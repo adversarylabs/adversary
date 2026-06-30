@@ -3,7 +3,9 @@ package cobra
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -22,11 +24,15 @@ type Command struct {
 	children []*Command
 	flags    *FlagSet
 	ctx      context.Context
+	out      io.Writer
 }
 
 func (c *Command) Execute() error {
 	if c.ctx == nil {
 		c.ctx = context.Background()
+	}
+	if c.out == nil {
+		c.out = os.Stdout
 	}
 	return c.execute(os.Args[1:])
 }
@@ -36,9 +42,15 @@ func (c *Command) execute(args []string) error {
 		for _, child := range c.children {
 			if child.commandName() == args[0] {
 				child.ctx = c.ctx
+				child.out = c.output()
 				return child.execute(args[1:])
 			}
 		}
+	}
+
+	if hasHelpFlag(args) {
+		c.printHelp(c.output())
+		return nil
 	}
 
 	if c.flags != nil {
@@ -54,6 +66,7 @@ func (c *Command) execute(args []string) error {
 		}
 	}
 	if c.RunE == nil {
+		c.printHelp(c.output())
 		return nil
 	}
 	return c.RunE(c, args)
@@ -69,8 +82,10 @@ func (c *Command) AddCommand(commands ...*Command) {
 func (c *Command) Flags() *FlagSet {
 	if c.flags == nil {
 		c.flags = &FlagSet{
-			strings: map[string]*string{},
-			bools:   map[string]*bool{},
+			strings:     map[string]*string{},
+			bools:       map[string]*bool{},
+			stringUsage: map[string]string{},
+			boolUsage:   map[string]string{},
 		}
 	}
 	return c.flags
@@ -95,20 +110,81 @@ func (c *Command) commandName() string {
 	return c.Use
 }
 
+func (c *Command) output() io.Writer {
+	if c.out != nil {
+		return c.out
+	}
+	if c.parent != nil {
+		return c.parent.output()
+	}
+	return os.Stdout
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Command) printHelp(w io.Writer) {
+	if c.Short != "" {
+		fmt.Fprintln(w, c.Short)
+		fmt.Fprintln(w)
+	}
+	fmt.Fprintf(w, "Usage:\n  %s", c.Use)
+	if len(c.children) > 0 {
+		fmt.Fprint(w, " <command>")
+	}
+	if c.flags != nil && c.flags.hasFlags() {
+		fmt.Fprint(w, " [flags]")
+	}
+	fmt.Fprintln(w)
+
+	if len(c.children) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Commands:")
+		for _, child := range c.children {
+			fmt.Fprintf(w, "  %-16s %s\n", child.commandName(), child.Short)
+		}
+	}
+
+	if c.Example != "" {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Examples:")
+		fmt.Fprintln(w, c.Example)
+	}
+
+	if c.flags != nil && c.flags.hasFlags() {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Flags:")
+		c.flags.printHelp(w)
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Use \"adversary <command> --help\" for more information about a command.")
+}
+
 type FlagSet struct {
-	strings map[string]*string
-	bools   map[string]*bool
-	args    []string
+	strings     map[string]*string
+	bools       map[string]*bool
+	stringUsage map[string]string
+	boolUsage   map[string]string
+	args        []string
 }
 
 func (f *FlagSet) StringVar(p *string, name string, value string, usage string) {
 	*p = value
 	f.strings[name] = p
+	f.stringUsage[name] = usage
 }
 
 func (f *FlagSet) BoolVar(p *bool, name string, value bool, usage string) {
 	*p = value
 	f.bools[name] = p
+	f.boolUsage[name] = usage
 }
 
 func (f *FlagSet) Parse(args []string) error {
@@ -159,6 +235,33 @@ func (f *FlagSet) Parse(args []string) error {
 
 func (f *FlagSet) Args() []string {
 	return f.args
+}
+
+func (f *FlagSet) hasFlags() bool {
+	return len(f.strings)+len(f.bools) > 0
+}
+
+func (f *FlagSet) printHelp(w io.Writer) {
+	names := make([]string, 0, len(f.strings)+len(f.bools)+1)
+	for name := range f.strings {
+		names = append(names, name)
+	}
+	for name := range f.bools {
+		names = append(names, name)
+	}
+	names = append(names, "help")
+	sort.Strings(names)
+
+	for _, name := range names {
+		switch {
+		case name == "help":
+			fmt.Fprintf(w, "  --%-14s %s\n", name, "help for this command")
+		case f.strings[name] != nil:
+			fmt.Fprintf(w, "  --%-14s %s\n", name+" <value>", f.stringUsage[name])
+		case f.bools[name] != nil:
+			fmt.Fprintf(w, "  --%-14s %s\n", name, f.boolUsage[name])
+		}
+	}
 }
 
 func ExactArgs(n int) PositionalArgs {
