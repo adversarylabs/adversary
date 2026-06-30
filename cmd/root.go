@@ -26,7 +26,12 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 		Short:         "Run containerized source-code adversaries against a local repository",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
 	}
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
 
 	cmd.AddCommand(newRunCommand(stdout, stderr))
 	return cmd
