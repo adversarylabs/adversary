@@ -122,3 +122,10 @@ or:
 ```bash
 brew install adversarylabs/homebrew/adversary
 ```
+
+After a successful prerelease, users can install the beta formula with:
+
+```bash
+brew install adversarylabs/homebrew/adversary-beta
+adversary-beta --help
+```
