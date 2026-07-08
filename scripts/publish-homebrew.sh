@@ -6,7 +6,8 @@ readonly TAP_REPO="adversarylabs/homebrew"
 readonly BINARY="adversary"
 readonly DIST_DIR="${DIST_DIR:-dist}"
 readonly FORMULA_TEMPLATE="${FORMULA_TEMPLATE:-Formula/adversary.rb.tmpl}"
-readonly FORMULA_NAME="adversary.rb"
+readonly STABLE_FORMULA_NAME="adversary.rb"
+readonly PRERELEASE_FORMULA_NAME="adversary-beta.rb"
 
 export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/adversary-go-build}"
 
@@ -58,6 +59,8 @@ render_formula() {
 
   sed \
     -e "s|__VERSION__|${VERSION}|g" \
+    -e "s|__FORMULA_CLASS__|${FORMULA_CLASS}|g" \
+    -e "s|__INSTALLED_BINARY__|${INSTALLED_BINARY}|g" \
     -e "s|__DARWIN_AMD64_URL__|${DARWIN_AMD64_URL}|g" \
     -e "s|__DARWIN_AMD64_SHA256__|${DARWIN_AMD64_SHA256}|g" \
     -e "s|__DARWIN_ARM64_URL__|${DARWIN_ARM64_URL}|g" \
@@ -127,10 +130,21 @@ need tar
 
 TAG="$(detect_tag "${1:-}")"
 [[ -n "$TAG" ]] || fail "could not determine release tag"
-[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || fail "tag must be semver-like, got ${TAG}"
+if [[ ! "$TAG" =~ ^20[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+  fail "tag must be CalVer-like (2026.7.8 or 2026.7.8-beta.1), got ${TAG}"
+fi
 
-VERSION="${TAG#v}"
-readonly TAG VERSION
+VERSION="$TAG"
+if [[ "$TAG" == *-* ]]; then
+  FORMULA_NAME="$PRERELEASE_FORMULA_NAME"
+  FORMULA_CLASS="AdversaryBeta"
+  INSTALLED_BINARY="adversary-beta"
+else
+  FORMULA_NAME="$STABLE_FORMULA_NAME"
+  FORMULA_CLASS="Adversary"
+  INSTALLED_BINARY="$BINARY"
+fi
+readonly TAG VERSION FORMULA_NAME FORMULA_CLASS INSTALLED_BINARY
 
 DARWIN_AMD64_ARCHIVE="${BINARY}_${VERSION}_darwin_amd64.tar.gz"
 DARWIN_ARM64_ARCHIVE="${BINARY}_${VERSION}_darwin_arm64.tar.gz"

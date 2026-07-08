@@ -19,17 +19,30 @@ repository needs contents read/write for `Formula/adversary.rb`.
 
 ## Creating a Release
 
-Use a semver tag:
+Use a CalVer tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag 2026.7.8
+git push origin 2026.7.8
 ```
 
-The tag push starts the Depot workflow. If the GitHub Release does not already
-exist, the workflow creates it. If a GitHub Release for the tag is published
-first, the release-published event starts the same workflow and uploads the
-artifacts to that existing release.
+The release workflow accepts CalVer tags like `2026.7.8`. The tag push starts
+the Depot workflow. If the GitHub Release does not already exist, the workflow
+creates it. If a GitHub Release for the tag is published first, the
+release-published event starts the same workflow and uploads the artifacts to
+that existing release.
+
+Prerelease tags use a suffix:
+
+```bash
+git tag 2026.7.8-beta.1
+git push origin 2026.7.8-beta.1
+```
+
+Stable releases update `Formula/adversary.rb` and install the `adversary`
+command. Prereleases update `Formula/adversary-beta.rb` and install the command
+as `adversary-beta`, so users can keep stable and beta installations side by
+side.
 
 Do not manually edit the Homebrew tap for normal releases.
 
@@ -59,7 +72,7 @@ To verify the build, checksum, and template-rendering path locally without
 publishing:
 
 ```bash
-SKIP_PUBLISH=1 scripts/publish-homebrew.sh v0.1.0
+SKIP_PUBLISH=1 scripts/publish-homebrew.sh 2026.7.8
 ```
 
 The rendered formula uses Homebrew platform blocks for macOS Intel, macOS Apple

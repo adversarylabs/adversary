@@ -1,4 +1,4 @@
-class Adversary < Formula
+class __FORMULA_CLASS__ < Formula
   desc "Run containerized source-code adversaries against a local repository"
   homepage "https://github.com/adversarylabs/adversary"
   version "__VERSION__"
@@ -28,10 +28,10 @@ class Adversary < Formula
   end
 
   def install
-    bin.install "adversary"
+    bin.install "adversary" => "__INSTALLED_BINARY__"
   end
 
   test do
-    assert_match "Run containerized source-code adversaries", shell_output("#{bin}/adversary --help")
+    assert_match "Run containerized source-code adversaries", shell_output("#{bin}/__INSTALLED_BINARY__ --help")
   end
 end
