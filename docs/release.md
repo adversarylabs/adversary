@@ -45,7 +45,7 @@ git push origin 2026.7.8-beta.1
 Stable releases update `Formula/adversary.rb` and install the `adversary`
 command. Prereleases update `Formula/adversary-beta.rb` and install the command
 as `adversary-beta`, so users can keep stable and beta installations side by
-side.
+side. Prerelease tags also create GitHub Releases marked as prereleases.
 
 Do not manually edit the Homebrew tap for normal releases.
 

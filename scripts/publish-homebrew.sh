@@ -90,10 +90,15 @@ upload_release_assets() {
     gh release upload "$TAG" "${assets[@]}" --repo "$REPO" --clobber
   else
     log "Creating GitHub Release ${TAG} and uploading artifacts"
+    local release_flags=()
+    if [[ "$IS_PRERELEASE" == "1" ]]; then
+      release_flags+=(--prerelease)
+    fi
     gh release create "$TAG" "${assets[@]}" \
       --repo "$REPO" \
       --title "$TAG" \
-      --notes "Release ${TAG}"
+      --notes "Release ${TAG}" \
+      "${release_flags[@]}"
   fi
 }
 
@@ -110,12 +115,12 @@ publish_formula() {
   git -C "$tap_dir" config user.name "${GIT_COMMITTER_NAME:-adversary-release-bot}"
   git -C "$tap_dir" config user.email "${GIT_COMMITTER_EMAIL:-release-bot@adversarylabs.com}"
 
-  if git -C "$tap_dir" diff --quiet -- "Formula/${FORMULA_NAME}"; then
+  git -C "$tap_dir" add "Formula/${FORMULA_NAME}"
+  if git -C "$tap_dir" diff --cached --quiet -- "Formula/${FORMULA_NAME}"; then
     log "Formula is already current"
     return
   fi
 
-  git -C "$tap_dir" add "Formula/${FORMULA_NAME}"
   git -C "$tap_dir" commit -m "Update adversary to ${TAG}"
   log "Pushing Homebrew formula update"
   git -C "$tap_dir" push origin HEAD
@@ -136,15 +141,17 @@ fi
 
 VERSION="$TAG"
 if [[ "$TAG" == *-* ]]; then
+  IS_PRERELEASE="1"
   FORMULA_NAME="$PRERELEASE_FORMULA_NAME"
   FORMULA_CLASS="AdversaryBeta"
   INSTALLED_BINARY="adversary-beta"
 else
+  IS_PRERELEASE="0"
   FORMULA_NAME="$STABLE_FORMULA_NAME"
   FORMULA_CLASS="Adversary"
   INSTALLED_BINARY="$BINARY"
 fi
-readonly TAG VERSION FORMULA_NAME FORMULA_CLASS INSTALLED_BINARY
+readonly TAG VERSION IS_PRERELEASE FORMULA_NAME FORMULA_CLASS INSTALLED_BINARY
 
 DARWIN_AMD64_ARCHIVE="${BINARY}_${VERSION}_darwin_amd64.tar.gz"
 DARWIN_ARM64_ARCHIVE="${BINARY}_${VERSION}_darwin_arm64.tar.gz"
