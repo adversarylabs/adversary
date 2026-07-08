@@ -14,10 +14,10 @@ used for the tap repository.
 
 The tap token must be able to:
 
-- clone, commit to, and push `github.com/adversarylabs/homebrew`
+- clone, commit to, and push `github.com/adversarylabs/homebrew-tap`
 
 For a fine-grained GitHub PAT, grant repository access to
-`adversarylabs/homebrew` with contents read/write permissions for
+`adversarylabs/homebrew-tap` with contents read/write permissions for
 `Formula/adversary.rb`.
 
 ## Creating a Release
@@ -86,16 +86,15 @@ binary with:
 bin.install "adversary"
 ```
 
-Finally, the script clones `github.com/adversarylabs/homebrew`, commits the
+Finally, the script clones `github.com/adversarylabs/homebrew-tap`, commits the
 updated formula, and pushes it back to the tap. Any upload, missing checksum,
 commit, or push failure fails the workflow.
 
 ## Rotating the PAT
 
 1. Create a new fine-grained GitHub PAT with access to:
-   - `adversarylabs/adversary`
-   - `adversarylabs/homebrew`
-2. Grant contents read/write permissions for both repositories.
+   - `adversarylabs/homebrew-tap`
+2. Grant contents read/write permissions for the tap repository.
 3. Replace the Depot secret `HOMEBREW_TAP_TOKEN` with the new token.
 4. Re-run the latest failed release workflow, or push the next release tag.
 5. Revoke the old PAT after the new token has successfully published a release.
@@ -116,19 +115,19 @@ The script is safe to re-run for the same tag.
 After a successful release, users can install with:
 
 ```bash
-brew tap adversarylabs/homebrew
+brew tap adversarylabs/tap
 brew install adversary
 ```
 
 or:
 
 ```bash
-brew install adversarylabs/homebrew/adversary
+brew install adversarylabs/tap/adversary
 ```
 
 After a successful prerelease, users can install the beta formula with:
 
 ```bash
-brew install adversarylabs/homebrew/adversary-beta
+brew install adversarylabs/tap/adversary-beta
 adversary-beta --help
 ```

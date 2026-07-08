@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly REPO="adversarylabs/adversary"
-readonly TAP_REPO="adversarylabs/homebrew"
+readonly TAP_REPO="adversarylabs/homebrew-tap"
 readonly BINARY="adversary"
 readonly DIST_DIR="${DIST_DIR:-dist}"
 readonly FORMULA_TEMPLATE="${FORMULA_TEMPLATE:-Formula/adversary.rb.tmpl}"
