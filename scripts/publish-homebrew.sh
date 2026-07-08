@@ -83,7 +83,7 @@ upload_release_assets() {
     "${DIST_DIR}/checksums.txt"
   )
 
-  export GH_TOKEN="${HOMEBREW_TAP_TOKEN}"
+  export GH_TOKEN="${GITHUB_TOKEN}"
 
   if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
     log "Uploading artifacts to existing GitHub Release ${TAG}"
@@ -198,6 +198,7 @@ if [[ "${SKIP_PUBLISH:-}" == "1" ]]; then
 fi
 
 [[ -n "${HOMEBREW_TAP_TOKEN:-}" ]] || fail "HOMEBREW_TAP_TOKEN is required"
+[[ -n "${GITHUB_TOKEN:-}" ]] || fail "GITHUB_TOKEN is required"
 need gh
 
 upload_release_assets

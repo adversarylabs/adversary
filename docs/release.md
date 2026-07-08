@@ -8,14 +8,17 @@ Actions secrets.
 
 Create a Depot secret named `HOMEBREW_TAP_TOKEN`.
 
-The token must be able to:
+The workflow uses the runtime GitHub token to create or update the GitHub
+Release in `github.com/adversarylabs/adversary`. `HOMEBREW_TAP_TOKEN` is only
+used for the tap repository.
 
-- read and write releases in `github.com/adversarylabs/adversary`
+The tap token must be able to:
+
 - clone, commit to, and push `github.com/adversarylabs/homebrew`
 
-For a fine-grained GitHub PAT, grant repository access to both repositories. The
-source repository needs contents read/write for release assets. The tap
-repository needs contents read/write for `Formula/adversary.rb`.
+For a fine-grained GitHub PAT, grant repository access to
+`adversarylabs/homebrew` with contents read/write permissions for
+`Formula/adversary.rb`.
 
 ## Creating a Release
 
