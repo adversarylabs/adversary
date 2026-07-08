@@ -11,10 +11,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    container: golang:1.26.4-bookworm
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: Test
         run: go test ./...

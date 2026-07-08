@@ -22,8 +22,8 @@
           ];
 
           shellHook = ''
-            if [ "$(${go}/bin/go env GOVERSION)" != "go1.26.4" ]; then
-              echo "expected Go 1.26.4, got $(${go}/bin/go env GOVERSION)" >&2
+            if [ "$(${go}/bin/go env GOVERSION)" != "go1.26.5" ]; then
+              echo "expected Go 1.26.5, got $(${go}/bin/go env GOVERSION)" >&2
               return 1
             fi
           '';
