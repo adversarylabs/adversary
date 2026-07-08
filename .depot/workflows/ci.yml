@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    container: golang:1.26.4-bookworm
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Test
+        run: go test ./...
