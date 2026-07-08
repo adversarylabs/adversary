@@ -1,0 +1,6 @@
+node_modules/
+dist/
+!vendor/adversary-sdk/dist/
+!vendor/adversary-sdk/dist/**
+.adversary/
+npm-debug.log*

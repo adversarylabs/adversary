@@ -19,7 +19,7 @@ func (CommandGitDiffer) ChangedFiles(ctx context.Context, repoPath, baseRef, hea
 		return nil, fmt.Errorf("base and head refs are required")
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "diff", "--name-only", baseRef+"..."+headRef)
+	cmd := gitDiffNameOnlyCommand(ctx, baseRef, headRef)
 	cmd.Dir = repoPath
 
 	var stdout bytes.Buffer
@@ -36,6 +36,10 @@ func (CommandGitDiffer) ChangedFiles(ctx context.Context, repoPath, baseRef, hea
 	}
 
 	return parseChangedFiles(stdout.String()), nil
+}
+
+func gitDiffNameOnlyCommand(ctx context.Context, baseRef, headRef string) *exec.Cmd {
+	return exec.CommandContext(ctx, "git", "diff", "--name-only", baseRef+"..."+headRef)
 }
 
 func parseChangedFiles(output string) []string {

@@ -1,4 +1,5 @@
 adversary
 bin/
+dist/
 result
 .direnv/

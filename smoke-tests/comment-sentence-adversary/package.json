@@ -1,0 +1,17 @@
+{
+  "name": "comment-sentence-adversary",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@adversary/sdk": "file:vendor/adversary-sdk"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

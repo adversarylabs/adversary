@@ -1,0 +1,23 @@
+name: local/{{name}}
+version: {{version}}
+description: {{description}}
+
+triggers:
+  manual: true
+
+runtime:
+  image: {{image}}
+  command:
+    - /adversary/run
+
+permissions:
+  filesystem:
+    read:
+      - .
+    write:
+      - .adversary/results
+  network: false
+  env: []
+
+findings:
+  format: adversary.findings.v1

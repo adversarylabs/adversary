@@ -1,0 +1,33 @@
+{
+  "name": "@adversary/sdk",
+  "version": "0.1.0",
+  "description": "Small TypeScript SDK for authoring Adversaries.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schemas/adversary.input.v1": "./schemas/adversary.input.v1.schema.json",
+    "./schemas/adversary.findings.v1": "./schemas/adversary.findings.v1.schema.json"
+  },
+  "files": ["dist", "schemas", "templates", "README.md"],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome check --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

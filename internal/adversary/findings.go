@@ -9,16 +9,25 @@ import (
 const FindingsSchemaVersion = "adversary.findings.v1"
 
 type FindingsOutput struct {
-	SchemaVersion string    `json:"schema_version"`
-	Adversary     string    `json:"adversary"`
-	Findings      []Finding `json:"findings"`
+	SchemaVersion string       `json:"schema_version"`
+	Adversary     string       `json:"adversary"`
+	Summary       *ScanSummary `json:"summary,omitempty"`
+	Findings      []Finding    `json:"findings"`
+}
+
+type ScanSummary struct {
+	FilesScanned  int `json:"files_scanned"`
+	RulesExecuted int `json:"rules_executed"`
 }
 
 type Finding struct {
 	ID             string `json:"id"`
+	RuleID         string `json:"rule_id"`
 	Severity       string `json:"severity"`
 	Title          string `json:"title"`
+	Message        string `json:"message"`
 	File           string `json:"file"`
+	Path           string `json:"path"`
 	Line           int    `json:"line"`
 	Evidence       string `json:"evidence"`
 	Recommendation string `json:"recommendation"`
@@ -36,6 +45,26 @@ func ParseFindings(data []byte) (FindingsOutput, error) {
 }
 
 func RenderTextFindings(w io.Writer, output FindingsOutput) error {
+	summary := output.ScanSummary()
+	if _, err := fmt.Fprintln(w, "Scan complete"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Files scanned: %d\n", summary.FilesScanned); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Rules executed: %d\n", summary.RulesExecuted); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Findings: %d\n", len(output.Findings)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+
 	if len(output.Findings) == 0 {
 		_, err := fmt.Fprintln(w, "No findings.")
 		return err
@@ -50,12 +79,18 @@ func RenderTextFindings(w io.Writer, output FindingsOutput) error {
 		if _, err := fmt.Fprintf(w, "[%s] %s\n", finding.Severity, finding.Title); err != nil {
 			return err
 		}
-		if finding.File != "" {
+		location := finding.Location()
+		if location != "" {
 			if finding.Line > 0 {
-				if _, err := fmt.Fprintf(w, "%s:%d\n", finding.File, finding.Line); err != nil {
+				if _, err := fmt.Fprintf(w, "%s:%d\n", location, finding.Line); err != nil {
 					return err
 				}
-			} else if _, err := fmt.Fprintln(w, finding.File); err != nil {
+			} else if _, err := fmt.Fprintln(w, location); err != nil {
+				return err
+			}
+		}
+		if finding.Message != "" {
+			if _, err := fmt.Fprintf(w, "Message: %s\n", finding.Message); err != nil {
 				return err
 			}
 		}
@@ -71,4 +106,27 @@ func RenderTextFindings(w io.Writer, output FindingsOutput) error {
 		}
 	}
 	return nil
+}
+
+func (output FindingsOutput) ScanSummary() ScanSummary {
+	if output.Summary != nil {
+		return *output.Summary
+	}
+	files := map[string]struct{}{}
+	for _, finding := range output.Findings {
+		if location := finding.Location(); location != "" {
+			files[location] = struct{}{}
+		}
+	}
+	return ScanSummary{
+		FilesScanned:  len(files),
+		RulesExecuted: 0,
+	}
+}
+
+func (finding Finding) Location() string {
+	if finding.File != "" {
+		return finding.File
+	}
+	return finding.Path
 }

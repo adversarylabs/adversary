@@ -11,13 +11,13 @@ type Manifest struct {
 	Name        string      `yaml:"name"`
 	Version     string      `yaml:"version"`
 	Description string      `yaml:"description"`
-	RunWhen     RunWhen     `yaml:"run_when"`
+	Triggers    Triggers    `yaml:"triggers"`
 	Runtime     Runtime     `yaml:"runtime"`
 	Permissions Permissions `yaml:"permissions"`
 	Findings    Findings    `yaml:"findings"`
 }
 
-type RunWhen struct {
+type Triggers struct {
 	FilesChanged []string `yaml:"files_changed"`
 }
 
@@ -84,8 +84,8 @@ func parseManifest(data []byte) (Manifest, error) {
 		if strings.HasPrefix(trimmed, "- ") {
 			value := parseYAMLScalar(strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")))
 			switch list {
-			case "run_when.files_changed":
-				manifest.RunWhen.FilesChanged = append(manifest.RunWhen.FilesChanged, value)
+			case "triggers.files_changed":
+				manifest.Triggers.FilesChanged = append(manifest.Triggers.FilesChanged, value)
 			case "runtime.command":
 				manifest.Runtime.Command = append(manifest.Runtime.Command, value)
 			case "permissions.filesystem.read":
@@ -114,7 +114,7 @@ func parseManifest(data []byte) (Manifest, error) {
 				manifest.Version = parseYAMLScalar(value)
 			case "description":
 				manifest.Description = parseYAMLScalar(value)
-			case "run_when", "runtime", "permissions", "findings":
+			case "triggers", "runtime", "permissions", "findings":
 			default:
 				return Manifest{}, fmt.Errorf("unsupported manifest field %q", key)
 			}
@@ -122,9 +122,9 @@ func parseManifest(data []byte) (Manifest, error) {
 		}
 
 		switch section {
-		case "run_when":
+		case "triggers":
 			if indent == 2 && key == "files_changed" {
-				list = "run_when.files_changed"
+				list = "triggers.files_changed"
 			}
 		case "runtime":
 			if indent == 2 {
@@ -202,12 +202,19 @@ func ResolveReference(ref string) (ResolvedAdversary, error) {
 		if err != nil {
 			return ResolvedAdversary{}, err
 		}
+		hasDockerfile := false
+		if info, err := os.Stat(filepath.Join(ref, "Dockerfile")); err == nil && !info.IsDir() {
+			hasDockerfile = true
+		}
 		return ResolvedAdversary{
-			Name:       manifest.Name,
-			Image:      manifest.Runtime.Image,
-			Command:    manifest.Runtime.Command,
-			Manifest:   &manifest,
-			NetworkOff: manifest.Permissions.Network != nil && !*manifest.Permissions.Network,
+			Name:          manifest.Name,
+			Image:         manifest.Runtime.Image,
+			Command:       manifest.Runtime.Command,
+			Manifest:      &manifest,
+			NetworkOff:    manifest.Permissions.Network != nil && !*manifest.Permissions.Network,
+			LocalDir:      true,
+			BuildContext:  ref,
+			HasDockerfile: hasDockerfile,
 		}, nil
 	}
 
@@ -218,9 +225,12 @@ func ResolveReference(ref string) (ResolvedAdversary, error) {
 }
 
 type ResolvedAdversary struct {
-	Name       string
-	Image      string
-	Command    []string
-	Manifest   *Manifest
-	NetworkOff bool
+	Name          string
+	Image         string
+	Command       []string
+	Manifest      *Manifest
+	NetworkOff    bool
+	LocalDir      bool
+	BuildContext  string
+	HasDockerfile bool
 }

@@ -1,0 +1,33 @@
+name: smoke-tests/comment-sentence
+version: 0.1.0
+description: Finds short or incomplete source comments.
+
+triggers:
+  files_changed:
+    - "*.ts"
+    - "**/*.ts"
+    - "*.tsx"
+    - "**/*.tsx"
+    - "*.js"
+    - "**/*.js"
+    - "*.jsx"
+    - "**/*.jsx"
+    - "*.go"
+    - "**/*.go"
+    - "*.py"
+    - "**/*.py"
+
+runtime:
+  image: smoke-tests/comment-sentence-adversary:0.1.0
+  command:
+    - /adversary/run
+
+permissions:
+  filesystem:
+    read:
+      - "."
+  network: false
+  env: []
+
+findings:
+  format: adversary.findings.v1

@@ -18,10 +18,11 @@ type InputChange struct {
 	Type         string   `json:"type"`
 	BaseRef      string   `json:"base_ref"`
 	HeadRef      string   `json:"head_ref"`
+	ScanMode     string   `json:"scan_mode"`
 	ChangedFiles []string `json:"changed_files"`
 }
 
-func NewInput(baseRef, headRef string, changedFiles []string) Input {
+func NewInput(baseRef, headRef string, changedFiles []string, allFiles bool) Input {
 	input := Input{
 		SchemaVersion: InputSchemaVersion,
 		Source: InputSource{
@@ -29,10 +30,15 @@ func NewInput(baseRef, headRef string, changedFiles []string) Input {
 		},
 	}
 	if baseRef != "" && headRef != "" {
+		scanMode := "changed"
+		if allFiles {
+			scanMode = "all"
+		}
 		input.Change = &InputChange{
 			Type:         "diff",
 			BaseRef:      baseRef,
 			HeadRef:      headRef,
+			ScanMode:     scanMode,
 			ChangedFiles: changedFiles,
 		}
 	}

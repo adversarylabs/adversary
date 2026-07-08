@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "typeRoots": ["node_modules/@types"],
+    "paths": {
+      "@adversary/sdk": ["./vendor/adversary-sdk/dist/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}
