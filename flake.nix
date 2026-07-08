@@ -9,7 +9,20 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [
+            (final: prev: {
+              go_1_26 = prev.go_1_26.overrideAttrs {
+                version = "1.26.5";
+                src = prev.fetchurl {
+                  url = "https://go.dev/dl/go1.26.5.src.tar.gz";
+                  hash = "sha256-SVvkvIcXasVnOS5bQRar2YRm0z17SdQedkzMaXay3EI=";
+                };
+              };
+            })
+          ];
+        };
         go = pkgs.go_1_26;
         buildGoModule = pkgs.buildGoModule.override { inherit go; };
       in

@@ -1,5 +1,8 @@
 adversary
 bin/
 dist/
+!templates/typescript/dist/
+!templates/typescript/dist/index.js
+!templates/typescript/dist/index.d.ts
 result
 .direnv/
