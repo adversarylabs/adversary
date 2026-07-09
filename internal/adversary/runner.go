@@ -260,6 +260,8 @@ func NewRunConfig(resolved ResolvedAdversary, repoPath, runDir string, opts RunO
 func (c RunConfig) ContainerSpec() ContainerSpec {
 	return ContainerSpec{
 		Image:           c.Resolved.Image,
+		RuntimeName:     c.Resolved.RuntimeName,
+		RuntimeVersion:  c.Resolved.RuntimeVersion,
 		Command:         c.Resolved.Command,
 		RepoPath:        c.RepoPath,
 		RunDir:          c.RunDir,

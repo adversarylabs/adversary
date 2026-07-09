@@ -2,6 +2,7 @@ package oci
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -57,7 +58,7 @@ func ParseReference(input string) (Reference, error) {
 		}
 	}
 
-	registry := DefaultRegistry
+	registry := DefaultRegistryHost()
 	repositoryParts := parts
 	explicitRegistry := false
 	if len(parts) > 1 && isRegistryHost(parts[0]) {
@@ -79,6 +80,15 @@ func ParseReference(input string) (Reference, error) {
 		Tag:        tag,
 		Digest:     digest,
 	}, nil
+}
+
+func DefaultRegistryHost() string {
+	if value := strings.TrimSpace(os.Getenv("ADVERSARY_REGISTRY_HOST")); value != "" {
+		value = strings.TrimPrefix(value, "https://")
+		value = strings.TrimPrefix(value, "http://")
+		return strings.TrimRight(value, "/")
+	}
+	return DefaultRegistry
 }
 
 func isRegistryHost(component string) bool {

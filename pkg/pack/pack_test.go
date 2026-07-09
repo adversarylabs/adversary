@@ -26,6 +26,48 @@ func TestCreateIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestCreateStoresRuntimeRequirement(t *testing.T) {
+	dir := testProject(t)
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.RuntimeName != "node" || artifact.RuntimeVersion != "22" {
+		t.Fatalf("runtime requirement = %s@%s", artifact.RuntimeName, artifact.RuntimeVersion)
+	}
+	if artifact.OCIManifest.Annotations["ai.adversary.runtime.name"] != "node" {
+		t.Fatalf("runtime name annotation missing: %#v", artifact.OCIManifest.Annotations)
+	}
+	if artifact.OCIManifest.Annotations["ai.adversary.runtime.version"] != "22" {
+		t.Fatalf("runtime version annotation missing: %#v", artifact.OCIManifest.Annotations)
+	}
+}
+
+func TestCreateNameOverride(t *testing.T) {
+	dir := testProject(t)
+	artifact, err := Create(context.Background(), Options{Dir: dir, NameOverride: "ghcr.io/acme/security-reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Name != "ghcr.io/acme/security-reviewer" {
+		t.Fatalf("Name = %q", artifact.Name)
+	}
+	if artifact.ManifestName != "local/security-reviewer" {
+		t.Fatalf("ManifestName = %q", artifact.ManifestName)
+	}
+}
+
+func TestCreateNameOverrideRejectsTag(t *testing.T) {
+	dir := testProject(t)
+	_, err := Create(context.Background(), Options{Dir: dir, NameOverride: "ghcr.io/acme/security-reviewer:dev"})
+	if err == nil {
+		t.Fatal("expected tag rejection")
+	}
+	if !strings.Contains(err.Error(), "must not include a tag") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDefaultIgnoreRules(t *testing.T) {
 	dir := testProject(t)
 	writeFile(t, dir, "node_modules/pkg/index.js", "ignored")
@@ -123,9 +165,9 @@ func testProject(t *testing.T) string {
 	writeFile(t, dir, "adversary.yaml", `name: local/security-reviewer
 version: 0.1.0
 runtime:
-  image: security-reviewer:local
+  name: node
+  version: "22"
   command:
-    - node
     - dist/index.js
 permissions:
   network: false

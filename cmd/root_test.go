@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/store"
 )
@@ -169,8 +171,10 @@ func TestPackHelpShowsBuilderFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := stdout.String()
-	if !strings.Contains(output, "--builder") || !strings.Contains(output, "local or docker") {
-		t.Fatalf("pack help missing builder flag:\n%s", output)
+	for _, want := range []string{"--builder", "local or docker", "--name"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("pack help missing %q:\n%s", want, output)
+		}
 	}
 }
 
@@ -267,6 +271,85 @@ func TestPackListAndInspectCommands(t *testing.T) {
 	}
 }
 
+func TestPackNameOverride(t *testing.T) {
+	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
+	project := t.TempDir()
+	writeProject(t, project)
+
+	var packStdout bytes.Buffer
+	var packStderr bytes.Buffer
+	packCmd := NewRootCommand(&packStdout, &packStderr)
+	packCmd.SetArgs([]string{"pack", project, "--name", "ghcr.io/acme/security-reviewer"})
+	if err := packCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(packStdout.String(), "ghcr.io/acme/security-reviewer:1.4.2") {
+		t.Fatalf("pack output missing overridden ref:\n%s", packStdout.String())
+	}
+
+	localStore, err := store.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localStore.Inspect("ghcr.io/acme/security-reviewer:1.4.2"); err != nil {
+		t.Fatalf("overridden ref not inspectable: %v", err)
+	}
+}
+
+func TestDefaultAdversaryLabsPushRefUsesStoredNamespace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "localhost:5000")
+	configStore, err := adversarylabs.DefaultConfigStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := configStore.SetAuth("localhost:5000", adversarylabs.Auth{
+		Token:             "secret-token",
+		RegistryNamespace: "Acme Security",
+		ExpiresAt:         "2099-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ref, err := defaultAdversaryLabsPushRef(context.Background(), "dockerfile-reviewer:0.1.0", store.Record{
+		Name:    "dockerfile-reviewer",
+		Version: "0.1.0",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "localhost:5000/acme-security/dockerfile-reviewer:0.1.0"
+	if ref != want {
+		t.Fatalf("ref = %q, want %q", ref, want)
+	}
+}
+
+func TestDefaultPushRefUsesLibraryForRegistryHostOverrideWithoutLogin(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "localhost:8787")
+
+	ref, err := defaultAdversaryLabsPushRef(context.Background(), "dockerfile-reviewer:0.1.0", store.Record{
+		Name:    "dockerfile-reviewer",
+		Version: "0.1.0",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "localhost:8787/library/dockerfile-reviewer:0.1.0"
+	if ref != want {
+		t.Fatalf("ref = %q, want %q", ref, want)
+	}
+}
+
+func TestRegistryNamespaceFromAccountUsesTeamSlug(t *testing.T) {
+	got := registryNamespaceFromAccount(adversarylabs.WhoamiResponse{
+		Team: adversarylabs.Team{Slug: "red-team"},
+	})
+	if got != "red-team" {
+		t.Fatalf("namespace = %q", got)
+	}
+}
+
 func TestPushPullAgainstLocalOCIRegistry(t *testing.T) {
 	registry := newTestOCIRegistry()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -280,16 +363,25 @@ func TestPushPullAgainstLocalOCIRegistry(t *testing.T) {
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
 
 	project := t.TempDir()
 	writeProject(t, project)
 	t.Chdir(project)
 
+	var packStdout bytes.Buffer
+	var packStderr bytes.Buffer
+	packCmd := NewRootCommand(&packStdout, &packStderr)
+	packCmd.SetArgs([]string{"pack", "."})
+	if err := packCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
 	host := strings.TrimPrefix(server.URL, "http://")
 	var pushStdout bytes.Buffer
 	var pushStderr bytes.Buffer
 	push := NewRootCommand(&pushStdout, &pushStderr)
-	push.SetArgs([]string{"push", host + "/acme/security-reviewer:v1"})
+	push.SetArgs([]string{"push", "security-reviewer:1.4.2", host + "/acme/security-reviewer:v1"})
 	if err := push.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -425,9 +517,9 @@ func writeProject(t *testing.T, dir string) {
 		"adversary.yaml": `name: local/security-reviewer
 version: 1.4.2
 runtime:
-  image: security-reviewer:local
+  name: node
+  version: "22"
   command:
-    - node
     - dist/index.js
 `,
 		"README.md":     "# Security Reviewer\n",

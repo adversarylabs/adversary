@@ -23,11 +23,12 @@ import (
 )
 
 type Options struct {
-	Dir     string
-	Build   bool
-	Builder string
-	Stdout  io.Writer
-	Stderr  io.Writer
+	Dir          string
+	NameOverride string
+	Build        bool
+	Builder      string
+	Stdout       io.Writer
+	Stderr       io.Writer
 }
 
 type Artifact struct {
@@ -35,6 +36,8 @@ type Artifact struct {
 	ManifestName   string
 	Version        string
 	Runtime        string
+	RuntimeName    string
+	RuntimeVersion string
 	Entrypoint     []string
 	Permissions    any
 	Config         []byte
@@ -81,27 +84,37 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		return Artifact{}, err
 	}
 	name := manifest.ShortName(m.Name)
+	if strings.TrimSpace(opts.NameOverride) != "" {
+		name, err = normalizeNameOverride(opts.NameOverride)
+		if err != nil {
+			return Artifact{}, err
+		}
+	}
 	version := m.Version
 	if version == "" {
 		version = oci.DefaultTag
 	}
 	runtime := detectRuntime(dir, m)
 	config, err := json.Marshal(struct {
-		Created    string   `json:"created"`
-		Name       string   `json:"name"`
-		FullName   string   `json:"full_name"`
-		Version    string   `json:"version"`
-		Runtime    string   `json:"runtime"`
-		Entrypoint []string `json:"entrypoint,omitempty"`
-		Files      []File   `json:"files"`
+		Created        string   `json:"created"`
+		Name           string   `json:"name"`
+		FullName       string   `json:"full_name"`
+		Version        string   `json:"version"`
+		Runtime        string   `json:"runtime"`
+		RuntimeName    string   `json:"runtime_name,omitempty"`
+		RuntimeVersion string   `json:"runtime_version,omitempty"`
+		Entrypoint     []string `json:"entrypoint,omitempty"`
+		Files          []File   `json:"files"`
 	}{
-		Created:    "1970-01-01T00:00:00Z",
-		Name:       name,
-		FullName:   m.Name,
-		Version:    version,
-		Runtime:    runtime,
-		Entrypoint: m.Runtime.Command,
-		Files:      files,
+		Created:        "1970-01-01T00:00:00Z",
+		Name:           name,
+		FullName:       m.Name,
+		Version:        version,
+		Runtime:        runtime,
+		RuntimeName:    runtimeName(m),
+		RuntimeVersion: m.Runtime.Version,
+		Entrypoint:     m.Runtime.Command,
+		Files:          files,
 	})
 	if err != nil {
 		return Artifact{}, err
@@ -121,6 +134,8 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		"ai.adversary.full_name":           m.Name,
 		"ai.adversary.version":             version,
 		"ai.adversary.runtime":             runtime,
+		"ai.adversary.runtime.name":        runtimeName(m),
+		"ai.adversary.runtime.version":     m.Runtime.Version,
 	}
 	manifestData, manifestDigest, ociManifest, err := oci.NewManifest(config, layerDescriptor, annotations)
 	if err != nil {
@@ -131,6 +146,8 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		ManifestName:   m.Name,
 		Version:        version,
 		Runtime:        runtime,
+		RuntimeName:    runtimeName(m),
+		RuntimeVersion: m.Runtime.Version,
 		Entrypoint:     m.Runtime.Command,
 		Permissions:    m.Permissions,
 		Config:         config,
@@ -143,6 +160,22 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		Files:          files,
 		OCIManifest:    ociManifest,
 	}, nil
+}
+
+func normalizeNameOverride(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", nil
+	}
+	if strings.Contains(name, "@") {
+		return "", fmt.Errorf("--name must not include a digest")
+	}
+	lastSlash := strings.LastIndex(name, "/")
+	lastColon := strings.LastIndex(name, ":")
+	if lastColon > lastSlash {
+		return "", fmt.Errorf("--name must not include a tag; version comes from adversary.yaml")
+	}
+	return name, nil
 }
 
 func buildIfNeeded(ctx context.Context, dir, builder string, stdout, stderr io.Writer) error {
@@ -372,10 +405,24 @@ func detectRuntime(dir string, m manifest.Manifest) string {
 	if _, err := os.Stat(filepath.Join(dir, "package.json")); err == nil {
 		return "typescript"
 	}
-	if strings.Contains(m.Runtime.Image, "node") {
+	if runtimeName(m) == "node" {
 		return "typescript"
 	}
 	return "custom"
+}
+
+func runtimeName(m manifest.Manifest) string {
+	name := strings.TrimSpace(m.Runtime.Name)
+	if name == "typescript" {
+		return "node"
+	}
+	if name != "" {
+		return name
+	}
+	if len(m.Runtime.Command) > 0 && m.Runtime.Command[0] == "node" {
+		return "node"
+	}
+	return ""
 }
 
 type ignoreRules []string

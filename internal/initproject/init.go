@@ -64,7 +64,6 @@ func Create(opts Options) (Result, error) {
 	values := map[string]string{
 		"name":        projectName,
 		"description": "Replace with a description.",
-		"image":       "local/" + projectName + ":" + DefaultVersion,
 		"version":     DefaultVersion,
 		"sdk":         sdk,
 	}

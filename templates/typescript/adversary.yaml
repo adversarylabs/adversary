@@ -6,9 +6,9 @@ triggers:
   manual: true
 
 runtime:
-  image: {{image}}
+  name: node
+  version: "22"
   command:
-    - node
     - dist/index.js
 
 permissions:

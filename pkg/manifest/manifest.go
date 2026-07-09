@@ -17,7 +17,8 @@ type Manifest struct {
 }
 
 type Runtime struct {
-	Image   string
+	Name    string
+	Version string
 	Command []string
 }
 
@@ -73,8 +74,10 @@ func Parse(data []byte) (Manifest, error) {
 		case "runtime":
 			if indent == 2 {
 				switch key {
-				case "image":
-					out.Runtime.Image = scalar(value)
+				case "name", "type":
+					out.Runtime.Name = scalar(value)
+				case "version":
+					out.Runtime.Version = scalar(value)
 				case "command":
 					list = "runtime.command"
 				}
@@ -88,8 +91,11 @@ func Parse(data []byte) (Manifest, error) {
 	if out.Name == "" {
 		return Manifest{}, fmt.Errorf("manifest name is required")
 	}
-	if out.Runtime.Image == "" {
-		return Manifest{}, fmt.Errorf("manifest runtime.image is required")
+	if out.Runtime.Name == "" {
+		return Manifest{}, fmt.Errorf("manifest runtime.name is required")
+	}
+	if out.Runtime.Version == "" {
+		return Manifest{}, fmt.Errorf("manifest runtime.version is required")
 	}
 	return out, nil
 }

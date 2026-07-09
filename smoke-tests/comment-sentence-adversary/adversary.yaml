@@ -18,9 +18,9 @@ triggers:
     - "**/*.py"
 
 runtime:
-  image: smoke-tests/comment-sentence-adversary:0.1.0
+  name: node
+  version: "22"
   command:
-    - node
     - dist/run.js
 
 permissions:

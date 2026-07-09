@@ -14,14 +14,21 @@ const (
 	DefaultAPIURL   = "https://adversarylabs.ai/api"
 )
 
+func ResolveRegistryHost() string {
+	return oci.DefaultRegistryHost()
+}
+
 type Config struct {
 	Auths map[string]Auth `json:"auths"`
 }
 
 type Auth struct {
-	Token     string `json:"token,omitempty"`
-	ClientID  string `json:"client_id,omitempty"`
-	ExpiresAt string `json:"expires_at,omitempty"`
+	Token             string `json:"token,omitempty"`
+	ClientID          string `json:"client_id,omitempty"`
+	ExpiresAt         string `json:"expires_at,omitempty"`
+	RegistryNamespace string `json:"registry_namespace,omitempty"`
+	Namespace         string `json:"namespace,omitempty"`
+	Team              string `json:"team,omitempty"`
 }
 
 type ConfigStore struct {

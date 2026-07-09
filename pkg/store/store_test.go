@@ -21,6 +21,9 @@ func TestStoreRefsListInspectAndDedupe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if record.RuntimeName != "node" || record.RuntimeVersion != "22" {
+		t.Fatalf("runtime requirement = %s@%s", record.RuntimeName, record.RuntimeVersion)
+	}
 	if got := readRef(t, localStore.Root, "security-reviewer", "0.1.0"); got != record.Digest {
 		t.Fatalf("version ref = %q, want %q", got, record.Digest)
 	}
@@ -107,9 +110,9 @@ func testProject(t *testing.T) string {
 	writeFile(t, dir, "adversary.yaml", `name: local/security-reviewer
 version: 0.1.0
 runtime:
-  image: security-reviewer:local
+  name: node
+  version: "22"
   command:
-    - node
     - dist/index.js
 `)
 	writeFile(t, dir, "README.md", "# Security Reviewer\n")

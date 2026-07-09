@@ -22,9 +22,9 @@ triggers:
   files_changed:
     - ".github/workflows/**"
 runtime:
-  image: ghcr.io/adversarylabs/github-actions:0.1.0
+  name: node
+  version: "22"
   command:
-    - node
     - dist/index.js
 permissions:
   filesystem:
@@ -49,10 +49,10 @@ findings:
 	if manifest.Name != "adversarylabs/github-actions" {
 		t.Fatalf("Name = %q", manifest.Name)
 	}
-	if manifest.Runtime.Image != "ghcr.io/adversarylabs/github-actions:0.1.0" {
-		t.Fatalf("Runtime.Image = %q", manifest.Runtime.Image)
+	if manifest.Runtime.Name != "node" || manifest.Runtime.Version != "22" {
+		t.Fatalf("Runtime = %#v", manifest.Runtime)
 	}
-	if strings.Join(manifest.Runtime.Command, " ") != "node dist/index.js" {
+	if strings.Join(manifest.Runtime.Command, " ") != "dist/index.js" {
 		t.Fatalf("Runtime.Command = %#v", manifest.Runtime.Command)
 	}
 	if manifest.Permissions.Network == nil || *manifest.Permissions.Network {
@@ -67,9 +67,9 @@ func TestResolveReferenceLocalDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "adversary.yaml"), []byte(`name: local/adversary
 runtime:
-  image: example/adversary:latest
+  name: node
+  version: "22"
   command:
-    - node
     - dist/index.js
 `), 0644); err != nil {
 		t.Fatal(err)
@@ -86,6 +86,9 @@ runtime:
 	}
 	if resolved.Image != "adversary-local-typescript" {
 		t.Fatalf("Image = %q", resolved.Image)
+	}
+	if resolved.RuntimeName != "node" || resolved.RuntimeVersion != "22" {
+		t.Fatalf("Runtime = %s@%s", resolved.RuntimeName, resolved.RuntimeVersion)
 	}
 	if resolved.Manifest == nil {
 		t.Fatal("Manifest is nil")
@@ -127,9 +130,9 @@ func TestResolveReferenceLocalStoreByNameTagAndDigest(t *testing.T) {
 	writeFile(t, filepath.Join(project, "adversary.yaml"), `name: local/dockerfile-adversary
 version: 0.1.0
 runtime:
-  image: dockerfile-adversary:local
+  name: node
+  version: "22"
   command:
-    - node
     - dist/index.js
 permissions:
   network: false
@@ -156,6 +159,9 @@ permissions:
 		}
 		if resolved.Image != "adversary-local-typescript" {
 			t.Fatalf("resolve %q image = %q", ref, resolved.Image)
+		}
+		if resolved.RuntimeName != "node" || resolved.RuntimeVersion != "22" {
+			t.Fatalf("resolve %q runtime = %s@%s", ref, resolved.RuntimeName, resolved.RuntimeVersion)
 		}
 		wantCommand := []string{"node", filepath.Join(resolved.ExecutionPath, "dist", "index.js")}
 		if strings.Join(resolved.Command, "\x00") != strings.Join(wantCommand, "\x00") {
@@ -262,9 +268,9 @@ triggers:
   files_changed:
     - "Dockerfile"
 runtime:
-  image: local/adversary:0.1.0
+  name: node
+  version: "22"
   command:
-    - node
     - dist/index.js
 `)
 
@@ -301,9 +307,9 @@ triggers:
   files_changed:
     - "Dockerfile"
 runtime:
-  image: local/adversary:0.1.0
+  name: node
+  version: "22"
   command:
-    - node
     - dist/index.js
 `)
 

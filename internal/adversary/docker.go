@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strings"
 )
 
 type ContainerExecutor interface {
@@ -22,6 +24,8 @@ type HostExecutor struct {
 
 type ContainerSpec struct {
 	Image           string
+	RuntimeName     string
+	RuntimeVersion  string
 	Command         []string
 	RepoPath        string
 	RunDir          string
@@ -45,9 +49,9 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution command is empty")
 	}
 	if command[0] == "node" {
-		node, err := findNode()
+		node, err := findNode(spec.RuntimeVersion)
 		if err != nil {
-			return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution failed: node was not found; install Node.js or ensure node is on PATH")
+			return ContainerResult{ExitCode: -1, Kind: "Process"}, err
 		}
 		command = append([]string{node}, command[1:]...)
 	}
@@ -66,9 +70,18 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 	return ContainerResult{ExitCode: 0, Kind: "Process"}, nil
 }
 
-func findNode() (string, error) {
-	if path, err := exec.LookPath("node"); err == nil {
+func findNode(version string) (string, error) {
+	version = normalizeNodeVersion(version)
+	if override := strings.TrimSpace(os.Getenv("ADVERSARY_NODE_PATH")); override != "" {
+		return override, nil
+	}
+	if path, ok := managedNodePath(version); ok {
 		return path, nil
+	}
+	if path, err := exec.LookPath("node"); err == nil {
+		if version == "" || nodeMatchesVersion(path, version) {
+			return path, nil
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -82,10 +95,70 @@ func findNode() (string, error) {
 	)
 	for _, candidate := range candidates {
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
+			if version == "" || nodeMatchesVersion(candidate, version) {
+				return candidate, nil
+			}
 		}
 	}
-	return "", exec.ErrNotFound
+	if version != "" {
+		return "", fmt.Errorf("host execution failed: Node.js %s was not found; install a managed runtime or set ADVERSARY_NODE_PATH", version)
+	}
+	return "", fmt.Errorf("host execution failed: Node.js was not found; install a managed runtime or set ADVERSARY_NODE_PATH")
+}
+
+func managedNodePath(version string) (string, bool) {
+	if version == "" {
+		return "", false
+	}
+	root, err := adversaryDataDir()
+	if err != nil {
+		return "", false
+	}
+	path := filepath.Join(root, "runtimes", "node", version, runtime.GOOS+"-"+runtime.GOARCH, "bin", "node")
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return path, true
+	}
+	return "", false
+}
+
+func adversaryDataDir() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("ADVERSARY_DATA_DIR")); override != "" {
+		return override, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "Adversary"), nil
+	case "linux":
+		if xdg := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); xdg != "" {
+			return filepath.Join(xdg, "adversary"), nil
+		}
+		return filepath.Join(home, ".local", "share", "adversary"), nil
+	default:
+		return filepath.Join(home, ".adversary"), nil
+	}
+}
+
+func nodeMatchesVersion(path, version string) bool {
+	out, err := exec.Command(path, "--version").Output()
+	if err != nil {
+		return false
+	}
+	got := strings.TrimSpace(strings.TrimPrefix(string(out), "v"))
+	if got == version || strings.HasPrefix(got, version+".") {
+		return true
+	}
+	return false
+}
+
+func normalizeNodeVersion(version string) string {
+	version = strings.TrimSpace(version)
+	version = strings.TrimPrefix(version, "node@")
+	version = strings.TrimPrefix(version, "v")
+	return version
 }
 
 func sortedEnvKeys(env map[string]string) []string {

@@ -22,22 +22,24 @@ type Store struct {
 }
 
 type Record struct {
-	Name         string            `json:"name"`
-	Version      string            `json:"version"`
-	Digest       string            `json:"digest"`
-	Runtime      string            `json:"runtime"`
-	Entrypoint   []string          `json:"entrypoint,omitempty"`
-	Permissions  any               `json:"permissions,omitempty"`
-	Size         int64             `json:"size"`
-	Created      time.Time         `json:"created"`
-	ConfigDigest string            `json:"configDigest"`
-	LayerDigest  string            `json:"layerDigest"`
-	Files        []pack.File       `json:"files"`
-	Annotations  map[string]string `json:"annotations,omitempty"`
-	Manifest     oci.Manifest      `json:"manifest"`
-	ManifestPath string            `json:"manifestPath,omitempty"`
-	ConfigPath   string            `json:"configPath,omitempty"`
-	LayerPath    string            `json:"layerPath,omitempty"`
+	Name           string            `json:"name"`
+	Version        string            `json:"version"`
+	Digest         string            `json:"digest"`
+	Runtime        string            `json:"runtime"`
+	RuntimeName    string            `json:"runtimeName,omitempty"`
+	RuntimeVersion string            `json:"runtimeVersion,omitempty"`
+	Entrypoint     []string          `json:"entrypoint,omitempty"`
+	Permissions    any               `json:"permissions,omitempty"`
+	Size           int64             `json:"size"`
+	Created        time.Time         `json:"created"`
+	ConfigDigest   string            `json:"configDigest"`
+	LayerDigest    string            `json:"layerDigest"`
+	Files          []pack.File       `json:"files"`
+	Annotations    map[string]string `json:"annotations,omitempty"`
+	Manifest       oci.Manifest      `json:"manifest"`
+	ManifestPath   string            `json:"manifestPath,omitempty"`
+	ConfigPath     string            `json:"configPath,omitempty"`
+	LayerPath      string            `json:"layerPath,omitempty"`
 }
 
 func Default() (Store, error) {
@@ -72,22 +74,24 @@ func (s Store) Put(artifact pack.Artifact) (Record, error) {
 		return Record{}, err
 	}
 	record := Record{
-		Name:         artifact.Name,
-		Version:      artifact.Version,
-		Digest:       artifact.ManifestDigest,
-		Runtime:      artifact.Runtime,
-		Entrypoint:   artifact.Entrypoint,
-		Permissions:  artifact.Permissions,
-		Size:         artifact.Size,
-		Created:      time.Now().UTC(),
-		ConfigDigest: artifact.ConfigDigest,
-		LayerDigest:  artifact.LayerDigest,
-		Files:        artifact.Files,
-		Annotations:  artifact.OCIManifest.Annotations,
-		Manifest:     artifact.OCIManifest,
-		ManifestPath: s.contentPath("manifests", artifact.ManifestDigest),
-		ConfigPath:   s.contentPath("blobs", artifact.ConfigDigest),
-		LayerPath:    s.contentPath("blobs", artifact.LayerDigest),
+		Name:           artifact.Name,
+		Version:        artifact.Version,
+		Digest:         artifact.ManifestDigest,
+		Runtime:        artifact.Runtime,
+		RuntimeName:    artifact.RuntimeName,
+		RuntimeVersion: artifact.RuntimeVersion,
+		Entrypoint:     artifact.Entrypoint,
+		Permissions:    artifact.Permissions,
+		Size:           artifact.Size,
+		Created:        time.Now().UTC(),
+		ConfigDigest:   artifact.ConfigDigest,
+		LayerDigest:    artifact.LayerDigest,
+		Files:          artifact.Files,
+		Annotations:    artifact.OCIManifest.Annotations,
+		Manifest:       artifact.OCIManifest,
+		ManifestPath:   s.contentPath("manifests", artifact.ManifestDigest),
+		ConfigPath:     s.contentPath("blobs", artifact.ConfigDigest),
+		LayerPath:      s.contentPath("blobs", artifact.LayerDigest),
 	}
 	if old, ok := s.resolveDigest(artifact.ManifestDigest); ok {
 		record.Created = old.Created
@@ -155,7 +159,7 @@ func (s Store) Inspect(ref string) (Record, error) {
 	}
 	name := ref
 	tag := oci.DefaultTag
-	if before, after, ok := strings.Cut(ref, ":"); ok {
+	if before, after, ok := splitNameTag(ref); ok {
 		name = before
 		tag = after
 	}
@@ -171,6 +175,15 @@ func (s Store) Inspect(ref string) (Record, error) {
 	return record, nil
 }
 
+func splitNameTag(ref string) (string, string, bool) {
+	lastSlash := strings.LastIndex(ref, "/")
+	lastColon := strings.LastIndex(ref, ":")
+	if lastColon <= lastSlash {
+		return "", "", false
+	}
+	return ref[:lastColon], ref[lastColon+1:], true
+}
+
 func (s Store) Materialize(ref string) (string, Record, error) {
 	record, err := s.Inspect(ref)
 	if err != nil {
@@ -181,6 +194,55 @@ func (s Store) Materialize(ref string) (string, Record, error) {
 		return "", Record{}, err
 	}
 	return path, record, nil
+}
+
+func (s Store) OCIPayload(record Record) ([]byte, []oci.Blob, error) {
+	manifestPath := record.ManifestPath
+	if manifestPath == "" {
+		manifestPath = s.contentPath("manifests", record.Digest)
+	}
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	configPath := record.ConfigPath
+	if configPath == "" {
+		configPath = s.contentPath("blobs", record.ConfigDigest)
+	}
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	layerPath := record.LayerPath
+	if layerPath == "" {
+		layerPath = s.contentPath("blobs", record.LayerDigest)
+	}
+	layerData, err := os.ReadFile(layerPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	blobs := []oci.Blob{
+		{
+			Descriptor: oci.Descriptor{
+				MediaType: oci.EmptyConfigMediaType,
+				Digest:    record.ConfigDigest,
+				Size:      int64(len(configData)),
+			},
+			Data: configData,
+		},
+		{
+			Descriptor: oci.Descriptor{
+				MediaType: oci.PackageLayerMediaType,
+				Digest:    record.LayerDigest,
+				Size:      int64(len(layerData)),
+				Annotations: map[string]string{
+					"org.opencontainers.image.title": "adversary-layer",
+				},
+			},
+			Data: layerData,
+		},
+	}
+	return manifestData, blobs, nil
 }
 
 func (s Store) MaterializeRecord(record Record) (string, error) {

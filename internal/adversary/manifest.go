@@ -25,7 +25,8 @@ type Triggers struct {
 }
 
 type Runtime struct {
-	Image   string   `yaml:"image"`
+	Name    string   `yaml:"name"`
+	Version string   `yaml:"version"`
 	Command []string `yaml:"command"`
 }
 
@@ -57,17 +58,17 @@ func LoadManifest(path string) (Manifest, error) {
 	if manifest.Name == "" {
 		return Manifest{}, fmt.Errorf("manifest name is required")
 	}
-	if manifest.Runtime.Image == "" {
-		return Manifest{}, fmt.Errorf("manifest runtime.image is required")
+	if manifest.Runtime.Name == "" {
+		return Manifest{}, fmt.Errorf("manifest runtime.name is required")
+	}
+	if manifest.Runtime.Version == "" {
+		return Manifest{}, fmt.Errorf("manifest runtime.version is required")
 	}
 	return manifest, nil
 }
 
 func parseManifest(data []byte) (Manifest, error) {
 	text := string(data)
-	if strings.Contains(text, "\nruntime:\n  type:") || strings.Contains(text, "\nruntime:\r\n  type:") {
-		return Manifest{}, fmt.Errorf("runtime.type is not supported in v1")
-	}
 	if strings.Contains(text, "\ninput:") || strings.HasPrefix(text, "input:") {
 		return Manifest{}, fmt.Errorf("input.supports is not supported in v1")
 	}
@@ -132,13 +133,14 @@ func parseManifest(data []byte) (Manifest, error) {
 		case "runtime":
 			if indent == 2 {
 				switch key {
-				case "image":
-					manifest.Runtime.Image = parseYAMLScalar(value)
+				case "name", "type":
+					manifest.Runtime.Name = parseYAMLScalar(value)
+					list = ""
+				case "version":
+					manifest.Runtime.Version = parseYAMLScalar(value)
 					list = ""
 				case "command":
 					list = "runtime.command"
-				case "type":
-					return Manifest{}, fmt.Errorf("runtime.type is not supported in v1")
 				}
 			}
 		case "permissions":
@@ -210,17 +212,20 @@ func ResolveReference(ref string) (ResolvedAdversary, error) {
 			return ResolvedAdversary{}, err
 		}
 		resolved := ResolvedAdversary{
-			Name:          manifest.Name,
-			Image:         "adversary-local-typescript",
-			Command:       manifest.Runtime.Command,
-			Manifest:      &manifest,
-			NetworkOff:    manifest.Permissions.Network != nil && !*manifest.Permissions.Network,
-			LocalDir:      true,
-			BuildContext:  buildContext,
-			ExecutionPath: buildContext,
+			Name:           manifest.Name,
+			Image:          "adversary-local-typescript",
+			RuntimeName:    normalizeRuntimeName(manifest.Runtime.Name, manifest.Runtime.Command),
+			RuntimeVersion: manifest.Runtime.Version,
+			Command:        manifest.Runtime.Command,
+			Manifest:       &manifest,
+			NetworkOff:     manifest.Permissions.Network != nil && !*manifest.Permissions.Network,
+			LocalDir:       true,
+			BuildContext:   buildContext,
+			ExecutionPath:  buildContext,
 		}
 		if isTypeScriptAdversary(buildContext) {
-			resolved.Command = typeScriptHostCommand(buildContext, manifest.Runtime.Command)
+			resolved.RuntimeName = "node"
+			resolved.Command = typeScriptHostCommand(buildContext, resolved.RuntimeName, manifest.Runtime.Command)
 		}
 		return resolved, nil
 	}
@@ -242,7 +247,9 @@ func ResolveReference(ref string) (ResolvedAdversary, error) {
 			resolved.ExecutionPath = path
 			if record.Runtime == "typescript" {
 				resolved.Image = "adversary-local-typescript"
-				resolved.Command = typeScriptHostCommand(path, resolved.Command)
+				resolved.RuntimeName = "node"
+				resolved.RuntimeVersion = record.RuntimeVersion
+				resolved.Command = typeScriptHostCommand(path, resolved.RuntimeName, resolved.Command)
 			}
 			return resolved, nil
 		}
@@ -263,25 +270,44 @@ func isTypeScriptAdversary(path string) bool {
 	return false
 }
 
-func typeScriptHostCommand(path string, command []string) []string {
+func typeScriptHostCommand(path, runtimeName string, command []string) []string {
 	hostCommand := append([]string(nil), command...)
 	for i, part := range hostCommand {
-		if i > 0 && !filepath.IsAbs(part) && strings.HasSuffix(part, ".js") {
+		if !filepath.IsAbs(part) && strings.HasSuffix(part, ".js") {
 			hostCommand[i] = filepath.Join(path, part)
 		}
+	}
+	if runtimeName == "node" && (len(hostCommand) == 0 || hostCommand[0] != "node") {
+		hostCommand = append([]string{"node"}, hostCommand...)
 	}
 	return hostCommand
 }
 
+func normalizeRuntimeName(name string, command []string) string {
+	name = strings.TrimSpace(name)
+	if name != "" {
+		if name == "typescript" {
+			return "node"
+		}
+		return name
+	}
+	if len(command) > 0 && command[0] == "node" {
+		return "node"
+	}
+	return ""
+}
+
 type ResolvedAdversary struct {
-	Name          string
-	Image         string
-	Command       []string
-	Manifest      *Manifest
-	NetworkOff    bool
-	LocalDir      bool
-	BuildContext  string
-	StoreBacked   bool
-	StorePath     string
-	ExecutionPath string
+	Name           string
+	Image          string
+	RuntimeName    string
+	RuntimeVersion string
+	Command        []string
+	Manifest       *Manifest
+	NetworkOff     bool
+	LocalDir       bool
+	BuildContext   string
+	StoreBacked    bool
+	StorePath      string
+	ExecutionPath  string
 }

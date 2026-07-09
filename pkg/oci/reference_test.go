@@ -55,3 +55,17 @@ func TestParseReferenceDefaults(t *testing.T) {
 		})
 	}
 }
+
+func TestParseReferenceUsesRegistryHostOverride(t *testing.T) {
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "localhost:5000")
+	ref, err := ParseReference("security-reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Registry != "localhost:5000" {
+		t.Fatalf("Registry = %q", ref.Registry)
+	}
+	if got := ref.Locator(); got != "localhost:5000/library/security-reviewer:latest" {
+		t.Fatalf("Locator = %q", got)
+	}
+}

@@ -61,7 +61,7 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(newVersionCommand(stdout))
 	cmd.AddCommand(newLoginCommand(stdout, stderr, &apiURL))
 	cmd.AddCommand(newLogoutCommand(stdout, stderr, &apiURL))
-	cmd.AddCommand(newPushCommand(stdout, stderr))
+	cmd.AddCommand(newPushCommand(stdout, stderr, &apiURL))
 	cmd.AddCommand(newPullCommand(stdout, stderr))
 	cmd.AddCommand(newSearchCommand(stdout, stderr, &apiURL))
 	cmd.AddCommand(newWhoamiCommand(stdout, stderr, &apiURL))
@@ -106,6 +106,7 @@ type listOptions struct {
 
 type packOptions struct {
 	builder string
+	name    string
 }
 
 func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
@@ -215,7 +216,7 @@ func newPackCommand(stdout, stderr io.Writer) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(stderr, "Packing adversary...")
-			artifact, err := pack.Create(cmd.Context(), pack.Options{Dir: args[0], Build: true, Builder: opts.builder, Stdout: stderr, Stderr: stderr})
+			artifact, err := pack.Create(cmd.Context(), pack.Options{Dir: args[0], NameOverride: opts.name, Build: true, Builder: opts.builder, Stdout: stderr, Stderr: stderr})
 			if err != nil {
 				return err
 			}
@@ -231,6 +232,9 @@ func newPackCommand(stdout, stderr io.Writer) *cobra.Command {
 			fmt.Fprintf(stdout, "Name: %s\n", record.Name)
 			fmt.Fprintf(stdout, "Version: %s\n", record.Version)
 			fmt.Fprintf(stdout, "Runtime: %s\n", record.Runtime)
+			if record.RuntimeName != "" {
+				fmt.Fprintf(stdout, "Runtime Requirement: %s@%s\n", record.RuntimeName, record.RuntimeVersion)
+			}
 			fmt.Fprintf(stdout, "Digest: %s\n", record.Digest)
 			fmt.Fprintf(stdout, "Size: %s\n", humanSize(record.Size))
 			fmt.Fprintln(stdout)
@@ -242,6 +246,7 @@ func newPackCommand(stdout, stderr io.Writer) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&opts.builder, "builder", "local", "build mechanism: local or docker")
+	cmd.Flags().StringVar(&opts.name, "name", "", "override the local artifact name")
 	return cmd
 }
 
@@ -365,10 +370,13 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 					return err
 				}
 			}
-			if err := store.SetAuth(adversarylabs.DefaultRegistry, adversarylabs.Auth{
-				Token:     token.Token,
-				ClientID:  token.ClientID,
-				ExpiresAt: token.ExpiresAt,
+			if err := store.SetAuth(adversarylabs.ResolveRegistryHost(), adversarylabs.Auth{
+				Token:             token.Token,
+				ClientID:          token.ClientID,
+				ExpiresAt:         token.ExpiresAt,
+				RegistryNamespace: token.RegistryNamespace,
+				Namespace:         token.Namespace,
+				Team:              token.Team,
 			}); err != nil {
 				return err
 			}
@@ -397,7 +405,7 @@ func newLogoutCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			auth, ok, err := store.RemoveAuth(adversarylabs.DefaultRegistry)
+			auth, ok, err := store.RemoveAuth(adversarylabs.ResolveRegistryHost())
 			if err != nil {
 				return err
 			}
@@ -421,26 +429,42 @@ func newLogoutCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 	return cmd
 }
 
-func newPushCommand(stdout, stderr io.Writer) *cobra.Command {
+func newPushCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "push <reference>",
-		Short: "Package and push the current adversary to an OCI registry",
-		Example: `  adversary push security-reviewer
-  adversary push adversarylabs/security-reviewer
-  adversary push ghcr.io/acme/security-reviewer
-  adversary push localhost:5000/security-reviewer`,
-		Args: cobra.ExactArgs(1),
+		Use:   "push <local-ref> [remote-ref]",
+		Short: "Push a locally packed adversary to an OCI registry",
+		Example: `  adversary push dockerfile-reviewer:0.1.0
+  adversary push security-reviewer:0.1.0 ghcr.io/acme/security-reviewer:0.1.0
+  adversary push sha256:abc123 ghcr.io/acme/security-reviewer:0.1.0
+  adversary push ghcr.io/acme/security-reviewer:0.1.0`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ref, err := oci.ParseReference(args[0])
+			localRef := args[0]
+			remoteRef := ""
+			if len(args) == 2 {
+				remoteRef = args[1]
+			} else {
+				remoteRef = localRef
+			}
+			localStore, err := store.Default()
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(stderr, "Packaging adversary...")
-			pkg, err := adversarypkg.PackageDirectory(".")
+			record, err := localStore.Inspect(localRef)
 			if err != nil {
 				return err
 			}
-			manifest, _, err := adversarypkg.BuildOCIManifest(pkg)
+			if len(args) == 1 && !hasExplicitRegistry(localRef) {
+				remoteRef, err = defaultAdversaryLabsPushRef(cmd.Context(), localRef, record, valueOf(apiURL))
+				if err != nil {
+					return err
+				}
+			}
+			ref, err := oci.ParseReference(remoteRef)
+			if err != nil {
+				return err
+			}
+			manifest, blobs, err := localStore.OCIPayload(record)
 			if err != nil {
 				return err
 			}
@@ -448,9 +472,12 @@ func newPushCommand(stdout, stderr io.Writer) *cobra.Command {
 			if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
 				registry.PlainHTTP = true
 			}
+			fmt.Fprintln(stderr, "Pushing adversary...")
+			fmt.Fprintf(stderr, "Local:  %s\n", localRef)
+			fmt.Fprintf(stderr, "Remote: %s\n", ref.Locator())
 			fmt.Fprintln(stderr, "Pushing layers...")
 			fmt.Fprintln(stderr, "Pushing manifest...")
-			digest, err := registry.Push(cmd.Context(), ref, manifest, pkg.Blobs())
+			digest, err := registry.Push(cmd.Context(), ref, manifest, blobs)
 			if err != nil {
 				return err
 			}
@@ -527,7 +554,7 @@ func newSearchCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 				return err
 			}
 			var token string
-			if auth, ok := store.Auth(adversarylabs.DefaultRegistry); ok {
+			if auth, ok := store.Auth(adversarylabs.ResolveRegistryHost()); ok {
 				token = auth.Token
 			}
 			client := adversarylabs.NewClientWithBaseURL(store, valueOf(apiURL))
@@ -571,7 +598,7 @@ func newWhoamiCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			auth, ok := store.Auth(adversarylabs.DefaultRegistry)
+			auth, ok := store.Auth(adversarylabs.ResolveRegistryHost())
 			if !ok {
 				fmt.Fprintln(stdout, "Not logged in.")
 				fmt.Fprintln(stdout)
@@ -630,6 +657,9 @@ func renderStoreInspect(stdout io.Writer, record store.Record, asJSON bool) erro
 	fmt.Fprintf(stdout, "Version: %s\n", record.Version)
 	fmt.Fprintf(stdout, "Digest: %s\n", record.Digest)
 	fmt.Fprintf(stdout, "Runtime: %s\n", record.Runtime)
+	if record.RuntimeName != "" {
+		fmt.Fprintf(stdout, "Runtime Requirement: %s@%s\n", record.RuntimeName, record.RuntimeVersion)
+	}
 	fmt.Fprintf(stdout, "Entrypoint: %s\n", strings.Join(record.Entrypoint, " "))
 	permissions, _ := json.Marshal(record.Permissions)
 	if len(permissions) == 0 || string(permissions) == "null" {
@@ -876,4 +906,143 @@ func hasLocalhostPort(registry string) bool {
 	return registry == "127.0.0.1" || registry == "[::1]" ||
 		len(registry) > len("localhost:") && registry[:len("localhost:")] == "localhost:" ||
 		len(registry) > len("127.0.0.1:") && registry[:len("127.0.0.1:")] == "127.0.0.1:"
+}
+
+func hasExplicitRegistry(ref string) bool {
+	name := ref
+	if before, _, ok := strings.Cut(name, "@"); ok {
+		name = before
+	}
+	lastSlash := strings.LastIndex(name, "/")
+	lastColon := strings.LastIndex(name, ":")
+	if lastColon > lastSlash {
+		name = name[:lastColon]
+	}
+	first, _, ok := strings.Cut(name, "/")
+	if !ok {
+		return false
+	}
+	return strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost"
+}
+
+func defaultAdversaryLabsPushRef(ctx context.Context, localRef string, record store.Record, apiURL string) (string, error) {
+	configStore, err := adversarylabs.DefaultConfigStore()
+	if err != nil {
+		return "", err
+	}
+	registryHost := adversarylabs.ResolveRegistryHost()
+	auth, ok := configStore.Auth(registryHost)
+	if !ok {
+		if registryHost != adversarylabs.DefaultRegistry {
+			namespace := cleanRegistryNamespace(os.Getenv("ADVERSARY_REGISTRY_NAMESPACE"))
+			if namespace == "" {
+				namespace = oci.DefaultNamespace
+			}
+			return defaultRegistryPushRef(registryHost, namespace, record), nil
+		}
+		return "", fmt.Errorf("remote reference is required for unqualified local ref %q; run adversary login or provide a remote reference", localRef)
+	}
+	namespace := registryNamespaceFromAuth(auth)
+	if namespace == "" {
+		client := adversarylabs.NewClientWithBaseURL(configStore, apiURL)
+		account, err := client.Whoami(ctx, auth.Token)
+		if err != nil {
+			if registryHost != adversarylabs.DefaultRegistry {
+				namespace = oci.DefaultNamespace
+			} else {
+				return "", err
+			}
+		} else {
+			namespace = registryNamespaceFromAccount(account)
+		}
+	}
+	namespace = cleanRegistryNamespace(namespace)
+	if namespace == "" {
+		if registryHost != adversarylabs.DefaultRegistry {
+			namespace = oci.DefaultNamespace
+		}
+	}
+	if namespace == "" {
+		return "", fmt.Errorf("logged in, but Adversary Labs did not provide a registry namespace; provide a remote reference explicitly")
+	}
+	return defaultRegistryPushRef(registryHost, namespace, record), nil
+}
+
+func defaultRegistryPushRef(registryHost, namespace string, record store.Record) string {
+	name := manifestNameForRemote(record.Name)
+	tag := record.Version
+	if tag == "" {
+		tag = oci.DefaultTag
+	}
+	return registryHost + "/" + namespace + "/" + name + ":" + tag
+}
+
+func registryNamespaceFromAuth(auth adversarylabs.Auth) string {
+	for _, value := range []string{
+		os.Getenv("ADVERSARY_REGISTRY_NAMESPACE"),
+		auth.RegistryNamespace,
+		auth.Namespace,
+		auth.Team,
+	} {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func registryNamespaceFromAccount(account adversarylabs.WhoamiResponse) string {
+	for _, value := range []string{
+		account.RegistryNamespace,
+		account.Namespace,
+		account.Team.Slug,
+		account.Team.Name,
+		account.Organization.Slug,
+		account.Organization.Name,
+	} {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	for _, team := range account.Teams {
+		if strings.TrimSpace(team.Slug) != "" {
+			return team.Slug
+		}
+		if strings.TrimSpace(team.Name) != "" {
+			return team.Name
+		}
+	}
+	return ""
+}
+
+func manifestNameForRemote(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "adversary"
+	}
+	parts := strings.Split(name, "/")
+	last := strings.TrimSpace(parts[len(parts)-1])
+	if last == "" {
+		return "adversary"
+	}
+	return last
+}
+
+func cleanRegistryNamespace(namespace string) string {
+	namespace = strings.TrimSpace(strings.ToLower(namespace))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range namespace {
+		valid := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.'
+		if valid {
+			b.WriteRune(r)
+			lastDash = r == '-'
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-.")
 }

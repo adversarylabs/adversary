@@ -14,6 +14,18 @@ adversary run . --repo /path/to/repository
 
 Only the TypeScript SDK is supported by `init` today. The generated project includes a working manifest, starter rule, fixtures, and tests.
 
+Generated TypeScript adversaries declare their runtime requirement in `adversary.yaml`:
+
+```yaml
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.js
+```
+
+`adversary run` uses that requirement to resolve the right Node runtime. It checks `ADVERSARY_NODE_PATH` for local overrides, then the CLI-managed runtime store, then a matching system `node`.
+
 ## Usage
 
 ```sh
@@ -74,9 +86,12 @@ Package the current adversary into the local content-addressable store:
 ```sh
 adversary pack .
 adversary pack . --builder docker
+adversary pack . --name ghcr.io/acme/security-reviewer
 ```
 
-`pack` reads `adversary.yaml`, validates the manifest, detects the runtime, runs the TypeScript build when needed, creates deterministic OCI-style artifact content, writes content by digest, and updates local refs. It does not create or tag a Docker image. Packed adversaries are run through the Adversary CLI, which materializes the artifact and executes it with the appropriate CLI-managed runtime. Use `--builder docker` to run the TypeScript build inside Docker/BuildKit; this supports remote builders that honor `docker build --output`, such as CI builders configured through `DOCKER_HOST`.
+`pack` reads `adversary.yaml`, validates the manifest, records the runtime requirement, detects the artifact runtime, runs the TypeScript build when needed, creates deterministic OCI-style artifact content, writes content by digest, and updates local refs. It does not create or tag a Docker image. Packed adversaries are run through the Adversary CLI, which materializes the artifact and executes it with the appropriate CLI-managed runtime. Use `--builder docker` to run the TypeScript build inside Docker/BuildKit; this supports remote builders that honor `docker build --output`, such as CI builders configured through `DOCKER_HOST`.
+
+Use `--name` to override the local artifact name without changing `adversary.yaml`. This is useful when you want the local ref to match the remote OCI repository.
 
 ```text
 refs/security-reviewer/0.1.0
@@ -123,11 +138,24 @@ Packaging applies safe default ignores for `node_modules/`, `.git/`, `.env`, `.e
 Adversaries can be packaged as OCI artifacts and pushed to any OCI-compatible registry:
 
 ```sh
-adversary push security-reviewer
-adversary push adversarylabs/security-reviewer
-adversary push ghcr.io/acme/security-reviewer
-adversary push registry.company.com/team/security-reviewer
+adversary pack .
+adversary push security-reviewer:0.1.0
+adversary push security-reviewer:0.1.0 ghcr.io/acme/security-reviewer:0.1.0
+adversary push sha256:abc123 ghcr.io/acme/security-reviewer:0.1.0
+adversary pack . --name ghcr.io/acme/security-reviewer
+adversary push ghcr.io/acme/security-reviewer:0.1.0
 ```
+
+`push` uploads an existing local artifact. With two arguments, the first is the local ref and the second is the remote OCI ref. With one registry-qualified argument, the local ref is also the remote ref, usually by packing with `--name`. With one unqualified argument, you must be logged in; the CLI pushes to `registry.adversarylabs.ai/<team>/<name>:<version>`.
+
+For local development, set `ADVERSARY_REGISTRY_HOST` to override the default registry host:
+
+```sh
+export ADVERSARY_REGISTRY_HOST=localhost:5000
+adversary push security-reviewer:0.1.0
+```
+
+That resolves to `localhost:5000/library/security-reviewer:0.1.0` when no namespace is available. Set `ADVERSARY_REGISTRY_NAMESPACE` to test a team namespace locally.
 
 Pull works the same way:
 

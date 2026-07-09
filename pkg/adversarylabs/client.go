@@ -41,9 +41,12 @@ type DeviceLogin struct {
 }
 
 type TokenResponse struct {
-	Token     string `json:"token"`
-	ClientID  string `json:"client_id"`
-	ExpiresAt string `json:"expires_at"`
+	Token             string `json:"token"`
+	ClientID          string `json:"client_id"`
+	ExpiresAt         string `json:"expires_at"`
+	RegistryNamespace string `json:"registry_namespace,omitempty"`
+	Namespace         string `json:"namespace,omitempty"`
+	Team              string `json:"team,omitempty"`
 }
 
 type BrowserLoginOptions struct {
@@ -60,11 +63,22 @@ type SearchResult struct {
 }
 
 type WhoamiResponse struct {
-	ID           string       `json:"id,omitempty"`
-	Name         string       `json:"name,omitempty"`
-	Email        string       `json:"email,omitempty"`
-	EmailAddress string       `json:"email_address,omitempty"`
-	Subscription Subscription `json:"subscription,omitempty"`
+	ID                string       `json:"id,omitempty"`
+	Name              string       `json:"name,omitempty"`
+	Email             string       `json:"email,omitempty"`
+	EmailAddress      string       `json:"email_address,omitempty"`
+	RegistryNamespace string       `json:"registry_namespace,omitempty"`
+	Namespace         string       `json:"namespace,omitempty"`
+	Team              Team         `json:"team,omitempty"`
+	Teams             []Team       `json:"teams,omitempty"`
+	Organization      Team         `json:"organization,omitempty"`
+	Subscription      Subscription `json:"subscription,omitempty"`
+}
+
+type Team struct {
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
+	Slug string `json:"slug,omitempty"`
 }
 
 type Subscription struct {

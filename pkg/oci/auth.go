@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -142,7 +143,12 @@ func readBearerToken(client *http.Client, challenge bearerChallenge, scope strin
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("token request failed: %s", resp.Status)
+		data, _ := io.ReadAll(resp.Body)
+		text := strings.TrimSpace(string(data))
+		if text == "" {
+			text = resp.Status
+		}
+		return "", fmt.Errorf("token request failed: %s: %s: %s", resp.Status, tokenURL, text)
 	}
 	var body struct {
 		Token       string `json:"token"`
