@@ -12,7 +12,7 @@ import (
 type Descriptor struct {
 	MediaType    string            `json:"mediaType"`
 	Digest       string            `json:"digest"`
-	Size         int64             `json:"size"`
+	Size         int64             `json:"size,omitempty"`
 	ArtifactType string            `json:"artifactType,omitempty"`
 	Annotations  map[string]string `json:"annotations,omitempty"`
 }

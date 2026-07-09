@@ -22,25 +22,29 @@ type Store struct {
 }
 
 type Record struct {
-	Name           string            `json:"name"`
-	Version        string            `json:"version"`
-	Digest         string            `json:"digest"`
-	Runtime        string            `json:"runtime"`
-	RuntimeName    string            `json:"runtimeName,omitempty"`
-	RuntimeVersion string            `json:"runtimeVersion,omitempty"`
-	Entrypoint     []string          `json:"entrypoint,omitempty"`
-	Permissions    any               `json:"permissions,omitempty"`
-	Size           int64             `json:"size"`
-	Created        time.Time         `json:"created"`
-	ConfigDigest   string            `json:"configDigest"`
-	LayerDigest    string            `json:"layerDigest"`
-	Files          []pack.File       `json:"files"`
-	Annotations    map[string]string `json:"annotations,omitempty"`
-	Manifest       oci.Manifest      `json:"manifest"`
-	ManifestPath   string            `json:"manifestPath,omitempty"`
-	ConfigPath     string            `json:"configPath,omitempty"`
-	LayerPath      string            `json:"layerPath,omitempty"`
+	Name                    string            `json:"name"`
+	Version                 string            `json:"version"`
+	Digest                  string            `json:"digest"`
+	AdversaryManifestDigest string            `json:"adversaryManifestDigest,omitempty"`
+	Runtime                 string            `json:"runtime"`
+	RuntimeName             string            `json:"runtimeName,omitempty"`
+	RuntimeVersion          string            `json:"runtimeVersion,omitempty"`
+	Entrypoint              []string          `json:"entrypoint,omitempty"`
+	Permissions             any               `json:"permissions,omitempty"`
+	Size                    int64             `json:"size"`
+	Created                 time.Time         `json:"created"`
+	ConfigDigest            string            `json:"configDigest"`
+	LayerDigest             string            `json:"layerDigest"`
+	Files                   []pack.File       `json:"files"`
+	Annotations             map[string]string `json:"annotations,omitempty"`
+	Manifest                oci.Manifest      `json:"manifest"`
+	ManifestPath            string            `json:"manifestPath,omitempty"`
+	AdversaryManifestPath   string            `json:"adversaryManifestPath,omitempty"`
+	ConfigPath              string            `json:"configPath,omitempty"`
+	LayerPath               string            `json:"layerPath,omitempty"`
 }
+
+const MaxAdversaryManifestSize = 1 << 20
 
 func Default() (Store, error) {
 	if override := strings.TrimSpace(os.Getenv("ADVERSARY_DATA_DIR")); override != "" {
@@ -73,25 +77,33 @@ func (s Store) Put(artifact pack.Artifact) (Record, error) {
 	if err := s.writeContent("manifests", artifact.ManifestDigest, artifact.Manifest); err != nil {
 		return Record{}, err
 	}
+	if err := validateAdversaryManifest(artifact.AdversaryManifest); err != nil {
+		return Record{}, err
+	}
+	if err := s.writeContent("adversary-manifests", artifact.AdversaryManifestDigest, artifact.AdversaryManifest); err != nil {
+		return Record{}, err
+	}
 	record := Record{
-		Name:           artifact.Name,
-		Version:        artifact.Version,
-		Digest:         artifact.ManifestDigest,
-		Runtime:        artifact.Runtime,
-		RuntimeName:    artifact.RuntimeName,
-		RuntimeVersion: artifact.RuntimeVersion,
-		Entrypoint:     artifact.Entrypoint,
-		Permissions:    artifact.Permissions,
-		Size:           artifact.Size,
-		Created:        time.Now().UTC(),
-		ConfigDigest:   artifact.ConfigDigest,
-		LayerDigest:    artifact.LayerDigest,
-		Files:          artifact.Files,
-		Annotations:    artifact.OCIManifest.Annotations,
-		Manifest:       artifact.OCIManifest,
-		ManifestPath:   s.contentPath("manifests", artifact.ManifestDigest),
-		ConfigPath:     s.contentPath("blobs", artifact.ConfigDigest),
-		LayerPath:      s.contentPath("blobs", artifact.LayerDigest),
+		Name:                    artifact.Name,
+		Version:                 artifact.Version,
+		Digest:                  artifact.ManifestDigest,
+		AdversaryManifestDigest: artifact.AdversaryManifestDigest,
+		Runtime:                 artifact.Runtime,
+		RuntimeName:             artifact.RuntimeName,
+		RuntimeVersion:          artifact.RuntimeVersion,
+		Entrypoint:              artifact.Entrypoint,
+		Permissions:             artifact.Permissions,
+		Size:                    artifact.Size,
+		Created:                 time.Now().UTC(),
+		ConfigDigest:            artifact.ConfigDigest,
+		LayerDigest:             artifact.LayerDigest,
+		Files:                   artifact.Files,
+		Annotations:             artifact.OCIManifest.Annotations,
+		Manifest:                artifact.OCIManifest,
+		ManifestPath:            s.contentPath("manifests", artifact.ManifestDigest),
+		AdversaryManifestPath:   s.contentPath("adversary-manifests", artifact.AdversaryManifestDigest),
+		ConfigPath:              s.contentPath("blobs", artifact.ConfigDigest),
+		LayerPath:               s.contentPath("blobs", artifact.LayerDigest),
 	}
 	if old, ok := s.resolveDigest(artifact.ManifestDigest); ok {
 		record.Created = old.Created
@@ -245,6 +257,33 @@ func (s Store) OCIPayload(record Record) ([]byte, []oci.Blob, error) {
 	return manifestData, blobs, nil
 }
 
+func (s Store) AdversaryManifest(record Record) ([]byte, error) {
+	path := record.AdversaryManifestPath
+	if path == "" && record.AdversaryManifestDigest != "" {
+		path = s.contentPath("adversary-manifests", record.AdversaryManifestDigest)
+	}
+	if path == "" {
+		materialized, err := s.MaterializeRecord(record)
+		if err != nil {
+			return nil, err
+		}
+		path = filepath.Join(materialized, "adversary.yaml")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("adversary.yaml is required for publishing: %w", err)
+	}
+	if err := validateAdversaryManifest(data); err != nil {
+		return nil, err
+	}
+	if record.AdversaryManifestDigest != "" {
+		if err := oci.VerifyDigest(data, record.AdversaryManifestDigest); err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
+}
+
 func (s Store) MaterializeRecord(record Record) (string, error) {
 	algo, value, ok := strings.Cut(record.Digest, ":")
 	if !ok || algo == "" || value == "" {
@@ -302,10 +341,32 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 			return "", err
 		}
 	}
+	manifestPath := filepath.Join(destination, "adversary.yaml")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		data, err := s.AdversaryManifest(record)
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(manifestPath, data, 0644); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	}
 	if err := prepareRuntimeNodeModules(destination); err != nil {
 		return "", err
 	}
 	return destination, nil
+}
+
+func validateAdversaryManifest(data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("adversary.yaml is empty")
+	}
+	if len(data) > MaxAdversaryManifestSize {
+		return fmt.Errorf("adversary.yaml is too large: %d bytes exceeds %d bytes", len(data), MaxAdversaryManifestSize)
+	}
+	return nil
 }
 
 func prepareRuntimeNodeModules(destination string) error {

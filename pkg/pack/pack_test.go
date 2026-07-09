@@ -43,6 +43,29 @@ func TestCreateStoresRuntimeRequirement(t *testing.T) {
 	}
 }
 
+func TestCreateStoresAdversaryManifestOutsideImageLayer(t *testing.T) {
+	dir := testProject(t)
+	manifestBytes, err := os.ReadFile(filepath.Join(dir, "adversary.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(artifact.AdversaryManifest) != string(manifestBytes) {
+		t.Fatal("adversary manifest bytes were not preserved exactly")
+	}
+	if artifact.AdversaryManifestDigest == "" {
+		t.Fatal("adversary manifest digest missing")
+	}
+	for _, file := range artifact.Files {
+		if file.Path == "adversary.yaml" {
+			t.Fatal("adversary.yaml must not be included in the runnable image layer")
+		}
+	}
+}
+
 func TestCreateNameOverride(t *testing.T) {
 	dir := testProject(t)
 	artifact, err := Create(context.Background(), Options{Dir: dir, NameOverride: "ghcr.io/acme/security-reviewer"})

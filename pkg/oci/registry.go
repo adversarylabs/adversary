@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -46,12 +47,43 @@ func (r *HTTPRegistry) Push(ctx context.Context, ref Reference, manifest []byte,
 			return "", err
 		}
 	}
+	return r.pushManifest(ctx, ref, ref.ManifestReference(), ImageManifestMediaType, manifest)
+}
+
+func (r *HTTPRegistry) PushAdversaryManifestReferrer(ctx context.Context, imageRef Reference, imageDigest string, yaml []byte) (string, string, error) {
+	yamlBlob := Blob{
+		Descriptor: Descriptor{
+			MediaType: AdversaryManifestMediaType,
+			Digest:    Digest(yaml),
+			Size:      int64(len(yaml)),
+		},
+		Data: yaml,
+	}
+	if err := r.pushBlob(ctx, imageRef, yamlBlob); err != nil {
+		return "", "", err
+	}
+	artifactManifest, _, _, err := NewAdversaryManifestArtifact(imageDigest, yaml)
+	if err != nil {
+		return "", "", err
+	}
+	artifactTag, err := AdversaryManifestArtifactTag(imageDigest)
+	if err != nil {
+		return "", "", err
+	}
+	digest, err := r.pushManifest(ctx, imageRef, artifactTag, OCIArtifactManifestMediaType, artifactManifest)
+	if err != nil {
+		return "", "", err
+	}
+	return digest, artifactTag, nil
+}
+
+func (r *HTTPRegistry) pushManifest(ctx context.Context, ref Reference, manifestReference, mediaType string, manifest []byte) (string, error) {
 	digest := Digest(manifest)
-	req, err := r.newRequest(ctx, http.MethodPut, ref, "/manifests/"+ref.ManifestReference(), bytes.NewReader(manifest))
+	req, err := r.newRequest(ctx, http.MethodPut, ref, "/manifests/"+manifestReference, bytes.NewReader(manifest))
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", ImageManifestMediaType)
+	req.Header.Set("Content-Type", mediaType)
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(manifest)))
 	resp, err := r.do(req, ref, "repository:"+ref.Repository+":push,pull")
 	if err != nil {
@@ -88,7 +120,11 @@ func (r *HTTPRegistry) Pull(ctx context.Context, ref Reference) (PulledArtifact,
 		}
 		blobs[descriptor.Digest] = data
 	}
-	return PulledArtifact{Reference: ref, Manifest: manifest, ManifestDigest: manifestDigest, Blobs: blobs}, nil
+	adversaryManifest, err := r.getAdversaryManifestReferrer(ctx, ref, manifestDigest)
+	if err != nil {
+		return PulledArtifact{}, err
+	}
+	return PulledArtifact{Reference: ref, Manifest: manifest, ManifestDigest: manifestDigest, AdversaryManifest: adversaryManifest, Blobs: blobs}, nil
 }
 
 func (r *HTTPRegistry) Resolve(ctx context.Context, ref Reference) (string, error) {
@@ -141,7 +177,11 @@ func (r *HTTPRegistry) pushBlob(ctx context.Context, ref Reference, blob Blob) e
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/octet-stream")
+	contentType := blob.Descriptor.MediaType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(blob.Data)))
 	resp, err = r.do(req, ref, "repository:"+ref.Repository+":push,pull")
 	if err != nil {
@@ -180,6 +220,74 @@ func (r *HTTPRegistry) getManifest(ctx context.Context, ref Reference) ([]byte, 
 		return nil, "", err
 	}
 	return data, digest, nil
+}
+
+func (r *HTTPRegistry) getArtifactManifest(ctx context.Context, ref Reference, digest string) ([]byte, string, error) {
+	req, err := r.newRequest(ctx, http.MethodGet, ref, "/manifests/"+digest, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Accept", OCIArtifactManifestMediaType)
+	resp, err := r.do(req, ref, "repository:"+ref.Repository+":pull")
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", registryError(resp)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	got := resp.Header.Get("Docker-Content-Digest")
+	if got == "" {
+		got = Digest(data)
+	}
+	if err := VerifyDigest(data, got); err != nil {
+		return nil, "", err
+	}
+	return data, got, nil
+}
+
+func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Reference, imageDigest string) ([]byte, error) {
+	req, err := r.newRequest(ctx, http.MethodGet, ref, "/referrers/"+imageDigest+"?artifactType="+url.QueryEscape(AdversaryManifestMediaType), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.do(req, ref, "repository:"+ref.Repository+":pull")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, registryError(resp)
+	}
+	var referrers ReferrersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&referrers); err != nil {
+		return nil, err
+	}
+	for _, descriptor := range referrers.Manifests {
+		if descriptor.ArtifactType != AdversaryManifestMediaType {
+			continue
+		}
+		data, _, err := r.getArtifactManifest(ctx, ref, descriptor.Digest)
+		if err != nil {
+			return nil, err
+		}
+		var artifact ArtifactManifest
+		if err := json.Unmarshal(data, &artifact); err != nil {
+			return nil, err
+		}
+		if artifact.ArtifactType != AdversaryManifestMediaType || artifact.Subject.Digest != imageDigest || len(artifact.Blobs) != 1 {
+			continue
+		}
+		return r.getBlob(ctx, ref, artifact.Blobs[0])
+	}
+	return nil, nil
 }
 
 func (r *HTTPRegistry) getBlob(ctx context.Context, ref Reference, descriptor Descriptor) ([]byte, error) {

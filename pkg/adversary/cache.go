@@ -48,6 +48,19 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if err != nil {
 		return InstallRecord{}, err
 	}
+	if len(artifact.AdversaryManifest) > 0 {
+		if err := os.WriteFile(filepath.Join(destination, ManifestFile), artifact.AdversaryManifest, 0644); err != nil {
+			return InstallRecord{}, err
+		}
+		if metadata.Name == "" {
+			name, version := parseManifestIdentity(string(artifact.AdversaryManifest))
+			metadata.Name = name
+			metadata.Version = version
+		}
+	}
+	if metadata.Name == "" {
+		return InstallRecord{}, fmt.Errorf("%s is required", ManifestFile)
+	}
 	record := InstallRecord{
 		Name:           metadata.Name,
 		Version:        metadata.Version,

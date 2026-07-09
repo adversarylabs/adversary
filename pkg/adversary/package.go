@@ -273,12 +273,11 @@ func ExtractLayer(layer []byte, destination string) (ManifestMetadata, error) {
 	}
 	if metadata.Name == "" {
 		manifestData, err := os.ReadFile(filepath.Join(destination, ManifestFile))
-		if err != nil {
-			return ManifestMetadata{}, err
+		if err == nil {
+			name, version := parseManifestIdentity(string(manifestData))
+			metadata.Name = name
+			metadata.Version = version
 		}
-		name, version := parseManifestIdentity(string(manifestData))
-		metadata.Name = name
-		metadata.Version = version
 	}
 	return metadata, nil
 }

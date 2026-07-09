@@ -32,23 +32,25 @@ type Options struct {
 }
 
 type Artifact struct {
-	Name           string
-	ManifestName   string
-	Version        string
-	Runtime        string
-	RuntimeName    string
-	RuntimeVersion string
-	Entrypoint     []string
-	Permissions    any
-	Config         []byte
-	Layer          []byte
-	Manifest       []byte
-	ManifestDigest string
-	ConfigDigest   string
-	LayerDigest    string
-	Size           int64
-	Files          []File
-	OCIManifest    oci.Manifest
+	Name                    string
+	ManifestName            string
+	Version                 string
+	Runtime                 string
+	RuntimeName             string
+	RuntimeVersion          string
+	Entrypoint              []string
+	Permissions             any
+	Config                  []byte
+	Layer                   []byte
+	AdversaryManifest       []byte
+	Manifest                []byte
+	ManifestDigest          string
+	AdversaryManifestDigest string
+	ConfigDigest            string
+	LayerDigest             string
+	Size                    int64
+	Files                   []File
+	OCIManifest             oci.Manifest
 }
 
 type File struct {
@@ -67,6 +69,10 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		return Artifact{}, err
 	}
 	m, err := manifest.Load(filepath.Join(dir, manifest.FileName))
+	if err != nil {
+		return Artifact{}, err
+	}
+	adversaryManifest, err := os.ReadFile(filepath.Join(dir, manifest.FileName))
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -142,23 +148,25 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		return Artifact{}, err
 	}
 	return Artifact{
-		Name:           name,
-		ManifestName:   m.Name,
-		Version:        version,
-		Runtime:        runtime,
-		RuntimeName:    runtimeName(m),
-		RuntimeVersion: m.Runtime.Version,
-		Entrypoint:     m.Runtime.Command,
-		Permissions:    m.Permissions,
-		Config:         config,
-		Layer:          layer,
-		Manifest:       manifestData,
-		ManifestDigest: manifestDigest,
-		ConfigDigest:   oci.Digest(config),
-		LayerDigest:    oci.Digest(layer),
-		Size:           int64(len(config) + len(layer) + len(manifestData)),
-		Files:          files,
-		OCIManifest:    ociManifest,
+		Name:                    name,
+		ManifestName:            m.Name,
+		Version:                 version,
+		Runtime:                 runtime,
+		RuntimeName:             runtimeName(m),
+		RuntimeVersion:          m.Runtime.Version,
+		Entrypoint:              m.Runtime.Command,
+		Permissions:             m.Permissions,
+		Config:                  config,
+		Layer:                   layer,
+		AdversaryManifest:       adversaryManifest,
+		Manifest:                manifestData,
+		ManifestDigest:          manifestDigest,
+		AdversaryManifestDigest: oci.Digest(adversaryManifest),
+		ConfigDigest:            oci.Digest(config),
+		LayerDigest:             oci.Digest(layer),
+		Size:                    int64(len(config) + len(layer) + len(manifestData)),
+		Files:                   files,
+		OCIManifest:             ociManifest,
 	}, nil
 }
 
@@ -340,6 +348,9 @@ func collectFiles(dir string) ([]File, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		if rel == manifest.FileName {
+			return nil
+		}
 		if ignore.ignored(rel, entry.IsDir()) {
 			if entry.IsDir() {
 				return filepath.SkipDir

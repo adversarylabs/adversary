@@ -437,11 +437,75 @@ func TestPushPullAgainstLocalOCIRegistry(t *testing.T) {
 	if err := push.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(pushStdout.String(), "Digest:\n\nsha256:") {
-		t.Fatalf("push output missing digest:\n%s", pushStdout.String())
+	if !strings.Contains(pushStdout.String(), "Image digest\n\nsha256:") {
+		t.Fatalf("push output missing image digest:\n%s", pushStdout.String())
 	}
-	if registry.manifestCount() != 1 {
-		t.Fatalf("expected one pushed manifest, got %d", registry.manifestCount())
+	if !strings.Contains(pushStdout.String(), "Published adversary manifest referrer\n\nsha256:") {
+		t.Fatalf("push output missing adversary manifest referrer digest:\n%s", pushStdout.String())
+	}
+	if registry.manifestCount() != 2 {
+		t.Fatalf("expected image and artifact manifests, got %d", registry.manifestCount())
+	}
+	imageKey := "acme/security-reviewer/v1"
+	imageManifest := registry.manifest(t, imageKey)
+	imageDigest := oci.Digest(imageManifest)
+	artifactTag, err := oci.AdversaryManifestArtifactTag(imageDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifactTag == "v1" {
+		t.Fatal("artifact tag must not overwrite image tag")
+	}
+	artifactManifest := registry.manifest(t, "acme/security-reviewer/"+artifactTag)
+	if registry.manifestContentType("acme/security-reviewer/"+artifactTag) != oci.OCIArtifactManifestMediaType {
+		t.Fatalf("artifact manifest content type = %q", registry.manifestContentType("acme/security-reviewer/"+artifactTag))
+	}
+	var artifact oci.ArtifactManifest
+	if err := json.Unmarshal(artifactManifest, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	manifestBytes := []byte(`name: local/security-reviewer
+version: 1.4.2
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.js
+`)
+	if artifact.MediaType != oci.OCIArtifactManifestMediaType {
+		t.Fatalf("artifact mediaType = %q", artifact.MediaType)
+	}
+	if artifact.ArtifactType != oci.AdversaryManifestMediaType {
+		t.Fatalf("artifactType = %q", artifact.ArtifactType)
+	}
+	if artifact.Subject.MediaType != oci.ImageManifestMediaType || artifact.Subject.Digest != imageDigest {
+		t.Fatalf("subject = %#v, image digest %s", artifact.Subject, imageDigest)
+	}
+	if len(artifact.Blobs) != 1 {
+		t.Fatalf("artifact blobs = %d", len(artifact.Blobs))
+	}
+	yamlBlob := artifact.Blobs[0]
+	if yamlBlob.MediaType != oci.AdversaryManifestMediaType || yamlBlob.Digest != oci.Digest(manifestBytes) || yamlBlob.Size != int64(len(manifestBytes)) {
+		t.Fatalf("yaml blob descriptor = %#v", yamlBlob)
+	}
+	if registry.blobContentType(yamlBlob.Digest) != oci.AdversaryManifestMediaType {
+		t.Fatalf("yaml blob content type = %q", registry.blobContentType(yamlBlob.Digest))
+	}
+	if got := string(registry.blob(t, yamlBlob.Digest)); got != string(manifestBytes) {
+		t.Fatalf("yaml blob bytes changed:\n%s", got)
+	}
+	if got := registry.manifest(t, imageKey); string(got) != string(imageManifest) {
+		t.Fatal("image tag no longer resolves to runnable image manifest")
+	}
+	var retryStdout bytes.Buffer
+	var retryStderr bytes.Buffer
+	retry := NewRootCommand(&retryStdout, &retryStderr)
+	retry.SetArgs([]string{"push", "security-reviewer:1.4.2", host + "/acme/security-reviewer:v1"})
+	if err := retry.Execute(); err != nil {
+		t.Fatalf("retry push: %v", err)
+	}
+	if registry.manifestCount() != 2 {
+		t.Fatalf("retry should not create extra manifest refs, got %d", registry.manifestCount())
 	}
 
 	pullDir := t.TempDir()
@@ -465,6 +529,82 @@ func TestPushPullAgainstLocalOCIRegistry(t *testing.T) {
 	}
 }
 
+func TestPushMissingAdversaryManifestFailsBeforeImageUpload(t *testing.T) {
+	registry := newTestOCIRegistry()
+	server := httptest.NewServer(registry)
+	defer server.Close()
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
+	project := t.TempDir()
+	writeProject(t, project)
+	t.Chdir(project)
+
+	var packStdout bytes.Buffer
+	var packStderr bytes.Buffer
+	packCmd := NewRootCommand(&packStdout, &packStderr)
+	packCmd.SetArgs([]string{"pack", "."})
+	if err := packCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	localStore, err := store.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := localStore.Inspect("security-reviewer:1.4.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(record.AdversaryManifestPath); err != nil {
+		t.Fatal(err)
+	}
+
+	host := strings.TrimPrefix(server.URL, "http://")
+	var pushStdout bytes.Buffer
+	var pushStderr bytes.Buffer
+	push := NewRootCommand(&pushStdout, &pushStderr)
+	push.SetArgs([]string{"push", "security-reviewer:1.4.2", host + "/acme/security-reviewer:v1"})
+	err = push.Execute()
+	if err == nil {
+		t.Fatal("expected missing adversary.yaml error")
+	}
+	if !strings.Contains(err.Error(), "adversary.yaml is required for publishing") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if registry.manifestCount() != 0 {
+		t.Fatalf("image should not be pushed after missing manifest validation, got %d manifests", registry.manifestCount())
+	}
+}
+
+func TestPackRejectsOversizedAdversaryManifest(t *testing.T) {
+	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
+	project := t.TempDir()
+	writeProject(t, project)
+	f, err := os.OpenFile(filepath.Join(project, "adversary.yaml"), os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString("# " + strings.Repeat("x", store.MaxAdversaryManifestSize) + "\n")
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var packStdout bytes.Buffer
+	var packStderr bytes.Buffer
+	packCmd := NewRootCommand(&packStdout, &packStderr)
+	packCmd.SetArgs([]string{"pack", project})
+	err = packCmd.Execute()
+	if err == nil {
+		t.Fatal("expected oversized adversary.yaml error")
+	}
+	if !strings.Contains(err.Error(), "adversary.yaml is too large") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func extractDigest(t *testing.T, output string) string {
 	t.Helper()
 	for _, line := range strings.Split(output, "\n") {
@@ -477,15 +617,23 @@ func extractDigest(t *testing.T, output string) string {
 }
 
 type testOCIRegistry struct {
-	mu        sync.Mutex
-	blobs     map[string][]byte
-	manifests map[string][]byte
+	mu                   sync.Mutex
+	blobs                map[string][]byte
+	blobContentTypes     map[string]string
+	manifests            map[string][]byte
+	manifestDigests      map[string][]byte
+	manifestContentTypes map[string]string
+	referrers            map[string][]oci.Descriptor
 }
 
 func newTestOCIRegistry() *testOCIRegistry {
 	return &testOCIRegistry{
-		blobs:     map[string][]byte{},
-		manifests: map[string][]byte{},
+		blobs:                map[string][]byte{},
+		blobContentTypes:     map[string]string{},
+		manifests:            map[string][]byte{},
+		manifestDigests:      map[string][]byte{},
+		manifestContentTypes: map[string]string{},
+		referrers:            map[string][]oci.Descriptor{},
 	}
 }
 
@@ -508,6 +656,7 @@ func (r *testOCIRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		data, _ := io.ReadAll(req.Body)
 		r.mu.Lock()
 		r.blobs[digest] = data
+		r.blobContentTypes[digest] = req.Header.Get("Content-Type")
 		r.mu.Unlock()
 		w.Header().Set("Docker-Content-Digest", digest)
 		w.WriteHeader(http.StatusCreated)
@@ -532,21 +681,58 @@ func (r *testOCIRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		digest := oci.Digest(data)
 		r.mu.Lock()
 		r.manifests[key] = data
+		r.manifestDigests[digest] = data
+		r.manifestContentTypes[key] = req.Header.Get("Content-Type")
+		if req.Header.Get("Content-Type") == oci.OCIArtifactManifestMediaType {
+			var artifact oci.ArtifactManifest
+			if err := json.Unmarshal(data, &artifact); err == nil {
+				r.referrers[artifact.Subject.Digest] = append(r.referrers[artifact.Subject.Digest], oci.Descriptor{
+					MediaType:    oci.OCIArtifactManifestMediaType,
+					Digest:       digest,
+					Size:         int64(len(data)),
+					ArtifactType: artifact.ArtifactType,
+				})
+			}
+		}
 		r.mu.Unlock()
 		w.Header().Set("Docker-Content-Digest", digest)
 		w.WriteHeader(http.StatusCreated)
 	case strings.Contains(path, "/manifests/") && req.Method == http.MethodGet:
 		key := manifestKey(path)
+		_, ref, _ := strings.Cut(path, "/manifests/")
 		r.mu.Lock()
 		data, ok := r.manifests[key]
+		if !ok && strings.HasPrefix(ref, "sha256:") {
+			data, ok = r.manifestDigests[ref]
+		}
 		r.mu.Unlock()
 		if !ok {
 			http.NotFound(w, req)
 			return
 		}
-		w.Header().Set("Content-Type", oci.ImageManifestMediaType)
+		if strings.Contains(req.Header.Get("Accept"), oci.OCIArtifactManifestMediaType) {
+			w.Header().Set("Content-Type", oci.OCIArtifactManifestMediaType)
+		} else {
+			w.Header().Set("Content-Type", oci.ImageManifestMediaType)
+		}
 		w.Header().Set("Docker-Content-Digest", oci.Digest(data))
 		_, _ = w.Write(data)
+	case strings.Contains(path, "/referrers/") && req.Method == http.MethodGet:
+		_, digest, _ := strings.Cut(path, "/referrers/")
+		r.mu.Lock()
+		descriptors := append([]oci.Descriptor(nil), r.referrers[digest]...)
+		r.mu.Unlock()
+		if artifactType := req.URL.Query().Get("artifactType"); artifactType != "" {
+			filtered := descriptors[:0]
+			for _, descriptor := range descriptors {
+				if descriptor.ArtifactType == artifactType {
+					filtered = append(filtered, descriptor)
+				}
+			}
+			descriptors = filtered
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(oci.ReferrersResponse{Manifests: descriptors})
 	default:
 		http.NotFound(w, req)
 	}
@@ -556,6 +742,40 @@ func (r *testOCIRegistry) manifestCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.manifests)
+}
+
+func (r *testOCIRegistry) manifest(t *testing.T, key string) []byte {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	data, ok := r.manifests[key]
+	if !ok {
+		t.Fatalf("manifest %q not found", key)
+	}
+	return append([]byte(nil), data...)
+}
+
+func (r *testOCIRegistry) manifestContentType(key string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.manifestContentTypes[key]
+}
+
+func (r *testOCIRegistry) blob(t *testing.T, digest string) []byte {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	data, ok := r.blobs[digest]
+	if !ok {
+		t.Fatalf("blob %q not found", digest)
+	}
+	return append([]byte(nil), data...)
+}
+
+func (r *testOCIRegistry) blobContentType(digest string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.blobContentTypes[digest]
 }
 
 func manifestKey(path string) string {

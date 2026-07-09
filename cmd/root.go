@@ -454,6 +454,10 @@ func newPushCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			adversaryManifest, err := localStore.AdversaryManifest(record)
+			if err != nil {
+				return err
+			}
 			if len(args) == 1 && !hasExplicitRegistry(localRef) {
 				remoteRef, err = defaultAdversaryLabsPushRef(cmd.Context(), localRef, record, valueOf(apiURL))
 				if err != nil {
@@ -481,14 +485,22 @@ func newPushCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return pushErrorWithNamespaceHint(err, localRef, ref)
 			}
+			artifactDigest, _, err := registry.PushAdversaryManifestReferrer(cmd.Context(), ref, digest, adversaryManifest)
+			if err != nil {
+				return fmt.Errorf("image pushed, but adversary.yaml referrer publish failed for %s with image digest %s: %w", ref.Locator(), digest, err)
+			}
 			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, "Published:")
+			fmt.Fprintln(stdout, "Pushed image")
 			fmt.Fprintln(stdout)
 			fmt.Fprintln(stdout, ref.Locator())
 			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, "Digest:")
+			fmt.Fprintln(stdout, "Image digest")
 			fmt.Fprintln(stdout)
 			fmt.Fprintln(stdout, digest)
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, "Published adversary manifest referrer")
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, artifactDigest)
 			return nil
 		},
 	}
