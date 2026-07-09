@@ -341,12 +341,64 @@ func TestDefaultPushRefUsesLibraryForRegistryHostOverrideWithoutLogin(t *testing
 	}
 }
 
+func TestRegistryAuthRealmUsesAppAuthRoute(t *testing.T) {
+	tests := map[string]string{
+		"http://localhost:3000/api":       "http://localhost:3000/auth/registry",
+		"http://localhost:3000/api/":      "http://localhost:3000/auth/registry",
+		"https://adversarylabs.ai/api":    "https://adversarylabs.ai/auth/registry",
+		"https://example.com/custom/api":  "https://example.com/custom/auth/registry",
+		"https://example.com/custom/api/": "https://example.com/custom/auth/registry",
+	}
+	for input, want := range tests {
+		if got := registryAuthRealm(input); got != want {
+			t.Fatalf("registryAuthRealm(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestRegistryNamespaceFromAccountUsesTeamSlug(t *testing.T) {
 	got := registryNamespaceFromAccount(adversarylabs.WhoamiResponse{
 		Team: adversarylabs.Team{Slug: "red-team"},
 	})
 	if got != "red-team" {
 		t.Fatalf("namespace = %q", got)
+	}
+}
+
+func TestPushErrorWithNamespaceHintForRegistryDenied(t *testing.T) {
+	ref := oci.Reference{
+		Registry:   "localhost:8787",
+		Repository: "library/dockerfile-adversary",
+		Tag:        "0.1.0",
+	}
+	err := pushErrorWithNamespaceHint(
+		fmt.Errorf(`token request failed: 403 Forbidden: http://localhost:3000/auth/registry?scope=repository%%3Alibrary%%2Fdockerfile-adversary%%3Apull&service=localhost%%3A8787: {"errors":[{"code":"DENIED","message":"Requested registry access is not authorized."}]}`),
+		"dockerfile-adversary:0.1.0",
+		ref,
+	)
+	text := err.Error()
+	for _, want := range []string{
+		"push is not authorized for localhost:8787/library/dockerfile-adversary:0.1.0",
+		`remote namespace "library" may not match your Adversary Labs team slug`,
+		"adversary push dockerfile-adversary:0.1.0 localhost:8787/<slug>/dockerfile-adversary:0.1.0",
+		"ADVERSARY_REGISTRY_NAMESPACE=<slug>",
+		"Original error: token request failed: 403 Forbidden",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("error %q missing %q", text, want)
+		}
+	}
+}
+
+func TestPushErrorWithNamespaceHintLeavesOtherErrorsAlone(t *testing.T) {
+	original := fmt.Errorf("dial tcp: connection refused")
+	ref := oci.Reference{
+		Registry:   "localhost:8787",
+		Repository: "library/dockerfile-adversary",
+		Tag:        "0.1.0",
+	}
+	if got := pushErrorWithNamespaceHint(original, "dockerfile-adversary:0.1.0", ref); got != original {
+		t.Fatalf("error = %v, want original %v", got, original)
 	}
 }
 

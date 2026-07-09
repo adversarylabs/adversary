@@ -62,7 +62,7 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(newLoginCommand(stdout, stderr, &apiURL))
 	cmd.AddCommand(newLogoutCommand(stdout, stderr, &apiURL))
 	cmd.AddCommand(newPushCommand(stdout, stderr, &apiURL))
-	cmd.AddCommand(newPullCommand(stdout, stderr))
+	cmd.AddCommand(newPullCommand(stdout, stderr, &apiURL))
 	cmd.AddCommand(newSearchCommand(stdout, stderr, &apiURL))
 	cmd.AddCommand(newWhoamiCommand(stdout, stderr, &apiURL))
 	return cmd
@@ -468,7 +468,7 @@ func newPushCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			registry := newOCIRegistry()
+			registry := newOCIRegistry(valueOf(apiURL))
 			if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
 				registry.PlainHTTP = true
 			}
@@ -479,7 +479,7 @@ func newPushCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			fmt.Fprintln(stderr, "Pushing manifest...")
 			digest, err := registry.Push(cmd.Context(), ref, manifest, blobs)
 			if err != nil {
-				return err
+				return pushErrorWithNamespaceHint(err, localRef, ref)
 			}
 			fmt.Fprintln(stdout)
 			fmt.Fprintln(stdout, "Published:")
@@ -494,7 +494,7 @@ func newPushCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 	}
 }
 
-func newPullCommand(stdout, stderr io.Writer) *cobra.Command {
+func newPullCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "pull <reference>",
 		Short: "Pull and install an adversary from an OCI registry",
@@ -508,7 +508,7 @@ func newPullCommand(stdout, stderr io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			registry := newOCIRegistry()
+			registry := newOCIRegistry(valueOf(apiURL))
 			if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
 				registry.PlainHTTP = true
 			}
@@ -878,13 +878,24 @@ func openBrowser(url string) error {
 	}
 }
 
-func newOCIRegistry() *oci.HTTPRegistry {
+func newOCIRegistry(apiURL string) *oci.HTTPRegistry {
 	registry := oci.NewHTTPRegistry()
+	if strings.TrimSpace(os.Getenv("ADVERSARY_OCI_DEBUG")) != "" {
+		registry.Debug = os.Stderr
+	}
+	registry.BearerRealm = registryAuthRealm(apiURL)
+	registry.BearerService = adversarylabs.ResolveRegistryHost()
 	store, err := adversarylabs.DefaultConfigStore()
 	if err == nil {
 		registry.Credentials = oci.ChainCredentialStore{store, oci.DockerCredentialStore{}}
 	}
 	return registry
+}
+
+func registryAuthRealm(apiURL string) string {
+	base := strings.TrimRight(adversarylabs.ResolveAPIURL(apiURL), "/")
+	base = strings.TrimSuffix(base, "/api")
+	return base + "/auth/registry"
 }
 
 func printInstallRecord(stdout io.Writer, record adversarypkg.InstallRecord) {
@@ -975,6 +986,38 @@ func defaultRegistryPushRef(registryHost, namespace string, record store.Record)
 		tag = oci.DefaultTag
 	}
 	return registryHost + "/" + namespace + "/" + name + ":" + tag
+}
+
+func pushErrorWithNamespaceHint(err error, localRef string, ref oci.Reference) error {
+	if err == nil || !isRegistryAccessDenied(err) {
+		return err
+	}
+	namespace := registryNamespaceFromReference(ref)
+	if namespace == "" {
+		return err
+	}
+	suggested := ref.Registry + "/<slug>/" + ref.ShortName()
+	if ref.Digest != "" {
+		suggested += "@" + ref.Digest
+	} else {
+		suggested += ":" + ref.Tag
+	}
+	return fmt.Errorf("push is not authorized for %s\n\nThe remote namespace %q may not match your Adversary Labs team slug. Push to your slug namespace, for example:\n  adversary push %s %s\n\nFor unqualified pushes, set ADVERSARY_REGISTRY_NAMESPACE=<slug>.\n\nOriginal error: %w", ref.Locator(), namespace, localRef, suggested, err)
+}
+
+func isRegistryAccessDenied(err error) bool {
+	text := err.Error()
+	return strings.Contains(text, "token request failed: 403 Forbidden") ||
+		strings.Contains(text, `"code":"DENIED"`) ||
+		strings.Contains(text, "Requested registry access is not authorized")
+}
+
+func registryNamespaceFromReference(ref oci.Reference) string {
+	namespace, _, ok := strings.Cut(ref.Repository, "/")
+	if !ok {
+		return ""
+	}
+	return namespace
 }
 
 func registryNamespaceFromAuth(auth adversarylabs.Auth) string {

@@ -22,9 +22,12 @@ type Registry interface {
 }
 
 type HTTPRegistry struct {
-	Client      *http.Client
-	Credentials CredentialStore
-	PlainHTTP   bool
+	Client        *http.Client
+	Credentials   CredentialStore
+	PlainHTTP     bool
+	Debug         io.Writer
+	BearerRealm   string
+	BearerService string
 }
 
 func NewHTTPRegistry() *HTTPRegistry {
@@ -219,7 +222,7 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	var hasCreds bool
 	if r.Credentials != nil {
 		creds, hasCreds = r.Credentials.Credentials(ref.Registry)
-		if hasCreds && req.Header.Get("Authorization") == "" {
+		if hasCreds && req.Header.Get("Authorization") == "" && creds.Token == "" {
 			ApplyAuthHeader(req, creds)
 		}
 	}
@@ -232,8 +235,20 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	}
 	challenge, ok := parseBearerChallenge(resp.Header.Get("WWW-Authenticate"))
 	if !ok {
-		return resp, nil
+		r.debugf("oci auth: %s %s returned 401 without bearer challenge", req.Method, req.URL.Path)
+		challenge, ok, err = r.rootBearerChallenge(req.Context(), client, ref)
+		if err != nil {
+			_ = resp.Body.Close()
+			return nil, err
+		}
+		if !ok {
+			challenge, ok = r.configuredBearerChallenge(ref)
+		}
+		if !ok {
+			return resp, nil
+		}
 	}
+	r.debugf("oci auth: %s %s challenge realm=%s service=%s scope=%s requested_scope=%s", req.Method, req.URL.Path, challenge.Realm, challenge.Service, challenge.Scope, scope)
 	_ = resp.Body.Close()
 	token, err := readBearerToken(client, challenge, scope, creds, hasCreds)
 	if err != nil {
@@ -248,7 +263,47 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 		retry.Body = body
 	}
 	retry.Header.Set("Authorization", "Bearer "+token)
+	r.debugf("oci auth: retrying %s %s authorization_header=%t", retry.Method, retry.URL.Path, retry.Header.Get("Authorization") != "")
 	return client.Do(retry)
+}
+
+func (r *HTTPRegistry) rootBearerChallenge(ctx context.Context, client *http.Client, ref Reference) (bearerChallenge, bool, error) {
+	u := fmt.Sprintf("%s://%s/v2/", r.scheme(), ref.Registry)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return bearerChallenge{}, false, err
+	}
+	r.debugf("oci auth: probing %s for bearer challenge", req.URL.Path)
+	resp, err := client.Do(req)
+	if err != nil {
+		return bearerChallenge{}, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		r.debugf("oci auth: challenge probe returned %s", resp.Status)
+		return bearerChallenge{}, false, nil
+	}
+	challenge, ok := parseBearerChallenge(resp.Header.Get("WWW-Authenticate"))
+	if !ok {
+		r.debugf("oci auth: challenge probe returned 401 without bearer challenge")
+		return bearerChallenge{}, false, nil
+	}
+	return challenge, true, nil
+}
+
+func (r *HTTPRegistry) configuredBearerChallenge(ref Reference) (bearerChallenge, bool) {
+	if r.BearerRealm == "" || r.BearerService == "" || r.BearerService != ref.Registry {
+		return bearerChallenge{}, false
+	}
+	r.debugf("oci auth: using configured bearer challenge realm=%s service=%s", r.BearerRealm, r.BearerService)
+	return bearerChallenge{Realm: r.BearerRealm, Service: r.BearerService}, true
+}
+
+func (r *HTTPRegistry) debugf(format string, args ...any) {
+	if r.Debug == nil {
+		return
+	}
+	fmt.Fprintf(r.Debug, format+"\n", args...)
 }
 
 func (r *HTTPRegistry) scheme() string {
