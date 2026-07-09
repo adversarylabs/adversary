@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 export const DEFAULT_INPUT_PATH = "/adversary/input.json";
 export const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
+export const DEFAULT_REPO_PATH = "/workspace";
 export const FINDINGS_SCHEMA_VERSION = "adversary.findings.v1";
 const verboseValues = new Set(["1", "true", "TRUE", "yes", "YES"]);
 export const Severity = {
@@ -96,7 +97,7 @@ export class Adversary {
     }
     async run(options = {}) {
         const input = options.input ?? (await parseInput(options.inputPath));
-        const repoPath = input.source.path;
+        const repoPath = process.env.ADVERSARY_REPO ?? input.source.path ?? DEFAULT_REPO_PATH;
         const summary = {};
         const cache = new Map();
         const context = createRuleContext(repoPath, summary, cache);
@@ -121,7 +122,7 @@ export class Adversary {
         return output;
     }
 }
-export async function parseInput(path = DEFAULT_INPUT_PATH) {
+export async function parseInput(path = process.env.ADVERSARY_INPUT ?? DEFAULT_INPUT_PATH) {
     const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw);
     if (!isRecord(parsed)) {
@@ -135,7 +136,7 @@ export async function parseInput(path = DEFAULT_INPUT_PATH) {
     }
     return parsed;
 }
-export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {
+export async function writeOutput(output, path = process.env.ADVERSARY_OUTPUT ?? DEFAULT_OUTPUT_PATH) {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, `${JSON.stringify(output, null, 2)}\n`, "utf8");
 }

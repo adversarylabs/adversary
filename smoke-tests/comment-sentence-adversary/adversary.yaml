@@ -20,7 +20,8 @@ triggers:
 runtime:
   image: smoke-tests/comment-sentence-adversary:0.1.0
   command:
-    - /adversary/run
+    - node
+    - dist/run.js
 
 permissions:
   filesystem:

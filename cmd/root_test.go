@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/store"
 )
 
 func TestInitCommandGeneratesTypeScriptProject(t *testing.T) {
@@ -31,7 +33,6 @@ func TestInitCommandGeneratesTypeScriptProject(t *testing.T) {
 
 	for _, rel := range []string{
 		"adversary.yaml",
-		"Dockerfile",
 		"package.json",
 		"tsconfig.json",
 		"README.md",
@@ -158,6 +159,21 @@ func TestLoginHelpShowsAPIURLFlag(t *testing.T) {
 	}
 }
 
+func TestPackHelpShowsBuilderFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := NewRootCommand(&stdout, &stderr)
+	cmd.SetArgs([]string{"pack", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "--builder") || !strings.Contains(output, "local or docker") {
+		t.Fatalf("pack help missing builder flag:\n%s", output)
+	}
+}
+
 func TestWhoamiCommandWhenLoggedOut(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -175,6 +191,79 @@ func TestWhoamiCommandWhenLoggedOut(t *testing.T) {
 	}
 	if !strings.Contains(output, "adversary login") {
 		t.Fatalf("whoami output missing login hint:\n%s", output)
+	}
+}
+
+func TestPackListAndInspectCommands(t *testing.T) {
+	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
+	project := t.TempDir()
+	writeProject(t, project)
+	t.Chdir(project)
+
+	var packStdout bytes.Buffer
+	var packStderr bytes.Buffer
+	packCmd := NewRootCommand(&packStdout, &packStderr)
+	packCmd.SetArgs([]string{"pack", "."})
+	if err := packCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	packOutput := packStdout.String()
+	if !strings.Contains(packOutput, "security-reviewer:1.4.2") || !strings.Contains(packOutput, "security-reviewer:latest") {
+		t.Fatalf("pack output missing refs:\n%s", packOutput)
+	}
+	digest := extractDigest(t, packOutput)
+
+	var lsStdout bytes.Buffer
+	var lsStderr bytes.Buffer
+	lsCmd := NewRootCommand(&lsStdout, &lsStderr)
+	lsCmd.SetArgs([]string{"ls"})
+	if err := lsCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(lsStdout.String(), "security-reviewer") || !strings.Contains(lsStdout.String(), "1.4.2") {
+		t.Fatalf("ls output missing record:\n%s", lsStdout.String())
+	}
+
+	var listJSONStdout bytes.Buffer
+	var listJSONStderr bytes.Buffer
+	listCmd := NewRootCommand(&listJSONStdout, &listJSONStderr)
+	listCmd.SetArgs([]string{"list", "--json"})
+	if err := listCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var records []store.Record
+	if err := json.Unmarshal(listJSONStdout.Bytes(), &records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Digest != digest {
+		t.Fatalf("list records = %#v, digest %s", records, digest)
+	}
+
+	for _, ref := range []string{"security-reviewer", "security-reviewer:1.4.2", digest} {
+		var inspectStdout bytes.Buffer
+		var inspectStderr bytes.Buffer
+		inspectCmd := NewRootCommand(&inspectStdout, &inspectStderr)
+		inspectCmd.SetArgs([]string{"inspect", ref})
+		if err := inspectCmd.Execute(); err != nil {
+			t.Fatalf("inspect %q: %v", ref, err)
+		}
+		if !strings.Contains(inspectStdout.String(), "Digest: "+digest) {
+			t.Fatalf("inspect %q output missing digest:\n%s", ref, inspectStdout.String())
+		}
+	}
+	var inspectJSONStdout bytes.Buffer
+	var inspectJSONStderr bytes.Buffer
+	inspectJSONCmd := NewRootCommand(&inspectJSONStdout, &inspectJSONStderr)
+	inspectJSONCmd.SetArgs([]string{"inspect", "security-reviewer", "--json"})
+	if err := inspectJSONCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var record store.Record
+	if err := json.Unmarshal(inspectJSONStdout.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Digest != digest {
+		t.Fatalf("inspect json digest = %q, want %q", record.Digest, digest)
 	}
 }
 
@@ -230,6 +319,17 @@ func TestPushPullAgainstLocalOCIRegistry(t *testing.T) {
 	if _, err := os.Stat(cacheIndex); err != nil {
 		t.Fatalf("expected cache index: %v", err)
 	}
+}
+
+func extractDigest(t *testing.T, output string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "Digest: sha256:") {
+			return strings.TrimPrefix(line, "Digest: ")
+		}
+	}
+	t.Fatalf("digest not found in output:\n%s", output)
+	return ""
 }
 
 type testOCIRegistry struct {

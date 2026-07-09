@@ -1,5 +1,6 @@
 export declare const DEFAULT_INPUT_PATH = "/adversary/input.json";
 export declare const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
+export declare const DEFAULT_REPO_PATH = "/workspace";
 export declare const FINDINGS_SCHEMA_VERSION = "adversary.findings.v1";
 export declare const Severity: {
     readonly Info: "info";

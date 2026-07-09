@@ -55,67 +55,39 @@ func TestGitDiffNameOnlyCommandConstruction(t *testing.T) {
 	}
 }
 
-func TestDockerRunArgs(t *testing.T) {
-	got := dockerRunArgs(ContainerSpec{
-		Image:           "example/adversary:latest",
-		Command:         []string{"/adversary/run"},
-		RepoPath:        "/repo",
-		RunDir:          "/tmp/adversary-run",
-		NetworkDisabled: true,
-	})
-	want := []string{
-		"run",
-		"--rm",
-		"-v", "/repo:/workspace:ro",
-		"-v", "/tmp/adversary-run/input.json:/adversary/input.json:ro",
-		"-v", "/tmp/adversary-run/output.json:/adversary/output.json",
-		"--network", "none",
-		"example/adversary:latest",
-		"/adversary/run",
+func TestRunConfigHostExecutionSpec(t *testing.T) {
+	config := NewRunConfig(ResolvedAdversary{
+		Name:          "local/adversary",
+		Image:         "adversary-local-typescript",
+		Command:       []string{"node", "/tmp/adversary/dist/index.js"},
+		LocalDir:      true,
+		ExecutionPath: "/tmp/adversary",
+	}, "/repo", "/tmp/adversary-run", RunOptions{NoNetwork: true})
+
+	spec := config.ContainerSpec()
+	if spec.Image != "adversary-local-typescript" {
+		t.Fatalf("Image = %q", spec.Image)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("args = %#v, want %#v", got, want)
+	if !reflect.DeepEqual(spec.Command, []string{"node", "/tmp/adversary/dist/index.js"}) {
+		t.Fatalf("Command = %#v", spec.Command)
+	}
+	if spec.AdversaryPath != "/tmp/adversary" {
+		t.Fatalf("AdversaryPath = %q", spec.AdversaryPath)
+	}
+	if !spec.NetworkDisabled {
+		t.Fatal("NetworkDisabled is false")
 	}
 }
 
-func TestDockerBuildArgs(t *testing.T) {
-	got := dockerBuildArgs(BuildSpec{
-		Image:   "example/adversary:latest",
-		Context: "./examples/adversary",
-	})
-	want := []string{"build", "-t", "example/adversary:latest", "./examples/adversary"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("args = %#v, want %#v", got, want)
-	}
-}
+func TestRunConfigShellUsesHostShell(t *testing.T) {
+	config := NewRunConfig(ResolvedAdversary{
+		Command:       []string{"node", "/tmp/adversary/dist/index.js"},
+		ExecutionPath: "/tmp/adversary",
+	}, "/repo", "/tmp/adversary-run", RunOptions{Shell: true})
 
-func TestDockerRunArgsWithEnvAndShell(t *testing.T) {
-	got := dockerRunArgs(ContainerSpec{
-		Image:    "example/adversary:latest",
-		RepoPath: "/repo",
-		RunDir:   "/tmp/adversary-run",
-		Env: map[string]string{
-			"ADVERSARY_OUTPUT":  "/adversary/output.json",
-			"ADVERSARY_REPO":    "/workspace",
-			"ADVERSARY_VERBOSE": "1",
-		},
-		Shell: true,
-	})
-	want := []string{
-		"run",
-		"--rm",
-		"-it",
-		"-v", "/repo:/workspace:ro",
-		"-v", "/tmp/adversary-run/input.json:/adversary/input.json:ro",
-		"-v", "/tmp/adversary-run/output.json:/adversary/output.json",
-		"-e", "ADVERSARY_OUTPUT=/adversary/output.json",
-		"-e", "ADVERSARY_REPO=/workspace",
-		"-e", "ADVERSARY_VERBOSE=1",
-		"example/adversary:latest",
-		"/bin/sh",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("args = %#v, want %#v", got, want)
+	spec := config.ContainerSpec()
+	if !spec.Shell {
+		t.Fatal("Shell is false")
 	}
 }
 

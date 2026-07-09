@@ -1,0 +1,149 @@
+package pack
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestCreateIsDeterministic(t *testing.T) {
+	dir := testProject(t)
+	first, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ManifestDigest != second.ManifestDigest {
+		t.Fatalf("digest mismatch: %s != %s", first.ManifestDigest, second.ManifestDigest)
+	}
+	if string(first.Layer) != string(second.Layer) {
+		t.Fatal("layer is not deterministic")
+	}
+}
+
+func TestDefaultIgnoreRules(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "node_modules/pkg/index.js", "ignored")
+	writeFile(t, dir, ".git/config", "ignored")
+	writeFile(t, dir, ".env", "ignored")
+	writeFile(t, dir, ".env.local", "ignored")
+	writeFile(t, dir, ".DS_Store", "ignored")
+	writeFile(t, dir, "coverage/out.json", "ignored")
+	writeFile(t, dir, "tmp/file", "ignored")
+	writeFile(t, dir, ".cache/file", "ignored")
+	writeFile(t, dir, "Dockerfile", "ignored")
+
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range artifact.Files {
+		switch file.Path {
+		case "node_modules/pkg/index.js", ".git/config", ".env", ".env.local", ".DS_Store", "coverage/out.json", "tmp/file", ".cache/file", "Dockerfile":
+			t.Fatalf("ignored file included: %s", file.Path)
+		}
+	}
+}
+
+func TestAdversaryIgnore(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, ".adversaryignore", "secrets/\n*.log\n")
+	writeFile(t, dir, "secrets/token.txt", "ignored")
+	writeFile(t, dir, "debug.log", "ignored")
+
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range artifact.Files {
+		if file.Path == "secrets/token.txt" || file.Path == "debug.log" {
+			t.Fatalf("ignored file included: %s", file.Path)
+		}
+	}
+}
+
+func TestCreateSkipsBuildWhenNPMMissingAndDistExists(t *testing.T) {
+	dir := testProject(t)
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	var stderr strings.Builder
+	artifact, err := Create(context.Background(), Options{Dir: dir, Build: true, Stderr: &stderr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.ManifestDigest == "" {
+		t.Fatal("expected packed artifact")
+	}
+	if !strings.Contains(stderr.String(), "Skipping build: npm was not found") {
+		t.Fatalf("expected npm warning, got %q", stderr.String())
+	}
+}
+
+func TestCreateRejectsUnsupportedBuilder(t *testing.T) {
+	dir := testProject(t)
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Create(context.Background(), Options{Dir: dir, Build: true, Builder: "spaceship"})
+	if err == nil {
+		t.Fatal("expected unsupported builder error")
+	}
+	if !strings.Contains(err.Error(), "unsupported builder") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCreateFailsForMissingManifest(t *testing.T) {
+	_, err := Create(context.Background(), Options{Dir: t.TempDir()})
+	if err == nil {
+		t.Fatal("expected missing manifest error")
+	}
+}
+
+func TestCreateFailsForInvalidManifest(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "adversary.yaml", "version: 0.1.0\n")
+	_, err := Create(context.Background(), Options{Dir: dir})
+	if err == nil {
+		t.Fatal("expected invalid manifest error")
+	}
+}
+
+func testProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, dir, "adversary.yaml", `name: local/security-reviewer
+version: 0.1.0
+runtime:
+  image: security-reviewer:local
+  command:
+    - node
+    - dist/index.js
+permissions:
+  network: false
+`)
+	writeFile(t, dir, "README.md", "# Security Reviewer\n")
+	writeFile(t, dir, "LICENSE", "MIT\n")
+	writeFile(t, dir, "package.json", `{"scripts":{"build":"tsc -p tsconfig.json"}}`)
+	writeFile(t, dir, "dist/index.js", "console.log('ok')\n")
+	return dir
+}
+
+func writeFile(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	path := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}

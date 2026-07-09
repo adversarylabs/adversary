@@ -30,4 +30,3 @@ npm test
 - `test/index.test.ts` demonstrates testing rules with fixtures.
 - `fixtures/clean` should produce no findings.
 - `fixtures/vulnerable` should produce one finding.
-- `Dockerfile` packages the compiled adversary for the CLI.

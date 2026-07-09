@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/adversarylabs/adversary/pkg/store"
 )
 
 func TestLoadManifest(t *testing.T) {
@@ -21,7 +24,8 @@ triggers:
 runtime:
   image: ghcr.io/adversarylabs/github-actions:0.1.0
   command:
-    - /adversary/run
+    - node
+    - dist/index.js
 permissions:
   filesystem:
     read:
@@ -48,7 +52,7 @@ findings:
 	if manifest.Runtime.Image != "ghcr.io/adversarylabs/github-actions:0.1.0" {
 		t.Fatalf("Runtime.Image = %q", manifest.Runtime.Image)
 	}
-	if len(manifest.Runtime.Command) != 1 || manifest.Runtime.Command[0] != "/adversary/run" {
+	if strings.Join(manifest.Runtime.Command, " ") != "node dist/index.js" {
 		t.Fatalf("Runtime.Command = %#v", manifest.Runtime.Command)
 	}
 	if manifest.Permissions.Network == nil || *manifest.Permissions.Network {
@@ -64,12 +68,14 @@ func TestResolveReferenceLocalDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "adversary.yaml"), []byte(`name: local/adversary
 runtime:
   image: example/adversary:latest
+  command:
+    - node
+    - dist/index.js
 `), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, filepath.Join(dir, "package.json"), `{"type":"module"}`)
+	writeFile(t, filepath.Join(dir, "dist", "index.js"), "console.log('ok')\n")
 
 	resolved, err := ResolveReference(dir)
 	if err != nil {
@@ -78,7 +84,7 @@ runtime:
 	if resolved.Name != "local/adversary" {
 		t.Fatalf("Name = %q", resolved.Name)
 	}
-	if resolved.Image != "example/adversary:latest" {
+	if resolved.Image != "adversary-local-typescript" {
 		t.Fatalf("Image = %q", resolved.Image)
 	}
 	if resolved.Manifest == nil {
@@ -90,33 +96,12 @@ runtime:
 	if resolved.BuildContext != dir {
 		t.Fatalf("BuildContext = %q", resolved.BuildContext)
 	}
-	if !resolved.HasDockerfile {
-		t.Fatal("HasDockerfile is false")
+	if resolved.ExecutionPath != dir {
+		t.Fatalf("ExecutionPath = %q", resolved.ExecutionPath)
 	}
 }
 
-func TestResolveReferenceLocalDirectoryWithoutDockerfile(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "adversary.yaml"), []byte(`name: local/adversary
-runtime:
-  image: example/adversary:latest
-`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	resolved, err := ResolveReference(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !resolved.LocalDir {
-		t.Fatal("LocalDir is false")
-	}
-	if resolved.HasDockerfile {
-		t.Fatal("HasDockerfile is true")
-	}
-}
-
-func TestResolveReferenceContainerImage(t *testing.T) {
+func TestResolveReferenceUnknownRemoteRefDoesNotBecomeExecutableImage(t *testing.T) {
 	resolved, err := ResolveReference("ghcr.io/adversarylabs/dockerfile:0.1.0")
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +109,7 @@ func TestResolveReferenceContainerImage(t *testing.T) {
 	if resolved.Name != "ghcr.io/adversarylabs/dockerfile:0.1.0" {
 		t.Fatalf("Name = %q", resolved.Name)
 	}
-	if resolved.Image != "ghcr.io/adversarylabs/dockerfile:0.1.0" {
+	if resolved.Image != "" {
 		t.Fatalf("Image = %q", resolved.Image)
 	}
 	if resolved.Manifest != nil {
@@ -135,55 +120,56 @@ func TestResolveReferenceContainerImage(t *testing.T) {
 	}
 }
 
-func TestShouldBuildAdversary(t *testing.T) {
-	tests := []struct {
-		name     string
-		resolved ResolvedAdversary
-		opts     RunOptions
-		want     bool
-	}{
-		{
-			name: "local directory with Dockerfile builds by default",
-			resolved: ResolvedAdversary{
-				LocalDir:      true,
-				HasDockerfile: true,
-			},
-			want: true,
-		},
-		{
-			name: "no build skips local Dockerfile",
-			resolved: ResolvedAdversary{
-				LocalDir:      true,
-				HasDockerfile: true,
-			},
-			opts: RunOptions{NoBuild: true},
-			want: false,
-		},
-		{
-			name: "local directory without Dockerfile does not build",
-			resolved: ResolvedAdversary{
-				LocalDir: true,
-			},
-			opts: RunOptions{Build: true},
-			want: false,
-		},
-		{
-			name: "image ref never builds",
-			resolved: ResolvedAdversary{
-				HasDockerfile: true,
-			},
-			opts: RunOptions{Build: true},
-			want: false,
-		},
+func TestResolveReferenceLocalStoreByNameTagAndDigest(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("ADVERSARY_DATA_DIR", dataDir)
+	project := t.TempDir()
+	writeFile(t, filepath.Join(project, "adversary.yaml"), `name: local/dockerfile-adversary
+version: 0.1.0
+runtime:
+  image: dockerfile-adversary:local
+  command:
+    - node
+    - dist/index.js
+permissions:
+  network: false
+`)
+	writeFile(t, filepath.Join(project, "package.json"), `{"type":"module"}`)
+	writeFile(t, filepath.Join(project, "dist", "index.js"), "console.log('ok')\n")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localStore := store.Store{Root: dataDir}
+	record, err := localStore.Put(artifact)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ShouldBuildAdversary(tt.resolved, tt.opts)
-			if got != tt.want {
-				t.Fatalf("got %v, want %v", got, tt.want)
-			}
-		})
+	for _, ref := range []string{"dockerfile-adversary:0.1.0", record.Digest} {
+		resolved, err := ResolveReference(ref)
+		if err != nil {
+			t.Fatalf("resolve %q: %v", ref, err)
+		}
+		if resolved.Name != "local/dockerfile-adversary" {
+			t.Fatalf("resolve %q name = %q", ref, resolved.Name)
+		}
+		if resolved.Image != "adversary-local-typescript" {
+			t.Fatalf("resolve %q image = %q", ref, resolved.Image)
+		}
+		wantCommand := []string{"node", filepath.Join(resolved.ExecutionPath, "dist", "index.js")}
+		if strings.Join(resolved.Command, "\x00") != strings.Join(wantCommand, "\x00") {
+			t.Fatalf("resolve %q command = %#v, want %#v", ref, resolved.Command, wantCommand)
+		}
+		if !resolved.LocalDir {
+			t.Fatalf("resolve %q did not materialize local dir", ref)
+		}
+		if !resolved.StoreBacked {
+			t.Fatalf("resolve %q did not mark store-backed", ref)
+		}
+		if _, err := os.Stat(filepath.Join(resolved.BuildContext, "adversary.yaml")); err != nil {
+			t.Fatalf("materialized adversary.yaml missing: %v", err)
+		}
 	}
 }
 
@@ -210,27 +196,27 @@ func TestPrintInspect(t *testing.T) {
 	var b strings.Builder
 	PrintInspect(&b, "./adv", NewRunConfig(ResolvedAdversary{
 		Name:          "local/adversary",
-		Image:         "example/adversary:latest",
-		Command:       []string{"/adversary/run"},
+		Image:         "adversary-local-typescript",
+		Command:       []string{"node", "/tmp/adversary/dist/index.js"},
 		LocalDir:      true,
 		BuildContext:  "./adv",
-		HasDockerfile: true,
+		ExecutionPath: "./adv",
 	}, dir, "/tmp/adversary-run", RunOptions{Verbose: true}))
 
 	got := b.String()
 	for _, want := range []string{
 		"Adversary",
-		"Image",
-		"example/adversary:latest",
-		"Build context",
+		"Runtime",
+		"adversary-local-typescript",
+		"Project",
 		"./adv",
 		"Repository contents",
 		"README.md",
 		"Command",
-		"/adversary/run",
+		"node",
+		"/tmp/adversary/dist/index.js",
 		"Environment",
-		"ADVERSARY_REPO=/workspace",
-		"Docker command",
+		"ADVERSARY_REPO=" + dir,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("inspect output missing %q in:\n%s", want, got)
@@ -278,7 +264,8 @@ triggers:
 runtime:
   image: local/adversary:0.1.0
   command:
-    - /adversary/run
+    - node
+    - dist/index.js
 `)
 
 	repoDir := t.TempDir()
@@ -316,7 +303,8 @@ triggers:
 runtime:
   image: local/adversary:0.1.0
   command:
-    - /adversary/run
+    - node
+    - dist/index.js
 `)
 
 	repoDir := t.TempDir()

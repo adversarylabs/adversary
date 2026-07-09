@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	adversarycache "github.com/adversarylabs/adversary/pkg/adversary"
+	localstore "github.com/adversarylabs/adversary/pkg/store"
 )
 
 type Manifest struct {
@@ -200,24 +201,28 @@ func parseYAMLScalar(s string) string {
 func ResolveReference(ref string) (ResolvedAdversary, error) {
 	manifestPath := filepath.Join(ref, "adversary.yaml")
 	if info, err := os.Stat(manifestPath); err == nil && !info.IsDir() {
+		buildContext, err := filepath.Abs(ref)
+		if err != nil {
+			return ResolvedAdversary{}, err
+		}
 		manifest, err := LoadManifest(manifestPath)
 		if err != nil {
 			return ResolvedAdversary{}, err
 		}
-		hasDockerfile := false
-		if info, err := os.Stat(filepath.Join(ref, "Dockerfile")); err == nil && !info.IsDir() {
-			hasDockerfile = true
-		}
-		return ResolvedAdversary{
+		resolved := ResolvedAdversary{
 			Name:          manifest.Name,
-			Image:         manifest.Runtime.Image,
+			Image:         "adversary-local-typescript",
 			Command:       manifest.Runtime.Command,
 			Manifest:      &manifest,
 			NetworkOff:    manifest.Permissions.Network != nil && !*manifest.Permissions.Network,
 			LocalDir:      true,
-			BuildContext:  ref,
-			HasDockerfile: hasDockerfile,
-		}, nil
+			BuildContext:  buildContext,
+			ExecutionPath: buildContext,
+		}
+		if isTypeScriptAdversary(buildContext) {
+			resolved.Command = typeScriptHostCommand(buildContext, manifest.Runtime.Command)
+		}
+		return resolved, nil
 	}
 
 	if cache, err := adversarycache.DefaultCache(); err == nil {
@@ -226,10 +231,46 @@ func ResolveReference(ref string) (ResolvedAdversary, error) {
 		}
 	}
 
+	if store, err := localstore.Default(); err == nil {
+		if path, record, err := store.Materialize(ref); err == nil {
+			resolved, err := ResolveReference(path)
+			if err != nil {
+				return ResolvedAdversary{}, err
+			}
+			resolved.StoreBacked = true
+			resolved.StorePath = path
+			resolved.ExecutionPath = path
+			if record.Runtime == "typescript" {
+				resolved.Image = "adversary-local-typescript"
+				resolved.Command = typeScriptHostCommand(path, resolved.Command)
+			}
+			return resolved, nil
+		}
+	}
+
 	return ResolvedAdversary{
-		Name:  ref,
-		Image: ref,
+		Name: ref,
 	}, nil
+}
+
+func isTypeScriptAdversary(path string) bool {
+	if info, err := os.Stat(filepath.Join(path, "package.json")); err == nil && !info.IsDir() {
+		return true
+	}
+	if info, err := os.Stat(filepath.Join(path, "dist", "index.js")); err == nil && !info.IsDir() {
+		return true
+	}
+	return false
+}
+
+func typeScriptHostCommand(path string, command []string) []string {
+	hostCommand := append([]string(nil), command...)
+	for i, part := range hostCommand {
+		if i > 0 && !filepath.IsAbs(part) && strings.HasSuffix(part, ".js") {
+			hostCommand[i] = filepath.Join(path, part)
+		}
+	}
+	return hostCommand
 }
 
 type ResolvedAdversary struct {
@@ -240,5 +281,7 @@ type ResolvedAdversary struct {
 	NetworkOff    bool
 	LocalDir      bool
 	BuildContext  string
-	HasDockerfile bool
+	StoreBacked   bool
+	StorePath     string
+	ExecutionPath string
 }

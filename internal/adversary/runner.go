@@ -21,8 +21,6 @@ type RunOptions struct {
 	Format       string
 	KeepTemp     bool
 	NoNetwork    bool
-	Build        bool
-	NoBuild      bool
 	Verbose      bool
 	Shell        bool
 	AllFiles     bool
@@ -33,7 +31,6 @@ type Runner struct {
 	Stderr    io.Writer
 	Git       GitDiffer
 	Executor  ContainerExecutor
-	Builder   ImageBuilder
 	MkdirTemp func(dir, pattern string) (string, error)
 }
 
@@ -54,12 +51,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	executor := r.Executor
 	if executor == nil {
-		executor = DockerExecutor{Stdout: r.Stdout, Stderr: r.Stderr, Stdin: os.Stdin}
-	}
-
-	builder := r.Builder
-	if builder == nil {
-		builder = DockerBuilder{Stdout: r.Stderr, Stderr: r.Stderr}
+		executor = HostExecutor{Stdout: r.Stdout, Stderr: r.Stderr, Stdin: os.Stdin}
 	}
 
 	mkdirTemp := r.MkdirTemp
@@ -70,6 +62,12 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	resolved, err := ResolveReference(opts.AdversaryRef)
 	if err != nil {
 		return err
+	}
+	if resolved.StoreBacked && r.Executor == nil {
+		executor = HostExecutor{Stdout: r.Stdout, Stderr: r.Stderr, Stdin: os.Stdin}
+	}
+	if !resolved.LocalDir {
+		return fmt.Errorf("adversary %q is not installed locally; run `adversary pull %s` first", opts.AdversaryRef, opts.AdversaryRef)
 	}
 
 	repoPath := opts.RepoPath
@@ -106,18 +104,6 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	started := time.Now()
 	var buildDuration time.Duration
-	if ShouldBuildAdversary(resolved, opts) {
-		if opts.Verbose {
-			PrintVerboseBuild(stderr, resolved)
-		} else {
-			fmt.Fprintf(stderr, "Building adversary image %s from %s\n", resolved.Image, resolved.BuildContext)
-		}
-		buildStarted := time.Now()
-		if _, err := builder.Build(ctx, BuildSpec{Image: resolved.Image, Context: resolved.BuildContext}); err != nil {
-			return err
-		}
-		buildDuration = time.Since(buildStarted)
-	}
 
 	runDir, err := mkdirTemp("", "adversary-run-*")
 	if err != nil {
@@ -142,17 +128,22 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	if err := os.WriteFile(outputPath, nil, 0644); err != nil {
 		return err
 	}
+	if resolved.LocalDir {
+		config.Env["ADVERSARY_REPO"] = repoPath
+		config.Env["ADVERSARY_INPUT"] = inputPath
+		config.Env["ADVERSARY_OUTPUT"] = outputPath
+	}
 
 	if opts.Verbose {
 		PrintVerboseLaunch(stderr, config)
 	} else {
-		fmt.Fprintf(stderr, "Running %s\n", resolved.Image)
+		fmt.Fprintf(stderr, "Running %s\n", displayRunName(opts.AdversaryRef, resolved))
 	}
 	runStarted := time.Now()
 	result, err := executor.Run(ctx, config.ContainerSpec())
 	scanDuration := time.Since(runStarted)
 	totalDuration := time.Since(started)
-	printExecutionSummary(stderr, result.ExitCode, buildDuration, scanDuration, totalDuration)
+	printExecutionSummary(stderr, result, buildDuration, scanDuration, totalDuration)
 	if err != nil {
 		return err
 	}
@@ -205,6 +196,13 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	return nil
 }
 
+func displayRunName(ref string, resolved ResolvedAdversary) string {
+	if resolved.LocalDir && ref != "" {
+		return ref
+	}
+	return resolved.Image
+}
+
 func (r Runner) Inspect(opts RunOptions) error {
 	stdout := r.Stdout
 	if stdout == nil {
@@ -238,10 +236,16 @@ type RunConfig struct {
 }
 
 func NewRunConfig(resolved ResolvedAdversary, repoPath, runDir string, opts RunOptions) RunConfig {
+	inputPath := ""
+	outputPath := ""
+	if runDir != "" {
+		inputPath = filepath.Join(runDir, "input.json")
+		outputPath = filepath.Join(runDir, "output.json")
+	}
 	env := map[string]string{
-		"ADVERSARY_REPO":    "/workspace",
-		"ADVERSARY_INPUT":   "/adversary/input.json",
-		"ADVERSARY_OUTPUT":  "/adversary/output.json",
+		"ADVERSARY_REPO":    repoPath,
+		"ADVERSARY_INPUT":   inputPath,
+		"ADVERSARY_OUTPUT":  outputPath,
 		"ADVERSARY_VERBOSE": boolEnv(opts.Verbose),
 	}
 	return RunConfig{
@@ -259,6 +263,7 @@ func (c RunConfig) ContainerSpec() ContainerSpec {
 		Command:         c.Resolved.Command,
 		RepoPath:        c.RepoPath,
 		RunDir:          c.RunDir,
+		AdversaryPath:   c.Resolved.ExecutionPath,
 		NetworkDisabled: c.Options.NoNetwork || c.Resolved.NetworkOff,
 		Env:             c.Env,
 		Shell:           c.Options.Shell,
@@ -270,13 +275,6 @@ func boolEnv(v bool) string {
 		return "1"
 	}
 	return "0"
-}
-
-func ShouldBuildAdversary(resolved ResolvedAdversary, opts RunOptions) bool {
-	if opts.NoBuild {
-		return false
-	}
-	return resolved.LocalDir && resolved.HasDockerfile
 }
 
 func PrintVerboseLoad(w io.Writer, ref string, resolved ResolvedAdversary) {
@@ -291,26 +289,18 @@ func PrintVerboseLoad(w io.Writer, ref string, resolved ResolvedAdversary) {
 	fmt.Fprintln(w)
 }
 
-func PrintVerboseBuild(w io.Writer, resolved ResolvedAdversary) {
-	fmt.Fprintln(w, "Building image")
-	fmt.Fprintf(w, "  Context: %s\n", resolved.BuildContext)
-	fmt.Fprintf(w, "  Image: %s\n", resolved.Image)
-	fmt.Fprintln(w)
-}
-
 func PrintVerboseLaunch(w io.Writer, config RunConfig) {
-	fmt.Fprintln(w, "Launching container")
+	fmt.Fprintln(w, "Launching adversary")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Docker command:")
+	fmt.Fprintln(w, "Command:")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, FormatShellCommand(append([]string{"docker"}, dockerRunArgs(config.ContainerSpec())...)))
+	fmt.Fprintln(w, FormatShellCommand(config.ContainerSpec().Command))
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Mounts")
+	fmt.Fprintln(w, "Paths")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  Host:      %s\n", config.RepoPath)
-	fmt.Fprintln(w, "  Container: /workspace")
-	fmt.Fprintf(w, "  Input:     %s/input.json -> /adversary/input.json\n", config.RunDir)
-	fmt.Fprintf(w, "  Output:    %s/output.json -> /adversary/output.json\n", config.RunDir)
+	fmt.Fprintf(w, "  Repository: %s\n", config.RepoPath)
+	fmt.Fprintf(w, "  Adversary:  %s\n", config.Resolved.ExecutionPath)
+	fmt.Fprintf(w, "  Run dir:    %s\n", config.RunDir)
 	fmt.Fprintln(w)
 	PrintEnvironment(w, config.Env)
 	fmt.Fprintln(w)
@@ -330,13 +320,13 @@ func PrintInspect(w io.Writer, ref string, config RunConfig) {
 		fmt.Fprintf(w, "  Manifest: %s\n", filepath.Join(ref, "adversary.yaml"))
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Image")
+	fmt.Fprintln(w, "Runtime")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  %s\n", resolved.Image)
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Build context")
+	fmt.Fprintln(w, "Project")
 	fmt.Fprintln(w)
-	if resolved.LocalDir && resolved.HasDockerfile {
+	if resolved.LocalDir {
 		fmt.Fprintf(w, "  %s\n", resolved.BuildContext)
 	} else {
 		fmt.Fprintln(w, "  none")
@@ -347,9 +337,6 @@ func PrintInspect(w io.Writer, ref string, config RunConfig) {
 	fmt.Fprintln(w, "  Host:")
 	fmt.Fprintf(w, "    %s\n", config.RepoPath)
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "  Container:")
-	fmt.Fprintln(w, "    /workspace")
-	fmt.Fprintln(w)
 	PrintRepositoryContents(w, config.RepoPath)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Command")
@@ -359,7 +346,7 @@ func PrintInspect(w io.Writer, ref string, config RunConfig) {
 		command = []string{"/bin/sh"}
 	}
 	if len(command) == 0 {
-		fmt.Fprintln(w, "  default image command")
+		fmt.Fprintln(w, "  none")
 	} else {
 		for _, part := range command {
 			fmt.Fprintf(w, "  %s\n", part)
@@ -367,10 +354,6 @@ func PrintInspect(w io.Writer, ref string, config RunConfig) {
 	}
 	fmt.Fprintln(w)
 	PrintEnvironment(w, config.Env)
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Docker command")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, FormatShellCommand(append([]string{"docker"}, dockerRunArgs(config.ContainerSpec())...)))
 }
 
 func PrintEnvironment(w io.Writer, env map[string]string) {
@@ -458,8 +441,12 @@ func shellQuote(s string) string {
 	return s
 }
 
-func printExecutionSummary(w io.Writer, exitCode int, build, scan, total time.Duration) {
-	fmt.Fprintf(w, "Container exit code: %d\n", exitCode)
+func printExecutionSummary(w io.Writer, result ContainerResult, build, scan, total time.Duration) {
+	kind := result.Kind
+	if kind == "" {
+		kind = "Process"
+	}
+	fmt.Fprintf(w, "%s exit code: %d\n", kind, result.ExitCode)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Execution time")
 	fmt.Fprintln(w)

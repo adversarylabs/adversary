@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
@@ -20,6 +23,8 @@ import (
 	adversarypkg "github.com/adversarylabs/adversary/pkg/adversary"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/adversarylabs/adversary/pkg/store"
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +41,7 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	var apiURL string
 	cmd := &cobra.Command{
 		Use:           "adversary",
-		Short:         "Run containerized source-code adversaries against a local repository",
+		Short:         "Run source-code adversaries against a local repository",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -50,6 +55,9 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(newRunCommand(stdout, stderr))
 	cmd.AddCommand(newInspectCommand(stdout, stderr))
 	cmd.AddCommand(newInitCommand(stdout, stderr))
+	cmd.AddCommand(newPackCommand(stdout, stderr))
+	cmd.AddCommand(newLSCommand(stdout, "ls"))
+	cmd.AddCommand(newLSCommand(stdout, "list"))
 	cmd.AddCommand(newVersionCommand(stdout))
 	cmd.AddCommand(newLoginCommand(stdout, stderr, &apiURL))
 	cmd.AddCommand(newLogoutCommand(stdout, stderr, &apiURL))
@@ -68,8 +76,6 @@ type runOptions struct {
 	format    string
 	keepTemp  bool
 	noNetwork bool
-	build     bool
-	noBuild   bool
 	verbose   bool
 	shell     bool
 	allFiles  bool
@@ -90,6 +96,18 @@ type logoutOptions struct {
 	localOnly bool
 }
 
+type inspectOptions struct {
+	json bool
+}
+
+type listOptions struct {
+	json bool
+}
+
+type packOptions struct {
+	builder string
+}
+
 func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 	opts := &runOptions{}
 
@@ -101,15 +119,11 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
   adversary run ./smoke-tests/comment-sentence-adversary --repo . --format json
   adversary run ./smoke-tests/comment-sentence-adversary --repo . --base main --head HEAD
   adversary run ./smoke-tests/comment-sentence-adversary --repo . --base main --head HEAD --all-files
-  adversary run ./smoke-tests/comment-sentence-adversary --repo . --shell
-  adversary run ./smoke-tests/comment-sentence-adversary --repo . --no-build`,
+  adversary run ./smoke-tests/comment-sentence-adversary --repo . --shell`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.format != "text" && opts.format != "json" {
 				return fmt.Errorf("--format must be text or json")
-			}
-			if opts.build && opts.noBuild {
-				return fmt.Errorf("--build and --no-build cannot be used together")
 			}
 
 			runner := internaladversary.Runner{
@@ -126,8 +140,6 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 				Format:       opts.format,
 				KeepTemp:     opts.keepTemp,
 				NoNetwork:    opts.noNetwork,
-				Build:        opts.build,
-				NoBuild:      opts.noBuild,
 				Verbose:      opts.verbose,
 				Shell:        opts.shell,
 				AllFiles:     opts.allFiles,
@@ -145,11 +157,9 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.force, "force", false, "run even when triggers.files_changed does not match")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&opts.keepTemp, "keep-temp", false, "do not delete the temporary run directory")
-	cmd.Flags().BoolVar(&opts.noNetwork, "no-network", false, "force container network disabled")
-	cmd.Flags().BoolVar(&opts.build, "build", false, "build a local directory adversary image before running")
-	cmd.Flags().BoolVar(&opts.noBuild, "no-build", false, "skip building a local directory adversary image")
+	cmd.Flags().BoolVar(&opts.noNetwork, "no-network", false, "disable network access when supported by the runtime")
 	cmd.Flags().BoolVar(&opts.verbose, "verbose", false, "print detailed execution diagnostics")
-	cmd.Flags().BoolVar(&opts.shell, "shell", false, "launch an interactive shell in the configured container")
+	cmd.Flags().BoolVar(&opts.shell, "shell", false, "launch an interactive shell in the adversary working directory")
 	cmd.Flags().BoolVar(&opts.allFiles, "all-files", false, "scan all files even when diff refs are provided")
 
 	return cmd
@@ -157,14 +167,27 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 
 func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
 	opts := &runOptions{}
+	inspectOpts := &inspectOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "inspect <adversary-ref>",
-		Short: "Inspect a local adversary runtime configuration",
+		Use:   "inspect <name|digest|adversary-ref>",
+		Short: "Inspect a locally stored adversary or local runtime configuration",
 		Example: `  adversary inspect ./smoke-tests/comment-sentence-adversary --repo .
-  adversary inspect adversarylabs/dockerfile --repo .`,
+  adversary inspect security-reviewer --repo .
+  adversary inspect security-reviewer
+  adversary inspect security-reviewer:0.1.0
+  adversary inspect sha256:abc123`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			localStore, err := store.Default()
+			if err == nil {
+				if record, err := localStore.Inspect(args[0]); err == nil {
+					return renderStoreInspect(stdout, record, inspectOpts.json)
+				}
+			}
+			if inspectOpts.json {
+				return fmt.Errorf("--json is only supported for locally stored adversaries")
+			}
 			runner := internaladversary.Runner{
 				Stdout: stdout,
 				Stderr: stderr,
@@ -178,8 +201,83 @@ func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&opts.repo, "repo", ".", "path to the local source repository")
-	cmd.Flags().BoolVar(&opts.noNetwork, "no-network", false, "force container network disabled")
+	cmd.Flags().BoolVar(&opts.noNetwork, "no-network", false, "disable network access when supported by the runtime")
+	cmd.Flags().BoolVar(&inspectOpts.json, "json", false, "print local store metadata as JSON")
 
+	return cmd
+}
+
+func newPackCommand(stdout, stderr io.Writer) *cobra.Command {
+	opts := &packOptions{builder: "local"}
+	cmd := &cobra.Command{
+		Use:   "pack <path>",
+		Short: "Package the current adversary into the local content-addressable store",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Fprintln(stderr, "Packing adversary...")
+			artifact, err := pack.Create(cmd.Context(), pack.Options{Dir: args[0], Build: true, Builder: opts.builder, Stdout: stderr, Stderr: stderr})
+			if err != nil {
+				return err
+			}
+			localStore, err := store.Default()
+			if err != nil {
+				return err
+			}
+			record, err := localStore.Put(artifact)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(stdout)
+			fmt.Fprintf(stdout, "Name: %s\n", record.Name)
+			fmt.Fprintf(stdout, "Version: %s\n", record.Version)
+			fmt.Fprintf(stdout, "Runtime: %s\n", record.Runtime)
+			fmt.Fprintf(stdout, "Digest: %s\n", record.Digest)
+			fmt.Fprintf(stdout, "Size: %s\n", humanSize(record.Size))
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, "Stored locally as:")
+			fmt.Fprintln(stdout)
+			fmt.Fprintf(stdout, "%s:%s\n", record.Name, record.Version)
+			fmt.Fprintf(stdout, "%s:latest\n", record.Name)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&opts.builder, "builder", "local", "build mechanism: local or docker")
+	return cmd
+}
+
+func newLSCommand(stdout io.Writer, use string) *cobra.Command {
+	opts := &listOptions{}
+	cmd := &cobra.Command{
+		Use:   use,
+		Short: "List locally stored adversaries",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			localStore, err := store.Default()
+			if err != nil {
+				return err
+			}
+			records, err := localStore.List()
+			if err != nil {
+				return err
+			}
+			if opts.json {
+				encoder := json.NewEncoder(stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(records)
+			}
+			if len(records) == 0 {
+				fmt.Fprintln(stdout, "No local adversaries found.")
+				return nil
+			}
+			w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NAME\tVERSION\tDIGEST\tSIZE\tCREATED")
+			for _, record := range records {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", record.Name, record.Version, shortDigest(record.Digest), humanSize(record.Size), relativeTime(record.Created))
+			}
+			return w.Flush()
+		},
+	}
+	cmd.Flags().BoolVar(&opts.json, "json", false, "print local adversaries as JSON")
 	return cmd
 }
 
@@ -520,6 +618,91 @@ func printWhoami(stdout io.Writer, account adversarylabs.WhoamiResponse) {
 	fmt.Fprintf(stdout, "Email: %s\n", email)
 	fmt.Fprintf(stdout, "Subscription: %s\n", subscription)
 	fmt.Fprintf(stdout, "Status: %s\n", status)
+}
+
+func renderStoreInspect(stdout io.Writer, record store.Record, asJSON bool) error {
+	if asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(record)
+	}
+	fmt.Fprintf(stdout, "Name: %s\n", record.Name)
+	fmt.Fprintf(stdout, "Version: %s\n", record.Version)
+	fmt.Fprintf(stdout, "Digest: %s\n", record.Digest)
+	fmt.Fprintf(stdout, "Runtime: %s\n", record.Runtime)
+	fmt.Fprintf(stdout, "Entrypoint: %s\n", strings.Join(record.Entrypoint, " "))
+	permissions, _ := json.Marshal(record.Permissions)
+	if len(permissions) == 0 || string(permissions) == "null" {
+		permissions = []byte("{}")
+	}
+	fmt.Fprintf(stdout, "Permissions: %s\n", permissions)
+	fmt.Fprintf(stdout, "Size: %s\n", humanSize(record.Size))
+	fmt.Fprintf(stdout, "Created: %s\n", record.Created.Format(time.RFC3339))
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Layers:")
+	fmt.Fprintf(stdout, "  config  %s\n", record.ConfigDigest)
+	fmt.Fprintf(stdout, "  layer   %s\n", record.LayerDigest)
+	if len(record.Annotations) > 0 {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Manifest annotations:")
+		keys := make([]string, 0, len(record.Annotations))
+		for key := range record.Annotations {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(stdout, "  %s: %s\n", key, record.Annotations[key])
+		}
+	}
+	if len(record.Files) > 0 {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Files:")
+		for _, file := range record.Files {
+			fmt.Fprintf(stdout, "  %s  %s\n", file.Path, humanSize(file.Size))
+		}
+	}
+	return nil
+}
+
+func shortDigest(digest string) string {
+	if len(digest) <= 19 {
+		return digest
+	}
+	if strings.HasPrefix(digest, "sha256:") {
+		return digest[:19]
+	}
+	return digest[:12]
+}
+
+func humanSize(size int64) string {
+	units := []string{"B", "KB", "MB", "GB"}
+	value := float64(size)
+	unit := units[0]
+	for i := 1; i < len(units) && value >= 1024; i++ {
+		value /= 1024
+		unit = units[i]
+	}
+	if unit == "B" {
+		return fmt.Sprintf("%d B", size)
+	}
+	return fmt.Sprintf("%.1f %s", value, unit)
+}
+
+func relativeTime(t time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	d := time.Since(t)
+	if d < time.Minute {
+		return "now"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
 func valueOf(value *string) string {

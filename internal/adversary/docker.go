@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 )
 
@@ -12,19 +14,10 @@ type ContainerExecutor interface {
 	Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error)
 }
 
-type ImageBuilder interface {
-	Build(ctx context.Context, spec BuildSpec) (BuildResult, error)
-}
-
-type DockerExecutor struct {
+type HostExecutor struct {
 	Stdout io.Writer
 	Stderr io.Writer
 	Stdin  io.Reader
-}
-
-type DockerBuilder struct {
-	Stdout io.Writer
-	Stderr io.Writer
 }
 
 type ContainerSpec struct {
@@ -32,79 +25,67 @@ type ContainerSpec struct {
 	Command         []string
 	RepoPath        string
 	RunDir          string
+	AdversaryPath   string
 	NetworkDisabled bool
 	Env             map[string]string
 	Shell           bool
 }
 
-type BuildSpec struct {
-	Image   string
-	Context string
-}
-
-type BuildResult struct {
-	ExitCode int
-}
-
 type ContainerResult struct {
 	ExitCode int
+	Kind     string
 }
 
-func (b DockerBuilder) Build(ctx context.Context, spec BuildSpec) (BuildResult, error) {
-	args := dockerBuildArgs(spec)
-
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Stdout = b.Stdout
-	cmd.Stderr = b.Stderr
-	if err := cmd.Run(); err != nil {
-		return BuildResult{ExitCode: exitCode(err)}, fmt.Errorf("image build failed: %w", err)
+func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
+	command := spec.Command
+	if spec.Shell {
+		command = []string{"/bin/sh"}
 	}
-	return BuildResult{ExitCode: 0}, nil
-}
-
-func (e DockerExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
-	args := dockerRunArgs(spec)
-
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	if len(command) == 0 {
+		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution command is empty")
+	}
+	if command[0] == "node" {
+		node, err := findNode()
+		if err != nil {
+			return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution failed: node was not found; install Node.js or ensure node is on PATH")
+		}
+		command = append([]string{node}, command[1:]...)
+	}
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd.Dir = spec.AdversaryPath
 	cmd.Stdout = e.Stdout
 	cmd.Stderr = e.Stderr
 	cmd.Stdin = e.Stdin
-	if err := cmd.Run(); err != nil {
-		return ContainerResult{ExitCode: exitCode(err)}, fmt.Errorf("container execution failed: %w", err)
-	}
-	return ContainerResult{ExitCode: 0}, nil
-}
-
-func dockerBuildArgs(spec BuildSpec) []string {
-	return []string{"build", "-t", spec.Image, spec.Context}
-}
-
-func dockerRunArgs(spec ContainerSpec) []string {
-	args := []string{
-		"run",
-		"--rm",
-	}
-	if spec.Shell {
-		args = append(args, "-it")
-	}
-	args = append(args,
-		"-v", fmt.Sprintf("%s:/workspace:ro", spec.RepoPath),
-		"-v", fmt.Sprintf("%s/input.json:/adversary/input.json:ro", spec.RunDir),
-		"-v", fmt.Sprintf("%s/output.json:/adversary/output.json", spec.RunDir),
-	)
-	if spec.NetworkDisabled {
-		args = append(args, "--network", "none")
-	}
+	cmd.Env = os.Environ()
 	for _, key := range sortedEnvKeys(spec.Env) {
-		args = append(args, "-e", key+"="+spec.Env[key])
+		cmd.Env = append(cmd.Env, key+"="+spec.Env[key])
 	}
-	args = append(args, spec.Image)
-	if spec.Shell {
-		args = append(args, "/bin/sh")
-	} else {
-		args = append(args, spec.Command...)
+	if err := cmd.Run(); err != nil {
+		return ContainerResult{ExitCode: exitCode(err), Kind: "Process"}, fmt.Errorf("host execution failed: %w", err)
 	}
-	return args
+	return ContainerResult{ExitCode: 0, Kind: "Process"}, nil
+}
+
+func findNode() (string, error) {
+	if path, err := exec.LookPath("node"); err == nil {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	matches, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", "node"))
+	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+	candidates := append(matches,
+		filepath.Join(home, ".volta", "bin", "node"),
+		filepath.Join(home, ".asdf", "shims", "node"),
+	)
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", exec.ErrNotFound
 }
 
 func sortedEnvKeys(env map[string]string) []string {

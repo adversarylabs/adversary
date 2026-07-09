@@ -4,9 +4,9 @@ import "encoding/json"
 
 const (
 	ImageManifestMediaType = "application/vnd.oci.image.manifest.v1+json"
-	EmptyConfigMediaType   = "application/vnd.adversary.config.v1+json"
-	ArtifactMediaType      = "application/vnd.adversary.package.v1"
-	PackageLayerMediaType  = "application/vnd.adversary.package.layer.v1.tar+gzip"
+	EmptyConfigMediaType   = "application/vnd.adversarylabs.adversary.config.v1+json"
+	ArtifactMediaType      = "application/vnd.adversarylabs.adversary.manifest.v1+json"
+	PackageLayerMediaType  = "application/vnd.adversarylabs.adversary.layer.v1.tar+gzip"
 )
 
 type Manifest struct {

@@ -14,7 +14,6 @@ The adversary should be deterministic, safe to run repeatedly, and produce stabl
 - `test/` contains unit and integration tests.
 - `fixtures/` contains repositories used by tests.
 - `adversary.yaml` describes runtime metadata.
-- `Dockerfile` packages the adversary for the CLI runtime.
 
 ## Design Principles
 

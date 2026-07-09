@@ -1,6 +1,6 @@
 # Adversary
 
-Adversary runs containerized source-code adversaries against a local repository.
+Adversary runs source-code adversaries against a local repository.
 
 ## Create an Adversary
 
@@ -12,7 +12,7 @@ npm run build
 adversary run . --repo /path/to/repository
 ```
 
-Only the TypeScript SDK is supported by `init` today. The generated project includes a working manifest, Dockerfile, starter rule, fixtures, and tests.
+Only the TypeScript SDK is supported by `init` today. The generated project includes a working manifest, starter rule, fixtures, and tests.
 
 ## Usage
 
@@ -23,6 +23,9 @@ Only the TypeScript SDK is supported by `init` today. The generated project incl
 ./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --base main --head HEAD
 ./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --base main --head HEAD --all-files
 ./bin/adversary inspect ./smoke-tests/comment-sentence-adversary --repo .
+./bin/adversary pack .
+./bin/adversary ls
+./bin/adversary inspect security-reviewer
 ./bin/adversary login
 ./bin/adversary whoami
 ./bin/adversary search dockerfile
@@ -30,7 +33,7 @@ Only the TypeScript SDK is supported by `init` today. The generated project incl
 ./bin/adversary pull ghcr.io/acme/security-reviewer
 ```
 
-An adversary reference can be either a local directory containing `adversary.yaml` or a direct container image reference.
+An adversary reference can be either a local directory containing `adversary.yaml` or a locally installed adversary artifact.
 
 When `--base` and `--head` are provided, the CLI includes changed files from `git diff --name-only <base>...<head>` in `input.json`. Use `--all-files` to keep that diff context but request a full repository scan and bypass `triggers.files_changed` skipping.
 
@@ -40,11 +43,11 @@ When `--base` and `--head` are provided, the CLI includes changed files from `gi
 ./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo .
 ```
 
-The repository includes a deliberately small smoke-test adversary used to verify the local CLI loop. Full authoring examples live with the SDK. For local adversary directories with a Dockerfile, `adversary run` builds the image from `runtime.image` before running it. Use `--no-build` to skip that local build.
+The repository includes a deliberately small smoke-test adversary used to verify the local CLI loop. Full authoring examples live with the SDK. `adversary run` executes local directories and installed adversary artifacts through the CLI-managed runtime; it does not build or run Docker images.
 
 ## Debugging
 
-Use `--verbose` to print the manifest, build context, image, Docker command, mounts, environment, repository contents, container exit code, and execution timing:
+Use `--verbose` to print the manifest, runtime, command, environment, repository contents, process exit code, and execution timing:
 
 ```sh
 ./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --verbose
@@ -56,13 +59,64 @@ Use `inspect` to validate the runtime configuration without executing the advers
 ./bin/adversary inspect ./smoke-tests/comment-sentence-adversary --repo .
 ```
 
-Use `--shell` to launch an interactive shell in the configured container instead of running the adversary command:
+Use `--shell` to launch an interactive shell in the adversary working directory instead of running the adversary command:
 
 ```sh
 ./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --shell
 ```
 
-Container stdout and stderr stream directly to the terminal.
+Adversary stdout and stderr stream directly to the terminal.
+
+## Local Packaging
+
+Package the current adversary into the local content-addressable store:
+
+```sh
+adversary pack .
+adversary pack . --builder docker
+```
+
+`pack` reads `adversary.yaml`, validates the manifest, detects the runtime, runs the TypeScript build when needed, creates deterministic OCI-style artifact content, writes content by digest, and updates local refs. It does not create or tag a Docker image. Packed adversaries are run through the Adversary CLI, which materializes the artifact and executes it with the appropriate CLI-managed runtime. Use `--builder docker` to run the TypeScript build inside Docker/BuildKit; this supports remote builders that honor `docker build --output`, such as CI builders configured through `DOCKER_HOST`.
+
+```text
+refs/security-reviewer/0.1.0
+refs/security-reviewer/latest
+```
+
+Local store locations:
+
+```text
+macOS: ~/Library/Application Support/Adversary/
+Linux: ~/.local/share/adversary/
+Fallback: ~/.adversary/
+```
+
+The store layout is content-addressable:
+
+```text
+store/blobs/sha256/...
+store/manifests/sha256/...
+refs/<name>/<tag>
+```
+
+List local adversaries:
+
+```sh
+adversary ls
+adversary list
+adversary ls --json
+```
+
+Inspect local artifacts by name, tag, or digest:
+
+```sh
+adversary inspect security-reviewer
+adversary inspect security-reviewer:0.1.0
+adversary inspect sha256:abc123
+adversary inspect security-reviewer --json
+```
+
+Packaging applies safe default ignores for `node_modules/`, `.git/`, `.env`, `.env.*`, `.DS_Store`, `coverage/`, `tmp/`, `.cache/`, and `Dockerfile`. Add `.adversaryignore` for project-specific exclusions.
 
 ## Registry Distribution
 
