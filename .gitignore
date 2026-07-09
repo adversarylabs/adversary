@@ -1,4 +1,4 @@
-adversary
+/adversary
 bin/
 dist/
 !templates/typescript/dist/
