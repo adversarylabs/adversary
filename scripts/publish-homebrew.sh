@@ -172,7 +172,7 @@ for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
   mkdir -p "$build_dir"
   CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
     -trimpath \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X github.com/adversarylabs/adversary/internal/version.Version=${VERSION}" \
     -o "${build_dir}/${BINARY}" \
     .
   tar -C "$build_dir" -czf "${DIST_DIR}/${archive}" "$BINARY"

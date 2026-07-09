@@ -23,6 +23,11 @@ Only the TypeScript SDK is supported by `init` today. The generated project incl
 ./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --base main --head HEAD
 ./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --base main --head HEAD --all-files
 ./bin/adversary inspect ./smoke-tests/comment-sentence-adversary --repo .
+./bin/adversary login
+./bin/adversary whoami
+./bin/adversary search dockerfile
+./bin/adversary push ghcr.io/acme/security-reviewer
+./bin/adversary pull ghcr.io/acme/security-reviewer
 ```
 
 An adversary reference can be either a local directory containing `adversary.yaml` or a direct container image reference.
@@ -58,6 +63,62 @@ Use `--shell` to launch an interactive shell in the configured container instead
 ```
 
 Container stdout and stderr stream directly to the terminal.
+
+## Registry Distribution
+
+Adversaries can be packaged as OCI artifacts and pushed to any OCI-compatible registry:
+
+```sh
+adversary push security-reviewer
+adversary push adversarylabs/security-reviewer
+adversary push ghcr.io/acme/security-reviewer
+adversary push registry.company.com/team/security-reviewer
+```
+
+Pull works the same way:
+
+```sh
+adversary pull security-reviewer
+adversary pull adversarylabs/security-reviewer
+adversary pull ghcr.io/acme/security-reviewer
+adversary pull registry.company.com/team/security-reviewer
+```
+
+References without a registry default to Adversary Labs:
+
+```text
+security-reviewer       -> registry.adversarylabs.ai/library/security-reviewer
+acme/security-reviewer  -> registry.adversarylabs.ai/acme/security-reviewer
+ghcr.io/acme/reviewer   -> ghcr.io/acme/reviewer
+```
+
+Pulled artifacts are cached under `~/.adversary/cache/` by digest and registered locally so `adversary run security-reviewer --repo .` can resolve a pulled adversary.
+
+## Login, Logout, And Search
+
+`adversary login` authenticates with Adversary Labs and stores the returned token in `~/.adversary/config.json`:
+
+```sh
+adversary login
+adversary login --name "Marc's MacBook Pro"
+adversary login --ci
+adversary login --email-address marc@example.com
+adversary login --email-address marc@example.com --password "$ADVERSARY_PASSWORD"
+adversary login --api-url http://localhost:3000/api
+```
+
+Without `--email-address`, login opens a browser and waits for the Adversary Labs app to redirect back to a temporary localhost callback. With `--email-address` but no `--password`, the CLI prompts for the password.
+The stored token is used for Adversary Labs registry access, private artifacts, search, and future SaaS API calls. Tokens are never printed by the CLI.
+The default SaaS endpoint is `https://adversarylabs.ai/api`. For local development, set `ADVERSARY_API_URL` or pass `--api-url`.
+
+```sh
+adversary search security
+adversary whoami
+adversary logout
+adversary logout --local-only
+```
+
+`push` and `pull` remain generic OCI operations. Adversary Labs-specific behavior is limited to default reference resolution, login/logout, and search.
 
 ## TypeScript Logging
 

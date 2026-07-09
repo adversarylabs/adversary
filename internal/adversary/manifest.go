@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	adversarycache "github.com/adversarylabs/adversary/pkg/adversary"
 )
 
 type Manifest struct {
@@ -216,6 +218,12 @@ func ResolveReference(ref string) (ResolvedAdversary, error) {
 			BuildContext:  ref,
 			HasDockerfile: hasDockerfile,
 		}, nil
+	}
+
+	if cache, err := adversarycache.DefaultCache(); err == nil {
+		if record, ok := cache.Resolve(ref); ok {
+			return ResolveReference(record.Path)
+		}
 	}
 
 	return ResolvedAdversary{
