@@ -241,10 +241,12 @@ func (f fakeGitDiffer) ChangedFiles(ctx context.Context, repoPath, baseRef, head
 type recordingExecutor struct {
 	called bool
 	input  Input
+	spec   ContainerSpec
 }
 
 func (e *recordingExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
 	e.called = true
+	e.spec = spec
 
 	data, err := os.ReadFile(filepath.Join(spec.RunDir, "input.json"))
 	if err != nil {
@@ -259,6 +261,73 @@ func (e *recordingExecutor) Run(ctx context.Context, spec ContainerSpec) (Contai
 		return ContainerResult{}, err
 	}
 	return ContainerResult{ExitCode: 0}, nil
+}
+
+func TestRunBuildsLocalTypeScriptAdversaryBeforeExecution(t *testing.T) {
+	adversaryDir := t.TempDir()
+	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), `name: local/adversary
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.js
+`)
+	writeFile(t, filepath.Join(adversaryDir, "package.json"), `{"scripts":{"build":"build"}}`)
+	if err := os.MkdirAll(filepath.Join(adversaryDir, "node_modules"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(adversaryDir, "vendor", "adversary-sdk", "dist", "index.js"), `export const DEFAULT_INPUT_PATH = "/adversary/input.json";
+export const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
+export class Adversary {
+  async run(options = {}) {
+    const input = options.input ?? (await parseInput(options.inputPath));
+    const repoPath = input.source.path;
+  }
+}
+export async function parseInput(path = DEFAULT_INPUT_PATH) {}
+export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
+`)
+	binDir := t.TempDir()
+	npmPath := filepath.Join(binDir, "npm")
+	writeFile(t, npmPath, "#!/bin/sh\n/bin/mkdir -p dist\nprintf 'console.log(\"built\")\\n' > dist/index.js\n")
+	if err := os.Chmod(npmPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("HOME", t.TempDir())
+
+	executor := &recordingExecutor{}
+	err := Runner{
+		Stdout:   &strings.Builder{},
+		Stderr:   &strings.Builder{},
+		Executor: executor,
+	}.Run(context.Background(), RunOptions{
+		AdversaryRef: adversaryDir,
+		RepoPath:     t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !executor.called {
+		t.Fatal("executor was not called")
+	}
+	builtPath := filepath.Join(adversaryDir, "dist", "index.js")
+	if _, err := os.Stat(builtPath); err != nil {
+		t.Fatalf("expected local build output: %v", err)
+	}
+	if len(executor.spec.Command) < 2 || executor.spec.Command[1] != builtPath {
+		t.Fatalf("command = %#v, want built entrypoint %q", executor.spec.Command, builtPath)
+	}
+	sdkData, err := os.ReadFile(filepath.Join(adversaryDir, "vendor", "adversary-sdk", "dist", "index.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdk := string(sdkData)
+	for _, want := range []string{"process.env.ADVERSARY_INPUT", "process.env.ADVERSARY_OUTPUT", "process.env.ADVERSARY_REPO"} {
+		if !strings.Contains(sdk, want) {
+			t.Fatalf("patched SDK missing %s:\n%s", want, sdk)
+		}
+	}
 }
 
 func TestRunSkipsWhenChangedFilesDoNotMatchTriggers(t *testing.T) {

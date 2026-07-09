@@ -72,6 +72,7 @@ type runOptions struct {
 	repo      string
 	base      string
 	head      string
+	builder   string
 	force     bool
 	format    string
 	keepTemp  bool
@@ -137,6 +138,7 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 				RepoPath:     opts.repo,
 				BaseRef:      opts.base,
 				HeadRef:      opts.head,
+				Builder:      opts.builder,
 				Force:        opts.force,
 				Format:       opts.format,
 				KeepTemp:     opts.keepTemp,
@@ -155,6 +157,7 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&opts.repo, "repo", ".", "path to the local source repository")
 	cmd.Flags().StringVar(&opts.base, "base", "", "git base ref for change context")
 	cmd.Flags().StringVar(&opts.head, "head", "", "git head ref for change context")
+	cmd.Flags().StringVar(&opts.builder, "builder", "local", "build mechanism for local adversaries: local or docker")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "run even when triggers.files_changed does not match")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&opts.keepTemp, "keep-temp", false, "do not delete the temporary run directory")

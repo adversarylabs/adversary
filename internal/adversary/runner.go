@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/adversarylabs/adversary/pkg/pack"
 )
 
 type RunOptions struct {
@@ -17,6 +19,7 @@ type RunOptions struct {
 	RepoPath     string
 	BaseRef      string
 	HeadRef      string
+	Builder      string
 	Force        bool
 	Format       string
 	KeepTemp     bool
@@ -104,6 +107,25 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	started := time.Now()
 	var buildDuration time.Duration
+	if resolved.LocalDir && !resolved.StoreBacked {
+		buildStarted := time.Now()
+		if err := pack.BuildProject(ctx, pack.BuildOptions{
+			Dir:     resolved.BuildContext,
+			Builder: opts.Builder,
+			Stdout:  stderr,
+			Stderr:  stderr,
+			Strict:  true,
+		}); err != nil {
+			return err
+		}
+		buildDuration = time.Since(buildStarted)
+		if err := patchLocalVendoredSDK(resolved.BuildContext); err != nil {
+			return err
+		}
+		if err := validateLocalCommandFiles(resolved.Command); err != nil {
+			return err
+		}
+	}
 
 	runDir, err := mkdirTemp("", "adversary-run-*")
 	if err != nil {
@@ -194,6 +216,41 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		fmt.Fprintf(stdout, "\nTemporary run directory: %s\n", runDir)
 	}
 	return nil
+}
+
+func validateLocalCommandFiles(command []string) error {
+	for _, part := range command {
+		if filepath.IsAbs(part) && strings.HasSuffix(part, ".js") {
+			if info, err := os.Stat(part); err != nil {
+				return fmt.Errorf("local adversary command file %s was not found; run npm install and npm run build, or pack the adversary first", part)
+			} else if info.IsDir() {
+				return fmt.Errorf("local adversary command file %s is a directory", part)
+			}
+		}
+	}
+	return nil
+}
+
+func patchLocalVendoredSDK(adversaryPath string) error {
+	indexPath := filepath.Join(adversaryPath, "vendor", "adversary-sdk", "dist", "index.js")
+	data, err := os.ReadFile(indexPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	text := string(data)
+	text = strings.ReplaceAll(text, "const repoPath = input.source.path;", "const repoPath = process.env.ADVERSARY_REPO ?? input.source.path ?? \"/workspace\";")
+	text = strings.ReplaceAll(text, "export async function parseInput(path = DEFAULT_INPUT_PATH)", "export async function parseInput(path = process.env.ADVERSARY_INPUT ?? DEFAULT_INPUT_PATH)")
+	text = strings.ReplaceAll(text, "export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH)", "export async function writeOutput(output, path = process.env.ADVERSARY_OUTPUT ?? DEFAULT_OUTPUT_PATH)")
+	if !strings.Contains(text, "DEFAULT_REPO_PATH") {
+		text = strings.Replace(text, "export const DEFAULT_OUTPUT_PATH = \"/adversary/output.json\";", "export const DEFAULT_OUTPUT_PATH = \"/adversary/output.json\";\nexport const DEFAULT_REPO_PATH = \"/workspace\";", 1)
+	}
+	if text == string(data) {
+		return nil
+	}
+	return os.WriteFile(indexPath, []byte(text), 0644)
 }
 
 func displayRunName(ref string, resolved ResolvedAdversary) string {

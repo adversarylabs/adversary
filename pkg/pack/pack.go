@@ -31,6 +31,14 @@ type Options struct {
 	Stderr       io.Writer
 }
 
+type BuildOptions struct {
+	Dir     string
+	Builder string
+	Stdout  io.Writer
+	Stderr  io.Writer
+	Strict  bool
+}
+
 type Artifact struct {
 	Name                    string
 	ManifestName            string
@@ -77,7 +85,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		return Artifact{}, err
 	}
 	if opts.Build {
-		if err := buildIfNeeded(ctx, dir, opts.Builder, opts.Stdout, opts.Stderr); err != nil {
+		if err := BuildProject(ctx, BuildOptions{Dir: dir, Builder: opts.Builder, Stdout: opts.Stdout, Stderr: opts.Stderr}); err != nil {
 			return Artifact{}, err
 		}
 	}
@@ -186,7 +194,15 @@ func normalizeNameOverride(name string) (string, error) {
 	return name, nil
 }
 
-func buildIfNeeded(ctx context.Context, dir, builder string, stdout, stderr io.Writer) error {
+func BuildProject(ctx context.Context, opts BuildOptions) error {
+	dir := opts.Dir
+	if dir == "" {
+		dir = "."
+	}
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
 	if err != nil {
 		return nil
@@ -195,18 +211,22 @@ func buildIfNeeded(ctx context.Context, dir, builder string, stdout, stderr io.W
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "node_modules")); err != nil {
-		if builder == "" || builder == "local" {
+		if opts.Strict {
+			return fmt.Errorf("build failed: node_modules was not found; run npm install or use --builder docker")
+		}
+		if opts.Builder == "" || opts.Builder == "local" {
 			return nil
 		}
 	}
+	builder := opts.Builder
 	if builder == "" {
 		builder = "local"
 	}
 	switch builder {
 	case "local":
-		return buildWithLocalNPM(ctx, dir, stdout, stderr)
+		return buildWithLocalNPM(ctx, dir, opts.Stdout, opts.Stderr)
 	case "docker":
-		return buildWithDocker(ctx, dir, stdout, stderr)
+		return buildWithDocker(ctx, dir, opts.Stdout, opts.Stderr)
 	default:
 		return fmt.Errorf("unsupported builder %q; supported builders: local, docker", builder)
 	}
