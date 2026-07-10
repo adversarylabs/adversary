@@ -22,6 +22,48 @@ test("shared review fixture satisfies SDK semantics", async () => {
   assert.equal(envelope.result.suppressedFindings.length, 1);
 });
 
+test("shared adversarial review fixtures are rejected", async () => {
+  const fixture = new URL(
+    "../../../../../schema/fixtures/adversary.review.v1.invalid.json",
+    import.meta.url,
+  );
+  const cases = JSON.parse(await readFile(fixture, "utf8"));
+  for (const entry of cases) {
+    assert.throws(
+      () => validateReviewEnvelope(entry.envelope),
+      undefined,
+      entry.name,
+    );
+  }
+});
+
+test("review validation covers optional object constraint families", () => {
+  const envelope = () => ({
+    protocolVersion: 1,
+    result: {
+      adversary: { name: "local/test" },
+      target: {},
+      positives: [],
+      observations: [],
+      findings: [],
+      suppressed: { observations: 0, findings: 0 },
+    },
+  });
+  const invalid = [
+    (value) => { value.result.target.filesScanned = -1; },
+    (value) => { value.result.assessment = { risk: "urgent" }; },
+    (value) => { value.result.opinion = { summary: "ok", ship: "yes" }; },
+    (value) => { value.result.timing = { totalMs: 1.5 }; },
+    (value) => { value.result.positives = [{ key: "x", summary: "x", metadata: [] }]; },
+    (value) => { value.result.findings = [{ id: "x", title: "x", category: "x", severity: "low", confidence: "high", summary: "x", evidence: [], remediation: { estimate: 1 } }]; },
+  ];
+  for (const mutate of invalid) {
+    const value = envelope();
+    mutate(value);
+    assert.throws(() => validateReviewEnvelope(value));
+  }
+});
+
 test("parseInput accepts the shared input fixture and rejects extensions", async () => {
   const fixture = new URL(
     "../../../../../schema/fixtures/adversary.input.v1.valid.json",

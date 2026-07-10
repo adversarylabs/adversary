@@ -146,6 +146,7 @@ export declare class Finding {
     readonly evidence?: string;
     readonly recommendation?: string;
     readonly metadata?: Record<string, unknown>;
+    readonly suppressed?: boolean;
     constructor(init: FindingInit);
     toJSON(): SerializedFinding;
 }

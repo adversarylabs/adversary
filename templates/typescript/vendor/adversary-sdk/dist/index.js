@@ -420,29 +420,51 @@ function isRunEnvelope(value) {
     return isRecord(value) && "protocolVersion" in value;
 }
 export function validateReviewEnvelope(value) {
-    requireExactKeys(value, ["protocolVersion", "result"], "envelope");
+    validateObject(value, ["protocolVersion", "result"], ["protocolVersion", "result"], "envelope");
     if (value.protocolVersion !== 1) {
         throw new Error("envelope.protocolVersion must be 1.");
     }
     const result = value.result;
-    if (!isRecord(result)) {
-        throw new Error("envelope.result must be an object.");
-    }
-    requireExactKeys(result, ["adversary", "target", "assessment", "positives", "observations", "findings", "opinion", "suppressed", "timing", "suppressedFindings", "rawObservations"].filter((key) => key in result || ["adversary", "target", "positives", "observations", "findings", "suppressed"].includes(key)), "result");
-    requireExactKeys(result.adversary, ["name", "version"].filter((key) => key in result.adversary || key === "name"), "result.adversary");
+    validateObject(result, ["adversary", "target", "assessment", "positives", "observations", "findings", "opinion", "suppressed", "timing", "suppressedFindings", "rawObservations"], ["adversary", "target", "positives", "observations", "findings", "suppressed"], "result");
+    validateObject(result.adversary, ["name", "version"], ["name"], "result.adversary");
     requireString(result.adversary.name, "result.adversary.name");
-    if (!isRecord(result.target)) {
-        throw new Error("result.target must be an object.");
+    optionalString(result.adversary.version, "result.adversary.version");
+    validateObject(result.target, ["repository", "filesScanned"], [], "result.target");
+    optionalString(result.target.repository, "result.target.repository");
+    optionalNonNegativeInteger(result.target.filesScanned, "result.target.filesScanned");
+    if (result.assessment !== undefined) {
+        validateObject(result.assessment, ["risk", "summary"], ["risk"], "result.assessment");
+        if (!["none", "low", "medium", "high", "critical"].includes(result.assessment.risk)) {
+            throw new Error("result.assessment.risk is unsupported.");
+        }
+        optionalString(result.assessment.summary, "result.assessment.summary");
     }
-    for (const field of ["positives", "observations", "findings"]) {
+    for (const field of ["positives", "observations"]) {
         if (!Array.isArray(result[field])) {
             throw new Error(`result.${field} must be an array.`);
         }
+        result[field].forEach((note, index) => validateReviewNote(note, `result.${field}[${index}]`));
     }
-    requireExactKeys(result.suppressed, ["observations", "findings"], "result.suppressed");
+    if (!Array.isArray(result.findings)) {
+        throw new Error("result.findings must be an array.");
+    }
+    if (result.opinion !== undefined) {
+        validateObject(result.opinion, ["ship", "summary"], ["summary"], "result.opinion");
+        if (result.opinion.ship !== undefined && typeof result.opinion.ship !== "boolean") {
+            throw new Error("result.opinion.ship must be a boolean.");
+        }
+        requireString(result.opinion.summary, "result.opinion.summary");
+    }
+    validateObject(result.suppressed, ["observations", "findings"], ["observations", "findings"], "result.suppressed");
     for (const field of ["observations", "findings"]) {
         if (!Number.isInteger(result.suppressed[field]) || result.suppressed[field] < 0) {
             throw new Error(`result.suppressed.${field} must be a non-negative integer.`);
+        }
+    }
+    if (result.timing !== undefined) {
+        validateObject(result.timing, ["buildMs", "startupMs", "scanMs", "totalMs"], [], "result.timing");
+        for (const field of ["buildMs", "startupMs", "scanMs", "totalMs"]) {
+            optionalNonNegativeInteger(result.timing[field], `result.timing.${field}`);
         }
     }
     if (result.suppressedFindings !== undefined) {
@@ -452,8 +474,8 @@ export function validateReviewEnvelope(value) {
     }
     const seen = new Set();
     for (const [field, findings] of [["findings", result.findings], ["suppressedFindings", result.suppressedFindings ?? []]]) {
-        for (const finding of findings) {
-            validateReviewFinding(finding, `result.${field}`);
+        for (const [index, finding] of findings.entries()) {
+            validateReviewFinding(finding, `result.${field}[${index}]`);
             if (seen.has(finding.id)) {
                 throw new Error(`result contains duplicate finding id "${finding.id}".`);
             }
@@ -462,11 +484,12 @@ export function validateReviewEnvelope(value) {
     }
 }
 function validateReviewFinding(finding, field) {
-    if (!isRecord(finding)) {
-        throw new Error(`${field} entries must be objects.`);
-    }
+    validateObject(finding, ["id", "ruleId", "groupKey", "title", "category", "severity", "confidence", "summary", "whyItMatters", "impact", "evidence", "recommendation", "remediation", "tags", "metadata"], ["id", "title", "category", "severity", "confidence", "summary", "evidence"], field);
     for (const key of ["id", "title", "category", "severity", "confidence", "summary"]) {
         requireString(finding[key], `${field}.${key}`);
+    }
+    for (const key of ["ruleId", "groupKey", "whyItMatters", "impact", "recommendation"]) {
+        optionalString(finding[key], `${field}.${key}`);
     }
     if (!isSeverity(finding.severity)) {
         throw new Error(`${field}.severity is unsupported.`);
@@ -476,6 +499,73 @@ function validateReviewFinding(finding, field) {
     }
     if (!Array.isArray(finding.evidence)) {
         throw new Error(`${field}.evidence must be an array.`);
+    }
+    finding.evidence.forEach((evidence, index) => validateReviewEvidence(evidence, `${field}.evidence[${index}]`));
+    if (finding.remediation !== undefined) {
+        validateObject(finding.remediation, ["estimate", "complexity"], [], `${field}.remediation`);
+        optionalString(finding.remediation.estimate, `${field}.remediation.estimate`);
+        optionalString(finding.remediation.complexity, `${field}.remediation.complexity`);
+    }
+    if (finding.tags !== undefined) {
+        if (!Array.isArray(finding.tags) || finding.tags.some((tag) => typeof tag !== "string")) {
+            throw new Error(`${field}.tags must contain only strings.`);
+        }
+        if (new Set(finding.tags).size !== finding.tags.length) {
+            throw new Error(`${field}.tags must not contain duplicates.`);
+        }
+    }
+    optionalMetadata(finding.metadata, `${field}.metadata`);
+}
+function validateReviewNote(note, field) {
+    validateObject(note, ["key", "summary", "evidence", "metadata"], ["key", "summary"], field);
+    requireString(note.key, `${field}.key`);
+    requireString(note.summary, `${field}.summary`);
+    if (note.evidence !== undefined) {
+        if (!Array.isArray(note.evidence)) {
+            throw new Error(`${field}.evidence must be an array.`);
+        }
+        note.evidence.forEach((evidence, index) => validateReviewEvidence(evidence, `${field}.evidence[${index}]`));
+    }
+    optionalMetadata(note.metadata, `${field}.metadata`);
+}
+function validateReviewEvidence(evidence, field) {
+    validateObject(evidence, ["file", "line", "endLine", "message", "snippet", "metadata"], [], field);
+    for (const key of ["file", "message", "snippet"]) {
+        optionalString(evidence[key], `${field}.${key}`);
+    }
+    optionalPositiveInteger(evidence.line, `${field}.line`);
+    optionalPositiveInteger(evidence.endLine, `${field}.endLine`);
+    if (evidence.endLine !== undefined && evidence.line === undefined) {
+        throw new Error(`${field}.endLine requires line.`);
+    }
+    if (evidence.endLine !== undefined && evidence.endLine < evidence.line) {
+        throw new Error(`${field}.endLine must not precede line.`);
+    }
+    optionalMetadata(evidence.metadata, `${field}.metadata`);
+}
+function optionalMetadata(value, field) {
+    if (value !== undefined && !isRecord(value)) {
+        throw new Error(`${field} must be an object.`);
+    }
+}
+function optionalNonNegativeInteger(value, field) {
+    if (value !== undefined && (!Number.isInteger(value) || value < 0)) {
+        throw new Error(`${field} must be a non-negative integer.`);
+    }
+}
+function validateObject(value, allowed, required, field) {
+    if (!isRecord(value)) {
+        throw new Error(`${field} must be an object.`);
+    }
+    const allowedKeys = new Set(allowed);
+    const unknown = Object.keys(value).filter((key) => !allowedKeys.has(key));
+    if (unknown.length > 0) {
+        throw new Error(`${field} contains unknown field "${unknown[0]}".`);
+    }
+    for (const key of required) {
+        if (!(key in value)) {
+            throw new Error(`${field}.${key} is required.`);
+        }
     }
 }
 //# sourceMappingURL=index.js.map

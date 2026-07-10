@@ -200,10 +200,14 @@ func (result ReviewResult) validate() error {
 
 func validateNotes(field string, notes []Note) error {
 	for i, note := range notes {
+		prefix := fmt.Sprintf("%s[%d]", field, i)
 		if strings.TrimSpace(note.Key) == "" || strings.TrimSpace(note.Summary) == "" {
-			return fmt.Errorf("%s[%d].key and summary must be non-empty strings", field, i)
+			return fmt.Errorf("%s.key and summary must be non-empty strings", prefix)
 		}
-		if err := validateEvidence(fmt.Sprintf("%s[%d].evidence", field, i), note.Evidence); err != nil {
+		if err := validateMetadata(prefix+".metadata", note.Metadata); err != nil {
+			return err
+		}
+		if err := validateEvidence(prefix+".evidence", note.Evidence); err != nil {
 			return err
 		}
 	}
@@ -234,6 +238,16 @@ func validateFindings(field string, findings []Finding, seen map[string]struct{}
 		if finding.Evidence == nil {
 			return fmt.Errorf("%s.evidence is required", prefix)
 		}
+		if err := validateMetadata(prefix+".metadata", finding.Metadata); err != nil {
+			return err
+		}
+		seenTags := make(map[string]struct{}, len(finding.Tags))
+		for _, tag := range finding.Tags {
+			if _, exists := seenTags[tag]; exists {
+				return fmt.Errorf("%s.tags contains duplicate value %q", prefix, tag)
+			}
+			seenTags[tag] = struct{}{}
+		}
 		if err := validateEvidence(prefix+".evidence", finding.Evidence); err != nil {
 			return err
 		}
@@ -243,6 +257,9 @@ func validateFindings(field string, findings []Finding, seen map[string]struct{}
 
 func validateEvidence(field string, evidence []Evidence) error {
 	for i, item := range evidence {
+		if err := validateMetadata(fmt.Sprintf("%s[%d].metadata", field, i), item.Metadata); err != nil {
+			return err
+		}
 		if item.Line != nil && *item.Line < 1 {
 			return fmt.Errorf("%s[%d].line must be positive", field, i)
 		}
@@ -257,6 +274,17 @@ func validateEvidence(field string, evidence []Evidence) error {
 				return fmt.Errorf("%s[%d].endLine must not precede line", field, i)
 			}
 		}
+	}
+	return nil
+}
+
+func validateMetadata(field string, metadata json.RawMessage) error {
+	if len(metadata) == 0 {
+		return nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &object); err != nil || object == nil {
+		return fmt.Errorf("%s must be an object", field)
 	}
 	return nil
 }

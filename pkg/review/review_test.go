@@ -170,6 +170,27 @@ func TestDecodeRunEnvelopeRejectsInvalidContracts(t *testing.T) {
 	}
 }
 
+func TestDecodeRunEnvelopeRejectsSharedInvalidFixtures(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "fixtures", "adversary.review.v1.invalid.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures []struct {
+		Name     string          `json:"name"`
+		Envelope json.RawMessage `json:"envelope"`
+	}
+	if err := json.Unmarshal(data, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture.Name, func(t *testing.T) {
+			if _, err := DecodeRunEnvelope(fixture.Envelope); err == nil {
+				t.Fatal("expected shared invalid fixture to be rejected")
+			}
+		})
+	}
+}
+
 func TestProtocolSchemasAreValidJSONAndSDKCopiesMatch(t *testing.T) {
 	for _, name := range []string{"adversary.input.v1.schema.json", "adversary.review.v1.schema.json"} {
 		canonical, err := os.ReadFile(filepath.Join("..", "..", "schema", name))
