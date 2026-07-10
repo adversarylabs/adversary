@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,6 +24,119 @@ func TestResolveAPIURLDefaultEnvAndOverride(t *testing.T) {
 	}
 	if got := ResolveAPIURL("http://127.0.0.1:8787/api/"); got != "http://127.0.0.1:8787/api" {
 		t.Fatalf("override API URL = %q", got)
+	}
+}
+
+func TestAuthKeyCanonicalizesHostWithoutCollapsingServicePath(t *testing.T) {
+	if AuthKey("HTTPS://API.Example:443/TenantA", "default") != AuthKey("https://api.example/TenantA", "default") {
+		t.Fatal("scheme/host/default port should canonicalize")
+	}
+	if AuthKey("https://api.example/TenantA", "default") == AuthKey("https://api.example/tenanta", "default") {
+		t.Fatal("case-sensitive service paths collided")
+	}
+	if AuthKey("https://api.example/api?q=A", "default") == AuthKey("https://api.example/api?q=a", "default") {
+		t.Fatal("queries collided")
+	}
+	if AuthKey("https://user@api.example/api", "default") == AuthKey("https://api.example/api", "default") {
+		t.Fatal("userinfo collided")
+	}
+	if AuthKey("https://api.example/api", "default") != AuthKey("https://api.example/api/", "default") {
+		t.Fatal("trailing service slash should canonicalize")
+	}
+	if AuthKey("https://api.example/api", "default") != AuthKey("https://api.example/api//", "default") {
+		t.Fatal("repeated trailing service slashes should canonicalize")
+	}
+	if AuthKey("https://api.example/api/%2F", "default") == AuthKey("https://api.example/api", "default") {
+		t.Fatal("escaped path segment collided with trailing slash normalization")
+	}
+	if AuthKey("https://api.example/TenantA/", "default") == AuthKey("https://api.example/tenanta/", "default") {
+		t.Fatal("nontrailing path case distinction was lost")
+	}
+}
+
+func TestConfigStoreHardeningAndServiceFallback(t *testing.T) {
+	dir := t.TempDir()
+	store := ConfigStore{Path: filepath.Join(dir, "private", "config.json")}
+	key := AuthKey("HTTPS://API.EXAMPLE/api/", " Work ")
+	if err := store.SetAuth(key, Auth{Token: "secret", RegistryHost: ResolveRegistryHost()}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("config mode = %o", info.Mode().Perm())
+	}
+	if _, ok, err := store.AuthE(ResolveRegistryHost()); err != nil || !ok {
+		t.Fatalf("registry fallback: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestConfigStoreSurfacesCorruptionAndMalformedExpiry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	store := ConfigStore{Path: path}
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(); err == nil {
+		t.Fatal("expected corrupt config error")
+	}
+	if err := os.WriteFile(path, []byte(`{"auths":{"key":{"token":"x","expires_at":"never"}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AuthE("key"); err == nil {
+		t.Fatal("expected malformed expiration error")
+	}
+}
+
+func TestConfigStoreRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	link := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(target, []byte(`{"auths":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := (ConfigStore{Path: link}).Load(); err == nil {
+		t.Fatal("expected symlink rejection")
+	}
+}
+
+func TestRegistryCredentialLookupRejectsAmbiguousScopedRecords(t *testing.T) {
+	store := ConfigStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	for _, key := range []string{AuthKey("https://one.example/api", "default"), AuthKey("https://two.example/api", "work")} {
+		if err := store.SetAuth(key, Auth{Token: key, RegistryHost: ResolveRegistryHost()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := store.AuthE(ResolveRegistryHost()); err == nil {
+		t.Fatal("expected ambiguous registry credential error")
+	}
+	if _, ok := store.Credentials(ResolveRegistryHost()); ok {
+		t.Fatal("compatibility lookup must fail closed")
+	}
+}
+
+func TestSaveIsLockedAndRepairsModes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "credentials")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	store := ConfigStore{Path: filepath.Join(dir, "config.json")}
+	if err := store.Save(Config{Auths: map[string]Auth{"key": {Token: "token"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{dir: 0700, store.Path: 0600, store.Path + ".lock": 0600} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != want {
+			t.Fatalf("%s mode = %o", path, info.Mode().Perm())
+		}
 	}
 }
 
@@ -124,8 +239,9 @@ func TestClientBrowserLoginURL(t *testing.T) {
 	client := Client{BaseURL: "http://localhost:3000/api"}
 	loginURL, err := client.BrowserLoginURL(BrowserLoginOptions{
 		RedirectURI: "http://127.0.0.1:54321/callback",
-		Name:        "Marc's MacBook Pro",
-		CI:          true,
+		State:       "random-state", CodeChallenge: "pkce-challenge",
+		Name: "Marc's MacBook Pro",
+		CI:   true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -138,6 +254,26 @@ func TestClientBrowserLoginURL(t *testing.T) {
 	}
 	if strings.Contains(loginURL, "/api/login") {
 		t.Fatalf("login URL should use app URL, not API URL: %q", loginURL)
+	}
+	parsed, _ := url.Parse(loginURL)
+	if parsed.Query().Get("state") != "random-state" || parsed.Query().Get("code_challenge") != "pkce-challenge" || parsed.Query().Get("code_challenge_method") != "S256" {
+		t.Fatalf("PKCE query = %q", parsed.RawQuery)
+	}
+}
+
+func TestClientExchangeCodeSendsPKCEAndRedirect(t *testing.T) {
+	var body map[string]string
+	client := Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		return jsonResponse(http.StatusOK, `{"token":"token"}`), nil
+	})}}
+	if _, err := client.ExchangeCode(context.Background(), "code", "verifier", "http://127.0.0.1/callback"); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "code" || body["code_verifier"] != "verifier" || body["redirect_uri"] == "" {
+		t.Fatalf("exchange body = %#v", body)
 	}
 }
 

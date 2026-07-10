@@ -50,9 +50,11 @@ type TokenResponse struct {
 }
 
 type BrowserLoginOptions struct {
-	RedirectURI string
-	Name        string
-	CI          bool
+	RedirectURI   string
+	State         string
+	CodeChallenge string
+	Name          string
+	CI            bool
 }
 
 type SearchResult struct {
@@ -135,6 +137,9 @@ func (c Client) BrowserLoginURL(opts BrowserLoginOptions) (string, error) {
 	q.Set("next", opts.RedirectURI)
 	q.Set("redirect_uri", opts.RedirectURI)
 	q.Set("cli", "true")
+	q.Set("state", opts.State)
+	q.Set("code_challenge", opts.CodeChallenge)
+	q.Set("code_challenge_method", "S256")
 	if opts.Name != "" {
 		q.Set("name", opts.Name)
 	}
@@ -145,9 +150,11 @@ func (c Client) BrowserLoginURL(opts BrowserLoginOptions) (string, error) {
 	return u.String(), nil
 }
 
-func (c Client) ExchangeCode(ctx context.Context, code string) (TokenResponse, error) {
+func (c Client) ExchangeCode(ctx context.Context, code, verifier, redirectURI string) (TokenResponse, error) {
 	var out TokenResponse
-	if err := c.postJSON(ctx, "/v1/auth/cli/exchange", map[string]string{"code": code}, "", &out); err != nil {
+	if err := c.postJSON(ctx, "/v1/auth/cli/exchange", map[string]string{
+		"code": code, "code_verifier": verifier, "redirect_uri": redirectURI,
+	}, "", &out); err != nil {
 		return TokenResponse{}, err
 	}
 	if out.Token == "" {
