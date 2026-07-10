@@ -2,11 +2,13 @@ package oci
 
 import (
 	"crypto/sha256"
+	_ "crypto/sha512" // register OCI-supported SHA-384 and SHA-512 algorithms
 	"encoding/hex"
 	"fmt"
 	"hash"
 	"io"
-	"strings"
+
+	digestapi "github.com/opencontainers/go-digest"
 )
 
 type Descriptor struct {
@@ -23,9 +25,18 @@ func Digest(data []byte) string {
 }
 
 func VerifyDigest(data []byte, digest string) error {
-	got := Digest(data)
-	if got != digest {
-		return fmt.Errorf("digest mismatch: got %s, want %s", got, digest)
+	d, err := digestapi.Parse(digest)
+	if err != nil {
+		return fmt.Errorf("invalid digest %q: %w", digest, err)
+	}
+	if err := d.Validate(); err != nil {
+		return fmt.Errorf("invalid digest %q: %w", digest, err)
+	}
+	if !d.Algorithm().Available() {
+		return fmt.Errorf("unsupported digest algorithm %q", d.Algorithm())
+	}
+	if d.Algorithm().FromBytes(data) != d {
+		return fmt.Errorf("digest mismatch for %s", digest)
 	}
 	return nil
 }
@@ -52,9 +63,17 @@ func (r *digestReader) Digest() string {
 }
 
 func DigestPath(digest string) (string, error) {
-	algo, hexValue, ok := strings.Cut(digest, ":")
-	if !ok || algo == "" || hexValue == "" {
-		return "", fmt.Errorf("invalid digest %q", digest)
+	d, err := ParseDigest(digest)
+	if err != nil {
+		return "", err
 	}
-	return algo + "/" + hexValue, nil
+	return d.Algorithm().String() + "/" + d.Encoded(), nil
+}
+
+func ParseDigest(value string) (digestapi.Digest, error) {
+	d, err := digestapi.Parse(value)
+	if err != nil || d.Validate() != nil || !d.Algorithm().Available() {
+		return "", fmt.Errorf("invalid or unsupported digest %q", value)
+	}
+	return d, nil
 }

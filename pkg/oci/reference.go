@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	distref "github.com/distribution/reference"
 )
 
 const (
@@ -12,12 +14,7 @@ const (
 	DefaultTag       = "latest"
 )
 
-type Reference struct {
-	Registry   string
-	Repository string
-	Tag        string
-	Digest     string
-}
+type Reference struct{ Registry, Repository, Tag, Digest string }
 
 func ParseReference(input string) (Reference, error) {
 	input = strings.TrimSpace(input)
@@ -27,59 +24,45 @@ func ParseReference(input string) (Reference, error) {
 	if strings.Contains(input, "://") {
 		return Reference{}, fmt.Errorf("reference must not include a URL scheme")
 	}
+	if strings.Count(input, "@") > 1 {
+		return Reference{}, fmt.Errorf("invalid reference: repeated digest separator")
+	}
 
-	var digest string
-	if before, after, ok := strings.Cut(input, "@"); ok {
-		input = before
-		digest = after
-		if digest == "" {
-			return Reference{}, fmt.Errorf("reference digest is empty")
+	qualified := input
+	namePart := input
+	if before, _, ok := strings.Cut(namePart, "@"); ok {
+		namePart = before
+	}
+	first := namePart
+	if before, _, ok := strings.Cut(first, "/"); ok {
+		first = before
+	}
+	explicitRegistry := strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost" || strings.HasPrefix(first, "[")
+	if !explicitRegistry {
+		if !strings.Contains(namePart, "/") {
+			qualified = DefaultRegistryHost() + "/" + DefaultNamespace + "/" + input
+		} else {
+			qualified = DefaultRegistryHost() + "/" + input
 		}
 	}
-
-	tag := ""
-	lastSlash := strings.LastIndex(input, "/")
-	lastColon := strings.LastIndex(input, ":")
-	if lastColon > lastSlash {
-		tag = input[lastColon+1:]
-		input = input[:lastColon]
-		if tag == "" {
-			return Reference{}, fmt.Errorf("reference tag is empty")
+	named, err := distref.ParseNormalizedNamed(qualified)
+	if err != nil {
+		return Reference{}, fmt.Errorf("invalid OCI reference %q: %w", input, err)
+	}
+	if _, ok := named.(distref.Digested); !ok {
+		named = distref.TagNameOnly(named)
+	}
+	r := Reference{Registry: distref.Domain(named), Repository: distref.Path(named)}
+	if tagged, ok := named.(distref.Tagged); ok {
+		r.Tag = tagged.Tag()
+	}
+	if digested, ok := named.(distref.Digested); ok {
+		if _, err := ParseDigest(digested.Digest().String()); err != nil {
+			return Reference{}, err
 		}
+		r.Digest = digested.Digest().String()
 	}
-	if tag == "" && digest == "" {
-		tag = DefaultTag
-	}
-
-	parts := strings.Split(input, "/")
-	for _, part := range parts {
-		if part == "" {
-			return Reference{}, fmt.Errorf("invalid empty reference component")
-		}
-	}
-
-	registry := DefaultRegistryHost()
-	repositoryParts := parts
-	explicitRegistry := false
-	if len(parts) > 1 && isRegistryHost(parts[0]) {
-		registry = parts[0]
-		repositoryParts = parts[1:]
-		explicitRegistry = true
-	}
-	if !explicitRegistry && len(repositoryParts) == 1 {
-		repositoryParts = []string{DefaultNamespace, repositoryParts[0]}
-	}
-	repository := strings.Join(repositoryParts, "/")
-	if repository == "" {
-		return Reference{}, fmt.Errorf("repository is required")
-	}
-
-	return Reference{
-		Registry:   registry,
-		Repository: repository,
-		Tag:        tag,
-		Digest:     digest,
-	}, nil
+	return r, nil
 }
 
 func DefaultRegistryHost() string {
@@ -91,28 +74,19 @@ func DefaultRegistryHost() string {
 	return DefaultRegistry
 }
 
-func isRegistryHost(component string) bool {
-	return strings.Contains(component, ".") || strings.Contains(component, ":") || component == "localhost"
-}
-
-func (r Reference) Name() string {
-	return r.Registry + "/" + r.Repository
-}
-
+func (r Reference) Name() string { return r.Registry + "/" + r.Repository }
 func (r Reference) Locator() string {
 	if r.Digest != "" {
 		return r.Name() + "@" + r.Digest
 	}
 	return r.Name() + ":" + r.Tag
 }
-
 func (r Reference) ManifestReference() string {
 	if r.Digest != "" {
 		return r.Digest
 	}
 	return r.Tag
 }
-
 func (r Reference) ShortName() string {
 	parts := strings.Split(r.Repository, "/")
 	return parts[len(parts)-1]

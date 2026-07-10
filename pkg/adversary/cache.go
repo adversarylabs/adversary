@@ -1,10 +1,15 @@
 package adversary
 
 import (
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
@@ -52,8 +57,33 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if err != nil {
 		return InstallRecord{}, err
 	}
-	destination := filepath.Join(c.Root, "artifacts", digestPath)
-	metadata, err := ExtractLayer(layer, destination)
+	if err := os.MkdirAll(c.Root, 0755); err != nil {
+		return InstallRecord{}, err
+	}
+	rooted, err := os.OpenRoot(c.Root)
+	if err != nil {
+		return InstallRecord{}, err
+	}
+	defer rooted.Close()
+	if err := rooted.MkdirAll("artifacts", 0755); err != nil {
+		return InstallRecord{}, err
+	}
+	destRel := filepath.ToSlash(filepath.Join("artifacts", digestPath))
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return InstallRecord{}, err
+	}
+	stageRel := fmt.Sprintf("artifacts/.staging-%x", nonce)
+	if err := rooted.Mkdir(stageRel, 0700); err != nil {
+		return InstallRecord{}, err
+	}
+	defer rooted.RemoveAll(stageRel)
+	stage, err := rooted.OpenRoot(stageRel)
+	if err != nil {
+		return InstallRecord{}, err
+	}
+	defer stage.Close()
+	metadata, err := ExtractLayerRoot(layer, stage)
 	if err != nil {
 		return InstallRecord{}, err
 	}
@@ -61,7 +91,7 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		if metadata.Name != "" && (metadata.Name != pulledManifest.Name || metadata.Version != pulledManifest.Version) {
 			return InstallRecord{}, fmt.Errorf("pulled adversary.yaml identity %s@%s does not match package metadata %s@%s", pulledManifest.Name, pulledManifest.Version, metadata.Name, metadata.Version)
 		}
-		if err := os.WriteFile(filepath.Join(destination, ManifestFile), artifact.AdversaryManifest, 0644); err != nil {
+		if err := stage.WriteFile(ManifestFile, artifact.AdversaryManifest, 0644); err != nil {
 			return InstallRecord{}, err
 		}
 		metadata.Name, metadata.Version = pulledManifest.Name, pulledManifest.Version
@@ -69,6 +99,39 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if metadata.Name == "" {
 		return InstallRecord{}, fmt.Errorf("%s is required", ManifestFile)
 	}
+	expectedFiles, err := snapshotFiles(stage)
+	if err != nil {
+		return InstallRecord{}, err
+	}
+	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(destRel)), 0755); err != nil {
+		return InstallRecord{}, err
+	}
+	published := false
+	if _, err := rooted.Lstat(destRel); err == nil {
+		if err := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); err != nil {
+			return InstallRecord{}, fmt.Errorf("invalid existing artifact: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return InstallRecord{}, err
+	} else {
+		if beforeCacheInstallPublish != nil {
+			beforeCacheInstallPublish(rooted, stageRel)
+		}
+		if err := rooted.Rename(stageRel, destRel); err != nil {
+			if validateErr := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); validateErr != nil {
+				return InstallRecord{}, fmt.Errorf("publish artifact: %w", err)
+			}
+		} else {
+			published = true
+		}
+	}
+	if published {
+		if err := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); err != nil {
+			_ = rooted.RemoveAll(destRel)
+			return InstallRecord{}, fmt.Errorf("verify published artifact: %w", err)
+		}
+	}
+	destination := filepath.Join(c.Root, filepath.FromSlash(destRel))
 	record := InstallRecord{
 		Name:           metadata.Name,
 		Version:        metadata.Version,
@@ -82,8 +145,76 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	return record, nil
 }
 
+var beforeCacheInstallPublish func(*os.Root, string)
+
+type installedFile struct {
+	size   int64
+	digest [sha256.Size]byte
+}
+
+func snapshotFiles(rooted *os.Root) (map[string]installedFile, error) {
+	files := map[string]installedFile{}
+	err := fs.WalkDir(rooted.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("non-regular file %q", path)
+		}
+		data, err := rooted.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[path] = installedFile{size: int64(len(data)), digest: sha256.Sum256(data)}
+		return nil
+	})
+	return files, err
+}
+
+func validateInstalledArtifact(rooted *os.Root, rel string, metadata ManifestMetadata, expectedManifest []byte, expected map[string]installedFile) error {
+	sub, err := rooted.OpenRoot(rel)
+	if err != nil {
+		return err
+	}
+	defer sub.Close()
+	manifest, err := sub.ReadFile(ManifestFile)
+	if err != nil {
+		return err
+	}
+	parsed, err := canonical.Parse(manifest)
+	if err != nil {
+		return err
+	}
+	if parsed.Name != metadata.Name || parsed.Version != metadata.Version {
+		return fmt.Errorf("manifest identity mismatch")
+	}
+	if len(expectedManifest) > 0 && !bytes.Equal(manifest, expectedManifest) {
+		return fmt.Errorf("manifest content mismatch")
+	}
+	actual, err := snapshotFiles(sub)
+	if err != nil {
+		return err
+	}
+	if len(actual) != len(expected) {
+		return fmt.Errorf("installed file set mismatch")
+	}
+	for path, want := range expected {
+		if got, ok := actual[path]; !ok || got != want {
+			return fmt.Errorf("file mismatch %q", path)
+		}
+	}
+	return nil
+}
+
 func (c Cache) Resolve(name string) (InstallRecord, bool) {
-	data, err := os.ReadFile(filepath.Join(c.Root, "index", sanitize(name)+".json"))
+	data, err := c.readCacheRecord("index", name)
 	if err != nil {
 		return InstallRecord{}, false
 	}
@@ -91,11 +222,23 @@ func (c Cache) Resolve(name string) (InstallRecord, bool) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return InstallRecord{}, false
 	}
-	return record, true
+	matched := record.Name == name
+	if !matched {
+		for _, alias := range referenceAliases(record.Reference) {
+			if alias == name {
+				matched = true
+				break
+			}
+		}
+	}
+	return record, matched && c.validRecord(record)
 }
 
 func (c Cache) ResolveDigest(digest string) (InstallRecord, bool) {
-	data, err := os.ReadFile(filepath.Join(c.Root, "digests", sanitize(digest)+".json"))
+	if _, err := oci.ParseDigest(digest); err != nil {
+		return InstallRecord{}, false
+	}
+	data, err := c.readCacheRecord("digests", digest)
 	if err != nil {
 		return InstallRecord{}, false
 	}
@@ -103,16 +246,22 @@ func (c Cache) ResolveDigest(digest string) (InstallRecord, bool) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return InstallRecord{}, false
 	}
-	return record, true
+	return record, record.ManifestDigest == digest && c.validRecord(record)
 }
 
 func (c Cache) writeRecord(record InstallRecord) error {
-	indexDir := filepath.Join(c.Root, "index")
-	if err := os.MkdirAll(indexDir, 0755); err != nil {
+	if err := os.MkdirAll(c.Root, 0755); err != nil {
 		return err
 	}
-	digestsDir := filepath.Join(c.Root, "digests")
-	if err := os.MkdirAll(digestsDir, 0755); err != nil {
+	rooted, err := os.OpenRoot(c.Root)
+	if err != nil {
+		return err
+	}
+	defer rooted.Close()
+	if err := rooted.MkdirAll("index", 0755); err != nil {
+		return err
+	}
+	if err := rooted.MkdirAll("digests", 0755); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(record, "", "  ")
@@ -120,7 +269,10 @@ func (c Cache) writeRecord(record InstallRecord) error {
 		return err
 	}
 	if record.ManifestDigest != "" {
-		if err := os.WriteFile(filepath.Join(digestsDir, sanitize(record.ManifestDigest)+".json"), data, 0644); err != nil {
+		if _, err := oci.ParseDigest(record.ManifestDigest); err != nil {
+			return err
+		}
+		if err := rooted.WriteFile("digests/"+cacheKey(record.ManifestDigest)+".json", data, 0644); err != nil {
 			return err
 		}
 	}
@@ -129,7 +281,7 @@ func (c Cache) writeRecord(record InstallRecord) error {
 		keys = append(keys, referenceAliases(record.Reference)...)
 	}
 	for _, key := range keys {
-		if err := os.WriteFile(filepath.Join(indexDir, sanitize(key)+".json"), data, 0644); err != nil {
+		if err := rooted.WriteFile("index/"+cacheKey(key)+".json", data, 0644); err != nil {
 			return err
 		}
 	}
@@ -182,4 +334,44 @@ func sanitize(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// cacheKey hashes the exact UTF-8 bytes. Canonically equivalent Unicode strings
+// intentionally remain distinct; reference and manifest parsers define identity.
+func cacheKey(s string) string { return fmt.Sprintf("v2-%x", sha256.Sum256([]byte(s))) }
+
+func (c Cache) readCacheRecord(kind, key string) ([]byte, error) {
+	rooted, err := os.OpenRoot(c.Root)
+	if err != nil {
+		return nil, err
+	}
+	defer rooted.Close()
+	data, err := rooted.ReadFile(kind + "/" + cacheKey(key) + ".json")
+	if err == nil || !os.IsNotExist(err) {
+		return data, err
+	}
+	// Compatibility: read pre-v2 lossy keys, but all new writes use v2 keys.
+	return rooted.ReadFile(kind + "/" + sanitize(key) + ".json")
+}
+
+func (c Cache) validRecord(record InstallRecord) bool {
+	d, err := oci.DigestPath(record.ManifestDigest)
+	if err != nil {
+		return false
+	}
+	expected, err := filepath.Abs(filepath.Join(c.Root, "artifacts", d))
+	if err != nil {
+		return false
+	}
+	actual, err := filepath.Abs(filepath.Clean(record.Path))
+	if err != nil || actual != expected || strings.ContainsRune(record.Path, '\x00') {
+		return false
+	}
+	rooted, err := os.OpenRoot(c.Root)
+	if err != nil {
+		return false
+	}
+	defer rooted.Close()
+	info, err := rooted.Stat(filepath.ToSlash(filepath.Join("artifacts", d)))
+	return err == nil && info.IsDir()
 }

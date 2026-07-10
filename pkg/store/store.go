@@ -3,9 +3,12 @@ package store
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/safepath"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
@@ -125,37 +129,45 @@ func (s Store) Put(artifact pack.Artifact) (Record, error) {
 }
 
 func (s Store) List() ([]Record, error) {
-	root := filepath.Join(s.Root, "store", "records", "sha256")
-	entries, err := os.ReadDir(root)
+	rooted, err := os.OpenRoot(s.Root)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	defer rooted.Close()
 	var records []Record
-	for _, prefix := range entries {
-		if !prefix.IsDir() {
-			continue
-		}
-		files, err := os.ReadDir(filepath.Join(root, prefix.Name()))
+	err = fs.WalkDir(rooted.FS(), "store/records", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			return nil, err
+			if os.IsNotExist(err) {
+				return fs.SkipAll
+			}
+			return err
 		}
-		for _, file := range files {
-			if file.IsDir() {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(root, prefix.Name(), file.Name()))
-			if err != nil {
-				return nil, err
-			}
-			var record Record
-			if err := json.Unmarshal(data, &record); err != nil {
-				return nil, err
-			}
-			records = append(records, record)
+		if entry.IsDir() {
+			return nil
 		}
+		data, err := rooted.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var record Record
+		if err := json.Unmarshal(data, &record); err != nil {
+			return err
+		}
+		if err := validateRecordDigests(record); err != nil {
+			return err
+		}
+		expected, err := filepath.Rel(s.Root, s.recordPath(record.Digest))
+		if err != nil || filepath.ToSlash(expected) != path {
+			return fmt.Errorf("persisted record path does not match digest %q", record.Digest)
+		}
+		records = append(records, record)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].Name == records[j].Name {
@@ -167,7 +179,7 @@ func (s Store) List() ([]Record, error) {
 }
 
 func (s Store) Inspect(ref string) (Record, error) {
-	if strings.HasPrefix(ref, "sha256:") {
+	if _, err := oci.ParseDigest(ref); err == nil {
 		if record, ok := s.resolveDigest(ref); ok {
 			return record, nil
 		}
@@ -179,7 +191,23 @@ func (s Store) Inspect(ref string) (Record, error) {
 		name = before
 		tag = after
 	}
-	digestData, err := os.ReadFile(filepath.Join(s.Root, "refs", name, tag))
+	if _, err := oci.ParseReference(name + ":" + tag); err != nil {
+		return Record{}, fmt.Errorf("invalid local adversary reference %q: %w", ref, err)
+	}
+	rooted, err := os.OpenRoot(s.Root)
+	if err != nil {
+		return Record{}, err
+	}
+	defer rooted.Close()
+	refRel, _ := safepath.Relative("refs-v2", refNameKey(name), tag)
+	digestData, err := rooted.ReadFile(refRel)
+	if os.IsNotExist(err) {
+		components := append([]string{"refs"}, strings.Split(name, "/")...)
+		components = append(components, tag)
+		if legacy, legacyErr := safepath.Relative(components...); legacyErr == nil {
+			digestData, err = rooted.ReadFile(legacy)
+		}
+	}
 	if err != nil {
 		return Record{}, fmt.Errorf("local adversary %q not found", ref)
 	}
@@ -213,27 +241,21 @@ func (s Store) Materialize(ref string) (string, Record, error) {
 }
 
 func (s Store) OCIPayload(record Record) ([]byte, []oci.Blob, error) {
-	manifestPath := record.ManifestPath
-	if manifestPath == "" {
-		manifestPath = s.contentPath("manifests", record.Digest)
+	if err := validateRecordDigests(record); err != nil {
+		return nil, nil, err
 	}
-	manifestData, err := os.ReadFile(manifestPath)
+	manifestPath := s.contentPath("manifests", record.Digest)
+	manifestData, err := s.readRooted(manifestPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	configPath := record.ConfigPath
-	if configPath == "" {
-		configPath = s.contentPath("blobs", record.ConfigDigest)
-	}
-	configData, err := os.ReadFile(configPath)
+	configPath := s.contentPath("blobs", record.ConfigDigest)
+	configData, err := s.readRooted(configPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	layerPath := record.LayerPath
-	if layerPath == "" {
-		layerPath = s.contentPath("blobs", record.LayerDigest)
-	}
-	layerData, err := os.ReadFile(layerPath)
+	layerPath := s.contentPath("blobs", record.LayerDigest)
+	layerData, err := s.readRooted(layerPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -262,8 +284,11 @@ func (s Store) OCIPayload(record Record) ([]byte, []oci.Blob, error) {
 }
 
 func (s Store) AdversaryManifest(record Record) ([]byte, error) {
-	path := record.AdversaryManifestPath
-	if path == "" && record.AdversaryManifestDigest != "" {
+	if err := validateRecordDigests(record); err != nil {
+		return nil, err
+	}
+	path := ""
+	if record.AdversaryManifestDigest != "" {
 		path = s.contentPath("adversary-manifests", record.AdversaryManifestDigest)
 	}
 	if path == "" {
@@ -273,7 +298,7 @@ func (s Store) AdversaryManifest(record Record) ([]byte, error) {
 		}
 		path = filepath.Join(materialized, "adversary.yaml")
 	}
-	data, err := os.ReadFile(path)
+	data, err := s.readRooted(path)
 	if err != nil {
 		return nil, fmt.Errorf("adversary.yaml is required for publishing: %w", err)
 	}
@@ -289,39 +314,59 @@ func (s Store) AdversaryManifest(record Record) ([]byte, error) {
 }
 
 func (s Store) MaterializeRecord(record Record) (string, error) {
-	algo, value, ok := strings.Cut(record.Digest, ":")
-	if !ok || algo == "" || value == "" {
-		return "", fmt.Errorf("invalid digest %q", record.Digest)
+	digestPath, err := oci.DigestPath(record.Digest)
+	if err != nil {
+		return "", err
 	}
-	destination := filepath.Join(s.Root, "artifacts", algo, value)
-	if info, err := os.Stat(filepath.Join(destination, "adversary.yaml")); err == nil && !info.IsDir() {
-		data, err := os.ReadFile(filepath.Join(destination, "adversary.yaml"))
-		if err != nil {
+	destination := filepath.Join(s.Root, "artifacts", digestPath)
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
+		return "", err
+	}
+	rooted, err := os.OpenRoot(s.Root)
+	if err != nil {
+		return "", err
+	}
+	defer rooted.Close()
+	destRel := filepath.ToSlash(filepath.Join("artifacts", digestPath))
+	if _, err := rooted.Lstat(destRel); err == nil {
+		if err := validateMaterialized(rooted, destRel, record, nil); err != nil {
 			return "", err
 		}
-		if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
-			return "", fmt.Errorf("validate materialized adversary.yaml: %w", err)
-		}
-		if err := prepareRuntimeNodeModules(destination); err != nil {
-			return "", err
-		}
-		return destination, nil
+		return destination, nil // Existing digest materializations are immutable.
+	} else if !os.IsNotExist(err) {
+		return "", err
 	}
-	layerPath := record.LayerPath
-	if layerPath == "" {
-		layerPath = s.contentPath("blobs", record.LayerDigest)
+	if _, err := oci.ParseDigest(record.LayerDigest); err != nil {
+		return "", err
 	}
-	file, err := os.Open(layerPath)
+	layerPath := s.contentPath("blobs", record.LayerDigest)
+	layerRoot, layerRel, err := s.rootForPath(layerPath)
+	if err != nil {
+		return "", err
+	}
+	defer layerRoot.Close()
+	file, err := layerRoot.Open(layerRel)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
-	if err := os.RemoveAll(destination); err != nil {
+	if err := rooted.MkdirAll("artifacts", 0755); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(destination, 0755); err != nil {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
 		return "", err
 	}
+	stageRel := fmt.Sprintf("artifacts/.materialize-%x", nonce)
+	if err := rooted.Mkdir(stageRel, 0700); err != nil {
+		return "", err
+	}
+	defer rooted.RemoveAll(stageRel)
+	stage, err := rooted.OpenRoot(stageRel)
+	if err != nil {
+		return "", err
+	}
+	defer stage.Close()
 	gz, err := gzip.NewReader(file)
 	if err != nil {
 		return "", err
@@ -336,45 +381,140 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		clean := filepath.Clean(header.Name)
-		if clean == "." || strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
+		clean := filepath.ToSlash(filepath.Clean(header.Name))
+		rel, pathErr := safepath.Relative(strings.Split(clean, "/")...)
+		if pathErr != nil || clean == "." || clean != header.Name {
 			return "", fmt.Errorf("unsafe package path %q", header.Name)
 		}
-		target := filepath.Join(destination, filepath.FromSlash(header.Name))
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		if err := stage.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
 			return "", err
 		}
 		data, err := io.ReadAll(tr)
 		if err != nil {
 			return "", err
 		}
-		if err := os.WriteFile(target, data, 0644); err != nil {
+		if err := stage.WriteFile(rel, data, 0644); err != nil {
 			return "", err
 		}
 	}
-	manifestPath := filepath.Join(destination, "adversary.yaml")
-	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
-		data, err := s.AdversaryManifest(record)
+	if _, err := stage.Stat("adversary.yaml"); os.IsNotExist(err) {
+		if record.AdversaryManifestDigest == "" {
+			return "", fmt.Errorf("adversary.yaml missing from package")
+		}
+		data, err := s.readRooted(s.contentPath("adversary-manifests", record.AdversaryManifestDigest))
 		if err != nil {
 			return "", err
 		}
-		if err := os.WriteFile(manifestPath, data, 0644); err != nil {
+		if err := stage.WriteFile("adversary.yaml", data, 0644); err != nil {
 			return "", err
 		}
 	} else if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(manifestPath)
+	data, err := stage.ReadFile("adversary.yaml")
 	if err != nil {
 		return "", err
 	}
 	if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
 		return "", fmt.Errorf("validate materialized adversary.yaml: %w", err)
 	}
-	if err := prepareRuntimeNodeModules(destination); err != nil {
+	if err := prepareRuntimeNodeModules(stage); err != nil {
 		return "", err
 	}
+	expected, err := snapshotMaterialized(stage)
+	if err != nil {
+		return "", err
+	}
+	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(destRel)), 0755); err != nil {
+		return "", err
+	}
+	if beforeStoreMaterializePublish != nil {
+		beforeStoreMaterializePublish(rooted, stageRel)
+	}
+	if err := rooted.Rename(stageRel, destRel); err != nil {
+		if validateErr := validateMaterialized(rooted, destRel, record, expected); validateErr == nil {
+			return destination, nil
+		}
+		return "", fmt.Errorf("publish materialization: %w", err)
+	}
+	if err := validateMaterialized(rooted, destRel, record, expected); err != nil {
+		_ = rooted.RemoveAll(destRel)
+		return "", fmt.Errorf("verify published materialization: %w", err)
+	}
 	return destination, nil
+}
+
+var beforeStoreMaterializePublish func(*os.Root, string)
+
+type materializedFile struct {
+	size   int64
+	digest [sha256.Size]byte
+}
+
+func snapshotMaterialized(rooted *os.Root) (map[string]materializedFile, error) {
+	files := map[string]materializedFile{}
+	err := fs.WalkDir(rooted.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("non-regular materialized file %q", path)
+		}
+		data, err := rooted.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[path] = materializedFile{size: int64(len(data)), digest: sha256.Sum256(data)}
+		return nil
+	})
+	return files, err
+}
+
+func validateMaterialized(rooted *os.Root, rel string, record Record, expected map[string]materializedFile) error {
+	sub, err := rooted.OpenRoot(rel)
+	if err != nil {
+		return fmt.Errorf("unsafe materialization: %w", err)
+	}
+	defer sub.Close()
+	data, err := sub.ReadFile("adversary.yaml")
+	if err != nil {
+		return err
+	}
+	if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
+		return fmt.Errorf("validate materialized adversary.yaml: %w", err)
+	}
+	actual, err := snapshotMaterialized(sub)
+	if err != nil {
+		return err
+	}
+	for _, file := range record.Files {
+		clean := filepath.ToSlash(filepath.Clean(file.Path))
+		if clean != file.Path {
+			return fmt.Errorf("unsafe materialized path %q", file.Path)
+		}
+		got, ok := actual[clean]
+		if !ok || got.size != file.Size || fmt.Sprintf("%x", got.digest) != file.SHA256 {
+			return fmt.Errorf("materialized file mismatch %q", file.Path)
+		}
+	}
+	if expected != nil {
+		if len(actual) != len(expected) {
+			return fmt.Errorf("materialized file set mismatch")
+		}
+		for path, want := range expected {
+			if got, ok := actual[path]; !ok || got != want {
+				return fmt.Errorf("materialized file mismatch %q", path)
+			}
+		}
+	}
+	return nil
 }
 
 func parseAndCheckManifest(data []byte, name, version string) (canonical.Manifest, error) {
@@ -394,27 +534,27 @@ func parseAndCheckManifest(data []byte, name, version string) (canonical.Manifes
 	return m, nil
 }
 
-func prepareRuntimeNodeModules(destination string) error {
-	vendorSDK := filepath.Join(destination, "vendor", "adversary-sdk")
-	if info, err := os.Stat(vendorSDK); err != nil || !info.IsDir() {
+func prepareRuntimeNodeModules(rooted *os.Root) error {
+	vendorSDK := "vendor/adversary-sdk"
+	if info, err := rooted.Stat(vendorSDK); err != nil || !info.IsDir() {
 		return nil
 	}
-	target := filepath.Join(destination, "node_modules", "@adversary", "sdk")
-	if info, err := os.Stat(target); err == nil && info.IsDir() {
-		return patchVendoredSDK(target)
+	target := "node_modules/@adversary/sdk"
+	if info, err := rooted.Stat(target); err == nil && info.IsDir() {
+		return patchVendoredSDK(rooted, target)
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+	if err := rooted.MkdirAll("node_modules/@adversary", 0755); err != nil {
 		return err
 	}
-	if err := copyDir(vendorSDK, target); err != nil {
+	if err := copyRootDir(rooted, vendorSDK, target); err != nil {
 		return err
 	}
-	return patchVendoredSDK(target)
+	return patchVendoredSDK(rooted, target)
 }
 
-func patchVendoredSDK(sdkDir string) error {
-	indexPath := filepath.Join(sdkDir, "dist", "index.js")
-	data, err := os.ReadFile(indexPath)
+func patchVendoredSDK(rooted *os.Root, sdkDir string) error {
+	indexPath := sdkDir + "/dist/index.js"
+	data, err := rooted.ReadFile(indexPath)
 	if err != nil {
 		return nil
 	}
@@ -428,11 +568,11 @@ func patchVendoredSDK(sdkDir string) error {
 	if text == string(data) {
 		return nil
 	}
-	return os.WriteFile(indexPath, []byte(text), 0644)
+	return rooted.WriteFile(indexPath, []byte(text), 0644)
 }
 
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
+func copyRootDir(rooted *os.Root, src, dst string) error {
+	return fs.WalkDir(rooted.FS(), src, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -440,24 +580,41 @@ func copyDir(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dst, rel)
+		target := filepath.ToSlash(filepath.Join(dst, rel))
 		if entry.IsDir() {
-			return os.MkdirAll(target, 0755)
+			return rooted.MkdirAll(target, 0755)
 		}
-		data, err := os.ReadFile(path)
+		data, err := rooted.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, data, 0644)
+		return rooted.WriteFile(target, data, 0644)
 	})
 }
 
 func (s Store) WriteRef(name, tag, digest string) error {
-	dir := filepath.Join(s.Root, "refs", name)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if _, err := oci.ParseDigest(digest); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, tag), []byte(digest+"\n"), 0644)
+	if _, err := oci.ParseReference(name + ":" + tag); err != nil {
+		return fmt.Errorf("invalid local reference: %w", err)
+	}
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
+		return err
+	}
+	rooted, err := os.OpenRoot(s.Root)
+	if err != nil {
+		return err
+	}
+	defer rooted.Close()
+	rel, err := safepath.Relative("refs-v2", refNameKey(name), tag)
+	if err != nil {
+		return err
+	}
+	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
+		return err
+	}
+	return rooted.WriteFile(rel, []byte(digest+"\n"), 0644)
 }
 
 func (s Store) BlobCount() (int, error) {
@@ -465,18 +622,29 @@ func (s Store) BlobCount() (int, error) {
 }
 
 func (s Store) writeContent(kind, digest string, data []byte) error {
+	if _, err := oci.ParseDigest(digest); err != nil {
+		return err
+	}
 	path := s.contentPath(kind, digest)
-	if _, err := os.Stat(path); err == nil {
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
+		return err
+	}
+	rooted, rel, err := s.rootForPath(path)
+	if err != nil {
+		return err
+	}
+	defer rooted.Close()
+	if _, err := rooted.Stat(rel); err == nil {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	tmp := rel + ".tmp"
+	if err := rooted.WriteFile(tmp, data, 0644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return rooted.Rename(tmp, rel)
 }
 
 func (s Store) writeRecord(record Record) error {
@@ -486,14 +654,25 @@ func (s Store) writeRecord(record Record) error {
 	}
 	data = append(data, '\n')
 	path := s.recordPath(record.Digest)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	rooted, rel, err := s.rootForPath(path)
+	if err != nil {
+		return err
+	}
+	defer rooted.Close()
+	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
+		return err
+	}
+	return rooted.WriteFile(rel, data, 0644)
 }
 
 func (s Store) resolveDigest(digest string) (Record, bool) {
-	data, err := os.ReadFile(s.recordPath(digest))
+	if _, err := oci.ParseDigest(digest); err != nil {
+		return Record{}, false
+	}
+	data, err := s.readRooted(s.recordPath(digest))
 	if err != nil {
 		return Record{}, false
 	}
@@ -501,11 +680,18 @@ func (s Store) resolveDigest(digest string) (Record, bool) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return Record{}, false
 	}
+	if record.Digest != digest || validateRecordDigests(record) != nil {
+		return Record{}, false
+	}
 	return record, true
 }
 
 func (s Store) contentPath(kind, digest string) string {
-	algo, value, _ := strings.Cut(digest, ":")
+	d, err := oci.ParseDigest(digest)
+	if err != nil {
+		return ""
+	}
+	algo, value := d.Algorithm().String(), d.Encoded()
 	if len(value) < 2 {
 		return filepath.Join(s.Root, "store", kind, algo, value)
 	}
@@ -513,11 +699,52 @@ func (s Store) contentPath(kind, digest string) string {
 }
 
 func (s Store) recordPath(digest string) string {
-	algo, value, _ := strings.Cut(digest, ":")
+	d, err := oci.ParseDigest(digest)
+	if err != nil {
+		return ""
+	}
+	algo, value := d.Algorithm().String(), d.Encoded()
 	if len(value) < 2 {
 		return filepath.Join(s.Root, "store", "records", algo, value+".json")
 	}
 	return filepath.Join(s.Root, "store", "records", algo, value[:2], value+".json")
+}
+
+func validateRecordDigests(record Record) error {
+	for label, value := range map[string]string{"manifest": record.Digest, "config": record.ConfigDigest, "layer": record.LayerDigest} {
+		if _, err := oci.ParseDigest(value); err != nil {
+			return fmt.Errorf("invalid persisted %s digest: %w", label, err)
+		}
+	}
+	if record.AdversaryManifestDigest != "" {
+		if _, err := oci.ParseDigest(record.AdversaryManifestDigest); err != nil {
+			return fmt.Errorf("invalid persisted adversary manifest digest: %w", err)
+		}
+	}
+	return nil
+}
+
+func refNameKey(name string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(name))) }
+
+func (s Store) rootForPath(path string) (*os.Root, string, error) {
+	rel, err := filepath.Rel(s.Root, path)
+	if err != nil {
+		return nil, "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, "", fmt.Errorf("path escapes store root")
+	}
+	rooted, err := os.OpenRoot(s.Root)
+	return rooted, filepath.ToSlash(rel), err
+}
+
+func (s Store) readRooted(path string) ([]byte, error) {
+	rooted, rel, err := s.rootForPath(path)
+	if err != nil {
+		return nil, err
+	}
+	defer rooted.Close()
+	return rooted.ReadFile(rel)
 }
 
 func countFiles(root string) (int, error) {

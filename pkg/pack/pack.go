@@ -191,6 +191,9 @@ func normalizeNameOverride(name string) (string, error) {
 	if lastColon > lastSlash {
 		return "", fmt.Errorf("--name must not include a tag; version comes from adversary.yaml")
 	}
+	if _, err := oci.ParseReference(name); err != nil {
+		return "", fmt.Errorf("invalid --name: %w", err)
+	}
 	return name, nil
 }
 
