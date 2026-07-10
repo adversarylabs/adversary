@@ -69,20 +69,21 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 }
 
 type runOptions struct {
-	repo              string
-	base              string
-	head              string
-	builder           string
-	force             bool
-	format            string
-	json              bool
-	keepTemp          bool
-	noNetwork         bool
-	verbose           bool
-	debug             bool
-	includeSuppressed bool
-	shell             bool
-	allFiles          bool
+	repo                     string
+	base                     string
+	head                     string
+	builder                  string
+	force                    bool
+	format                   string
+	json                     bool
+	keepTemp                 bool
+	noNetwork                bool
+	verbose                  bool
+	debug                    bool
+	includeSuppressed        bool
+	shell                    bool
+	allFiles                 bool
+	allowUnsafeHostExecution bool
 }
 
 type initOptions struct {
@@ -136,6 +137,12 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 			if opts.debug {
 				opts.verbose = true
 			}
+			if opts.shell && opts.noNetwork {
+				return fmt.Errorf("--shell cannot be combined with --no-network because the host shell cannot enforce network isolation")
+			}
+			if opts.shell && (opts.json || opts.format == "json") {
+				return fmt.Errorf("--shell cannot be combined with JSON output")
+			}
 
 			runner := internaladversary.Runner{
 				Stdout: stdout,
@@ -143,19 +150,20 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 			}
 
 			err := runner.Run(cmd.Context(), internaladversary.RunOptions{
-				AdversaryRef:      args[0],
-				RepoPath:          opts.repo,
-				BaseRef:           opts.base,
-				HeadRef:           opts.head,
-				Builder:           opts.builder,
-				Force:             opts.force,
-				Format:            opts.format,
-				KeepTemp:          opts.keepTemp,
-				NoNetwork:         opts.noNetwork,
-				Verbose:           opts.verbose,
-				IncludeSuppressed: opts.includeSuppressed,
-				Shell:             opts.shell,
-				AllFiles:          opts.allFiles,
+				AdversaryRef:             args[0],
+				RepoPath:                 opts.repo,
+				BaseRef:                  opts.base,
+				HeadRef:                  opts.head,
+				Builder:                  opts.builder,
+				Force:                    opts.force,
+				Format:                   opts.format,
+				KeepTemp:                 opts.keepTemp,
+				NoNetwork:                opts.noNetwork,
+				Verbose:                  opts.verbose,
+				IncludeSuppressed:        opts.includeSuppressed,
+				Shell:                    opts.shell,
+				AllFiles:                 opts.allFiles,
+				AllowUnsafeHostExecution: opts.allowUnsafeHostExecution,
 			})
 			if errors.Is(err, context.Canceled) {
 				return err
@@ -172,11 +180,12 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "print the versioned review result envelope as JSON")
 	cmd.Flags().BoolVar(&opts.keepTemp, "keep-temp", false, "do not delete the temporary run directory")
-	cmd.Flags().BoolVar(&opts.noNetwork, "no-network", false, "disable network access when supported by the runtime")
+	cmd.Flags().BoolVar(&opts.noNetwork, "no-network", false, "require network access to be disabled (fails if the executor cannot enforce it)")
 	cmd.Flags().BoolVar(&opts.verbose, "verbose", false, "print detailed execution diagnostics")
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "print detailed execution diagnostics")
 	cmd.Flags().BoolVar(&opts.includeSuppressed, "include-suppressed", false, "request suppressed review findings when supported by the runtime")
-	cmd.Flags().BoolVar(&opts.shell, "shell", false, "launch an interactive shell in the adversary working directory")
+	cmd.Flags().BoolVar(&opts.shell, "shell", false, "UNSAFE: launch an unrestricted host shell in the adversary working directory")
+	cmd.Flags().BoolVar(&opts.allowUnsafeHostExecution, "allow-unsafe-host-execution", false, "acknowledge unrestricted host execution of installed or pulled code and --shell")
 	cmd.Flags().BoolVar(&opts.allFiles, "all-files", false, "scan all files even when diff refs are provided")
 
 	return cmd
