@@ -3,6 +3,7 @@
 These Draft 2020-12 JSON Schemas are the normative contracts for the versioned
 runtime input and review output envelopes. Changes to an existing schema must
 remain backward compatible; incompatible changes require a new versioned file.
+`adversary.manifest.v1.schema.json` is the canonical v1 project manifest schema.
 Unknown fields are rejected at every schema-defined object boundary. Extensions
 must therefore use a new versioned contract instead of adding unversioned fields
 to a v1 payload.

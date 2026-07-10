@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/adversarylabs/adversary/pkg/manifest"
 	projecttemplates "github.com/adversarylabs/adversary/templates"
 )
 
@@ -20,6 +21,8 @@ const (
 var supportedSDKs = map[string]string{
 	"typescript": "TypeScript",
 }
+
+var publishProject = publishNoReplace
 
 type Options struct {
 	Destination string
@@ -46,12 +49,6 @@ func Create(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("unsupported SDK %q; supported SDKs: %s", sdk, strings.Join(SupportedSDKs(), ", "))
 	}
 
-	if _, err := os.Stat(destination); err == nil {
-		return Result{}, fmt.Errorf("destination already exists: %s", destination)
-	} else if !os.IsNotExist(err) {
-		return Result{}, err
-	}
-
 	templateRoot := sdk
 	if _, err := fs.Stat(projecttemplates.FS, templateRoot); err != nil {
 		if os.IsNotExist(err) {
@@ -61,6 +58,23 @@ func Create(opts Options) (Result, error) {
 	}
 
 	projectName := filepath.Base(filepath.Clean(destination))
+	if err := manifest.ValidateProjectName(projectName); err != nil {
+		return Result{}, err
+	}
+	parent := filepath.Dir(destination)
+	if err := os.MkdirAll(parent, 0755); err != nil {
+		return Result{}, fmt.Errorf("create destination parent: %w", err)
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return Result{}, fmt.Errorf("destination already exists: %s", destination)
+	} else if !os.IsNotExist(err) {
+		return Result{}, err
+	}
+	staging, err := os.MkdirTemp(parent, ".adversary-init-*")
+	if err != nil {
+		return Result{}, fmt.Errorf("create project staging directory: %w", err)
+	}
+	defer os.RemoveAll(staging)
 	values := map[string]string{
 		"name":        projectName,
 		"description": "Replace with a description.",
@@ -68,7 +82,7 @@ func Create(opts Options) (Result, error) {
 		"sdk":         sdk,
 	}
 
-	err := fs.WalkDir(projecttemplates.FS, templateRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(projecttemplates.FS, templateRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -76,9 +90,9 @@ func Create(opts Options) (Result, error) {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(destination, rel)
+		target := filepath.Join(staging, rel)
 		if rel == "." {
-			return os.MkdirAll(destination, 0755)
+			return nil
 		}
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0755)
@@ -95,8 +109,18 @@ func Create(opts Options) (Result, error) {
 		return os.WriteFile(target, data, writableFileMode(info.Mode()))
 	})
 	if err != nil {
-		_ = os.RemoveAll(destination)
 		return Result{}, err
+	}
+	if err := os.Chmod(staging, 0755); err != nil {
+		return Result{}, fmt.Errorf("set project root permissions: %w", err)
+	}
+	// The platform helper publishes the fully rendered sibling atomically and
+	// fails if any destination was created concurrently.
+	if err := publishProject(staging, destination); err != nil {
+		if _, statErr := os.Lstat(destination); statErr == nil {
+			return Result{}, fmt.Errorf("destination already exists: %s", destination)
+		}
+		return Result{}, fmt.Errorf("publish generated project: %w", err)
 	}
 
 	abs, err := filepath.Abs(destination)
@@ -119,14 +143,14 @@ func SupportedSDKs() []string {
 	return sdks
 }
 
-func RenderSuccess(w io.Writer, result Result, destination string) {
+func RenderSuccess(w io.Writer, result Result, _ string) {
 	fmt.Fprintln(w, "Creating adversary...")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "✓ Generated project")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Location")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  %s\n", destination)
+	fmt.Fprintf(w, "  %s\n", result.Location)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "SDK")
 	fmt.Fprintln(w)
@@ -134,10 +158,14 @@ func RenderSuccess(w io.Writer, result Result, destination string) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Next steps")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  cd %s\n", destination)
+	fmt.Fprintf(w, "  cd %s\n", shellQuote(result.Location))
 	fmt.Fprintln(w, "  npm install")
 	fmt.Fprintln(w, "  npm run build")
 	fmt.Fprintln(w, "  adversary run . --repo /path/to/repository")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func applyPlaceholders(input string, values map[string]string) string {

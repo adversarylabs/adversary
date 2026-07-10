@@ -1,9 +1,13 @@
 package adversary
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/pack"
 )
 
 func TestPackageDirectoryIsDeterministic(t *testing.T) {
@@ -35,6 +39,24 @@ runtime:
 	}
 	if got := len(first.Blobs()); got != 2 {
 		t.Fatalf("package blobs = %d, want config and layer", got)
+	}
+}
+
+func TestCacheInstallRejectsInvalidPulledManifest(t *testing.T) {
+	dir := t.TempDir()
+	writePackageFile(t, dir, "adversary.yaml", "name: local/test\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writePackageFile(t, dir, "dist/index.js", "")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := oci.ParseReference("local/test:1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: []byte("name: INVALID\n"), Blobs: map[string][]byte{artifact.LayerDigest: artifact.Layer}}
+	if _, err := (Cache{Root: t.TempDir()}).Install(pulled); err == nil {
+		t.Fatal("Install succeeded")
 	}
 }
 

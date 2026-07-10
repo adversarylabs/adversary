@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 )
@@ -23,6 +24,7 @@ type Store struct {
 
 type Record struct {
 	Name                    string            `json:"name"`
+	ManifestName            string            `json:"manifestName,omitempty"`
 	Version                 string            `json:"version"`
 	Digest                  string            `json:"digest"`
 	AdversaryManifestDigest string            `json:"adversaryManifestDigest,omitempty"`
@@ -68,6 +70,10 @@ func Default() (Store, error) {
 }
 
 func (s Store) Put(artifact pack.Artifact) (Record, error) {
+	_, err := parseAndCheckManifest(artifact.AdversaryManifest, artifact.ManifestName, artifact.Version)
+	if err != nil {
+		return Record{}, fmt.Errorf("validate packed adversary.yaml: %w", err)
+	}
 	if err := s.writeContent("blobs", artifact.ConfigDigest, artifact.Config); err != nil {
 		return Record{}, err
 	}
@@ -77,14 +83,12 @@ func (s Store) Put(artifact pack.Artifact) (Record, error) {
 	if err := s.writeContent("manifests", artifact.ManifestDigest, artifact.Manifest); err != nil {
 		return Record{}, err
 	}
-	if err := validateAdversaryManifest(artifact.AdversaryManifest); err != nil {
-		return Record{}, err
-	}
 	if err := s.writeContent("adversary-manifests", artifact.AdversaryManifestDigest, artifact.AdversaryManifest); err != nil {
 		return Record{}, err
 	}
 	record := Record{
 		Name:                    artifact.Name,
+		ManifestName:            artifact.ManifestName,
 		Version:                 artifact.Version,
 		Digest:                  artifact.ManifestDigest,
 		AdversaryManifestDigest: artifact.AdversaryManifestDigest,
@@ -273,7 +277,7 @@ func (s Store) AdversaryManifest(record Record) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("adversary.yaml is required for publishing: %w", err)
 	}
-	if err := validateAdversaryManifest(data); err != nil {
+	if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
 		return nil, err
 	}
 	if record.AdversaryManifestDigest != "" {
@@ -291,6 +295,13 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	}
 	destination := filepath.Join(s.Root, "artifacts", algo, value)
 	if info, err := os.Stat(filepath.Join(destination, "adversary.yaml")); err == nil && !info.IsDir() {
+		data, err := os.ReadFile(filepath.Join(destination, "adversary.yaml"))
+		if err != nil {
+			return "", err
+		}
+		if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
+			return "", fmt.Errorf("validate materialized adversary.yaml: %w", err)
+		}
 		if err := prepareRuntimeNodeModules(destination); err != nil {
 			return "", err
 		}
@@ -353,20 +364,34 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	} else if err != nil {
 		return "", err
 	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", err
+	}
+	if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
+		return "", fmt.Errorf("validate materialized adversary.yaml: %w", err)
+	}
 	if err := prepareRuntimeNodeModules(destination); err != nil {
 		return "", err
 	}
 	return destination, nil
 }
 
-func validateAdversaryManifest(data []byte) error {
-	if len(data) == 0 {
-		return fmt.Errorf("adversary.yaml is empty")
+func parseAndCheckManifest(data []byte, name, version string) (canonical.Manifest, error) {
+	m, err := canonical.Parse(data)
+	if err != nil {
+		return canonical.Manifest{}, err
 	}
-	if len(data) > MaxAdversaryManifestSize {
-		return fmt.Errorf("adversary.yaml is too large: %d bytes exceeds %d bytes", len(data), MaxAdversaryManifestSize)
+	if name != "" && name != m.Name {
+		return canonical.Manifest{}, fmt.Errorf("manifest name %q does not match metadata name %q", m.Name, name)
 	}
-	return nil
+	if m.Version == "" && version != "" && version != oci.DefaultTag {
+		return canonical.Manifest{}, fmt.Errorf("manifest has no version but metadata version is %q", version)
+	}
+	if m.Version != "" && version != "" && version != m.Version {
+		return canonical.Manifest{}, fmt.Errorf("manifest version %q does not match metadata version %q", m.Version, version)
+	}
+	return m, nil
 }
 
 func prepareRuntimeNodeModules(destination string) error {

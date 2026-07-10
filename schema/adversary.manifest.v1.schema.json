@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adversary.dev/schemas/adversary.manifest.v1.schema.json",
+  "title": "Adversary Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "runtime"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "description": {
+      "type": "string"
+    },
+    "triggers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "manual": {
+          "type": "boolean"
+        },
+        "files_changed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "image"
+          ]
+        },
+        {
+          "required": [
+            "name",
+            "version"
+          ]
+        }
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "node",
+            "process"
+          ]
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^[^\\x00\\s]+$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
+          }
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "filesystem": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "read": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
+              }
+            },
+            "write": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
+              }
+            }
+          }
+        },
+        "network": {
+          "type": "boolean"
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "adversary.review.v1"
+        }
+      }
+    }
+  }
+}

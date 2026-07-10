@@ -1,0 +1,15 @@
+name: adversarylabs/example
+version: 1.2.3
+triggers:
+  files_changed: ["**/*.go"]
+runtime:
+  name: node
+  version: "22"
+  command: [dist/index.js]
+permissions:
+  filesystem:
+    read: ["."]
+  network: false
+  env: [CI]
+findings:
+  format: adversary.review.v1
