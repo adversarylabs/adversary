@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adversary.dev/schemas/adversary.input.v1.schema.json",
+  "title": "Adversary input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "change"],
+  "properties": {
+    "schema_version": { "const": "adversary.input.v1" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 }
+      }
+    },
+    "change": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "base_ref", "head_ref", "scan_mode", "changed_files"],
+          "properties": {
+            "type": { "const": "diff" },
+            "base_ref": { "type": "string", "minLength": 1 },
+            "head_ref": { "type": "string", "minLength": 1 },
+            "scan_mode": { "enum": ["changed", "all"] },
+            "changed_files": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          }
+        }
+      ]
+    }
+  }
+}

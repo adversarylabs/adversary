@@ -1,0 +1,11 @@
+{
+  "schema_version": "adversary.input.v1",
+  "source": { "path": "/workspace" },
+  "change": {
+    "type": "diff",
+    "base_ref": "main",
+    "head_ref": "HEAD",
+    "scan_mode": "changed",
+    "changed_files": ["README.md"]
+  }
+}

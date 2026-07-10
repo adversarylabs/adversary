@@ -20,7 +20,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "node --test test/*.test.js",
     "lint": "biome check .",
     "format": "biome check --write ."
   },

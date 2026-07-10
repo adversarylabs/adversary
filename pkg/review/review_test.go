@@ -1,7 +1,10 @@
 package review
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -132,5 +135,56 @@ func TestDecodeRunEnvelopeRejectsUnversionedPayload(t *testing.T) {
 	_, err := DecodeRunEnvelope([]byte(`{"findings":[]}`))
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestDecodeRunEnvelopeSharedFixture(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "fixtures", "adversary.review.v1.valid.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := DecodeRunEnvelope(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(envelope.Result.SuppressedFindings); got != 1 {
+		t.Fatalf("SuppressedFindings len = %d", got)
+	}
+}
+
+func TestDecodeRunEnvelopeRejectsInvalidContracts(t *testing.T) {
+	tests := map[string]string{
+		"unknown field":             `{"protocolVersion":1,"extra":true,"result":{}}`,
+		"trailing JSON":             `{"protocolVersion":1,"result":{}} {}`,
+		"missing required arrays":   `{"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"suppressed":{"observations":0,"findings":0}}}`,
+		"missing suppressed counts": `{"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[],"observations":[],"findings":[],"suppressed":{}}}`,
+		"unsupported severity":      `{"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[],"observations":[],"findings":[{"id":"x","title":"x","category":"test","severity":"urgent","confidence":"high","summary":"x","evidence":[]}],"suppressed":{"observations":0,"findings":0}}}`,
+		"suppressed count mismatch": `{"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":1},"suppressedFindings":[]}}`,
+	}
+	for name, data := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecodeRunEnvelope([]byte(data)); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func TestProtocolSchemasAreValidJSONAndSDKCopiesMatch(t *testing.T) {
+	for _, name := range []string{"adversary.input.v1.schema.json", "adversary.review.v1.schema.json"} {
+		canonical, err := os.ReadFile(filepath.Join("..", "..", "schema", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !json.Valid(canonical) {
+			t.Fatalf("schema/%s is not valid JSON", name)
+		}
+		vendored, err := os.ReadFile(filepath.Join("..", "..", "templates", "typescript", "vendor", "adversary-sdk", "schemas", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(canonical, vendored) {
+			t.Fatalf("vendored SDK schema %s differs from canonical schema", name)
+		}
 	}
 }

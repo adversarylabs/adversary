@@ -3,6 +3,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 export const DEFAULT_INPUT_PATH = "/adversary/input.json";
 export const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
 export const DEFAULT_REPO_PATH = "/workspace";
+export const INPUT_SCHEMA_VERSION = "adversary.input.v1";
 export const REVIEW_SCHEMA_VERSION = "adversary.review.v1";
 const verboseValues = new Set(["1", "true", "TRUE", "yes", "YES"]);
 export const Severity = {
@@ -43,6 +44,7 @@ export class Finding {
     evidence;
     recommendation;
     metadata;
+    suppressed;
     constructor(init) {
         assertFindingInit(init);
         this.ruleId = init.ruleId;
@@ -57,6 +59,7 @@ export class Finding {
         this.evidence = init.evidence;
         this.recommendation = init.recommendation;
         this.metadata = init.metadata;
+        this.suppressed = init.suppressed;
     }
     toJSON() {
         return omitUndefined({
@@ -72,6 +75,7 @@ export class Finding {
             evidence: this.evidence,
             recommendation: this.recommendation,
             metadata: this.metadata,
+            suppressed: this.suppressed,
         });
     }
 }
@@ -96,7 +100,7 @@ export class Adversary {
         this.rules.push({ id, handler });
     }
     async run(options = {}) {
-        const input = options.input ?? (await parseInput(options.inputPath));
+        const input = options.input === undefined ? await parseInput(options.inputPath) : normalizeRuntimeInput(options.input);
         const repoPath = process.env.ADVERSARY_REPO ?? input.source.path ?? DEFAULT_REPO_PATH;
         const summary = {};
         const cache = new Map();
@@ -110,14 +114,15 @@ export class Adversary {
         if (summary.rules_executed === undefined) {
             summary.rules_executed = this.rules.length;
         }
+        const suppressedFindings = findings.filter((finding) => finding.suppressed === true);
         const output = {
             schema_version: this.schemaVersion,
             adversary: this.name,
             summary,
-            findings: sortFindings(findings),
+            findings: sortFindings(findings.filter((finding) => finding.suppressed !== true)).map(stripSuppressed),
         };
         if (options.write !== false) {
-            await writeOutput(createAdversaryRunEnvelope(output, repoPath), options.outputPath);
+            await writeOutput(createAdversaryRunEnvelope(output, repoPath, suppressedFindings), options.outputPath);
         }
         return output;
     }
@@ -125,20 +130,20 @@ export class Adversary {
 export async function parseInput(path = process.env.ADVERSARY_INPUT ?? DEFAULT_INPUT_PATH) {
     const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw);
-    if (!isRecord(parsed)) {
-        throw new Error(`Invalid input at ${path}: expected an object.`);
+    try {
+        return validateRuntimeInput(parsed);
     }
-    if (!isRecord(parsed.source)) {
-        throw new Error(`Invalid input at ${path}: source must be an object.`);
+    catch (error) {
+        throw new Error(`Invalid input at ${path}: ${error.message}`);
     }
-    if (typeof parsed.source.path !== "string" || parsed.source.path.length === 0) {
-        throw new Error(`Invalid input at ${path}: source.path must be a non-empty string.`);
-    }
-    return parsed;
 }
 export async function writeOutput(output, path = process.env.ADVERSARY_OUTPUT ?? DEFAULT_OUTPUT_PATH) {
+    const envelope = isRunEnvelope(output)
+        ? output
+        : createAdversaryRunEnvelope(output, process.env.ADVERSARY_REPO ?? DEFAULT_REPO_PATH, []);
+    validateReviewEnvelope(envelope);
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify(output, null, 2)}\n`, "utf8");
+    await writeFile(path, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
 }
 export function sortFindings(findings) {
     return [...findings].sort((left, right) => {
@@ -233,6 +238,9 @@ function assertFindingInit(value) {
     if (value.metadata !== undefined && !isRecord(value.metadata)) {
         throw new Error("Finding metadata must be an object.");
     }
+    if (value.suppressed !== undefined && typeof value.suppressed !== "boolean") {
+        throw new Error("Finding suppressed must be a boolean.");
+    }
 }
 function writeLog(level, message) {
     process.stderr.write(`[adversary] ${level}: ${String(message)}\n`);
@@ -280,14 +288,20 @@ function isRecord(value) {
 function omitUndefined(value) {
     return Object.fromEntries(Object.entries(value).filter(([, entryValue]) => entryValue !== undefined));
 }
-function createAdversaryRunEnvelope(output, repoPath) {
+function stripSuppressed(finding) {
+    const { suppressed: _suppressed, ...serialized } = finding;
+    return serialized;
+}
+function createAdversaryRunEnvelope(output, repoPath, suppressedFindings) {
     return {
         protocolVersion: 1,
-        result: normalizeReviewResult(output, repoPath),
+        result: normalizeReviewResult(output, repoPath, suppressedFindings),
     };
 }
-function normalizeReviewResult(output, repoPath) {
+function normalizeReviewResult(output, repoPath, suppressedFindings = []) {
     const summary = output.summary ?? {};
+    const normalizedSuppressed = sortFindings(suppressedFindings).map((finding) => normalizeReviewFinding(stripSuppressed(finding)));
+    const includeSuppressed = verboseValues.has(process.env.ADVERSARY_INCLUDE_SUPPRESSED ?? "");
     return omitUndefined({
         adversary: normalizeAdversary(output.adversary),
         target: omitUndefined({
@@ -297,7 +311,8 @@ function normalizeReviewResult(output, repoPath) {
         positives: [],
         observations: [],
         findings: Array.isArray(output.findings) ? output.findings.map(normalizeReviewFinding) : [],
-        suppressed: { observations: 0, findings: 0 },
+        suppressed: { observations: 0, findings: normalizedSuppressed.length },
+        suppressedFindings: includeSuppressed && normalizedSuppressed.length > 0 ? normalizedSuppressed : undefined,
     });
 }
 function normalizeAdversary(value) {
@@ -356,5 +371,111 @@ function normalizeRecommendation(value) {
         return [value.summary, value.details].filter((item) => typeof item === "string" && item.length > 0).join("\n\n");
     }
     return undefined;
+}
+function normalizeRuntimeInput(value) {
+    return validateRuntimeInput({ schema_version: INPUT_SCHEMA_VERSION, change: null, ...value });
+}
+function validateRuntimeInput(value) {
+    requireExactKeys(value, ["schema_version", "source", "change"], "input");
+    if (value.schema_version !== INPUT_SCHEMA_VERSION) {
+        throw new Error(`schema_version must be "${INPUT_SCHEMA_VERSION}".`);
+    }
+    requireExactKeys(value.source, ["path"], "source");
+    requireString(value.source.path, "source.path");
+    if (value.change !== null) {
+        requireExactKeys(value.change, ["type", "base_ref", "head_ref", "scan_mode", "changed_files"], "change");
+        if (value.change.type !== "diff") {
+            throw new Error('change.type must be "diff".');
+        }
+        requireString(value.change.base_ref, "change.base_ref");
+        requireString(value.change.head_ref, "change.head_ref");
+        if (value.change.scan_mode !== "changed" && value.change.scan_mode !== "all") {
+            throw new Error('change.scan_mode must be "changed" or "all".');
+        }
+        if (!Array.isArray(value.change.changed_files) || value.change.changed_files.some((path) => typeof path !== "string" || path.length === 0)) {
+            throw new Error("change.changed_files must contain only non-empty strings.");
+        }
+        if (new Set(value.change.changed_files).size !== value.change.changed_files.length) {
+            throw new Error("change.changed_files must not contain duplicates.");
+        }
+    }
+    return value;
+}
+function requireExactKeys(value, keys, field) {
+    if (!isRecord(value)) {
+        throw new Error(`${field} must be an object.`);
+    }
+    const expected = new Set(keys);
+    const unknown = Object.keys(value).filter((key) => !expected.has(key));
+    if (unknown.length > 0) {
+        throw new Error(`${field} contains unknown field "${unknown[0]}".`);
+    }
+    for (const key of keys) {
+        if (!(key in value)) {
+            throw new Error(`${field}.${key} is required.`);
+        }
+    }
+}
+function isRunEnvelope(value) {
+    return isRecord(value) && "protocolVersion" in value;
+}
+export function validateReviewEnvelope(value) {
+    requireExactKeys(value, ["protocolVersion", "result"], "envelope");
+    if (value.protocolVersion !== 1) {
+        throw new Error("envelope.protocolVersion must be 1.");
+    }
+    const result = value.result;
+    if (!isRecord(result)) {
+        throw new Error("envelope.result must be an object.");
+    }
+    requireExactKeys(result, ["adversary", "target", "assessment", "positives", "observations", "findings", "opinion", "suppressed", "timing", "suppressedFindings", "rawObservations"].filter((key) => key in result || ["adversary", "target", "positives", "observations", "findings", "suppressed"].includes(key)), "result");
+    requireExactKeys(result.adversary, ["name", "version"].filter((key) => key in result.adversary || key === "name"), "result.adversary");
+    requireString(result.adversary.name, "result.adversary.name");
+    if (!isRecord(result.target)) {
+        throw new Error("result.target must be an object.");
+    }
+    for (const field of ["positives", "observations", "findings"]) {
+        if (!Array.isArray(result[field])) {
+            throw new Error(`result.${field} must be an array.`);
+        }
+    }
+    requireExactKeys(result.suppressed, ["observations", "findings"], "result.suppressed");
+    for (const field of ["observations", "findings"]) {
+        if (!Number.isInteger(result.suppressed[field]) || result.suppressed[field] < 0) {
+            throw new Error(`result.suppressed.${field} must be a non-negative integer.`);
+        }
+    }
+    if (result.suppressedFindings !== undefined) {
+        if (!Array.isArray(result.suppressedFindings) || result.suppressedFindings.length !== result.suppressed.findings) {
+            throw new Error("result.suppressedFindings length must equal result.suppressed.findings.");
+        }
+    }
+    const seen = new Set();
+    for (const [field, findings] of [["findings", result.findings], ["suppressedFindings", result.suppressedFindings ?? []]]) {
+        for (const finding of findings) {
+            validateReviewFinding(finding, `result.${field}`);
+            if (seen.has(finding.id)) {
+                throw new Error(`result contains duplicate finding id "${finding.id}".`);
+            }
+            seen.add(finding.id);
+        }
+    }
+}
+function validateReviewFinding(finding, field) {
+    if (!isRecord(finding)) {
+        throw new Error(`${field} entries must be objects.`);
+    }
+    for (const key of ["id", "title", "category", "severity", "confidence", "summary"]) {
+        requireString(finding[key], `${field}.${key}`);
+    }
+    if (!isSeverity(finding.severity)) {
+        throw new Error(`${field}.severity is unsupported.`);
+    }
+    if (!["low", "medium", "high"].includes(finding.confidence)) {
+        throw new Error(`${field}.confidence is unsupported.`);
+    }
+    if (!Array.isArray(finding.evidence)) {
+        throw new Error(`${field}.evidence must be an array.`);
+    }
 }
 //# sourceMappingURL=index.js.map

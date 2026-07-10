@@ -1,0 +1,33 @@
+{
+  "protocolVersion": 1,
+  "result": {
+    "adversary": { "name": "local/example", "version": "1.0.0" },
+    "target": { "repository": "/workspace", "filesScanned": 1 },
+    "assessment": { "risk": "low", "summary": "One low-risk issue was found." },
+    "positives": [{ "key": "documented", "summary": "The repository has a README." }],
+    "observations": [],
+    "findings": [{
+      "id": "readme-license",
+      "ruleId": "readme.license",
+      "title": "README does not mention a license",
+      "category": "documentation",
+      "severity": "low",
+      "confidence": "high",
+      "summary": "The README has no license section.",
+      "evidence": [{ "file": "README.md", "line": 1, "message": "No license heading was found." }],
+      "recommendation": "Document the project license."
+    }],
+    "opinion": { "ship": true, "summary": "This issue does not block release." },
+    "suppressed": { "observations": 0, "findings": 1 },
+    "suppressedFindings": [{
+      "id": "generated-file",
+      "ruleId": "repo.generated-file",
+      "title": "Generated file is checked in",
+      "category": "maintenance",
+      "severity": "info",
+      "confidence": "medium",
+      "summary": "A generated file is tracked intentionally.",
+      "evidence": [{ "file": "generated.txt" }]
+    }]
+  }
+}

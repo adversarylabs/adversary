@@ -1,6 +1,7 @@
 export declare const DEFAULT_INPUT_PATH = "/adversary/input.json";
 export declare const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
 export declare const DEFAULT_REPO_PATH = "/workspace";
+export declare const INPUT_SCHEMA_VERSION = "adversary.input.v1";
 export declare const REVIEW_SCHEMA_VERSION = "adversary.review.v1";
 export declare const Severity: {
     readonly Info: "info";
@@ -11,10 +12,17 @@ export declare const Severity: {
 };
 export type Severity = (typeof Severity)[keyof typeof Severity];
 export interface RuntimeInput {
+    schema_version: typeof INPUT_SCHEMA_VERSION;
     source: {
         path: string;
     };
-    [key: string]: unknown;
+    change: {
+        type: "diff";
+        base_ref: string;
+        head_ref: string;
+        scan_mode: "changed" | "all";
+        changed_files: string[];
+    } | null;
 }
 export interface Summary {
     files_scanned?: number;
@@ -34,6 +42,7 @@ export interface FindingInit {
     evidence?: string;
     recommendation?: string;
     metadata?: Record<string, unknown>;
+    suppressed?: boolean;
 }
 export interface SerializedFinding {
     rule_id: string;
@@ -48,6 +57,7 @@ export interface SerializedFinding {
     evidence?: string;
     recommendation?: string;
     metadata?: Record<string, unknown>;
+    suppressed?: boolean;
 }
 export interface Output {
     schema_version: typeof REVIEW_SCHEMA_VERSION;
@@ -57,7 +67,45 @@ export interface Output {
 }
 export interface AdversaryRunEnvelope {
     protocolVersion: 1;
-    result: Output;
+    result: ReviewResult;
+}
+export interface ReviewEvidence {
+    file?: string;
+    line?: number;
+    endLine?: number;
+    message?: string;
+    snippet?: string;
+    metadata?: Record<string, unknown>;
+}
+export interface ReviewFinding {
+    id: string;
+    ruleId?: string;
+    groupKey?: string;
+    title: string;
+    category: string;
+    severity: Severity;
+    confidence: "low" | "medium" | "high";
+    summary: string;
+    whyItMatters?: string;
+    impact?: string;
+    evidence: ReviewEvidence[];
+    recommendation?: string;
+    remediation?: { estimate?: string; complexity?: string };
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+}
+export interface ReviewResult {
+    adversary: { name: string; version?: string };
+    target: { repository?: string; filesScanned?: number };
+    assessment?: { risk: "none" | "low" | "medium" | "high" | "critical"; summary?: string };
+    positives: Array<{ key: string; summary: string; evidence?: ReviewEvidence[]; metadata?: Record<string, unknown> }>;
+    observations: Array<{ key: string; summary: string; evidence?: ReviewEvidence[]; metadata?: Record<string, unknown> }>;
+    findings: ReviewFinding[];
+    opinion?: { ship?: boolean; summary: string };
+    suppressed: { observations: number; findings: number };
+    timing?: { buildMs?: number; startupMs?: number; scanMs?: number; totalMs?: number };
+    suppressedFindings?: ReviewFinding[];
+    rawObservations?: unknown;
 }
 export interface RuleContext {
     repoPath: string;
@@ -74,7 +122,7 @@ export interface AdversaryOptions {
     schemaVersion?: typeof REVIEW_SCHEMA_VERSION;
 }
 export interface RunOptions {
-    input?: RuntimeInput;
+    input?: RuntimeInput | { source: { path: string }; schema_version?: typeof INPUT_SCHEMA_VERSION; change?: RuntimeInput["change"] };
     inputPath?: string;
     outputPath?: string;
     write?: boolean;
@@ -115,4 +163,5 @@ export declare class Adversary {
 export declare function parseInput(path?: string): Promise<RuntimeInput>;
 export declare function writeOutput(output: Output | AdversaryRunEnvelope, path?: string): Promise<void>;
 export declare function sortFindings(findings: SerializedFinding[]): SerializedFinding[];
+export declare function validateReviewEnvelope(value: unknown): asserts value is AdversaryRunEnvelope;
 //# sourceMappingURL=index.d.ts.map
