@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/adversarylabs/adversary/internal/archiveutil"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
@@ -36,6 +37,41 @@ func DefaultCache() (Cache, error) {
 }
 
 func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
+	if artifact.Manifest.SchemaVersion != 2 || artifact.Manifest.ArtifactType != oci.ArtifactMediaType || artifact.Manifest.Config.MediaType != oci.EmptyConfigMediaType || len(artifact.Manifest.Layers) != 1 || artifact.Manifest.Layers[0].MediaType != oci.PackageLayerMediaType {
+		return InstallRecord{}, fmt.Errorf("unsupported adversary artifact layout")
+	}
+	var config struct {
+		Name           string `json:"name"`
+		FullName       string `json:"full_name"`
+		Version        string `json:"version"`
+		Runtime        string `json:"runtime"`
+		RuntimeName    string `json:"runtime_name"`
+		RuntimeVersion string `json:"runtime_version"`
+		Files          []struct {
+			Path   string `json:"path"`
+			Size   int64  `json:"size"`
+			SHA256 string `json:"sha256"`
+		} `json:"files"`
+	}
+	if configData, ok := artifact.Blobs[artifact.Manifest.Config.Digest]; ok {
+		if err := oci.VerifyDigest(configData, artifact.Manifest.Config.Digest); err != nil {
+			return InstallRecord{}, fmt.Errorf("config: %w", err)
+		}
+		if err := json.Unmarshal(configData, &config); err != nil {
+			return InstallRecord{}, fmt.Errorf("config: %w", err)
+		}
+		for key, want := range map[string]string{"ai.adversary.name": config.Name, "ai.adversary.full_name": config.FullName, "ai.adversary.version": config.Version, "ai.adversary.runtime": config.Runtime, "ai.adversary.runtime.name": config.RuntimeName, "ai.adversary.runtime.version": config.RuntimeVersion} {
+			if artifact.Manifest.Annotations[key] != want {
+				return InstallRecord{}, fmt.Errorf("manifest annotation %s conflicts with config", key)
+			}
+		}
+	}
+	if err := oci.VerifyDigest(artifact.Blobs[artifact.Manifest.Layers[0].Digest], artifact.Manifest.Layers[0].Digest); err != nil {
+		return InstallRecord{}, fmt.Errorf("layer: %w", err)
+	}
+	if artifact.ManifestDigest == "" {
+		return InstallRecord{}, fmt.Errorf("manifest digest is required")
+	}
 	var pulledManifest *canonical.Manifest
 	if len(artifact.AdversaryManifest) > 0 {
 		parsed, err := canonical.Parse(artifact.AdversaryManifest)
@@ -44,12 +80,7 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		}
 		pulledManifest = &parsed
 	}
-	var layer []byte
-	for _, descriptor := range artifact.Manifest.Layers {
-		if descriptor.MediaType == oci.PackageLayerMediaType || layer == nil {
-			layer = artifact.Blobs[descriptor.Digest]
-		}
-	}
+	layer := artifact.Blobs[artifact.Manifest.Layers[0].Digest]
 	if len(layer) == 0 {
 		return InstallRecord{}, fmt.Errorf("artifact has no package layer")
 	}
@@ -98,6 +129,31 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	}
 	if metadata.Name == "" {
 		return InstallRecord{}, fmt.Errorf("%s is required", ManifestFile)
+	}
+	if pulledManifest != nil && config.FullName != "" && (config.FullName != pulledManifest.Name || (pulledManifest.Version != "" && config.Version != pulledManifest.Version)) {
+		return InstallRecord{}, fmt.Errorf("config identity conflicts with adversary.yaml")
+	}
+	if len(config.Files) > 0 {
+		actual, err := snapshotFiles(stage)
+		if err != nil {
+			return InstallRecord{}, err
+		}
+		allowed := map[string]bool{ManifestFile: true, MetadataFile: true}
+		for _, file := range config.Files {
+			allowed[file.Path] = true
+			got, ok := actual[file.Path]
+			if !ok || got.size != file.Size || fmt.Sprintf("%x", got.digest) != file.SHA256 {
+				return InstallRecord{}, fmt.Errorf("config file metadata mismatch for %q", file.Path)
+			}
+		}
+		for path := range actual {
+			if !allowed[path] {
+				return InstallRecord{}, fmt.Errorf("file %q is not declared by config", path)
+			}
+		}
+	}
+	if err := archiveutil.Seal(stage); err != nil {
+		return InstallRecord{}, err
 	}
 	expectedFiles, err := snapshotFiles(stage)
 	if err != nil {

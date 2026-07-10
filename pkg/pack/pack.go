@@ -65,6 +65,7 @@ type File struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
+	Mode   int64  `json:"mode,omitempty"`
 }
 
 func Create(ctx context.Context, opts Options) (Artifact, error) {
@@ -383,12 +384,27 @@ func collectFiles(dir string) ([]File, error) {
 		if entry.IsDir() {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-		sum := sha256.Sum256(data)
-		files = append(files, File{Path: rel, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:])})
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported package file type: %s", rel)
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		h := sha256.New()
+		_, copyErr := io.CopyBuffer(h, f, make([]byte, 32<<10))
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		files = append(files, File{Path: rel, Size: info.Size(), SHA256: hex.EncodeToString(h.Sum(nil)), Mode: int64(info.Mode().Perm() & 0111)})
 		return nil
 	})
 	if err != nil {
@@ -407,22 +423,29 @@ func buildLayer(dir string, files []File) ([]byte, error) {
 	gz.Name = ""
 	gz.ModTime = time.Unix(0, 0).UTC()
 	tw := tar.NewWriter(gz)
+	defer tw.Close()
+	defer gz.Close()
 	for _, file := range files {
-		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(file.Path)))
+		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(file.Path)))
 		if err != nil {
 			return nil, err
 		}
 		header := &tar.Header{
 			Name:    file.Path,
-			Mode:    0644,
-			Size:    int64(len(data)),
+			Mode:    0644 | file.Mode,
+			Size:    file.Size,
 			ModTime: time.Unix(0, 0).UTC(),
 			Format:  tar.FormatPAX,
 		}
 		if err := tw.WriteHeader(header); err != nil {
+			f.Close()
 			return nil, err
 		}
-		if _, err := tw.Write(data); err != nil {
+		if _, err := io.CopyBuffer(tw, f, make([]byte, 32<<10)); err != nil {
+			f.Close()
+			return nil, err
+		}
+		if err := f.Close(); err != nil {
 			return nil, err
 		}
 	}

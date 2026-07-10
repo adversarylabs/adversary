@@ -240,7 +240,14 @@ func TestCacheInstallRejectsCorruptOrphan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(record.Path, ManifestFile), []byte("name: wrong/name\n"), 0644); err != nil {
+	manifestPath := filepath.Join(record.Path, ManifestFile)
+	if info, err := os.Stat(manifestPath); err != nil || info.Mode().Perm()&0222 != 0 {
+		t.Fatalf("installed manifest is not read-only: %v mode=%v", err, info)
+	}
+	if err := os.Chmod(manifestPath, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, []byte("name: wrong/name\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cache.Install(pulled); err == nil {

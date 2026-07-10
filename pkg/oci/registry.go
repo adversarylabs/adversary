@@ -31,6 +31,14 @@ type HTTPRegistry struct {
 	BearerService string
 }
 
+type IngestionLimits struct {
+	ManifestBytes       int64
+	ConfigBytes         int64
+	CompressedBlobBytes int64
+}
+
+var DefaultIngestionLimits = IngestionLimits{ManifestBytes: 4 << 20, ConfigBytes: 1 << 20, CompressedBlobBytes: 256 << 20}
+
 func NewHTTPRegistry() *HTTPRegistry {
 	return &HTTPRegistry{
 		Client:      http.DefaultClient,
@@ -111,6 +119,9 @@ func (r *HTTPRegistry) Pull(ctx context.Context, ref Reference) (PulledArtifact,
 	if manifest.MediaType != "" && manifest.MediaType != ImageManifestMediaType {
 		return PulledArtifact{}, fmt.Errorf("unsupported manifest media type %s", manifest.MediaType)
 	}
+	if err := validatePulledManifest(manifest); err != nil {
+		return PulledArtifact{}, err
+	}
 	blobs := map[string][]byte{}
 	descriptors := append([]Descriptor{manifest.Config}, manifest.Layers...)
 	for _, descriptor := range descriptors {
@@ -125,6 +136,16 @@ func (r *HTTPRegistry) Pull(ctx context.Context, ref Reference) (PulledArtifact,
 		return PulledArtifact{}, err
 	}
 	return PulledArtifact{Reference: ref, Manifest: manifest, ManifestDigest: manifestDigest, AdversaryManifest: adversaryManifest, Blobs: blobs}, nil
+}
+
+func validatePulledManifest(manifest Manifest) error {
+	if manifest.SchemaVersion != 2 || manifest.ArtifactType != ArtifactMediaType {
+		return fmt.Errorf("manifest is not an adversary artifact")
+	}
+	if manifest.Config.MediaType != EmptyConfigMediaType || len(manifest.Layers) != 1 || manifest.Layers[0].MediaType != PackageLayerMediaType {
+		return fmt.Errorf("unsupported adversary artifact config/layer layout")
+	}
+	return nil
 }
 
 func (r *HTTPRegistry) Resolve(ctx context.Context, ref Reference) (string, error) {
@@ -208,7 +229,7 @@ func (r *HTTPRegistry) getManifest(ctx context.Context, ref Reference) ([]byte, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", registryError(resp)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := readLimited(resp.Body, DefaultIngestionLimits.ManifestBytes, "manifest")
 	if err != nil {
 		return nil, "", err
 	}
@@ -236,7 +257,7 @@ func (r *HTTPRegistry) getArtifactManifest(ctx context.Context, ref Reference, d
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", registryError(resp)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := readLimited(resp.Body, DefaultIngestionLimits.ManifestBytes, "artifact manifest")
 	if err != nil {
 		return nil, "", err
 	}
@@ -266,8 +287,12 @@ func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Ref
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, registryError(resp)
 	}
+	data, err := readLimited(resp.Body, DefaultIngestionLimits.ManifestBytes, "referrers response")
+	if err != nil {
+		return nil, err
+	}
 	var referrers ReferrersResponse
-	if err := json.NewDecoder(resp.Body).Decode(&referrers); err != nil {
+	if err := json.Unmarshal(data, &referrers); err != nil {
 		return nil, err
 	}
 	for _, descriptor := range referrers.Manifests {
@@ -282,7 +307,7 @@ func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Ref
 		if err := json.Unmarshal(data, &artifact); err != nil {
 			return nil, err
 		}
-		if artifact.ArtifactType != AdversaryManifestMediaType || artifact.Subject.Digest != imageDigest || len(artifact.Blobs) != 1 {
+		if artifact.MediaType != OCIArtifactManifestMediaType || artifact.ArtifactType != AdversaryManifestMediaType || artifact.Subject.MediaType != ImageManifestMediaType || artifact.Subject.Digest != imageDigest || len(artifact.Blobs) != 1 || artifact.Blobs[0].MediaType != AdversaryManifestMediaType {
 			continue
 		}
 		return r.getBlob(ctx, ref, artifact.Blobs[0])
@@ -291,6 +316,17 @@ func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Ref
 }
 
 func (r *HTTPRegistry) getBlob(ctx context.Context, ref Reference, descriptor Descriptor) ([]byte, error) {
+	limit := DefaultIngestionLimits.CompressedBlobBytes
+	switch descriptor.MediaType {
+	case EmptyConfigMediaType, AdversaryManifestMediaType:
+		limit = DefaultIngestionLimits.ConfigBytes
+	case PackageLayerMediaType:
+	default:
+		return nil, fmt.Errorf("unsupported blob media type %q", descriptor.MediaType)
+	}
+	if descriptor.Size < 0 || descriptor.Size > limit {
+		return nil, fmt.Errorf("blob %s exceeds %d byte limit", descriptor.Digest, limit)
+	}
 	req, err := r.newRequest(ctx, http.MethodGet, ref, "/blobs/"+descriptor.Digest, nil)
 	if err != nil {
 		return nil, err
@@ -303,7 +339,7 @@ func (r *HTTPRegistry) getBlob(ctx context.Context, ref Reference, descriptor De
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, registryError(resp)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := readLimited(resp.Body, limit, "blob")
 	if err != nil {
 		return nil, err
 	}
@@ -312,6 +348,17 @@ func (r *HTTPRegistry) getBlob(ctx context.Context, ref Reference, descriptor De
 	}
 	if err := VerifyDigest(data, descriptor.Digest); err != nil {
 		return nil, err
+	}
+	return data, nil
+}
+
+func readLimited(r io.Reader, limit int64, label string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s exceeds %d byte limit", label, limit)
 	}
 	return data, nil
 }

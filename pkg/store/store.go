@@ -1,13 +1,10 @@
 package store
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/archiveutil"
 	"github.com/adversarylabs/adversary/internal/safepath"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
@@ -367,35 +365,8 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		return "", err
 	}
 	defer stage.Close()
-	gz, err := gzip.NewReader(file)
-	if err != nil {
+	if err := archiveutil.ExtractGzipTar(file, stage, archiveutil.DefaultLimits); err != nil {
 		return "", err
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-		clean := filepath.ToSlash(filepath.Clean(header.Name))
-		rel, pathErr := safepath.Relative(strings.Split(clean, "/")...)
-		if pathErr != nil || clean == "." || clean != header.Name {
-			return "", fmt.Errorf("unsafe package path %q", header.Name)
-		}
-		if err := stage.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
-			return "", err
-		}
-		data, err := io.ReadAll(tr)
-		if err != nil {
-			return "", err
-		}
-		if err := stage.WriteFile(rel, data, 0644); err != nil {
-			return "", err
-		}
 	}
 	if _, err := stage.Stat("adversary.yaml"); os.IsNotExist(err) {
 		if record.AdversaryManifestDigest == "" {
@@ -419,6 +390,9 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		return "", fmt.Errorf("validate materialized adversary.yaml: %w", err)
 	}
 	if err := prepareRuntimeNodeModules(stage); err != nil {
+		return "", err
+	}
+	if err := archiveutil.Seal(stage); err != nil {
 		return "", err
 	}
 	expected, err := snapshotMaterialized(stage)

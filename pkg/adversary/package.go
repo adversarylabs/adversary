@@ -13,10 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/safepath"
+	"github.com/adversarylabs/adversary/internal/archiveutil"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
@@ -43,6 +42,7 @@ type FileMetadata struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
+	Mode   int64  `json:"mode,omitempty"`
 }
 
 func PackageDirectory(dir string) (Package, error) {
@@ -144,15 +144,26 @@ func buildMetadata(dir string) (ManifestMetadata, error) {
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path)
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported package file type: %s", rel)
+		}
+		f, err := os.Open(path)
 		if err != nil {
 			return err
 		}
-		sum := sha256.Sum256(data)
+		h := sha256.New()
+		_, copyErr := io.CopyBuffer(h, f, make([]byte, 32<<10))
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
 		files = append(files, FileMetadata{
 			Path:   rel,
 			Size:   info.Size(),
-			SHA256: hex.EncodeToString(sum[:]),
+			SHA256: hex.EncodeToString(h.Sum(nil)), Mode: int64(info.Mode().Perm() & 0111),
 		})
 		return nil
 	})
@@ -183,15 +194,17 @@ func buildLayer(dir string, metadata ManifestMetadata) ([]byte, error) {
 	gz.Name = ""
 	gz.ModTime = time.Unix(0, 0).UTC()
 	tw := tar.NewWriter(gz)
+	defer tw.Close()
+	defer gz.Close()
 	for _, file := range metadata.Files {
-		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(file.Path)))
+		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(file.Path)))
 		if err != nil {
 			return nil, err
 		}
 		header := &tar.Header{
 			Name:    file.Path,
-			Mode:    0644,
-			Size:    int64(len(data)),
+			Mode:    0644 | file.Mode,
+			Size:    file.Size,
 			ModTime: time.Unix(0, 0).UTC(),
 			Uid:     0,
 			Gid:     0,
@@ -200,9 +213,14 @@ func buildLayer(dir string, metadata ManifestMetadata) ([]byte, error) {
 			Format:  tar.FormatPAX,
 		}
 		if err := tw.WriteHeader(header); err != nil {
+			f.Close()
 			return nil, err
 		}
-		if _, err := tw.Write(data); err != nil {
+		if _, err := io.CopyBuffer(tw, f, make([]byte, 32<<10)); err != nil {
+			f.Close()
+			return nil, err
+		}
+		if err := f.Close(); err != nil {
 			return nil, err
 		}
 	}
@@ -245,43 +263,16 @@ func ExtractLayer(layer []byte, destination string) (ManifestMetadata, error) {
 }
 
 func ExtractLayerRoot(layer []byte, rooted *os.Root) (ManifestMetadata, error) {
-	gz, err := gzip.NewReader(bytes.NewReader(layer))
-	if err != nil {
+	if err := archiveutil.ExtractGzipTar(bytes.NewReader(layer), rooted, archiveutil.DefaultLimits); err != nil {
 		return ManifestMetadata{}, err
 	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
 	var metadata ManifestMetadata
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
+	if data, err := rooted.ReadFile(MetadataFile); err == nil {
+		if err := json.Unmarshal(data, &metadata); err != nil {
 			return ManifestMetadata{}, err
 		}
-		clean := filepath.ToSlash(filepath.Clean(header.Name))
-		components := strings.Split(clean, "/")
-		rel, pathErr := safepath.Relative(components...)
-		if pathErr != nil || clean == "." || clean != header.Name {
-			return ManifestMetadata{}, fmt.Errorf("unsafe package path %q", header.Name)
-		}
-		data, err := io.ReadAll(tr)
-		if err != nil {
-			return ManifestMetadata{}, err
-		}
-		if header.Name == MetadataFile {
-			if err := json.Unmarshal(data, &metadata); err != nil {
-				return ManifestMetadata{}, err
-			}
-			continue
-		}
-		if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
-			return ManifestMetadata{}, err
-		}
-		if err := rooted.WriteFile(rel, data, 0644); err != nil {
-			return ManifestMetadata{}, err
-		}
+	} else if !os.IsNotExist(err) {
+		return ManifestMetadata{}, err
 	}
 	manifestData, err := rooted.ReadFile(ManifestFile)
 	if err == nil {
