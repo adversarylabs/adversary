@@ -25,6 +25,26 @@ func TestCreateRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsSymlinkSwap(t *testing.T) {
+	dir := testProject(t)
+	target := filepath.Join(dir, "dist", "index.js")
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("outside-secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	beforePackOpen = func(rel string) {
+		if rel == "dist/index.js" {
+			beforePackOpen = nil
+			_ = os.Remove(target)
+			_ = os.Symlink(outside, target)
+		}
+	}
+	t.Cleanup(func() { beforePackOpen = nil })
+	if _, err := Create(context.Background(), Options{Dir: dir}); err == nil {
+		t.Fatal("pack accepted symlink swap")
+	}
+}
+
 func TestCreatePreservesExecutableMode(t *testing.T) {
 	dir := testProject(t)
 	path := filepath.Join(dir, "run.sh")

@@ -233,9 +233,20 @@ func (r *HTTPRegistry) getManifest(ctx context.Context, ref Reference) ([]byte, 
 	if err != nil {
 		return nil, "", err
 	}
-	digest := resp.Header.Get("Docker-Content-Digest")
+	actual := Digest(data)
+	header := resp.Header.Get("Docker-Content-Digest")
+	digest := header
+	if ref.Digest != "" {
+		digest = ref.Digest
+	}
 	if digest == "" {
-		digest = Digest(data)
+		digest = actual
+	}
+	if header != "" && header != actual {
+		return nil, "", fmt.Errorf("manifest digest header %s does not match content %s", header, actual)
+	}
+	if ref.Digest != "" && actual != ref.Digest {
+		return nil, "", fmt.Errorf("requested manifest digest %s does not match content %s", ref.Digest, actual)
 	}
 	if err := VerifyDigest(data, digest); err != nil {
 		return nil, "", err
@@ -261,14 +272,18 @@ func (r *HTTPRegistry) getArtifactManifest(ctx context.Context, ref Reference, d
 	if err != nil {
 		return nil, "", err
 	}
-	got := resp.Header.Get("Docker-Content-Digest")
-	if got == "" {
-		got = Digest(data)
+	actual := Digest(data)
+	header := resp.Header.Get("Docker-Content-Digest")
+	if header != "" && header != digest {
+		return nil, "", fmt.Errorf("artifact manifest digest header %s does not match requested %s", header, digest)
 	}
-	if err := VerifyDigest(data, got); err != nil {
+	if actual != digest {
+		return nil, "", fmt.Errorf("requested artifact manifest digest %s does not match content %s", digest, actual)
+	}
+	if err := VerifyDigest(data, digest); err != nil {
 		return nil, "", err
 	}
-	return data, got, nil
+	return data, digest, nil
 }
 
 func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Reference, imageDigest string) ([]byte, error) {
@@ -479,7 +494,7 @@ func absoluteURL(scheme, registry, location string) string {
 }
 
 func registryError(resp *http.Response) error {
-	data, _ := io.ReadAll(resp.Body)
+	data, _ := readLimited(resp.Body, 64<<10, "registry error response")
 	text := strings.TrimSpace(string(data))
 	if text == "" {
 		text = resp.Status

@@ -445,6 +445,7 @@ func TestPushPullAgainstLocalOCIRegistry(t *testing.T) {
 	defer server.Close()
 
 	home := t.TempDir()
+	t.Cleanup(func() { makeTestTreeWritable(home) })
 	t.Setenv("HOME", home)
 	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
 
@@ -558,6 +559,15 @@ runtime:
 	if _, err := os.Stat(cacheIndex); err != nil {
 		t.Fatalf("expected cache index: %v", err)
 	}
+}
+
+func makeTestTreeWritable(root string) {
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err == nil {
+			_ = os.Chmod(path, info.Mode().Perm()|0700)
+		}
+		return nil
+	})
 }
 
 func TestPushMissingAdversaryManifestFailsBeforeImageUpload(t *testing.T) {

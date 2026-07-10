@@ -90,11 +90,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 			return Artifact{}, err
 		}
 	}
-	files, err := collectFiles(dir)
-	if err != nil {
-		return Artifact{}, err
-	}
-	layer, err := buildLayer(dir, files)
+	files, layer, err := collectAndBuildLayer(dir)
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -177,6 +173,101 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		Files:                   files,
 		OCIManifest:             ociManifest,
 	}, nil
+}
+
+var beforePackOpen func(string)
+
+func collectAndBuildLayer(dir string) ([]File, []byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer root.Close()
+	ignore := loadIgnore(dir)
+	files := make([]File, 0)
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil, nil, err
+	}
+	gz.Name = ""
+	gz.ModTime = time.Unix(0, 0).UTC()
+	tw := tar.NewWriter(gz)
+	err = fs.WalkDir(root.FS(), ".", func(rel string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == manifest.FileName {
+			return nil
+		}
+		if ignore.ignored(rel, entry.IsDir()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		before, err := root.Lstat(rel)
+		if err != nil {
+			return err
+		}
+		if !before.Mode().IsRegular() {
+			return fmt.Errorf("unsupported package file type: %s", rel)
+		}
+		if beforePackOpen != nil {
+			beforePackOpen(rel)
+		}
+		f, err := root.Open(rel)
+		if err != nil {
+			return err
+		}
+		after, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return err
+		}
+		if !after.Mode().IsRegular() || !os.SameFile(before, after) {
+			f.Close()
+			return fmt.Errorf("package file changed while opening: %s", rel)
+		}
+		h := sha256.New()
+		header := &tar.Header{Name: rel, Mode: int64(0644 | after.Mode().Perm()&0111), Size: after.Size(), ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatPAX}
+		if err := tw.WriteHeader(header); err != nil {
+			f.Close()
+			return err
+		}
+		n, copyErr := io.CopyBuffer(io.MultiWriter(tw, h), f, make([]byte, 32<<10))
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if n != after.Size() {
+			return fmt.Errorf("package file changed while reading: %s", rel)
+		}
+		files = append(files, File{Path: rel, Size: n, SHA256: hex.EncodeToString(h.Sum(nil)), Mode: int64(after.Mode().Perm() & 0111)})
+		return nil
+	})
+	if err != nil {
+		tw.Close()
+		gz.Close()
+		return nil, nil, err
+	}
+	if err := tw.Close(); err != nil {
+		return nil, nil, err
+	}
+	if err := gz.Close(); err != nil {
+		return nil, nil, err
+	}
+	return files, buf.Bytes(), nil
 }
 
 func normalizeNameOverride(name string) (string, error) {
@@ -359,7 +450,7 @@ func findNPM() (string, error) {
 
 func collectFiles(dir string) ([]File, error) {
 	ignore := loadIgnore(dir)
-	var files []File
+	files := make([]File, 0)
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err

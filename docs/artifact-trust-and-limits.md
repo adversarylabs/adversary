@@ -9,13 +9,17 @@ gzip package layer. Container images and generic OCI layers are rejected.
 Manifests are limited to 4 MiB, configs and attached `adversary.yaml` documents
 to 1 MiB, and compressed package layers to 256 MiB.
 
-Extraction defaults are configurable through `archiveutil.Limits`: 256 MiB
+Extraction first spools the complete compressed input into a private temporary
+file through a hard limit, so unread or trailing bytes cannot evade accounting.
+Defaults are configurable through `archiveutil.Limits`: 256 MiB
 compressed, 1 GiB expanded, 256 MiB per file, 10,000 entries, 4,096 bytes per
 path, and a 100:1 expansion ratio. Extraction streams into a private staging
 directory and accepts regular files and directories only. Links, devices,
 sparse entries, duplicate paths, traversal, and paths outside that directory
-are rejected. Published files are read-only; executable intent is retained as
-read-and-execute mode. The package digest, manifest digest, and original
+are rejected. The config is mandatory and its identity, runtime, annotations,
+complete file set, sizes, modes, and hashes are cross-checked. Published files
+are read-only and every published directory is non-writable; executable intent
+is retained as read-and-execute mode. The package digest, manifest digest, and original
 reference are retained by the existing cache record.
 
 Digest verification provides content integrity, not publisher identity. This

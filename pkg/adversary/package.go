@@ -54,11 +54,7 @@ func PackageDirectory(dir string) (Package, error) {
 		return Package{}, fmt.Errorf("%s is required: %w", ManifestFile, err)
 	}
 
-	metadata, err := buildMetadata(dir)
-	if err != nil {
-		return Package{}, err
-	}
-	layer, err := buildLayer(dir, metadata)
+	metadata, layer, err := buildMetadataAndLayer(dir)
 	if err != nil {
 		return Package{}, err
 	}
@@ -88,6 +84,116 @@ func PackageDirectory(dir string) (Package, error) {
 		Config:   config,
 		Blob:     oci.Blob{Descriptor: descriptor, Data: layer},
 	}, nil
+}
+
+var beforePackageOpen func(string)
+
+func buildMetadataAndLayer(dir string) (ManifestMetadata, []byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	defer root.Close()
+	manifestData, err := root.ReadFile(ManifestFile)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	m, err := canonical.Parse(manifestData)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	metadata := ManifestMetadata{Name: m.Name, Version: m.Version}
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	gz.Name = ""
+	gz.ModTime = time.Unix(0, 0).UTC()
+	tw := tar.NewWriter(gz)
+	err = fs.WalkDir(root.FS(), ".", func(rel string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if shouldSkip(rel, entry) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		before, err := root.Lstat(rel)
+		if err != nil {
+			return err
+		}
+		if !before.Mode().IsRegular() {
+			return fmt.Errorf("unsupported package file type: %s", rel)
+		}
+		if beforePackageOpen != nil {
+			beforePackageOpen(rel)
+		}
+		f, err := root.Open(rel)
+		if err != nil {
+			return err
+		}
+		after, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return err
+		}
+		if !after.Mode().IsRegular() || !os.SameFile(before, after) {
+			f.Close()
+			return fmt.Errorf("package file changed while opening: %s", rel)
+		}
+		h := sha256.New()
+		header := &tar.Header{Name: rel, Mode: int64(0644 | after.Mode().Perm()&0111), Size: after.Size(), ModTime: time.Unix(0, 0).UTC(), Uid: 0, Gid: 0, Format: tar.FormatPAX}
+		if err := tw.WriteHeader(header); err != nil {
+			f.Close()
+			return err
+		}
+		n, copyErr := io.CopyBuffer(io.MultiWriter(tw, h), f, make([]byte, 32<<10))
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if n != after.Size() {
+			return fmt.Errorf("package file changed while reading: %s", rel)
+		}
+		metadata.Files = append(metadata.Files, FileMetadata{Path: rel, Size: n, SHA256: hex.EncodeToString(h.Sum(nil)), Mode: int64(after.Mode().Perm() & 0111)})
+		return nil
+	})
+	if err != nil {
+		tw.Close()
+		gz.Close()
+		return ManifestMetadata{}, nil, err
+	}
+	metadataData, err := json.Marshal(metadata)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	header := &tar.Header{Name: MetadataFile, Mode: 0444, Size: int64(len(metadataData)), ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatPAX}
+	if err := tw.WriteHeader(header); err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	if _, err := tw.Write(metadataData); err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	if err := tw.Close(); err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	if err := gz.Close(); err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	return metadata, buf.Bytes(), nil
 }
 
 func BuildOCIManifest(pkg Package) ([]byte, string, error) {

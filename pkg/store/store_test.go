@@ -85,6 +85,7 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 		t.Fatal(err)
 	}
 	localStore := Store{Root: t.TempDir()}
+	t.Cleanup(func() { makeStoreWritable(localStore.Root) })
 	record, err := localStore.Put(artifact)
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +93,12 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 	path, err := localStore.MaterializeRecord(record)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "new"), []byte("x"), 0644); err == nil {
+		t.Fatal("created file in sealed materialization")
+	}
+	if err := os.Remove(filepath.Join(path, "dist/index.js")); err == nil {
+		t.Fatal("deleted file from sealed materialization")
 	}
 	if _, err := os.Stat(filepath.Join(path, "node_modules", "@adversary", "sdk", "package.json")); err != nil {
 		t.Fatalf("expected materialized SDK node module: %v", err)
@@ -230,6 +237,7 @@ func TestMaterializeRejectsTamperedPreexistingManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	localStore := Store{Root: t.TempDir()}
+	t.Cleanup(func() { makeStoreWritable(localStore.Root) })
 	record, err := localStore.Put(artifact)
 	if err != nil {
 		t.Fatal(err)
@@ -412,6 +420,15 @@ func writeFile(t *testing.T, dir, rel, content string) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func makeStoreWritable(root string) {
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err == nil {
+			_ = os.Chmod(path, info.Mode().Perm()|0700)
+		}
+		return nil
+	})
 }
 
 func readRef(t *testing.T, root, name, tag string) string {

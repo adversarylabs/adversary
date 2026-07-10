@@ -392,9 +392,6 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	if err := prepareRuntimeNodeModules(stage); err != nil {
 		return "", err
 	}
-	if err := archiveutil.Seal(stage); err != nil {
-		return "", err
-	}
 	expected, err := snapshotMaterialized(stage)
 	if err != nil {
 		return "", err
@@ -411,7 +408,24 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		}
 		return "", fmt.Errorf("publish materialization: %w", err)
 	}
+	publishedRoot, err := rooted.OpenRoot(destRel)
+	if err != nil {
+		_ = rooted.Remove(destRel)
+		return "", err
+	}
+	sealErr := archiveutil.Seal(publishedRoot)
+	closeErr := publishedRoot.Close()
+	if sealErr != nil {
+		return "", sealErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
 	if err := validateMaterialized(rooted, destRel, record, expected); err != nil {
+		if doomed, openErr := rooted.OpenRoot(destRel); openErr == nil {
+			_ = archiveutil.Unseal(doomed)
+			_ = doomed.Close()
+		}
 		_ = rooted.RemoveAll(destRel)
 		return "", fmt.Errorf("verify published materialization: %w", err)
 	}
@@ -423,6 +437,7 @@ var beforeStoreMaterializePublish func(*os.Root, string)
 type materializedFile struct {
 	size   int64
 	digest [sha256.Size]byte
+	mode   os.FileMode
 }
 
 func snapshotMaterialized(rooted *os.Root) (map[string]materializedFile, error) {
@@ -445,7 +460,7 @@ func snapshotMaterialized(rooted *os.Root) (map[string]materializedFile, error) 
 		if err != nil {
 			return err
 		}
-		files[path] = materializedFile{size: int64(len(data)), digest: sha256.Sum256(data)}
+		files[path] = materializedFile{size: int64(len(data)), digest: sha256.Sum256(data), mode: info.Mode().Perm() & 0111}
 		return nil
 	})
 	return files, err
@@ -474,7 +489,7 @@ func validateMaterialized(rooted *os.Root, rel string, record Record, expected m
 			return fmt.Errorf("unsafe materialized path %q", file.Path)
 		}
 		got, ok := actual[clean]
-		if !ok || got.size != file.Size || fmt.Sprintf("%x", got.digest) != file.SHA256 {
+		if !ok || got.size != file.Size || got.mode != os.FileMode(file.Mode)&0111 || fmt.Sprintf("%x", got.digest) != file.SHA256 {
 			return fmt.Errorf("materialized file mismatch %q", file.Path)
 		}
 	}

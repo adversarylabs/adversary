@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/archiveutil"
@@ -41,16 +42,18 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		return InstallRecord{}, fmt.Errorf("unsupported adversary artifact layout")
 	}
 	var config struct {
-		Name           string `json:"name"`
-		FullName       string `json:"full_name"`
-		Version        string `json:"version"`
-		Runtime        string `json:"runtime"`
-		RuntimeName    string `json:"runtime_name"`
-		RuntimeVersion string `json:"runtime_version"`
+		Name           string   `json:"name"`
+		FullName       string   `json:"full_name"`
+		Version        string   `json:"version"`
+		Runtime        string   `json:"runtime"`
+		RuntimeName    string   `json:"runtime_name"`
+		RuntimeVersion string   `json:"runtime_version"`
+		Entrypoint     []string `json:"entrypoint"`
 		Files          []struct {
 			Path   string `json:"path"`
 			Size   int64  `json:"size"`
 			SHA256 string `json:"sha256"`
+			Mode   int64  `json:"mode"`
 		} `json:"files"`
 	}
 	if configData, ok := artifact.Blobs[artifact.Manifest.Config.Digest]; ok {
@@ -65,6 +68,8 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 				return InstallRecord{}, fmt.Errorf("manifest annotation %s conflicts with config", key)
 			}
 		}
+	} else {
+		return InstallRecord{}, fmt.Errorf("artifact config blob is missing")
 	}
 	if err := oci.VerifyDigest(artifact.Blobs[artifact.Manifest.Layers[0].Digest], artifact.Manifest.Layers[0].Digest); err != nil {
 		return InstallRecord{}, fmt.Errorf("layer: %w", err)
@@ -130,19 +135,40 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if metadata.Name == "" {
 		return InstallRecord{}, fmt.Errorf("%s is required", ManifestFile)
 	}
-	if pulledManifest != nil && config.FullName != "" && (config.FullName != pulledManifest.Name || (pulledManifest.Version != "" && config.Version != pulledManifest.Version)) {
+	installedManifestData, err := stage.ReadFile(ManifestFile)
+	if err != nil {
+		return InstallRecord{}, err
+	}
+	installedManifest, err := canonical.Parse(installedManifestData)
+	if err != nil {
+		return InstallRecord{}, err
+	}
+	pulledManifest = &installedManifest
+	if config.Name == "" || config.FullName == "" || config.Version == "" || config.Runtime == "" || config.RuntimeName == "" || config.RuntimeVersion == "" || config.Entrypoint == nil {
+		return InstallRecord{}, fmt.Errorf("config identity and runtime fields are required")
+	}
+	if config.FullName != pulledManifest.Name || (pulledManifest.Version != "" && config.Version != pulledManifest.Version) {
 		return InstallRecord{}, fmt.Errorf("config identity conflicts with adversary.yaml")
 	}
-	if len(config.Files) > 0 {
+	if pulledManifest != nil && (config.RuntimeName != pulledManifest.Runtime.Name || config.RuntimeVersion != pulledManifest.Runtime.Version || !slices.Equal(config.Entrypoint, pulledManifest.Runtime.Command)) {
+		return InstallRecord{}, fmt.Errorf("config runtime conflicts with adversary.yaml")
+	}
+	if config.Files == nil {
+		return InstallRecord{}, fmt.Errorf("config files metadata is required")
+	}
+	{
 		actual, err := snapshotFiles(stage)
 		if err != nil {
 			return InstallRecord{}, err
 		}
 		allowed := map[string]bool{ManifestFile: true, MetadataFile: true}
 		for _, file := range config.Files {
+			if allowed[file.Path] {
+				return InstallRecord{}, fmt.Errorf("duplicate or reserved config file path %q", file.Path)
+			}
 			allowed[file.Path] = true
 			got, ok := actual[file.Path]
-			if !ok || got.size != file.Size || fmt.Sprintf("%x", got.digest) != file.SHA256 {
+			if !ok || got.size != file.Size || got.mode != os.FileMode(file.Mode)&0111 || fmt.Sprintf("%x", got.digest) != file.SHA256 {
 				return InstallRecord{}, fmt.Errorf("config file metadata mismatch for %q", file.Path)
 			}
 		}
@@ -151,9 +177,6 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 				return InstallRecord{}, fmt.Errorf("file %q is not declared by config", path)
 			}
 		}
-	}
-	if err := archiveutil.Seal(stage); err != nil {
-		return InstallRecord{}, err
 	}
 	expectedFiles, err := snapshotFiles(stage)
 	if err != nil {
@@ -179,10 +202,27 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 			}
 		} else {
 			published = true
+			publishedRoot, openErr := rooted.OpenRoot(destRel)
+			if openErr != nil {
+				_ = rooted.Remove(destRel)
+				return InstallRecord{}, openErr
+			}
+			sealErr := archiveutil.Seal(publishedRoot)
+			closeErr := publishedRoot.Close()
+			if sealErr != nil {
+				return InstallRecord{}, sealErr
+			}
+			if closeErr != nil {
+				return InstallRecord{}, closeErr
+			}
 		}
 	}
 	if published {
 		if err := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); err != nil {
+			if doomed, openErr := rooted.OpenRoot(destRel); openErr == nil {
+				_ = archiveutil.Unseal(doomed)
+				_ = doomed.Close()
+			}
 			_ = rooted.RemoveAll(destRel)
 			return InstallRecord{}, fmt.Errorf("verify published artifact: %w", err)
 		}
@@ -206,6 +246,7 @@ var beforeCacheInstallPublish func(*os.Root, string)
 type installedFile struct {
 	size   int64
 	digest [sha256.Size]byte
+	mode   os.FileMode
 }
 
 func snapshotFiles(rooted *os.Root) (map[string]installedFile, error) {
@@ -228,7 +269,7 @@ func snapshotFiles(rooted *os.Root) (map[string]installedFile, error) {
 		if err != nil {
 			return err
 		}
-		files[path] = installedFile{size: int64(len(data)), digest: sha256.Sum256(data)}
+		files[path] = installedFile{size: int64(len(data)), digest: sha256.Sum256(data), mode: info.Mode().Perm() & 0111}
 		return nil
 	})
 	return files, err

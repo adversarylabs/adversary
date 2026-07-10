@@ -118,3 +118,22 @@ func TestPreservesExecutableMode(t *testing.T) {
 		t.Fatalf("mode=%o", info.Mode().Perm())
 	}
 }
+
+func TestCompressedLimitCountsTrailingData(t *testing.T) {
+	data := testArchive(t, testEntry{"x", tar.TypeReg, "x"})
+	limit := int64(len(data))
+	data = append(data, bytes.Repeat([]byte("z"), 32)...)
+	l := DefaultLimits
+	l.CompressedBytes = limit
+	if err := testExtract(t, data, l); err == nil {
+		t.Fatal("trailing bytes bypassed compressed limit")
+	}
+}
+
+func TestRejectsBadGzipChecksum(t *testing.T) {
+	data := testArchive(t, testEntry{"x", tar.TypeReg, "x"})
+	data[len(data)-5] ^= 0xff
+	if err := testExtract(t, data, DefaultLimits); err == nil {
+		t.Fatal("bad gzip checksum accepted")
+	}
+}

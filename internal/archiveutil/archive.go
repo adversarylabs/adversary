@@ -44,14 +44,30 @@ func Seal(root *os.Root) error {
 		return err
 	}
 	for i := len(dirs) - 1; i >= 0; i-- {
-		if dirs[i] == "." {
-			continue
-		}
-		if err := root.Chmod(dirs[i], 0755); err != nil {
+		if err := root.Chmod(dirs[i], 0555); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func Unseal(root *os.Root) error {
+	var dirs []string
+	err := fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			dirs = append(dirs, path)
+			return root.Chmod(path, 0755)
+		}
+		return root.Chmod(path, info.Mode().Perm()&0111|0644)
+	})
+	return err
 }
 
 var DefaultLimits = Limits{CompressedBytes: 256 << 20, ExpandedBytes: 1 << 30, FileBytes: 256 << 20, Files: 10000, PathBytes: 4096, CompressionRatio: 100}
@@ -60,12 +76,31 @@ var DefaultLimits = Limits{CompressedBytes: 256 << 20, ExpandedBytes: 1 << 30, F
 // regular files. It rejects links, devices, sparse entries, duplicate paths and
 // archive amplification before publishing any content outside root.
 func ExtractGzipTar(src io.Reader, root *os.Root, limits Limits) error {
-	compressed := &countingReader{r: io.LimitReader(src, limits.CompressedBytes+1)}
-	gz, err := gzip.NewReader(compressed)
+	if limits.CompressedBytes <= 0 || limits.ExpandedBytes <= 0 || limits.FileBytes <= 0 || limits.Files <= 0 || limits.PathBytes <= 0 || limits.CompressionRatio <= 0 {
+		return fmt.Errorf("archive limits must all be positive")
+	}
+	spool, err := os.CreateTemp("", "adversary-archive-*")
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
+	name := spool.Name()
+	defer os.Remove(name)
+	defer spool.Close()
+	n, err := io.CopyBuffer(spool, io.LimitReader(src, limits.CompressedBytes+1), make([]byte, 32<<10))
+	if err != nil {
+		return err
+	}
+	if n > limits.CompressedBytes {
+		return fmt.Errorf("archive exceeds compressed size limit")
+	}
+	if _, err := spool.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	gz, err := gzip.NewReader(spool)
+	if err != nil {
+		return err
+	}
+	gz.Multistream(false)
 	tr := tar.NewReader(gz)
 	seen := map[string]byte{}
 	var expanded int64
@@ -109,7 +144,7 @@ func ExtractGzipTar(src io.Reader, root *os.Root, limits Limits) error {
 			if expanded > limits.ExpandedBytes {
 				return fmt.Errorf("archive exceeds expanded size limit")
 			}
-			if compressed.n > 0 && expanded > compressed.n*limits.CompressionRatio {
+			if expanded > n*limits.CompressionRatio {
 				return fmt.Errorf("archive exceeds compression ratio limit")
 			}
 			if err := root.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
@@ -134,19 +169,11 @@ func ExtractGzipTar(src io.Reader, root *os.Root, limits Limits) error {
 			return fmt.Errorf("unsupported archive entry type %d for %q", h.Typeflag, h.Name)
 		}
 	}
-	if compressed.n > limits.CompressedBytes {
-		return fmt.Errorf("archive exceeds compressed size limit")
+	if _, err := io.CopyBuffer(io.Discard, gz, make([]byte, 32<<10)); err != nil {
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		return err
 	}
 	return nil
-}
-
-type countingReader struct {
-	r io.Reader
-	n int64
-}
-
-func (r *countingReader) Read(p []byte) (int, error) {
-	n, err := r.r.Read(p)
-	r.n += int64(n)
-	return n, err
 }
