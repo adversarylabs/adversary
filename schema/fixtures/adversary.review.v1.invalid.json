@@ -1,0 +1,34 @@
+[
+  {
+    "name": "metadata must be an object",
+    "envelope": {"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[],"observations":[],"findings":[{"id":"one","title":"One","category":"test","severity":"low","confidence":"high","summary":"One","evidence":[],"metadata":null}],"suppressed":{"observations":0,"findings":0}}}
+  },
+  {
+    "name": "note metadata must be an object",
+    "envelope": {"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[{"key":"one","summary":"One","metadata":null}],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0}}}
+  },
+  {
+    "name": "evidence metadata must be an object",
+    "envelope": {"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[],"observations":[],"findings":[{"id":"one","title":"One","category":"test","severity":"low","confidence":"high","summary":"One","evidence":[{"metadata":[]}]}],"suppressed":{"observations":0,"findings":0}}}
+  },
+  {
+    "name": "nested unknown fields are rejected",
+    "envelope": {"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[{"key":"one","summary":"One","extension":true}],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0}}}
+  },
+  {
+    "name": "endLine cannot precede line",
+    "envelope": {"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[],"observations":[],"findings":[{"id":"one","title":"One","category":"test","severity":"low","confidence":"high","summary":"One","evidence":[{"file":"a.go","line":4,"endLine":2}]}],"suppressed":{"observations":0,"findings":0}}}
+  },
+  {
+    "name": "tags must be unique",
+    "envelope": {"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[],"observations":[],"findings":[{"id":"one","title":"One","category":"test","severity":"low","confidence":"high","summary":"One","evidence":[],"tags":["security","security"]}],"suppressed":{"observations":0,"findings":0}}}
+  },
+  {
+    "name": "timing values are non-negative",
+    "envelope": {"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0},"timing":{"scanMs":-1}}}
+  },
+  {
+    "name": "required strings cannot be whitespace-only",
+    "envelope": {"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[{"key":"one","summary":" \t\n"}],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0}}}
+  }
+]

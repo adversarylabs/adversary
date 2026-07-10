@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adversary.dev/schemas/adversary.review.v1.schema.json",
+  "title": "Adversary review envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "result"],
+  "properties": {
+    "protocolVersion": { "const": 1 },
+    "result": { "$ref": "#/$defs/reviewResult" }
+  },
+  "$defs": {
+    "metadata": { "type": "object" },
+    "adversary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "version": { "type": "string" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string" },
+        "filesScanned": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "endLine": { "type": "integer", "minimum": 1 },
+        "message": { "type": "string" },
+        "snippet": { "type": "string" },
+        "metadata": { "$ref": "#/$defs/metadata" }
+      },
+      "dependentRequired": { "endLine": ["line"] }
+    },
+    "note": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "summary"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "summary": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "metadata": { "$ref": "#/$defs/metadata" }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "category", "severity", "confidence", "summary", "evidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "ruleId": { "type": "string" },
+        "groupKey": { "type": "string" },
+        "title": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "category": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+        "confidence": { "enum": ["low", "medium", "high"] },
+        "summary": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "whyItMatters": { "type": "string" },
+        "impact": { "type": "string" },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "recommendation": { "type": "string" },
+        "remediation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "estimate": { "type": "string" },
+            "complexity": { "type": "string" }
+          }
+        },
+        "tags": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "metadata": { "$ref": "#/$defs/metadata" }
+      }
+    },
+    "reviewResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adversary", "target", "positives", "observations", "findings", "suppressed"],
+      "properties": {
+        "adversary": { "$ref": "#/$defs/adversary" },
+        "target": { "$ref": "#/$defs/target" },
+        "assessment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["risk"],
+          "properties": {
+            "risk": { "enum": ["none", "low", "medium", "high", "critical"] },
+            "summary": { "type": "string" }
+          }
+        },
+        "positives": { "type": "array", "items": { "$ref": "#/$defs/note" } },
+        "observations": { "type": "array", "items": { "$ref": "#/$defs/note" } },
+        "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+        "opinion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summary"],
+          "properties": {
+            "ship": { "type": "boolean" },
+            "summary": { "type": "string", "minLength": 1, "pattern": "\\S" }
+          }
+        },
+        "suppressed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["observations", "findings"],
+          "properties": {
+            "observations": { "type": "integer", "minimum": 0 },
+            "findings": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "timing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "buildMs": { "type": "integer", "minimum": 0 },
+            "startupMs": { "type": "integer", "minimum": 0 },
+            "scanMs": { "type": "integer", "minimum": 0 },
+            "totalMs": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "suppressedFindings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+        "rawObservations": {}
+      }
+    }
+  }
+}

@@ -3,6 +3,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 export const DEFAULT_INPUT_PATH = "/adversary/input.json";
 export const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
 export const DEFAULT_REPO_PATH = "/workspace";
+export const INPUT_SCHEMA_VERSION = "adversary.input.v1";
 export const REVIEW_SCHEMA_VERSION = "adversary.review.v1";
 const verboseValues = new Set(["1", "true", "TRUE", "yes", "YES"]);
 export const Severity = {
@@ -43,6 +44,7 @@ export class Finding {
     evidence;
     recommendation;
     metadata;
+    suppressed;
     constructor(init) {
         assertFindingInit(init);
         this.ruleId = init.ruleId;
@@ -57,6 +59,7 @@ export class Finding {
         this.evidence = init.evidence;
         this.recommendation = init.recommendation;
         this.metadata = init.metadata;
+        this.suppressed = init.suppressed;
     }
     toJSON() {
         return omitUndefined({
@@ -72,6 +75,7 @@ export class Finding {
             evidence: this.evidence,
             recommendation: this.recommendation,
             metadata: this.metadata,
+            suppressed: this.suppressed,
         });
     }
 }
@@ -80,9 +84,7 @@ export class Adversary {
     schemaVersion;
     rules = [];
     constructor(options) {
-        if (options.name.length === 0) {
-            throw new Error("Adversary name must be a non-empty string.");
-        }
+        requireString(options.name, "Adversary name");
         if (options.schemaVersion !== undefined && options.schemaVersion !== REVIEW_SCHEMA_VERSION) {
             throw new Error(`Unsupported schemaVersion "${options.schemaVersion}".`);
         }
@@ -90,13 +92,11 @@ export class Adversary {
         this.schemaVersion = options.schemaVersion ?? REVIEW_SCHEMA_VERSION;
     }
     rule(id, handler) {
-        if (id.length === 0) {
-            throw new Error("Rule id must be a non-empty string.");
-        }
+        requireString(id, "Rule id");
         this.rules.push({ id, handler });
     }
     async run(options = {}) {
-        const input = options.input ?? (await parseInput(options.inputPath));
+        const input = options.input === undefined ? await parseInput(options.inputPath) : normalizeRuntimeInput(options.input);
         const repoPath = process.env.ADVERSARY_REPO ?? input.source.path ?? DEFAULT_REPO_PATH;
         const summary = {};
         const cache = new Map();
@@ -110,14 +110,15 @@ export class Adversary {
         if (summary.rules_executed === undefined) {
             summary.rules_executed = this.rules.length;
         }
+        const suppressedFindings = findings.filter((finding) => finding.suppressed === true);
         const output = {
             schema_version: this.schemaVersion,
             adversary: this.name,
             summary,
-            findings: sortFindings(findings),
+            findings: sortFindings(findings.filter((finding) => finding.suppressed !== true)).map(stripSuppressed),
         };
         if (options.write !== false) {
-            await writeOutput(createAdversaryRunEnvelope(output, repoPath), options.outputPath);
+            await writeOutput(createAdversaryRunEnvelope(output, repoPath, suppressedFindings), options.outputPath);
         }
         return output;
     }
@@ -125,20 +126,20 @@ export class Adversary {
 export async function parseInput(path = process.env.ADVERSARY_INPUT ?? DEFAULT_INPUT_PATH) {
     const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw);
-    if (!isRecord(parsed)) {
-        throw new Error(`Invalid input at ${path}: expected an object.`);
+    try {
+        return validateRuntimeInput(parsed);
     }
-    if (!isRecord(parsed.source)) {
-        throw new Error(`Invalid input at ${path}: source must be an object.`);
+    catch (error) {
+        throw new Error(`Invalid input at ${path}: ${error.message}`);
     }
-    if (typeof parsed.source.path !== "string" || parsed.source.path.length === 0) {
-        throw new Error(`Invalid input at ${path}: source.path must be a non-empty string.`);
-    }
-    return parsed;
 }
 export async function writeOutput(output, path = process.env.ADVERSARY_OUTPUT ?? DEFAULT_OUTPUT_PATH) {
+    const envelope = isRunEnvelope(output)
+        ? output
+        : createAdversaryRunEnvelope(output, process.env.ADVERSARY_REPO ?? DEFAULT_REPO_PATH, []);
+    validateReviewEnvelope(envelope);
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify(output, null, 2)}\n`, "utf8");
+    await writeFile(path, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
 }
 export function sortFindings(findings) {
     return [...findings].sort((left, right) => {
@@ -233,6 +234,9 @@ function assertFindingInit(value) {
     if (value.metadata !== undefined && !isRecord(value.metadata)) {
         throw new Error("Finding metadata must be an object.");
     }
+    if (value.suppressed !== undefined && typeof value.suppressed !== "boolean") {
+        throw new Error("Finding suppressed must be a boolean.");
+    }
 }
 function writeLog(level, message) {
     process.stderr.write(`[adversary] ${level}: ${String(message)}\n`);
@@ -253,7 +257,7 @@ function basename(path) {
     return path.split("/").at(-1) ?? path;
 }
 function requireString(value, field) {
-    if (typeof value !== "string" || value.length === 0) {
+    if (typeof value !== "string" || value.trim().length === 0) {
         throw new Error(`${field} must be a non-empty string.`);
     }
 }
@@ -280,14 +284,20 @@ function isRecord(value) {
 function omitUndefined(value) {
     return Object.fromEntries(Object.entries(value).filter(([, entryValue]) => entryValue !== undefined));
 }
-function createAdversaryRunEnvelope(output, repoPath) {
+function stripSuppressed(finding) {
+    const { suppressed: _suppressed, ...serialized } = finding;
+    return serialized;
+}
+function createAdversaryRunEnvelope(output, repoPath, suppressedFindings) {
     return {
         protocolVersion: 1,
-        result: normalizeReviewResult(output, repoPath),
+        result: normalizeReviewResult(output, repoPath, suppressedFindings),
     };
 }
-function normalizeReviewResult(output, repoPath) {
+function normalizeReviewResult(output, repoPath, suppressedFindings = []) {
     const summary = output.summary ?? {};
+    const normalizedSuppressed = sortFindings(suppressedFindings).map((finding) => normalizeReviewFinding(stripSuppressed(finding)));
+    const includeSuppressed = verboseValues.has(process.env.ADVERSARY_INCLUDE_SUPPRESSED ?? "");
     return omitUndefined({
         adversary: normalizeAdversary(output.adversary),
         target: omitUndefined({
@@ -297,7 +307,8 @@ function normalizeReviewResult(output, repoPath) {
         positives: [],
         observations: [],
         findings: Array.isArray(output.findings) ? output.findings.map(normalizeReviewFinding) : [],
-        suppressed: { observations: 0, findings: 0 },
+        suppressed: { observations: 0, findings: normalizedSuppressed.length },
+        suppressedFindings: includeSuppressed && normalizedSuppressed.length > 0 ? normalizedSuppressed : undefined,
     });
 }
 function normalizeAdversary(value) {
@@ -356,5 +367,201 @@ function normalizeRecommendation(value) {
         return [value.summary, value.details].filter((item) => typeof item === "string" && item.length > 0).join("\n\n");
     }
     return undefined;
+}
+function normalizeRuntimeInput(value) {
+    return validateRuntimeInput({ schema_version: INPUT_SCHEMA_VERSION, change: null, ...value });
+}
+function validateRuntimeInput(value) {
+    requireExactKeys(value, ["schema_version", "source", "change"], "input");
+    if (value.schema_version !== INPUT_SCHEMA_VERSION) {
+        throw new Error(`schema_version must be "${INPUT_SCHEMA_VERSION}".`);
+    }
+    requireExactKeys(value.source, ["path"], "source");
+    requireString(value.source.path, "source.path");
+    if (value.change !== null) {
+        requireExactKeys(value.change, ["type", "base_ref", "head_ref", "scan_mode", "changed_files"], "change");
+        if (value.change.type !== "diff") {
+            throw new Error('change.type must be "diff".');
+        }
+        requireString(value.change.base_ref, "change.base_ref");
+        requireString(value.change.head_ref, "change.head_ref");
+        if (value.change.scan_mode !== "changed" && value.change.scan_mode !== "all") {
+            throw new Error('change.scan_mode must be "changed" or "all".');
+        }
+        if (!Array.isArray(value.change.changed_files) || value.change.changed_files.some((path) => typeof path !== "string" || path.trim().length === 0)) {
+            throw new Error("change.changed_files must contain only non-empty strings.");
+        }
+        if (new Set(value.change.changed_files).size !== value.change.changed_files.length) {
+            throw new Error("change.changed_files must not contain duplicates.");
+        }
+    }
+    return value;
+}
+function requireExactKeys(value, keys, field) {
+    if (!isRecord(value)) {
+        throw new Error(`${field} must be an object.`);
+    }
+    const expected = new Set(keys);
+    const unknown = Object.keys(value).filter((key) => !expected.has(key));
+    if (unknown.length > 0) {
+        throw new Error(`${field} contains unknown field "${unknown[0]}".`);
+    }
+    for (const key of keys) {
+        if (!(key in value)) {
+            throw new Error(`${field}.${key} is required.`);
+        }
+    }
+}
+function isRunEnvelope(value) {
+    return isRecord(value) && "protocolVersion" in value;
+}
+export function validateReviewEnvelope(value) {
+    validateObject(value, ["protocolVersion", "result"], ["protocolVersion", "result"], "envelope");
+    if (value.protocolVersion !== 1) {
+        throw new Error("envelope.protocolVersion must be 1.");
+    }
+    const result = value.result;
+    validateObject(result, ["adversary", "target", "assessment", "positives", "observations", "findings", "opinion", "suppressed", "timing", "suppressedFindings", "rawObservations"], ["adversary", "target", "positives", "observations", "findings", "suppressed"], "result");
+    validateObject(result.adversary, ["name", "version"], ["name"], "result.adversary");
+    requireString(result.adversary.name, "result.adversary.name");
+    optionalString(result.adversary.version, "result.adversary.version");
+    validateObject(result.target, ["repository", "filesScanned"], [], "result.target");
+    optionalString(result.target.repository, "result.target.repository");
+    optionalNonNegativeInteger(result.target.filesScanned, "result.target.filesScanned");
+    if (result.assessment !== undefined) {
+        validateObject(result.assessment, ["risk", "summary"], ["risk"], "result.assessment");
+        if (!["none", "low", "medium", "high", "critical"].includes(result.assessment.risk)) {
+            throw new Error("result.assessment.risk is unsupported.");
+        }
+        optionalString(result.assessment.summary, "result.assessment.summary");
+    }
+    for (const field of ["positives", "observations"]) {
+        if (!Array.isArray(result[field])) {
+            throw new Error(`result.${field} must be an array.`);
+        }
+        result[field].forEach((note, index) => validateReviewNote(note, `result.${field}[${index}]`));
+    }
+    if (!Array.isArray(result.findings)) {
+        throw new Error("result.findings must be an array.");
+    }
+    if (result.opinion !== undefined) {
+        validateObject(result.opinion, ["ship", "summary"], ["summary"], "result.opinion");
+        if (result.opinion.ship !== undefined && typeof result.opinion.ship !== "boolean") {
+            throw new Error("result.opinion.ship must be a boolean.");
+        }
+        requireString(result.opinion.summary, "result.opinion.summary");
+    }
+    validateObject(result.suppressed, ["observations", "findings"], ["observations", "findings"], "result.suppressed");
+    for (const field of ["observations", "findings"]) {
+        if (!Number.isInteger(result.suppressed[field]) || result.suppressed[field] < 0) {
+            throw new Error(`result.suppressed.${field} must be a non-negative integer.`);
+        }
+    }
+    if (result.timing !== undefined) {
+        validateObject(result.timing, ["buildMs", "startupMs", "scanMs", "totalMs"], [], "result.timing");
+        for (const field of ["buildMs", "startupMs", "scanMs", "totalMs"]) {
+            optionalNonNegativeInteger(result.timing[field], `result.timing.${field}`);
+        }
+    }
+    if (result.suppressedFindings !== undefined) {
+        if (!Array.isArray(result.suppressedFindings) || result.suppressedFindings.length !== result.suppressed.findings) {
+            throw new Error("result.suppressedFindings length must equal result.suppressed.findings.");
+        }
+    }
+    const seen = new Set();
+    for (const [field, findings] of [["findings", result.findings], ["suppressedFindings", result.suppressedFindings ?? []]]) {
+        for (const [index, finding] of findings.entries()) {
+            validateReviewFinding(finding, `result.${field}[${index}]`);
+            if (seen.has(finding.id)) {
+                throw new Error(`result contains duplicate finding id "${finding.id}".`);
+            }
+            seen.add(finding.id);
+        }
+    }
+}
+function validateReviewFinding(finding, field) {
+    validateObject(finding, ["id", "ruleId", "groupKey", "title", "category", "severity", "confidence", "summary", "whyItMatters", "impact", "evidence", "recommendation", "remediation", "tags", "metadata"], ["id", "title", "category", "severity", "confidence", "summary", "evidence"], field);
+    for (const key of ["id", "title", "category", "severity", "confidence", "summary"]) {
+        requireString(finding[key], `${field}.${key}`);
+    }
+    for (const key of ["ruleId", "groupKey", "whyItMatters", "impact", "recommendation"]) {
+        optionalString(finding[key], `${field}.${key}`);
+    }
+    if (!isSeverity(finding.severity)) {
+        throw new Error(`${field}.severity is unsupported.`);
+    }
+    if (!["low", "medium", "high"].includes(finding.confidence)) {
+        throw new Error(`${field}.confidence is unsupported.`);
+    }
+    if (!Array.isArray(finding.evidence)) {
+        throw new Error(`${field}.evidence must be an array.`);
+    }
+    finding.evidence.forEach((evidence, index) => validateReviewEvidence(evidence, `${field}.evidence[${index}]`));
+    if (finding.remediation !== undefined) {
+        validateObject(finding.remediation, ["estimate", "complexity"], [], `${field}.remediation`);
+        optionalString(finding.remediation.estimate, `${field}.remediation.estimate`);
+        optionalString(finding.remediation.complexity, `${field}.remediation.complexity`);
+    }
+    if (finding.tags !== undefined) {
+        if (!Array.isArray(finding.tags) || finding.tags.some((tag) => typeof tag !== "string")) {
+            throw new Error(`${field}.tags must contain only strings.`);
+        }
+        if (new Set(finding.tags).size !== finding.tags.length) {
+            throw new Error(`${field}.tags must not contain duplicates.`);
+        }
+    }
+    optionalMetadata(finding.metadata, `${field}.metadata`);
+}
+function validateReviewNote(note, field) {
+    validateObject(note, ["key", "summary", "evidence", "metadata"], ["key", "summary"], field);
+    requireString(note.key, `${field}.key`);
+    requireString(note.summary, `${field}.summary`);
+    if (note.evidence !== undefined) {
+        if (!Array.isArray(note.evidence)) {
+            throw new Error(`${field}.evidence must be an array.`);
+        }
+        note.evidence.forEach((evidence, index) => validateReviewEvidence(evidence, `${field}.evidence[${index}]`));
+    }
+    optionalMetadata(note.metadata, `${field}.metadata`);
+}
+function validateReviewEvidence(evidence, field) {
+    validateObject(evidence, ["file", "line", "endLine", "message", "snippet", "metadata"], [], field);
+    for (const key of ["file", "message", "snippet"]) {
+        optionalString(evidence[key], `${field}.${key}`);
+    }
+    optionalPositiveInteger(evidence.line, `${field}.line`);
+    optionalPositiveInteger(evidence.endLine, `${field}.endLine`);
+    if (evidence.endLine !== undefined && evidence.line === undefined) {
+        throw new Error(`${field}.endLine requires line.`);
+    }
+    if (evidence.endLine !== undefined && evidence.endLine < evidence.line) {
+        throw new Error(`${field}.endLine must not precede line.`);
+    }
+    optionalMetadata(evidence.metadata, `${field}.metadata`);
+}
+function optionalMetadata(value, field) {
+    if (value !== undefined && !isRecord(value)) {
+        throw new Error(`${field} must be an object.`);
+    }
+}
+function optionalNonNegativeInteger(value, field) {
+    if (value !== undefined && (!Number.isInteger(value) || value < 0)) {
+        throw new Error(`${field} must be a non-negative integer.`);
+    }
+}
+function validateObject(value, allowed, required, field) {
+    if (!isRecord(value)) {
+        throw new Error(`${field} must be an object.`);
+    }
+    const allowedKeys = new Set(allowed);
+    const unknown = Object.keys(value).filter((key) => !allowedKeys.has(key));
+    if (unknown.length > 0) {
+        throw new Error(`${field} contains unknown field "${unknown[0]}".`);
+    }
+    for (const key of required) {
+        if (!(key in value)) {
+            throw new Error(`${field}.${key} is required.`);
+        }
+    }
 }
 //# sourceMappingURL=index.js.map

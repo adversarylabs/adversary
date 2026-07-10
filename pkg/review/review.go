@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -102,13 +103,190 @@ type Remediation struct {
 
 func DecodeRunEnvelope(data []byte) (RunEnvelope, error) {
 	var envelope RunEnvelope
-	if err := json.Unmarshal(data, &envelope); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return RunEnvelope{}, err
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
 		return RunEnvelope{}, err
 	}
 	if envelope.ProtocolVersion != ProtocolVersion {
 		return RunEnvelope{}, fmt.Errorf("unsupported adversary run protocolVersion %d", envelope.ProtocolVersion)
 	}
+	if err := validateRequiredReviewFields(data); err != nil {
+		return RunEnvelope{}, err
+	}
+	if err := envelope.Result.validate(); err != nil {
+		return RunEnvelope{}, fmt.Errorf("invalid adversary run result: %w", err)
+	}
 	return envelope, nil
+}
+
+func validateRequiredReviewFields(data []byte) error {
+	var raw struct {
+		Result map[string]json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for _, field := range []string{"adversary", "target", "positives", "observations", "findings", "suppressed"} {
+		if _, ok := raw.Result[field]; !ok {
+			return fmt.Errorf("invalid adversary run result: %s is required", field)
+		}
+	}
+	var suppressed map[string]json.RawMessage
+	if err := json.Unmarshal(raw.Result["suppressed"], &suppressed); err != nil {
+		return fmt.Errorf("invalid adversary run result: suppressed must be an object")
+	}
+	for _, field := range []string{"observations", "findings"} {
+		if _, ok := suppressed[field]; !ok {
+			return fmt.Errorf("invalid adversary run result: suppressed.%s is required", field)
+		}
+	}
+	return nil
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("unexpected data after adversary run envelope")
+		}
+		return err
+	}
+	return nil
+}
+
+func (result ReviewResult) validate() error {
+	if strings.TrimSpace(result.Adversary.Name) == "" {
+		return fmt.Errorf("adversary.name must be a non-empty string")
+	}
+	if result.Target.FilesScanned != nil && *result.Target.FilesScanned < 0 {
+		return fmt.Errorf("target.filesScanned must be non-negative")
+	}
+	if result.Positives == nil || result.Observations == nil || result.Findings == nil {
+		return fmt.Errorf("positives, observations, and findings are required")
+	}
+	if result.Suppressed.Observations < 0 || result.Suppressed.Findings < 0 {
+		return fmt.Errorf("suppressed counts must be non-negative")
+	}
+	if result.SuppressedFindings != nil && len(result.SuppressedFindings) != result.Suppressed.Findings {
+		return fmt.Errorf("suppressed.findings must equal the number of suppressedFindings when included")
+	}
+	if result.Assessment != nil {
+		if !slices.Contains([]string{"none", "low", "medium", "high", "critical"}, result.Assessment.Risk) {
+			return fmt.Errorf("assessment.risk %q is not supported", result.Assessment.Risk)
+		}
+	}
+	if result.Opinion != nil && strings.TrimSpace(result.Opinion.Summary) == "" {
+		return fmt.Errorf("opinion.summary must be a non-empty string")
+	}
+	if result.Timing != nil && (result.Timing.BuildMS < 0 || result.Timing.StartupMS < 0 || result.Timing.ScanMS < 0 || result.Timing.TotalMS < 0) {
+		return fmt.Errorf("timing values must be non-negative")
+	}
+	if err := validateNotes("positives", result.Positives); err != nil {
+		return err
+	}
+	if err := validateNotes("observations", result.Observations); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(result.Findings)+len(result.SuppressedFindings))
+	if err := validateFindings("findings", result.Findings, seen); err != nil {
+		return err
+	}
+	return validateFindings("suppressedFindings", result.SuppressedFindings, seen)
+}
+
+func validateNotes(field string, notes []Note) error {
+	for i, note := range notes {
+		prefix := fmt.Sprintf("%s[%d]", field, i)
+		if strings.TrimSpace(note.Key) == "" || strings.TrimSpace(note.Summary) == "" {
+			return fmt.Errorf("%s.key and summary must be non-empty strings", prefix)
+		}
+		if err := validateMetadata(prefix+".metadata", note.Metadata); err != nil {
+			return err
+		}
+		if err := validateEvidence(prefix+".evidence", note.Evidence); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateFindings(field string, findings []Finding, seen map[string]struct{}) error {
+	for i, finding := range findings {
+		prefix := fmt.Sprintf("%s[%d]", field, i)
+		for name, value := range map[string]string{
+			"id": finding.ID, "title": finding.Title, "category": finding.Category,
+			"severity": finding.Severity, "confidence": finding.Confidence, "summary": finding.Summary,
+		} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("%s.%s must be a non-empty string", prefix, name)
+			}
+		}
+		if !slices.Contains([]string{"info", "low", "medium", "high", "critical"}, finding.Severity) {
+			return fmt.Errorf("%s.severity %q is not supported", prefix, finding.Severity)
+		}
+		if !slices.Contains([]string{"low", "medium", "high"}, finding.Confidence) {
+			return fmt.Errorf("%s.confidence %q is not supported", prefix, finding.Confidence)
+		}
+		if _, exists := seen[finding.ID]; exists {
+			return fmt.Errorf("%s.id %q is duplicated", prefix, finding.ID)
+		}
+		seen[finding.ID] = struct{}{}
+		if finding.Evidence == nil {
+			return fmt.Errorf("%s.evidence is required", prefix)
+		}
+		if err := validateMetadata(prefix+".metadata", finding.Metadata); err != nil {
+			return err
+		}
+		seenTags := make(map[string]struct{}, len(finding.Tags))
+		for _, tag := range finding.Tags {
+			if _, exists := seenTags[tag]; exists {
+				return fmt.Errorf("%s.tags contains duplicate value %q", prefix, tag)
+			}
+			seenTags[tag] = struct{}{}
+		}
+		if err := validateEvidence(prefix+".evidence", finding.Evidence); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateEvidence(field string, evidence []Evidence) error {
+	for i, item := range evidence {
+		if err := validateMetadata(fmt.Sprintf("%s[%d].metadata", field, i), item.Metadata); err != nil {
+			return err
+		}
+		if item.Line != nil && *item.Line < 1 {
+			return fmt.Errorf("%s[%d].line must be positive", field, i)
+		}
+		if item.EndLine != nil {
+			if *item.EndLine < 1 {
+				return fmt.Errorf("%s[%d].endLine must be positive", field, i)
+			}
+			if item.Line == nil {
+				return fmt.Errorf("%s[%d].endLine requires line", field, i)
+			}
+			if *item.EndLine < *item.Line {
+				return fmt.Errorf("%s[%d].endLine must not precede line", field, i)
+			}
+		}
+	}
+	return nil
+}
+
+func validateMetadata(field string, metadata json.RawMessage) error {
+	if len(metadata) == 0 {
+		return nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &object); err != nil || object == nil {
+		return fmt.Errorf("%s must be an object", field)
+	}
+	return nil
 }
 
 func RenderTerminal(w io.Writer, result ReviewResult) error {

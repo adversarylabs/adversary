@@ -21,5 +21,13 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+
+      - name: Test vendored TypeScript SDK protocol
+        run: node --test templates/typescript/vendor/adversary-sdk/test/protocol.test.js
+
       - name: Test
         run: go test ./...
