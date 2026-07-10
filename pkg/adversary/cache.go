@@ -342,12 +342,21 @@ func validateInstalledArtifact(rooted *os.Root, rel string, metadata ManifestMet
 }
 
 func (c Cache) Resolve(name string) (InstallRecord, bool) {
+	aliasLock, err := publock.Acquire(c.Root, "alias\x00"+name)
+	if err != nil {
+		return InstallRecord{}, false
+	}
 	data, err := c.readCacheRecord("index", name)
 	if err != nil {
+		_ = aliasLock.Close()
 		return InstallRecord{}, false
 	}
 	var record InstallRecord
 	if err := json.Unmarshal(data, &record); err != nil {
+		_ = aliasLock.Close()
+		return InstallRecord{}, false
+	}
+	if err := aliasLock.Close(); err != nil {
 		return InstallRecord{}, false
 	}
 	lock, err := publock.Acquire(c.Root, record.ManifestDigest)
@@ -410,7 +419,7 @@ func (c Cache) writeRecord(record InstallRecord) error {
 		if _, err := oci.ParseDigest(record.ManifestDigest); err != nil {
 			return err
 		}
-		if err := rooted.WriteFile("digests/"+cacheKey(record.ManifestDigest)+".json", data, 0644); err != nil {
+		if err := atomicCacheWrite(rooted, "digests/"+cacheKey(record.ManifestDigest)+".json", data); err != nil {
 			return err
 		}
 	}
@@ -418,12 +427,38 @@ func (c Cache) writeRecord(record InstallRecord) error {
 	if record.Reference != "" {
 		keys = append(keys, referenceAliases(record.Reference)...)
 	}
-	for _, key := range keys {
-		if err := rooted.WriteFile("index/"+cacheKey(key)+".json", data, 0644); err != nil {
+	for _, key := range uniqueStrings(keys) {
+		aliasLock, err := publock.Acquire(c.Root, "alias\x00"+key)
+		if err != nil {
 			return err
+		}
+		writeErr := atomicCacheWrite(rooted, "index/"+cacheKey(key)+".json", data)
+		closeErr := aliasLock.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 	}
 	return nil
+}
+
+func atomicCacheWrite(rooted *os.Root, destination string, data []byte) error {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	dir := filepath.ToSlash(filepath.Dir(destination))
+	temp := dir + fmt.Sprintf("/.tmp-%x", nonce)
+	defer rooted.Remove(temp)
+	if err := rooted.WriteFile(temp, data, 0600); err != nil {
+		return err
+	}
+	if err := rooted.Chmod(temp, 0644); err != nil {
+		return err
+	}
+	return rooted.Rename(temp, destination)
 }
 
 func referenceAliases(reference string) []string {
@@ -511,5 +546,13 @@ func (c Cache) validRecord(record InstallRecord) bool {
 	}
 	defer rooted.Close()
 	info, err := rooted.Stat(filepath.ToSlash(filepath.Join("artifacts", d)))
-	return err == nil && info.IsDir()
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	sub, err := rooted.OpenRoot(filepath.ToSlash(filepath.Join("artifacts", d)))
+	if err != nil {
+		return false
+	}
+	defer sub.Close()
+	return archiveutil.ValidateSealed(sub) == nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/adversarylabs/adversary/pkg/oci"
@@ -78,6 +79,10 @@ func TestCacheReferenceAliases(t *testing.T) {
 	if err := os.MkdirAll(record.Path, 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(record.Path, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(record.Path, 0755) })
 	if err := cache.writeRecord(record); err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +113,10 @@ func TestCacheKeysDoNotCollideAndLegacyRecordsRemainReadable(t *testing.T) {
 	if err := os.MkdirAll(record.Path, 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(record.Path, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(record.Path, 0755) })
 	data, _ := json.Marshal(record)
 	if err := os.MkdirAll(filepath.Join(cache.Root, "index"), 0755); err != nil {
 		t.Fatal(err)
@@ -282,6 +291,45 @@ func TestCacheInstallImageRuntime(t *testing.T) {
 	badCache := Cache{Root: t.TempDir()}
 	if _, err := badCache.Install(pulled); err == nil {
 		t.Fatal("accepted conflicting image runtime")
+	}
+}
+
+func TestConcurrentAliasUpdatesAreAtomic(t *testing.T) {
+	makePulled := func(content string) oci.PulledArtifact {
+		dir := t.TempDir()
+		writePackageFile(t, dir, "adversary.yaml", "name: local/race\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+		writePackageFile(t, dir, "dist/index.js", content)
+		a, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref, _ := oci.ParseReference("local/race:1.0.0")
+		return oci.PulledArtifact{Reference: ref, Manifest: a.OCIManifest, ManifestDigest: a.ManifestDigest, AdversaryManifest: a.AdversaryManifest, Blobs: map[string][]byte{a.ConfigDigest: a.Config, a.LayerDigest: a.Layer}}
+	}
+	one, two := makePulled("one"), makePulled("two")
+	cache := Cache{Root: t.TempDir()}
+	t.Cleanup(func() { makeWritable(cache.Root) })
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, p := range []oci.PulledArtifact{one, two} {
+		wg.Add(1)
+		go func(p oci.PulledArtifact) { defer wg.Done(); _, err := cache.Install(p); errs <- err }(p)
+	}
+	for i := 0; i < 100; i++ {
+		if record, ok := cache.Resolve("local/race"); ok && record.ManifestDigest != one.ManifestDigest && record.ManifestDigest != two.ManifestDigest {
+			t.Fatalf("partial alias record: %#v", record)
+		}
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	record, ok := cache.Resolve("local/race")
+	if !ok || (record.ManifestDigest != one.ManifestDigest && record.ManifestDigest != two.ManifestDigest) {
+		t.Fatalf("invalid final alias: %#v", record)
 	}
 }
 

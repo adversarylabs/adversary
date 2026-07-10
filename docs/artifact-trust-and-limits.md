@@ -39,6 +39,12 @@ after publication (the credential-storage decision uses the same same-user
 authority boundary). Platforms that cannot rename a sealed directory safely
 fail closed instead of making the stage writable.
 
+Cache name and reference aliases have exact-byte interprocess locks and atomic
+record replacement, so readers observe one complete record. Concurrent writers
+use last-writer-wins semantics per alias. Compare-and-swap or conflict prompts
+are deferred to the CLI-012 reference-resolution policy rather than being
+silently inferred during artifact ingestion.
+
 Digest verification provides content integrity, not publisher identity. This
 change does not introduce signatures because the repository has no configured
 publisher trust roots or provenance policy. A future signature feature must
