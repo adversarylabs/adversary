@@ -13,10 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/safepath"
+	"github.com/adversarylabs/adversary/internal/archiveutil"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
@@ -34,15 +33,20 @@ type Package struct {
 }
 
 type ManifestMetadata struct {
-	Name    string         `json:"name"`
-	Version string         `json:"version,omitempty"`
-	Files   []FileMetadata `json:"files"`
+	Name           string         `json:"name"`
+	Version        string         `json:"version,omitempty"`
+	Files          []FileMetadata `json:"files"`
+	RuntimeName    string         `json:"runtime_name,omitempty"`
+	RuntimeVersion string         `json:"runtime_version,omitempty"`
+	RuntimeImage   string         `json:"runtime_image,omitempty"`
+	Entrypoint     []string       `json:"entrypoint,omitempty"`
 }
 
 type FileMetadata struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
+	Mode   int64  `json:"mode,omitempty"`
 }
 
 func PackageDirectory(dir string) (Package, error) {
@@ -50,26 +54,23 @@ func PackageDirectory(dir string) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
-	if _, err := os.Stat(filepath.Join(dir, ManifestFile)); err != nil {
-		return Package{}, fmt.Errorf("%s is required: %w", ManifestFile, err)
-	}
-
-	metadata, err := buildMetadata(dir)
-	if err != nil {
-		return Package{}, err
-	}
-	layer, err := buildLayer(dir, metadata)
+	metadata, layer, err := buildMetadataAndLayer(dir)
 	if err != nil {
 		return Package{}, err
 	}
 	config, err := json.Marshal(struct {
-		Created string `json:"created"`
-		Name    string `json:"name"`
-		Version string `json:"version,omitempty"`
+		Created        string   `json:"created"`
+		Name           string   `json:"name"`
+		Version        string   `json:"version,omitempty"`
+		RuntimeName    string   `json:"runtime_name,omitempty"`
+		RuntimeVersion string   `json:"runtime_version,omitempty"`
+		RuntimeImage   string   `json:"runtime_image,omitempty"`
+		Entrypoint     []string `json:"entrypoint,omitempty"`
 	}{
-		Created: "1970-01-01T00:00:00Z",
-		Name:    metadata.Name,
-		Version: metadata.Version,
+		Created:     "1970-01-01T00:00:00Z",
+		Name:        metadata.Name,
+		Version:     metadata.Version,
+		RuntimeName: metadata.RuntimeName, RuntimeVersion: metadata.RuntimeVersion, RuntimeImage: metadata.RuntimeImage, Entrypoint: metadata.Entrypoint,
 	})
 	if err != nil {
 		return Package{}, err
@@ -90,6 +91,128 @@ func PackageDirectory(dir string) (Package, error) {
 	}, nil
 }
 
+var beforePackageOpen func(string)
+var beforePackageManifestRead func()
+
+func buildMetadataAndLayer(dir string) (ManifestMetadata, []byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	defer root.Close()
+	before, err := root.Lstat(ManifestFile)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	if beforePackageManifestRead != nil {
+		beforePackageManifestRead()
+	}
+	manifestData, err := root.ReadFile(ManifestFile)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	m, err := canonical.Parse(manifestData)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	after, err := root.Lstat(ManifestFile)
+	if err != nil || !os.SameFile(before, after) {
+		return ManifestMetadata{}, nil, fmt.Errorf("manifest changed while reading")
+	}
+	metadata := ManifestMetadata{Name: m.Name, Version: m.Version, RuntimeName: m.Runtime.Name, RuntimeVersion: m.Runtime.Version, RuntimeImage: m.Runtime.Image, Entrypoint: m.Runtime.Command}
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	gz.Name = ""
+	gz.ModTime = time.Unix(0, 0).UTC()
+	tw := tar.NewWriter(gz)
+	err = fs.WalkDir(root.FS(), ".", func(rel string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if shouldSkip(rel, entry) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		before, err := root.Lstat(rel)
+		if err != nil {
+			return err
+		}
+		if !before.Mode().IsRegular() {
+			return fmt.Errorf("unsupported package file type: %s", rel)
+		}
+		if beforePackageOpen != nil {
+			beforePackageOpen(rel)
+		}
+		f, err := root.Open(rel)
+		if err != nil {
+			return err
+		}
+		after, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return err
+		}
+		if !after.Mode().IsRegular() || !os.SameFile(before, after) {
+			f.Close()
+			return fmt.Errorf("package file changed while opening: %s", rel)
+		}
+		h := sha256.New()
+		header := &tar.Header{Name: rel, Mode: int64(0644 | after.Mode().Perm()&0111), Size: after.Size(), ModTime: time.Unix(0, 0).UTC(), Uid: 0, Gid: 0, Format: tar.FormatPAX}
+		if err := tw.WriteHeader(header); err != nil {
+			f.Close()
+			return err
+		}
+		n, copyErr := io.CopyBuffer(io.MultiWriter(tw, h), f, make([]byte, 32<<10))
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if n != after.Size() {
+			return fmt.Errorf("package file changed while reading: %s", rel)
+		}
+		metadata.Files = append(metadata.Files, FileMetadata{Path: rel, Size: n, SHA256: hex.EncodeToString(h.Sum(nil)), Mode: int64(after.Mode().Perm() & 0111)})
+		return nil
+	})
+	if err != nil {
+		tw.Close()
+		gz.Close()
+		return ManifestMetadata{}, nil, err
+	}
+	metadataData, err := json.Marshal(metadata)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	header := &tar.Header{Name: MetadataFile, Mode: 0444, Size: int64(len(metadataData)), ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatPAX}
+	if err := tw.WriteHeader(header); err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	if _, err := tw.Write(metadataData); err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	if err := tw.Close(); err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	if err := gz.Close(); err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	return metadata, buf.Bytes(), nil
+}
+
 func BuildOCIManifest(pkg Package) ([]byte, string, error) {
 	annotations := map[string]string{
 		"org.opencontainers.image.title": pkg.Manifest.Name,
@@ -99,6 +222,9 @@ func BuildOCIManifest(pkg Package) ([]byte, string, error) {
 		annotations["org.opencontainers.image.version"] = pkg.Manifest.Version
 		annotations["ai.adversary.version"] = pkg.Manifest.Version
 	}
+	annotations["ai.adversary.runtime.name"] = pkg.Manifest.RuntimeName
+	annotations["ai.adversary.runtime.version"] = pkg.Manifest.RuntimeVersion
+	annotations["ai.adversary.runtime.image"] = pkg.Manifest.RuntimeImage
 	data, digest, _, err := oci.NewManifest(pkg.Config, pkg.Blob.Descriptor, annotations)
 	return data, digest, err
 }
@@ -144,15 +270,26 @@ func buildMetadata(dir string) (ManifestMetadata, error) {
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path)
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported package file type: %s", rel)
+		}
+		f, err := os.Open(path)
 		if err != nil {
 			return err
 		}
-		sum := sha256.Sum256(data)
+		h := sha256.New()
+		_, copyErr := io.CopyBuffer(h, f, make([]byte, 32<<10))
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
 		files = append(files, FileMetadata{
 			Path:   rel,
 			Size:   info.Size(),
-			SHA256: hex.EncodeToString(sum[:]),
+			SHA256: hex.EncodeToString(h.Sum(nil)), Mode: int64(info.Mode().Perm() & 0111),
 		})
 		return nil
 	})
@@ -183,15 +320,17 @@ func buildLayer(dir string, metadata ManifestMetadata) ([]byte, error) {
 	gz.Name = ""
 	gz.ModTime = time.Unix(0, 0).UTC()
 	tw := tar.NewWriter(gz)
+	defer tw.Close()
+	defer gz.Close()
 	for _, file := range metadata.Files {
-		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(file.Path)))
+		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(file.Path)))
 		if err != nil {
 			return nil, err
 		}
 		header := &tar.Header{
 			Name:    file.Path,
-			Mode:    0644,
-			Size:    int64(len(data)),
+			Mode:    0644 | file.Mode,
+			Size:    file.Size,
 			ModTime: time.Unix(0, 0).UTC(),
 			Uid:     0,
 			Gid:     0,
@@ -200,9 +339,14 @@ func buildLayer(dir string, metadata ManifestMetadata) ([]byte, error) {
 			Format:  tar.FormatPAX,
 		}
 		if err := tw.WriteHeader(header); err != nil {
+			f.Close()
 			return nil, err
 		}
-		if _, err := tw.Write(data); err != nil {
+		if _, err := io.CopyBuffer(tw, f, make([]byte, 32<<10)); err != nil {
+			f.Close()
+			return nil, err
+		}
+		if err := f.Close(); err != nil {
 			return nil, err
 		}
 	}
@@ -245,43 +389,16 @@ func ExtractLayer(layer []byte, destination string) (ManifestMetadata, error) {
 }
 
 func ExtractLayerRoot(layer []byte, rooted *os.Root) (ManifestMetadata, error) {
-	gz, err := gzip.NewReader(bytes.NewReader(layer))
-	if err != nil {
+	if err := archiveutil.ExtractGzipTar(bytes.NewReader(layer), rooted, archiveutil.DefaultLimits); err != nil {
 		return ManifestMetadata{}, err
 	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
 	var metadata ManifestMetadata
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
+	if data, err := rooted.ReadFile(MetadataFile); err == nil {
+		if err := json.Unmarshal(data, &metadata); err != nil {
 			return ManifestMetadata{}, err
 		}
-		clean := filepath.ToSlash(filepath.Clean(header.Name))
-		components := strings.Split(clean, "/")
-		rel, pathErr := safepath.Relative(components...)
-		if pathErr != nil || clean == "." || clean != header.Name {
-			return ManifestMetadata{}, fmt.Errorf("unsafe package path %q", header.Name)
-		}
-		data, err := io.ReadAll(tr)
-		if err != nil {
-			return ManifestMetadata{}, err
-		}
-		if header.Name == MetadataFile {
-			if err := json.Unmarshal(data, &metadata); err != nil {
-				return ManifestMetadata{}, err
-			}
-			continue
-		}
-		if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
-			return ManifestMetadata{}, err
-		}
-		if err := rooted.WriteFile(rel, data, 0644); err != nil {
-			return ManifestMetadata{}, err
-		}
+	} else if !os.IsNotExist(err) {
+		return ManifestMetadata{}, err
 	}
 	manifestData, err := rooted.ReadFile(ManifestFile)
 	if err == nil {

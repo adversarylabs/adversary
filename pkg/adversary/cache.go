@@ -9,8 +9,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/adversarylabs/adversary/internal/archiveutil"
+	"github.com/adversarylabs/adversary/internal/publock"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
@@ -36,6 +39,46 @@ func DefaultCache() (Cache, error) {
 }
 
 func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
+	if artifact.Manifest.SchemaVersion != 2 || artifact.Manifest.ArtifactType != oci.ArtifactMediaType || artifact.Manifest.Config.MediaType != oci.EmptyConfigMediaType || len(artifact.Manifest.Layers) != 1 || artifact.Manifest.Layers[0].MediaType != oci.PackageLayerMediaType {
+		return InstallRecord{}, fmt.Errorf("unsupported adversary artifact layout")
+	}
+	var config struct {
+		Name           string   `json:"name"`
+		FullName       string   `json:"full_name"`
+		Version        string   `json:"version"`
+		Runtime        string   `json:"runtime"`
+		RuntimeName    string   `json:"runtime_name"`
+		RuntimeVersion string   `json:"runtime_version"`
+		RuntimeImage   string   `json:"runtime_image"`
+		Entrypoint     []string `json:"entrypoint"`
+		Files          []struct {
+			Path   string `json:"path"`
+			Size   int64  `json:"size"`
+			SHA256 string `json:"sha256"`
+			Mode   int64  `json:"mode"`
+		} `json:"files"`
+	}
+	if configData, ok := artifact.Blobs[artifact.Manifest.Config.Digest]; ok {
+		if err := oci.VerifyDigest(configData, artifact.Manifest.Config.Digest); err != nil {
+			return InstallRecord{}, fmt.Errorf("config: %w", err)
+		}
+		if err := json.Unmarshal(configData, &config); err != nil {
+			return InstallRecord{}, fmt.Errorf("config: %w", err)
+		}
+		for key, want := range map[string]string{"ai.adversary.name": config.Name, "ai.adversary.full_name": config.FullName, "ai.adversary.version": config.Version, "ai.adversary.runtime": config.Runtime, "ai.adversary.runtime.name": config.RuntimeName, "ai.adversary.runtime.version": config.RuntimeVersion, "ai.adversary.runtime.image": config.RuntimeImage} {
+			if artifact.Manifest.Annotations[key] != want {
+				return InstallRecord{}, fmt.Errorf("manifest annotation %s conflicts with config", key)
+			}
+		}
+	} else {
+		return InstallRecord{}, fmt.Errorf("artifact config blob is missing")
+	}
+	if err := oci.VerifyDigest(artifact.Blobs[artifact.Manifest.Layers[0].Digest], artifact.Manifest.Layers[0].Digest); err != nil {
+		return InstallRecord{}, fmt.Errorf("layer: %w", err)
+	}
+	if artifact.ManifestDigest == "" {
+		return InstallRecord{}, fmt.Errorf("manifest digest is required")
+	}
 	var pulledManifest *canonical.Manifest
 	if len(artifact.AdversaryManifest) > 0 {
 		parsed, err := canonical.Parse(artifact.AdversaryManifest)
@@ -44,12 +87,7 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		}
 		pulledManifest = &parsed
 	}
-	var layer []byte
-	for _, descriptor := range artifact.Manifest.Layers {
-		if descriptor.MediaType == oci.PackageLayerMediaType || layer == nil {
-			layer = artifact.Blobs[descriptor.Digest]
-		}
-	}
+	layer := artifact.Blobs[artifact.Manifest.Layers[0].Digest]
 	if len(layer) == 0 {
 		return InstallRecord{}, fmt.Errorf("artifact has no package layer")
 	}
@@ -60,6 +98,11 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if err := os.MkdirAll(c.Root, 0755); err != nil {
 		return InstallRecord{}, err
 	}
+	publicationLock, err := publock.Acquire(c.Root, artifact.ManifestDigest)
+	if err != nil {
+		return InstallRecord{}, err
+	}
+	defer publicationLock.Close()
 	rooted, err := os.OpenRoot(c.Root)
 	if err != nil {
 		return InstallRecord{}, err
@@ -77,12 +120,23 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if err := rooted.Mkdir(stageRel, 0700); err != nil {
 		return InstallRecord{}, err
 	}
-	defer rooted.RemoveAll(stageRel)
+	defer func() {
+		if staged, e := rooted.OpenRoot(stageRel); e == nil {
+			_ = archiveutil.Unseal(staged)
+			_ = staged.Close()
+		}
+		_ = rooted.RemoveAll(stageRel)
+	}()
 	stage, err := rooted.OpenRoot(stageRel)
 	if err != nil {
 		return InstallRecord{}, err
 	}
-	defer stage.Close()
+	stageClosed := false
+	defer func() {
+		if !stageClosed {
+			_ = stage.Close()
+		}
+	}()
 	metadata, err := ExtractLayerRoot(layer, stage)
 	if err != nil {
 		return InstallRecord{}, err
@@ -99,10 +153,63 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if metadata.Name == "" {
 		return InstallRecord{}, fmt.Errorf("%s is required", ManifestFile)
 	}
+	installedManifestData, err := stage.ReadFile(ManifestFile)
+	if err != nil {
+		return InstallRecord{}, err
+	}
+	installedManifest, err := canonical.Parse(installedManifestData)
+	if err != nil {
+		return InstallRecord{}, err
+	}
+	pulledManifest = &installedManifest
+	if config.Name == "" || config.FullName == "" || config.Version == "" || config.Runtime == "" || config.Entrypoint == nil || (config.RuntimeImage == "" && (config.RuntimeName == "" || config.RuntimeVersion == "")) {
+		return InstallRecord{}, fmt.Errorf("config identity and runtime fields are required")
+	}
+	if config.FullName != pulledManifest.Name || (pulledManifest.Version != "" && config.Version != pulledManifest.Version) {
+		return InstallRecord{}, fmt.Errorf("config identity conflicts with adversary.yaml")
+	}
+	if config.RuntimeImage != pulledManifest.Runtime.Image || (pulledManifest.Runtime.Image == "" && (config.RuntimeName != pulledManifest.Runtime.Name || config.RuntimeVersion != pulledManifest.Runtime.Version)) || (pulledManifest.Runtime.Image != "" && ((config.RuntimeName != "" && config.RuntimeName != pulledManifest.Runtime.Name) || (config.RuntimeVersion != "" && config.RuntimeVersion != pulledManifest.Runtime.Version))) || !slices.Equal(config.Entrypoint, pulledManifest.Runtime.Command) {
+		return InstallRecord{}, fmt.Errorf("config runtime conflicts with adversary.yaml")
+	}
+	if config.Files == nil {
+		return InstallRecord{}, fmt.Errorf("config files metadata is required")
+	}
+	{
+		actual, err := snapshotFiles(stage)
+		if err != nil {
+			return InstallRecord{}, err
+		}
+		allowed := map[string]bool{ManifestFile: true, MetadataFile: true}
+		for _, file := range config.Files {
+			if allowed[file.Path] {
+				return InstallRecord{}, fmt.Errorf("duplicate or reserved config file path %q", file.Path)
+			}
+			allowed[file.Path] = true
+			got, ok := actual[file.Path]
+			if !ok || got.size != file.Size || got.mode != os.FileMode(file.Mode)&0111 || fmt.Sprintf("%x", got.digest) != file.SHA256 {
+				return InstallRecord{}, fmt.Errorf("config file metadata mismatch for %q", file.Path)
+			}
+		}
+		for path := range actual {
+			if !allowed[path] {
+				return InstallRecord{}, fmt.Errorf("file %q is not declared by config", path)
+			}
+		}
+	}
 	expectedFiles, err := snapshotFiles(stage)
 	if err != nil {
 		return InstallRecord{}, err
 	}
+	if err := archiveutil.PreparePublish(stage); err != nil {
+		return InstallRecord{}, err
+	}
+	if err := archiveutil.ValidatePrepared(stage); err != nil {
+		return InstallRecord{}, err
+	}
+	if err := stage.Close(); err != nil {
+		return InstallRecord{}, err
+	}
+	stageClosed = true
 	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(destRel)), 0755); err != nil {
 		return InstallRecord{}, err
 	}
@@ -117,9 +224,14 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		if beforeCacheInstallPublish != nil {
 			beforeCacheInstallPublish(rooted, stageRel)
 		}
-		if err := rooted.Rename(stageRel, destRel); err != nil {
+		didPublish, publishErr := archiveutil.PublishSealed(c.Root, rooted, stageRel, destRel)
+		if publishErr != nil {
+			if didPublish {
+				cleanupPublished(rooted, destRel)
+				return InstallRecord{}, publishErr
+			}
 			if validateErr := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); validateErr != nil {
-				return InstallRecord{}, fmt.Errorf("publish artifact: %w", err)
+				return InstallRecord{}, fmt.Errorf("publish artifact: %w", publishErr)
 			}
 		} else {
 			published = true
@@ -127,6 +239,10 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	}
 	if published {
 		if err := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); err != nil {
+			if doomed, openErr := rooted.OpenRoot(destRel); openErr == nil {
+				_ = archiveutil.Unseal(doomed)
+				_ = doomed.Close()
+			}
 			_ = rooted.RemoveAll(destRel)
 			return InstallRecord{}, fmt.Errorf("verify published artifact: %w", err)
 		}
@@ -145,11 +261,20 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	return record, nil
 }
 
+func cleanupPublished(rooted *os.Root, rel string) {
+	if doomed, e := rooted.OpenRoot(rel); e == nil {
+		_ = archiveutil.Unseal(doomed)
+		_ = doomed.Close()
+	}
+	_ = rooted.RemoveAll(rel)
+}
+
 var beforeCacheInstallPublish func(*os.Root, string)
 
 type installedFile struct {
 	size   int64
 	digest [sha256.Size]byte
+	mode   os.FileMode
 }
 
 func snapshotFiles(rooted *os.Root) (map[string]installedFile, error) {
@@ -172,7 +297,7 @@ func snapshotFiles(rooted *os.Root) (map[string]installedFile, error) {
 		if err != nil {
 			return err
 		}
-		files[path] = installedFile{size: int64(len(data)), digest: sha256.Sum256(data)}
+		files[path] = installedFile{size: int64(len(data)), digest: sha256.Sum256(data), mode: info.Mode().Perm() & 0111}
 		return nil
 	})
 	return files, err
@@ -184,6 +309,9 @@ func validateInstalledArtifact(rooted *os.Root, rel string, metadata ManifestMet
 		return err
 	}
 	defer sub.Close()
+	if err := archiveutil.ValidateSealed(sub); err != nil {
+		return err
+	}
 	manifest, err := sub.ReadFile(ManifestFile)
 	if err != nil {
 		return err
@@ -214,14 +342,28 @@ func validateInstalledArtifact(rooted *os.Root, rel string, metadata ManifestMet
 }
 
 func (c Cache) Resolve(name string) (InstallRecord, bool) {
+	aliasLock, err := publock.Acquire(c.Root, "alias\x00"+name)
+	if err != nil {
+		return InstallRecord{}, false
+	}
 	data, err := c.readCacheRecord("index", name)
 	if err != nil {
+		_ = aliasLock.Close()
 		return InstallRecord{}, false
 	}
 	var record InstallRecord
 	if err := json.Unmarshal(data, &record); err != nil {
+		_ = aliasLock.Close()
 		return InstallRecord{}, false
 	}
+	if err := aliasLock.Close(); err != nil {
+		return InstallRecord{}, false
+	}
+	lock, err := publock.Acquire(c.Root, record.ManifestDigest)
+	if err != nil {
+		return InstallRecord{}, false
+	}
+	defer lock.Close()
 	matched := record.Name == name
 	if !matched {
 		for _, alias := range referenceAliases(record.Reference) {
@@ -238,6 +380,11 @@ func (c Cache) ResolveDigest(digest string) (InstallRecord, bool) {
 	if _, err := oci.ParseDigest(digest); err != nil {
 		return InstallRecord{}, false
 	}
+	lock, err := publock.Acquire(c.Root, digest)
+	if err != nil {
+		return InstallRecord{}, false
+	}
+	defer lock.Close()
 	data, err := c.readCacheRecord("digests", digest)
 	if err != nil {
 		return InstallRecord{}, false
@@ -272,7 +419,7 @@ func (c Cache) writeRecord(record InstallRecord) error {
 		if _, err := oci.ParseDigest(record.ManifestDigest); err != nil {
 			return err
 		}
-		if err := rooted.WriteFile("digests/"+cacheKey(record.ManifestDigest)+".json", data, 0644); err != nil {
+		if err := atomicCacheWrite(rooted, "digests/"+cacheKey(record.ManifestDigest)+".json", data); err != nil {
 			return err
 		}
 	}
@@ -280,12 +427,38 @@ func (c Cache) writeRecord(record InstallRecord) error {
 	if record.Reference != "" {
 		keys = append(keys, referenceAliases(record.Reference)...)
 	}
-	for _, key := range keys {
-		if err := rooted.WriteFile("index/"+cacheKey(key)+".json", data, 0644); err != nil {
+	for _, key := range uniqueStrings(keys) {
+		aliasLock, err := publock.Acquire(c.Root, "alias\x00"+key)
+		if err != nil {
 			return err
+		}
+		writeErr := atomicCacheWrite(rooted, "index/"+cacheKey(key)+".json", data)
+		closeErr := aliasLock.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 	}
 	return nil
+}
+
+func atomicCacheWrite(rooted *os.Root, destination string, data []byte) error {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	dir := filepath.ToSlash(filepath.Dir(destination))
+	temp := dir + fmt.Sprintf("/.tmp-%x", nonce)
+	defer rooted.Remove(temp)
+	if err := rooted.WriteFile(temp, data, 0600); err != nil {
+		return err
+	}
+	if err := rooted.Chmod(temp, 0644); err != nil {
+		return err
+	}
+	return rooted.Rename(temp, destination)
 }
 
 func referenceAliases(reference string) []string {
@@ -373,5 +546,13 @@ func (c Cache) validRecord(record InstallRecord) bool {
 	}
 	defer rooted.Close()
 	info, err := rooted.Stat(filepath.ToSlash(filepath.Join("artifacts", d)))
-	return err == nil && info.IsDir()
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	sub, err := rooted.OpenRoot(filepath.ToSlash(filepath.Join("artifacts", d)))
+	if err != nil {
+		return false
+	}
+	defer sub.Close()
+	return archiveutil.ValidateSealed(sub) == nil
 }

@@ -1,12 +1,93 @@
 package pack
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestCreateRejectsSymlink(t *testing.T) {
+	dir := testProject(t)
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "outside-link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := Create(context.Background(), Options{Dir: dir}); err == nil {
+		t.Fatal("pack accepted symlink")
+	}
+}
+
+func TestCreateRejectsSymlinkSwap(t *testing.T) {
+	dir := testProject(t)
+	target := filepath.Join(dir, "dist", "index.js")
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("outside-secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	beforePackOpen = func(rel string) {
+		if rel == "dist/index.js" {
+			beforePackOpen = nil
+			_ = os.Remove(target)
+			_ = os.Symlink(outside, target)
+		}
+	}
+	t.Cleanup(func() { beforePackOpen = nil })
+	if _, err := Create(context.Background(), Options{Dir: dir}); err == nil {
+		t.Fatal("pack accepted symlink swap")
+	}
+}
+
+func TestCreateRejectsManifestSymlinkSwap(t *testing.T) {
+	dir := testProject(t)
+	target := filepath.Join(dir, "adversary.yaml")
+	outside := filepath.Join(t.TempDir(), "adversary.yaml")
+	if err := os.WriteFile(outside, []byte("name: outside/secret\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	beforeManifestRead = func() { beforeManifestRead = nil; _ = os.Remove(target); _ = os.Symlink(outside, target) }
+	t.Cleanup(func() { beforeManifestRead = nil })
+	if _, err := Create(context.Background(), Options{Dir: dir}); err == nil {
+		t.Fatal("pack accepted manifest symlink swap")
+	}
+}
+
+func TestCreatePreservesExecutableMode(t *testing.T) {
+	dir := testProject(t)
+	path := filepath.Join(dir, "run.sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(artifact.Layer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Name == "run.sh" {
+			if h.Mode != 0755 {
+				t.Fatalf("mode=%o", h.Mode)
+			}
+			return
+		}
+	}
+}
 
 func TestCreateIsDeterministic(t *testing.T) {
 	dir := testProject(t)

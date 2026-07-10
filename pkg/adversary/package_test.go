@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/adversarylabs/adversary/pkg/oci"
@@ -55,7 +56,7 @@ func TestCacheInstallRejectsInvalidPulledManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: []byte("name: INVALID\n"), Blobs: map[string][]byte{artifact.LayerDigest: artifact.Layer}}
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: []byte("name: INVALID\n"), Blobs: map[string][]byte{artifact.ConfigDigest: artifact.Config, artifact.LayerDigest: artifact.Layer}}
 	if _, err := (Cache{Root: t.TempDir()}).Install(pulled); err == nil {
 		t.Fatal("Install succeeded")
 	}
@@ -78,6 +79,10 @@ func TestCacheReferenceAliases(t *testing.T) {
 	if err := os.MkdirAll(record.Path, 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(record.Path, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(record.Path, 0755) })
 	if err := cache.writeRecord(record); err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +113,10 @@ func TestCacheKeysDoNotCollideAndLegacyRecordsRemainReadable(t *testing.T) {
 	if err := os.MkdirAll(record.Path, 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(record.Path, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(record.Path, 0755) })
 	data, _ := json.Marshal(record)
 	if err := os.MkdirAll(filepath.Join(cache.Root, "index"), 0755); err != nil {
 		t.Fatal(err)
@@ -171,7 +180,7 @@ func TestCacheInstallRejectsEscapingDigestSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.LayerDigest: artifact.Layer}}
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.ConfigDigest: artifact.Config, artifact.LayerDigest: artifact.Layer}}
 	cache := Cache{Root: t.TempDir()}
 	outside := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cache.Root, "artifacts"), 0755); err != nil {
@@ -201,11 +210,21 @@ func TestCacheInstallRepairsMissingIndexFromValidOrphan(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref, _ := oci.ParseReference("local/test:1.0.0")
-	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.LayerDigest: artifact.Layer}}
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.ConfigDigest: artifact.Config, artifact.LayerDigest: artifact.Layer}}
 	cache := Cache{Root: t.TempDir()}
+	t.Cleanup(func() { makeWritable(cache.Root) })
 	first, err := cache.Install(pulled)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(first.Path, "new"), []byte("x"), 0644); err == nil {
+		t.Fatal("created file in sealed artifact")
+	}
+	if err := os.Remove(filepath.Join(first.Path, "dist/index.js")); err == nil {
+		t.Fatal("deleted file from sealed artifact")
+	}
+	if err := os.Rename(filepath.Join(first.Path, "adversary.yaml"), filepath.Join(first.Path, "moved")); err == nil {
+		t.Fatal("renamed file in sealed artifact")
 	}
 	if err := os.RemoveAll(filepath.Join(cache.Root, "index")); err != nil {
 		t.Fatal(err)
@@ -225,7 +244,7 @@ func TestCacheInstallRepairsMissingIndexFromValidOrphan(t *testing.T) {
 	}
 }
 
-func TestCacheInstallRejectsCorruptOrphan(t *testing.T) {
+func TestCacheInstallRequiresConfigBlob(t *testing.T) {
 	dir := t.TempDir()
 	writePackageFile(t, dir, "adversary.yaml", "name: local/test\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
 	writePackageFile(t, dir, "dist/index.js", "")
@@ -235,12 +254,109 @@ func TestCacheInstallRejectsCorruptOrphan(t *testing.T) {
 	}
 	ref, _ := oci.ParseReference("local/test:1.0.0")
 	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.LayerDigest: artifact.Layer}}
+	if _, err := (Cache{Root: t.TempDir()}).Install(pulled); err == nil {
+		t.Fatal("installed artifact without config")
+	}
+}
+
+func TestCacheInstallImageRuntime(t *testing.T) {
+	dir := t.TempDir()
+	writePackageFile(t, dir, "adversary.yaml", "name: local/image-test\nversion: 1.0.0\nruntime:\n  image: example.com/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  command: [run]\n")
+	writePackageFile(t, dir, "run", "")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := oci.ParseReference("local/image-test:1.0.0")
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.ConfigDigest: artifact.Config, artifact.LayerDigest: artifact.Layer}}
 	cache := Cache{Root: t.TempDir()}
+	t.Cleanup(func() { makeWritable(cache.Root) })
+	if _, err := cache.Install(pulled); err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(artifact.Config, &config); err != nil {
+		t.Fatal(err)
+	}
+	config["runtime_image"] = "example.com/other@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	bad, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badDigest := oci.Digest(bad)
+	pulled.Manifest.Config.Digest = badDigest
+	pulled.Manifest.Config.Size = int64(len(bad))
+	pulled.Manifest.Annotations["ai.adversary.runtime.image"] = config["runtime_image"].(string)
+	pulled.Blobs[badDigest] = bad
+	badCache := Cache{Root: t.TempDir()}
+	if _, err := badCache.Install(pulled); err == nil {
+		t.Fatal("accepted conflicting image runtime")
+	}
+}
+
+func TestConcurrentAliasUpdatesAreAtomic(t *testing.T) {
+	makePulled := func(content string) oci.PulledArtifact {
+		dir := t.TempDir()
+		writePackageFile(t, dir, "adversary.yaml", "name: local/race\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+		writePackageFile(t, dir, "dist/index.js", content)
+		a, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref, _ := oci.ParseReference("local/race:1.0.0")
+		return oci.PulledArtifact{Reference: ref, Manifest: a.OCIManifest, ManifestDigest: a.ManifestDigest, AdversaryManifest: a.AdversaryManifest, Blobs: map[string][]byte{a.ConfigDigest: a.Config, a.LayerDigest: a.Layer}}
+	}
+	one, two := makePulled("one"), makePulled("two")
+	cache := Cache{Root: t.TempDir()}
+	t.Cleanup(func() { makeWritable(cache.Root) })
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, p := range []oci.PulledArtifact{one, two} {
+		wg.Add(1)
+		go func(p oci.PulledArtifact) { defer wg.Done(); _, err := cache.Install(p); errs <- err }(p)
+	}
+	for i := 0; i < 100; i++ {
+		if record, ok := cache.Resolve("local/race"); ok && record.ManifestDigest != one.ManifestDigest && record.ManifestDigest != two.ManifestDigest {
+			t.Fatalf("partial alias record: %#v", record)
+		}
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	record, ok := cache.Resolve("local/race")
+	if !ok || (record.ManifestDigest != one.ManifestDigest && record.ManifestDigest != two.ManifestDigest) {
+		t.Fatalf("invalid final alias: %#v", record)
+	}
+}
+
+func TestCacheInstallRejectsCorruptOrphan(t *testing.T) {
+	dir := t.TempDir()
+	writePackageFile(t, dir, "adversary.yaml", "name: local/test\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writePackageFile(t, dir, "dist/index.js", "")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := oci.ParseReference("local/test:1.0.0")
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.ConfigDigest: artifact.Config, artifact.LayerDigest: artifact.Layer}}
+	cache := Cache{Root: t.TempDir()}
+	t.Cleanup(func() { makeWritable(cache.Root) })
 	record, err := cache.Install(pulled)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(record.Path, ManifestFile), []byte("name: wrong/name\n"), 0644); err != nil {
+	manifestPath := filepath.Join(record.Path, ManifestFile)
+	if info, err := os.Stat(manifestPath); err != nil || info.Mode().Perm()&0222 != 0 {
+		t.Fatalf("installed manifest is not read-only: %v mode=%v", err, info)
+	}
+	if err := os.Chmod(manifestPath, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, []byte("name: wrong/name\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cache.Install(pulled); err == nil {
@@ -257,8 +373,9 @@ func TestCacheInstallRejectsStagePathSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref, _ := oci.ParseReference("local/test:1.0.0")
-	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.LayerDigest: artifact.Layer}}
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.ConfigDigest: artifact.Config, artifact.LayerDigest: artifact.Layer}}
 	cache := Cache{Root: t.TempDir()}
+	t.Cleanup(func() { makeWritable(cache.Root) })
 	outside := t.TempDir()
 	sentinel := filepath.Join(outside, "sentinel")
 	if err := os.WriteFile(sentinel, []byte("safe"), 0644); err != nil {
@@ -296,4 +413,13 @@ func writePackageFile(t *testing.T, dir, rel, content string) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func makeWritable(root string) {
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err == nil {
+			_ = os.Chmod(path, info.Mode().Perm()|0700)
+		}
+		return nil
+	})
 }

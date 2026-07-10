@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -143,7 +142,7 @@ func readBearerToken(client *http.Client, challenge bearerChallenge, scope strin
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
+		data, _ := readLimited(resp.Body, 64<<10, "token error response")
 		text := strings.TrimSpace(string(data))
 		if text == "" {
 			text = resp.Status
@@ -154,7 +153,11 @@ func readBearerToken(client *http.Client, challenge bearerChallenge, scope strin
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	data, err := readLimited(resp.Body, 1<<20, "token response")
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
 		return "", err
 	}
 	if body.Token != "" {

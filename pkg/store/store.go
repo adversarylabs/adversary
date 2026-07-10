@@ -1,13 +1,10 @@
 package store
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/archiveutil"
+	"github.com/adversarylabs/adversary/internal/publock"
 	"github.com/adversarylabs/adversary/internal/safepath"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
@@ -322,6 +321,11 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	if err := os.MkdirAll(s.Root, 0755); err != nil {
 		return "", err
 	}
+	publicationLock, err := publock.Acquire(s.Root, record.Digest)
+	if err != nil {
+		return "", err
+	}
+	defer publicationLock.Close()
 	rooted, err := os.OpenRoot(s.Root)
 	if err != nil {
 		return "", err
@@ -361,41 +365,25 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	if err := rooted.Mkdir(stageRel, 0700); err != nil {
 		return "", err
 	}
-	defer rooted.RemoveAll(stageRel)
+	defer func() {
+		if staged, e := rooted.OpenRoot(stageRel); e == nil {
+			_ = archiveutil.Unseal(staged)
+			_ = staged.Close()
+		}
+		_ = rooted.RemoveAll(stageRel)
+	}()
 	stage, err := rooted.OpenRoot(stageRel)
 	if err != nil {
 		return "", err
 	}
-	defer stage.Close()
-	gz, err := gzip.NewReader(file)
-	if err != nil {
+	stageClosed := false
+	defer func() {
+		if !stageClosed {
+			_ = stage.Close()
+		}
+	}()
+	if err := archiveutil.ExtractGzipTar(file, stage, archiveutil.DefaultLimits); err != nil {
 		return "", err
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-		clean := filepath.ToSlash(filepath.Clean(header.Name))
-		rel, pathErr := safepath.Relative(strings.Split(clean, "/")...)
-		if pathErr != nil || clean == "." || clean != header.Name {
-			return "", fmt.Errorf("unsafe package path %q", header.Name)
-		}
-		if err := stage.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
-			return "", err
-		}
-		data, err := io.ReadAll(tr)
-		if err != nil {
-			return "", err
-		}
-		if err := stage.WriteFile(rel, data, 0644); err != nil {
-			return "", err
-		}
 	}
 	if _, err := stage.Stat("adversary.yaml"); os.IsNotExist(err) {
 		if record.AdversaryManifestDigest == "" {
@@ -425,23 +413,50 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := archiveutil.PreparePublish(stage); err != nil {
+		return "", err
+	}
+	if err := archiveutil.ValidatePrepared(stage); err != nil {
+		return "", err
+	}
+	if err := stage.Close(); err != nil {
+		return "", err
+	}
+	stageClosed = true
 	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(destRel)), 0755); err != nil {
 		return "", err
 	}
 	if beforeStoreMaterializePublish != nil {
 		beforeStoreMaterializePublish(rooted, stageRel)
 	}
-	if err := rooted.Rename(stageRel, destRel); err != nil {
+	didPublish, publishErr := archiveutil.PublishSealed(s.Root, rooted, stageRel, destRel)
+	if publishErr != nil {
+		if didPublish {
+			cleanupMaterialized(rooted, destRel)
+			return "", publishErr
+		}
 		if validateErr := validateMaterialized(rooted, destRel, record, expected); validateErr == nil {
 			return destination, nil
 		}
-		return "", fmt.Errorf("publish materialization: %w", err)
+		return "", fmt.Errorf("publish materialization: %w", publishErr)
 	}
 	if err := validateMaterialized(rooted, destRel, record, expected); err != nil {
+		if doomed, openErr := rooted.OpenRoot(destRel); openErr == nil {
+			_ = archiveutil.Unseal(doomed)
+			_ = doomed.Close()
+		}
 		_ = rooted.RemoveAll(destRel)
 		return "", fmt.Errorf("verify published materialization: %w", err)
 	}
 	return destination, nil
+}
+
+func cleanupMaterialized(rooted *os.Root, rel string) {
+	if doomed, e := rooted.OpenRoot(rel); e == nil {
+		_ = archiveutil.Unseal(doomed)
+		_ = doomed.Close()
+	}
+	_ = rooted.RemoveAll(rel)
 }
 
 var beforeStoreMaterializePublish func(*os.Root, string)
@@ -449,6 +464,7 @@ var beforeStoreMaterializePublish func(*os.Root, string)
 type materializedFile struct {
 	size   int64
 	digest [sha256.Size]byte
+	mode   os.FileMode
 }
 
 func snapshotMaterialized(rooted *os.Root) (map[string]materializedFile, error) {
@@ -471,7 +487,7 @@ func snapshotMaterialized(rooted *os.Root) (map[string]materializedFile, error) 
 		if err != nil {
 			return err
 		}
-		files[path] = materializedFile{size: int64(len(data)), digest: sha256.Sum256(data)}
+		files[path] = materializedFile{size: int64(len(data)), digest: sha256.Sum256(data), mode: info.Mode().Perm() & 0111}
 		return nil
 	})
 	return files, err
@@ -483,6 +499,9 @@ func validateMaterialized(rooted *os.Root, rel string, record Record, expected m
 		return fmt.Errorf("unsafe materialization: %w", err)
 	}
 	defer sub.Close()
+	if err := archiveutil.ValidateSealed(sub); err != nil {
+		return err
+	}
 	data, err := sub.ReadFile("adversary.yaml")
 	if err != nil {
 		return err
@@ -500,7 +519,7 @@ func validateMaterialized(rooted *os.Root, rel string, record Record, expected m
 			return fmt.Errorf("unsafe materialized path %q", file.Path)
 		}
 		got, ok := actual[clean]
-		if !ok || got.size != file.Size || fmt.Sprintf("%x", got.digest) != file.SHA256 {
+		if !ok || got.size != file.Size || got.mode != os.FileMode(file.Mode)&0111 || fmt.Sprintf("%x", got.digest) != file.SHA256 {
 			return fmt.Errorf("materialized file mismatch %q", file.Path)
 		}
 	}

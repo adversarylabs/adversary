@@ -125,6 +125,7 @@ func TestResolveReferenceUnknownRemoteRefDoesNotBecomeExecutableImage(t *testing
 
 func TestResolveReferenceLocalStoreByNameTagAndDigest(t *testing.T) {
 	dataDir := t.TempDir()
+	t.Cleanup(func() { makeManifestTestTreeWritable(dataDir) })
 	t.Setenv("ADVERSARY_DATA_DIR", dataDir)
 	project := t.TempDir()
 	writeFile(t, filepath.Join(project, "adversary.yaml"), `name: local/dockerfile-adversary
@@ -177,6 +178,15 @@ permissions:
 			t.Fatalf("materialized adversary.yaml missing: %v", err)
 		}
 	}
+}
+
+func makeManifestTestTreeWritable(root string) {
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err == nil {
+			_ = os.Chmod(path, info.Mode().Perm()|0700)
+		}
+		return nil
+	})
 }
 
 func TestRepositoryContents(t *testing.T) {
