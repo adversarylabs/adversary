@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/adversarylabs/adversary/pkg/review"
 )
 
 type outputExecutor struct {
@@ -54,6 +56,149 @@ func TestRunFailsClosedForHostManifestRestrictions(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "cannot enforce manifest") {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+func TestEmptyPermissionListsDoNotRequestHostBoundary(t *testing.T) {
+	project := writeRunnerProject(t, "permissions:\n  filesystem:\n    read: []\n    write: []\n  env: []\n")
+	resolved, err := ResolveReference(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateHostExecution(resolved, true, RunOptions{}); err != nil {
+		t.Fatalf("empty lists should have current compatibility semantics: %v", err)
+	}
+}
+
+func TestExplicitPathClassificationRejectsArtifactStorage(t *testing.T) {
+	home := t.TempDir()
+	data := filepath.Join(t.TempDir(), "data")
+	t.Setenv("HOME", home)
+	t.Setenv("ADVERSARY_DATA_DIR", data)
+
+	storeProject := filepath.Join(data, "materialized", "artifact")
+	cacheProject := filepath.Join(home, ".adversary", "cache", "artifacts", "artifact")
+	localProject := filepath.Join(t.TempDir(), "source")
+	for _, project := range []string{storeProject, cacheProject, localProject} {
+		if err := os.MkdirAll(project, 0755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: local/test\nruntime:\n  name: node\n  version: \"22\"\n")
+	}
+
+	for name, project := range map[string]string{"store": storeProject, "cache": cacheProject} {
+		t.Run(name, func(t *testing.T) {
+			explicit, err := isExplicitLocalAdversaryPath(project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if explicit {
+				t.Fatalf("artifact storage path %q classified as explicit local source", project)
+			}
+			err = Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}.Run(context.Background(), RunOptions{AdversaryRef: project, RepoPath: t.TempDir()})
+			if err == nil || !strings.Contains(err.Error(), "--allow-unsafe-host-execution") {
+				t.Fatalf("direct artifact path error = %v", err)
+			}
+		})
+	}
+
+	explicit, err := isExplicitLocalAdversaryPath(localProject)
+	if err != nil || !explicit {
+		t.Fatalf("absolute local path: explicit=%v, error=%v", explicit, err)
+	}
+	parent := filepath.Dir(localProject)
+	t.Chdir(parent)
+	explicit, err = isExplicitLocalAdversaryPath(filepath.Base(localProject))
+	if err != nil || !explicit {
+		t.Fatalf("relative local path: explicit=%v, error=%v", explicit, err)
+	}
+}
+
+func TestDefaultPlatformStorePathRequiresAcknowledgement(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ADVERSARY_DATA_DIR", "")
+	roots, err := artifactStorageRoots()
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(roots[0], "materialized", "artifact")
+	if err := os.MkdirAll(project, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(project, "adversary.yaml"), "name: local/test\nruntime:\n  name: node\n  version: \"22\"\n")
+	explicit, err := isExplicitLocalAdversaryPath(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit {
+		t.Fatalf("default store path %q classified as explicit local source", project)
+	}
+}
+
+func TestArtifactStorageSymlinkCannotBypassAcknowledgement(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ADVERSARY_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+	cacheProject := filepath.Join(home, ".adversary", "cache", "artifacts", "artifact")
+	if err := os.MkdirAll(cacheProject, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(cacheProject, "adversary.yaml"), "name: local/test\nruntime:\n  name: node\n  version: \"22\"\n")
+	link := filepath.Join(t.TempDir(), "apparently-local")
+	if err := os.Symlink(cacheProject, link); err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := isExplicitLocalAdversaryPath(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit {
+		t.Fatal("symlink into pulled cache classified as explicit local source")
+	}
+}
+
+func TestRunJSONTriggerSkipIsOneVersionedEnvelope(t *testing.T) {
+	project := writeRunnerProject(t, "")
+	writeFile(t, filepath.Join(project, "adversary.yaml"), `name: local/test
+triggers:
+  files_changed:
+    - "Dockerfile"
+runtime:
+  name: node
+  version: "22"
+  command:
+    - index.js
+`)
+	repo := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	executor := &recordingExecutor{}
+	err := Runner{Stdout: &stdout, Stderr: &stderr, Git: fakeGitDiffer{files: []string{"README.md"}}, Executor: executor}.Run(context.Background(), RunOptions{
+		AdversaryRef: project, RepoPath: repo, BaseRef: "main", HeadRef: "HEAD", Format: "json", KeepTemp: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.called {
+		t.Fatal("executor was called")
+	}
+	want := "{\n  \"protocolVersion\": 1,\n  \"result\": {\n    \"adversary\": {\n      \"name\": \"local/test\"\n    },\n    \"target\": {\n      \"repository\": " + string(mustJSON(t, repo)) + "\n    },\n    \"positives\": [],\n    \"observations\": [\n      {\n        \"key\": \"run-skipped\",\n        \"summary\": \"No changed files matched triggers.files_changed.\"\n      }\n    ],\n    \"findings\": [],\n    \"suppressed\": {\n      \"observations\": 0,\n      \"findings\": 0\n    }\n  }\n}\n"
+	if stdout.String() != want {
+		t.Fatalf("JSON skip output mismatch\nwant:\n%s\ngot:\n%s", want, stdout.String())
+	}
+	if _, err := review.DecodeRunEnvelope(stdout.Bytes()); err != nil {
+		t.Fatalf("skip envelope is not protocol-valid: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func mustJSON(t *testing.T, value string) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestRunRequiresAcknowledgementForNonPathReference(t *testing.T) {

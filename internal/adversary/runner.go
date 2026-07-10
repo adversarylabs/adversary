@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	adversarycache "github.com/adversarylabs/adversary/pkg/adversary"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/review"
+	localstore "github.com/adversarylabs/adversary/pkg/store"
 )
 
 type RunOptions struct {
@@ -67,7 +69,10 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		mkdirTemp = os.MkdirTemp
 	}
 
-	explicitLocalPath := isExplicitLocalAdversaryPath(opts.AdversaryRef)
+	explicitLocalPath, err := isExplicitLocalAdversaryPath(opts.AdversaryRef)
+	if err != nil {
+		return err
+	}
 	resolved, err := ResolveReference(opts.AdversaryRef)
 	if err != nil {
 		return err
@@ -108,7 +113,26 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	if resolved.Manifest != nil && len(resolved.Manifest.Triggers.FilesChanged) > 0 && (opts.BaseRef != "" || opts.HeadRef != "") {
 		if !ShouldRunForChangedFiles(resolved.Manifest.Triggers.FilesChanged, changedFiles, opts.Force || opts.AllFiles) {
-			fmt.Fprintf(stdout, "Skipped %s: no changed files matched triggers.files_changed\n", resolved.Name)
+			if opts.Format == "json" {
+				skipped := review.RunEnvelope{
+					ProtocolVersion: review.ProtocolVersion,
+					Result: review.ReviewResult{
+						Adversary:    review.ReviewAdversary{Name: resolved.Name},
+						Target:       review.ReviewTarget{Repository: repoPath},
+						Positives:    []review.Note{},
+						Observations: []review.Note{{Key: "run-skipped", Summary: "No changed files matched triggers.files_changed."}},
+						Findings:     []review.Finding{},
+						Suppressed:   review.Suppressed{},
+					},
+				}
+				encoder := json.NewEncoder(stdout)
+				encoder.SetIndent("", "  ")
+				if err := encoder.Encode(skipped); err != nil {
+					return err
+				}
+			} else {
+				fmt.Fprintf(stdout, "Skipped %s: no changed files matched triggers.files_changed\n", resolved.Name)
+			}
 			return nil
 		}
 	}
@@ -210,9 +234,54 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	return nil
 }
 
-func isExplicitLocalAdversaryPath(ref string) bool {
+func isExplicitLocalAdversaryPath(ref string) (bool, error) {
 	info, err := os.Stat(filepath.Join(ref, "adversary.yaml"))
-	return err == nil && !info.IsDir()
+	if err != nil || info.IsDir() {
+		return false, nil
+	}
+	candidate, err := filepath.Abs(ref)
+	if err != nil {
+		return false, fmt.Errorf("classify adversary path: %w", err)
+	}
+	canonicalCandidate, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return false, fmt.Errorf("classify adversary path safely: %w", err)
+	}
+	roots, err := artifactStorageRoots()
+	if err != nil {
+		return false, err
+	}
+	for _, root := range roots {
+		absoluteRoot, err := filepath.Abs(root)
+		if err != nil {
+			return false, fmt.Errorf("classify artifact storage root: %w", err)
+		}
+		if pathWithin(candidate, absoluteRoot) {
+			return false, nil
+		}
+		canonicalRoot, err := filepath.EvalSymlinks(absoluteRoot)
+		if err == nil && pathWithin(canonicalCandidate, canonicalRoot) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func artifactStorageRoots() ([]string, error) {
+	store, err := localstore.Default()
+	if err != nil {
+		return nil, fmt.Errorf("locate local artifact store: %w", err)
+	}
+	cache, err := adversarycache.DefaultCache()
+	if err != nil {
+		return nil, fmt.Errorf("locate pulled artifact cache: %w", err)
+	}
+	return []string{store.Root, cache.Root}, nil
+}
+
+func pathWithin(path, root string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func validateHostExecution(resolved ResolvedAdversary, explicitLocalPath bool, opts RunOptions) error {
