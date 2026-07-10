@@ -78,6 +78,41 @@ func TestConfigStoreRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestRegistryCredentialLookupRejectsAmbiguousScopedRecords(t *testing.T) {
+	store := ConfigStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	for _, key := range []string{AuthKey("https://one.example/api", "default"), AuthKey("https://two.example/api", "work")} {
+		if err := store.SetAuth(key, Auth{Token: key, RegistryHost: ResolveRegistryHost()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := store.AuthE(ResolveRegistryHost()); err == nil {
+		t.Fatal("expected ambiguous registry credential error")
+	}
+	if _, ok := store.Credentials(ResolveRegistryHost()); ok {
+		t.Fatal("compatibility lookup must fail closed")
+	}
+}
+
+func TestSaveIsLockedAndRepairsModes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "credentials")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	store := ConfigStore{Path: filepath.Join(dir, "config.json")}
+	if err := store.Save(Config{Auths: map[string]Auth{"key": {Token: "token"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{dir: 0700, store.Path: 0600, store.Path + ".lock": 0600} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != want {
+			t.Fatalf("%s mode = %o", path, info.Mode().Perm())
+		}
+	}
+}
+
 func TestConfigStoreTokenStorageAndLogoutCleanup(t *testing.T) {
 	store := ConfigStore{Path: filepath.Join(t.TempDir(), "config.json")}
 	auth := Auth{

@@ -55,8 +55,8 @@ func DefaultConfigStore() (ConfigStore, error) {
 func (s ConfigStore) rejectSymlink() error {
 	for _, p := range []string{filepath.Dir(s.Path), s.Path} {
 		info, err := os.Lstat(p)
-		if err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("refusing symlinked credential path %q", p)
+		if err == nil && (info.Mode()&os.ModeSymlink != 0 || p == filepath.Dir(s.Path) && !info.IsDir() || p == s.Path && !info.Mode().IsRegular()) {
+			return fmt.Errorf("refusing non-regular credential path %q", p)
 		}
 		if err != nil && !os.IsNotExist(err) {
 			return err
@@ -69,7 +69,10 @@ func (s ConfigStore) Load() (Config, error) {
 	if err := s.rejectSymlink(); err != nil {
 		return Config{}, err
 	}
-	data, err := os.ReadFile(s.Path)
+	if err := os.Chmod(filepath.Dir(s.Path), 0700); err != nil && !os.IsNotExist(err) {
+		return Config{}, err
+	}
+	data, err := readCredentialFile(s.Path)
 	if os.IsNotExist(err) {
 		return Config{Auths: map[string]Auth{}}, nil
 	}
@@ -87,6 +90,10 @@ func (s ConfigStore) Load() (Config, error) {
 }
 
 func (s ConfigStore) Save(config Config) error {
+	return s.locked(func(current *Config) error { *current = config; return nil })
+}
+
+func (s ConfigStore) saveUnlocked(config Config) error {
 	if err := s.rejectSymlink(); err != nil {
 		return err
 	}
@@ -138,6 +145,12 @@ func (s ConfigStore) locked(fn func(*Config) error) error {
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0700); err != nil {
 		return err
 	}
+	if err := s.rejectSymlink(); err != nil {
+		return err
+	}
+	if err := os.Chmod(filepath.Dir(s.Path), 0700); err != nil {
+		return err
+	}
 	if info, err := os.Lstat(s.Path + ".lock"); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refusing symlinked credential lock %q", s.Path+".lock")
 	} else if err != nil && !os.IsNotExist(err) {
@@ -151,7 +164,7 @@ func (s ConfigStore) locked(fn func(*Config) error) error {
 		if err := fn(&c); err != nil {
 			return err
 		}
-		return s.Save(c)
+		return s.saveUnlocked(c)
 	})
 }
 
@@ -178,16 +191,40 @@ func (s ConfigStore) AuthE(key string) (Auth, bool, error) {
 	}
 	a, ok := c.Auths[key]
 	if !ok && key == ResolveRegistryHost() {
+		var match Auth
+		matches := 0
 		for _, candidate := range c.Auths {
 			if candidate.RegistryHost == key {
-				a, ok = candidate, true
-				break
+				match, matches = candidate, matches+1
 			}
+		}
+		if matches > 1 {
+			return Auth{}, false, fmt.Errorf("ambiguous credentials for registry %q", key)
+		}
+		if matches == 1 {
+			a, ok = match, true
 		}
 	}
 	if !ok || a.Token == "" {
 		return Auth{}, false, nil
 	}
+	return validateAuth(a)
+}
+
+// ExactAuthE never performs registry-host discovery and is used for API authorization.
+func (s ConfigStore) ExactAuthE(key string) (Auth, bool, error) {
+	c, err := s.Load()
+	if err != nil {
+		return Auth{}, false, err
+	}
+	a, ok := c.Auths[key]
+	if !ok || a.Token == "" {
+		return Auth{}, false, nil
+	}
+	return validateAuth(a)
+}
+
+func validateAuth(a Auth) (Auth, bool, error) {
 	if a.ExpiresAt != "" {
 		exp, err := time.Parse(time.RFC3339, a.ExpiresAt)
 		if err != nil {

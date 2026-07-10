@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -344,7 +345,7 @@ func TestDefaultAdversaryLabsPushRefUsesStoredNamespace(t *testing.T) {
 	ref, err := defaultAdversaryLabsPushRef(context.Background(), "dockerfile-reviewer:0.1.0", store.Record{
 		Name:    "dockerfile-reviewer",
 		Version: "0.1.0",
-	}, "")
+	}, "", "default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +362,7 @@ func TestDefaultPushRefUsesLibraryForRegistryHostOverrideWithoutLogin(t *testing
 	ref, err := defaultAdversaryLabsPushRef(context.Background(), "dockerfile-reviewer:0.1.0", store.Record{
 		Name:    "dockerfile-reviewer",
 		Version: "0.1.0",
-	}, "")
+	}, "", "default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -898,4 +899,124 @@ func TestReadPasswordLine(t *testing.T) {
 	if _, err := readPasswordLine(strings.NewReader("\n")); err == nil {
 		t.Fatal("expected empty password error")
 	}
+}
+
+func TestBrowserCallbackOAuthErrorCompletesOnce(t *testing.T) {
+	results := make(chan browserLoginOutcome, 1)
+	h := browserCallbackHandler("expected", results, func(string) (adversarylabs.TokenResponse, error) {
+		t.Fatal("exchange called")
+		return adversarylabs.TokenResponse{}, nil
+	})
+	req := httptest.NewRequest(http.MethodGet, "/?error=access_denied&state=expected", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := <-results; got.err == nil {
+		t.Fatal("expected OAuth error outcome")
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("repeat status = %d", rec.Code)
+	}
+}
+
+func TestScopedAuthNeverCrossesServiceOrProfile(t *testing.T) {
+	store := adversarylabs.ConfigStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	for _, tc := range []struct{ api, profile, token string }{{"https://one.example/api", "default", "one"}, {"https://two.example/api", "work", "two"}} {
+		if err := store.SetAuth(adversarylabs.AuthKey(tc.api, tc.profile), adversarylabs.Auth{Token: tc.token, RegistryHost: adversarylabs.ResolveRegistryHost()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ api, profile, token string }{{"https://one.example/api", "default", "one"}, {"https://two.example/api", "work", "two"}} {
+		auth, ok, err := scopedAuth(store, tc.api, tc.profile)
+		if err != nil || !ok || auth.Token != tc.token {
+			t.Fatalf("%s/%s = %#v,%v,%v", tc.api, tc.profile, auth, ok, err)
+		}
+	}
+	if _, ok, err := scopedAuth(store, "https://one.example/api", "work"); err != nil || ok {
+		t.Fatalf("cross-profile credential: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := scopedAuth(store, "https://three.example/api", "default"); err != nil || ok {
+		t.Fatalf("cross-service credential: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestLoginWithDeviceRendersInstructionsAndToken(t *testing.T) {
+	client := adversarylabs.Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: cmdRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/device/code") {
+			return jsonHTTPResponse(http.StatusOK, `{"device_code":"device","user_code":"ABCD","verification_uri":"https://verify.test","expires_in":60}`), nil
+		}
+		return jsonHTTPResponse(http.StatusOK, `{"token":"token"}`), nil
+	})}}
+	var out bytes.Buffer
+	token, err := loginWithDevice(context.Background(), &out, client, &loginOptions{ci: true})
+	if err != nil || token.Token != "token" {
+		t.Fatalf("token=%#v err=%v", token, err)
+	}
+	if !strings.Contains(out.String(), "https://verify.test") || !strings.Contains(out.String(), "ABCD") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestLoginCISelectsDeviceFlowAndProfile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var deviceCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/v1/auth/device/code":
+			deviceCalls++
+			fmt.Fprint(w, `{"device_code":"device","user_code":"ABCD","verification_uri":"https://verify.test","expires_in":60}`)
+		case "/v1/auth/device/token":
+			fmt.Fprint(w, `{"token":"ci-token"}`)
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	defer server.Close()
+	var out, errOut bytes.Buffer
+	cmd := NewRootCommand(&out, &errOut)
+	cmd.SetArgs([]string{"--api-url", server.URL, "--profile", "ci", "login", "--ci"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if deviceCalls != 1 {
+		t.Fatalf("device calls = %d", deviceCalls)
+	}
+	store, _ := adversarylabs.DefaultConfigStore()
+	auth, ok, err := store.AuthE(adversarylabs.AuthKey(server.URL, "ci"))
+	if err != nil || !ok || auth.Token != "ci-token" {
+		t.Fatalf("stored auth=%#v ok=%v err=%v", auth, ok, err)
+	}
+}
+
+func TestWaitForLoginCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := adversarylabs.Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: cmdRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusBadGateway, `{}`), nil
+	})}}
+	_, err := waitForLogin(ctx, client, adversarylabs.DeviceLogin{DeviceCode: "device", ExpiresIn: 60, Interval: 1})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWaitForLoginExpiry(t *testing.T) {
+	client := adversarylabs.Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: cmdRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusBadGateway, `{}`), nil
+	})}}
+	_, err := waitForLogin(context.Background(), client, adversarylabs.DeviceLogin{DeviceCode: "device", ExpiresIn: 1, Interval: 1})
+	if err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+type cmdRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f cmdRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+func jsonHTTPResponse(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Status: http.StatusText(status), Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
 }

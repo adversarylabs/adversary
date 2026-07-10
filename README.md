@@ -184,12 +184,13 @@ Pulled artifacts are cached under `~/.adversary/cache/` by digest and registered
 adversary login
 adversary login --name "Marc's MacBook Pro"
 adversary login --ci
+adversary login --device
 adversary login --email-address marc@example.com
-adversary login --email-address marc@example.com --password "$ADVERSARY_PASSWORD"
+printf '%s\n' "$ADVERSARY_PASSWORD" | adversary login --email-address marc@example.com --password-stdin
 adversary login --api-url http://localhost:3000/api
 ```
 
-Without `--email-address`, login opens a browser and waits for the Adversary Labs app to redirect back to a temporary localhost callback. With `--email-address` but no `--password`, the CLI prompts for the password.
+Without `--email-address`, login opens a browser and waits for the Adversary Labs app to redirect back to a temporary localhost callback. Use `--device` for headless environments; `--ci` also uses the device flow. With `--email-address`, the CLI securely prompts unless `--password-stdin` is supplied. `--profile` selects an isolated credential profile and defaults to `default`.
 The stored token is used for Adversary Labs registry access, private artifacts, search, and future SaaS API calls. Tokens are never printed by the CLI.
 The default SaaS endpoint is `https://adversarylabs.ai/api`. For local development, set `ADVERSARY_API_URL` or pass `--api-url`.
 

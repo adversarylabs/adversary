@@ -43,6 +43,7 @@ func Execute() error {
 
 func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	var apiURL string
+	var profile string
 	cmd := &cobra.Command{
 		Use:           "adversary",
 		Short:         "Run source-code adversaries against a local repository",
@@ -55,6 +56,7 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	cmd.PersistentFlags().StringVar(&apiURL, "api-url", adversarylabs.ResolveAPIURL(""), "Adversary Labs API endpoint (or ADVERSARY_API_URL)")
+	cmd.PersistentFlags().StringVar(&profile, "profile", "default", "credential profile")
 
 	cmd.AddCommand(newRunCommand(stdout, stderr))
 	cmd.AddCommand(newInspectCommand(stdout, stderr))
@@ -63,12 +65,12 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(newLSCommand(stdout, "ls"))
 	cmd.AddCommand(newLSCommand(stdout, "list"))
 	cmd.AddCommand(newVersionCommand(stdout))
-	cmd.AddCommand(newLoginCommand(stdout, stderr, &apiURL))
-	cmd.AddCommand(newLogoutCommand(stdout, stderr, &apiURL))
-	cmd.AddCommand(newPushCommand(stdout, stderr, &apiURL))
-	cmd.AddCommand(newPullCommand(stdout, stderr, &apiURL))
-	cmd.AddCommand(newSearchCommand(stdout, stderr, &apiURL))
-	cmd.AddCommand(newWhoamiCommand(stdout, stderr, &apiURL))
+	cmd.AddCommand(newLoginCommand(stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newLogoutCommand(stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newPushCommand(stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newPullCommand(stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newSearchCommand(stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newWhoamiCommand(stdout, stderr, &apiURL, &profile))
 	return cmd
 }
 
@@ -99,6 +101,7 @@ type loginOptions struct {
 	name          string
 	emailAddress  string
 	passwordStdin bool
+	device        bool
 }
 
 type logoutOptions struct {
@@ -354,7 +357,7 @@ func newVersionCommand(stdout io.Writer) *cobra.Command {
 	}
 }
 
-func newLoginCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
+func newLoginCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	opts := &loginOptions{}
 	cmd := &cobra.Command{
 		Use:   "login",
@@ -368,6 +371,9 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := adversarylabs.DefaultConfigStore()
 			if err != nil {
+				return err
+			}
+			if _, _, err := store.ExactAuthE(adversarylabs.AuthKey(valueOf(apiURL), valueOf(profile))); err != nil {
 				return err
 			}
 			client := adversarylabs.NewClientWithBaseURL(store, valueOf(apiURL))
@@ -395,13 +401,18 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 				if err != nil {
 					return err
 				}
+			} else if opts.ci || opts.device {
+				token, err = loginWithDevice(cmd.Context(), stdout, client, opts)
+				if err != nil {
+					return err
+				}
 			} else {
 				token, err = loginWithBrowser(cmd.Context(), stdout, client, opts)
 				if err != nil {
 					return err
 				}
 			}
-			if err := store.SetAuth(adversarylabs.AuthKey(valueOf(apiURL), "default"), adversarylabs.Auth{
+			if err := store.SetAuth(adversarylabs.AuthKey(valueOf(apiURL), valueOf(profile)), adversarylabs.Auth{
 				Token:             token.Token,
 				ClientID:          token.ClientID,
 				ExpiresAt:         token.ExpiresAt,
@@ -418,13 +429,14 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.ci, "ci", false, "request a short-lived automation token")
+	cmd.Flags().BoolVar(&opts.device, "device", false, "use device login for a headless environment")
 	cmd.Flags().StringVar(&opts.name, "name", "", "friendly name for this client")
 	cmd.Flags().StringVar(&opts.emailAddress, "email-address", "", "email address for password login")
 	cmd.Flags().BoolVar(&opts.passwordStdin, "password-stdin", false, "read the password from standard input")
 	return cmd
 }
 
-func newLogoutCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
+func newLogoutCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	opts := &logoutOptions{}
 	cmd := &cobra.Command{
 		Use:   "logout",
@@ -437,13 +449,13 @@ func newLogoutCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			key := adversarylabs.AuthKey(valueOf(apiURL), "default")
-			auth, ok, err := store.AuthE(key)
+			key := adversarylabs.AuthKey(valueOf(apiURL), valueOf(profile))
+			auth, ok, err := store.ExactAuthE(key)
 			if err != nil {
 				return err
 			}
-			if !ok { // migration fallback
-				auth, ok, err = store.AuthE(adversarylabs.ResolveRegistryHost())
+			if !ok && key == adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, "default") { // exact legacy migration fallback
+				auth, ok, err = store.ExactAuthE(adversarylabs.ResolveRegistryHost())
 				key = adversarylabs.ResolveRegistryHost()
 				if err != nil {
 					return err
@@ -470,7 +482,7 @@ func newLogoutCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 	return cmd
 }
 
-func newPushCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
+func newPushCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "push <local-ref> [remote-ref]",
 		Short: "Push a locally packed adversary to an OCI registry",
@@ -500,7 +512,7 @@ func newPushCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 				return err
 			}
 			if len(args) == 1 && !hasExplicitRegistry(localRef) {
-				remoteRef, err = defaultAdversaryLabsPushRef(cmd.Context(), localRef, record, valueOf(apiURL))
+				remoteRef, err = defaultAdversaryLabsPushRef(cmd.Context(), localRef, record, valueOf(apiURL), valueOf(profile))
 				if err != nil {
 					return err
 				}
@@ -513,7 +525,10 @@ func newPushCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			registry := newOCIRegistry(valueOf(apiURL))
+			registry, err := newOCIRegistry(valueOf(apiURL), valueOf(profile))
+			if err != nil {
+				return err
+			}
 			if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
 				registry.PlainHTTP = true
 			}
@@ -547,7 +562,7 @@ func newPushCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 	}
 }
 
-func newPullCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
+func newPullCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "pull <reference>",
 		Short: "Pull and install an adversary from an OCI registry",
@@ -561,7 +576,10 @@ func newPullCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			registry := newOCIRegistry(valueOf(apiURL))
+			registry, err := newOCIRegistry(valueOf(apiURL), valueOf(profile))
+			if err != nil {
+				return err
+			}
 			if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
 				registry.PlainHTTP = true
 			}
@@ -594,7 +612,7 @@ func newPullCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 	}
 }
 
-func newSearchCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
+func newSearchCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search Adversary Labs adversaries",
@@ -607,7 +625,7 @@ func newSearchCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 				return err
 			}
 			var token string
-			auth, ok, err := store.AuthE(adversarylabs.ResolveRegistryHost())
+			auth, ok, err := scopedAuth(store, valueOf(apiURL), valueOf(profile))
 			if err != nil {
 				return err
 			}
@@ -643,7 +661,7 @@ func newSearchCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 	}
 }
 
-func newWhoamiCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
+func newWhoamiCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "whoami",
 		Short: "Show the current Adversary Labs login",
@@ -655,7 +673,7 @@ func newWhoamiCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			auth, ok, err := store.AuthE(adversarylabs.ResolveRegistryHost())
+			auth, ok, err := scopedAuth(store, valueOf(apiURL), valueOf(profile))
 			if err != nil {
 				return err
 			}
@@ -826,6 +844,22 @@ func waitForLogin(ctx context.Context, client adversarylabs.Client, login advers
 	}
 }
 
+func loginWithDevice(ctx context.Context, stdout io.Writer, client adversarylabs.Client, opts *loginOptions) (adversarylabs.TokenResponse, error) {
+	login, err := client.BeginLogin(ctx, adversarylabs.LoginOptions{Name: opts.name, CI: opts.ci})
+	if err != nil {
+		return adversarylabs.TokenResponse{}, err
+	}
+	verificationURL := login.VerificationURIComplete
+	if verificationURL == "" {
+		verificationURL = login.VerificationURI
+	}
+	if verificationURL == "" || login.UserCode == "" {
+		return adversarylabs.TokenResponse{}, fmt.Errorf("device login response was missing verification instructions")
+	}
+	fmt.Fprintf(stdout, "Open %s\n\nEnter code: %s\n\nWaiting for authentication...\n", verificationURL, login.UserCode)
+	return waitForLogin(ctx, client, login)
+}
+
 func loginWithBrowser(ctx context.Context, stdout io.Writer, client adversarylabs.Client, opts *loginOptions) (adversarylabs.TokenResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
@@ -921,6 +955,18 @@ func browserCallbackHandler(state string, result chan<- browserLoginOutcome, exc
 			http.Error(w, "Invalid login state.", http.StatusBadRequest)
 			return
 		}
+		if query.Get("error") != "" {
+			handled := false
+			once.Do(func() {
+				handled = true
+				publishBrowserOutcome(result, browserLoginOutcome{err: fmt.Errorf("login authorization failed")})
+				http.Error(w, "Login failed. You can close this window.", http.StatusBadRequest)
+			})
+			if !handled {
+				http.Error(w, "Login callback was already handled.", http.StatusConflict)
+			}
+			return
+		}
 		code := query.Get("code")
 		if code == "" || query.Get("token") != "" {
 			http.Error(w, "Login callback was missing a code.", http.StatusBadRequest)
@@ -966,6 +1012,14 @@ func readPasswordLine(r io.Reader) (string, error) {
 
 func promptPassword(stderr io.Writer) (string, error) {
 	fmt.Fprint(stderr, "Password: ")
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		password, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(stderr)
+		return string(password), err
+	}
+	if runtime.GOOS == "windows" {
+		return "", fmt.Errorf("no interactive terminal; use --password-stdin")
+	}
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return "", fmt.Errorf("no interactive terminal; use --password-stdin")
@@ -990,7 +1044,28 @@ func openBrowser(url string) error {
 	}
 }
 
-func newOCIRegistry(apiURL string) *oci.HTTPRegistry {
+type scopedCredentialStore struct{ registry, token string }
+
+func (s scopedCredentialStore) Credentials(registry string) (oci.Credentials, bool) {
+	if registry != s.registry || s.token == "" {
+		return oci.Credentials{}, false
+	}
+	return oci.Credentials{Token: s.token}, true
+}
+
+func scopedAuth(store adversarylabs.ConfigStore, apiURL, profile string) (adversarylabs.Auth, bool, error) {
+	key := adversarylabs.AuthKey(apiURL, profile)
+	auth, ok, err := store.ExactAuthE(key)
+	if err != nil || ok {
+		return auth, ok, err
+	}
+	if key == adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, "default") {
+		return store.ExactAuthE(adversarylabs.ResolveRegistryHost())
+	}
+	return adversarylabs.Auth{}, false, nil
+}
+
+func newOCIRegistry(apiURL, profile string) (*oci.HTTPRegistry, error) {
 	registry := oci.NewHTTPRegistry()
 	if strings.TrimSpace(os.Getenv("ADVERSARY_OCI_DEBUG")) != "" {
 		registry.Debug = os.Stderr
@@ -998,10 +1073,17 @@ func newOCIRegistry(apiURL string) *oci.HTTPRegistry {
 	registry.BearerRealm = registryAuthRealm(apiURL)
 	registry.BearerService = adversarylabs.ResolveRegistryHost()
 	store, err := adversarylabs.DefaultConfigStore()
-	if err == nil {
-		registry.Credentials = oci.ChainCredentialStore{store, oci.DockerCredentialStore{}}
+	if err != nil {
+		return nil, err
 	}
-	return registry
+	auth, ok, err := scopedAuth(store, apiURL, profile)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		registry.Credentials = oci.ChainCredentialStore{scopedCredentialStore{registry: adversarylabs.ResolveRegistryHost(), token: auth.Token}, oci.DockerCredentialStore{}}
+	}
+	return registry, nil
 }
 
 func registryAuthRealm(apiURL string) string {
@@ -1048,13 +1130,13 @@ func hasExplicitRegistry(ref string) bool {
 	return strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost"
 }
 
-func defaultAdversaryLabsPushRef(ctx context.Context, localRef string, record store.Record, apiURL string) (string, error) {
+func defaultAdversaryLabsPushRef(ctx context.Context, localRef string, record store.Record, apiURL, profile string) (string, error) {
 	configStore, err := adversarylabs.DefaultConfigStore()
 	if err != nil {
 		return "", err
 	}
 	registryHost := adversarylabs.ResolveRegistryHost()
-	auth, ok, err := configStore.AuthE(registryHost)
+	auth, ok, err := scopedAuth(configStore, apiURL, profile)
 	if err != nil {
 		return "", err
 	}
