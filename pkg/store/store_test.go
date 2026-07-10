@@ -73,6 +73,23 @@ export class Adversary {
     const repoPath = input.source.path;
   }
 }
+
+func TestPutRejectsManifestMetadataMismatch(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
+	if err != nil { t.Fatal(err) }
+	artifact.Name = "another-name"
+	if _, err := (Store{Root: t.TempDir()}).Put(artifact); err == nil { t.Fatal("Put succeeded") }
+}
+
+func TestMaterializeRejectsTamperedPreexistingManifest(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
+	if err != nil { t.Fatal(err) }
+	localStore := Store{Root: t.TempDir()}
+	record, err := localStore.Put(artifact); if err != nil { t.Fatal(err) }
+	path, err := localStore.MaterializeRecord(record); if err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(path, "adversary.yaml"), []byte("name: wrong/name\n"), 0644); err != nil { t.Fatal(err) }
+	if _, err := localStore.MaterializeRecord(record); err == nil { t.Fatal("MaterializeRecord accepted tampered manifest") }
+}
 export async function parseInput(path = DEFAULT_INPUT_PATH) {}
 export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 `)

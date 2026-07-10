@@ -66,6 +66,56 @@ func TestParseSizeBound(t *testing.T) {
 	}
 }
 
+func TestSemanticVersionParity(t *testing.T) {
+	validVersions := []string{"0.0.0", "1.2.3", "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-0A", "1.0.0+build.7", "1.0.0-beta+exp.sha"}
+	invalidVersions := []string{"01.2.3", "1.02.3", "1.2.03", "1.2", "1.2.3-", "1.2.3-01", "1.2.3-alpha..1", "1.2.3+", "1.2.3+build..1"}
+	for _, version := range validVersions {
+		t.Run("valid/"+version, func(t *testing.T) {
+			if _, err := Parse([]byte(strings.Replace(valid, "1.2.3", version, 1))); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	for _, version := range invalidVersions {
+		t.Run("invalid/"+version, func(t *testing.T) {
+			if _, err := Parse([]byte(strings.Replace(valid, "1.2.3", version, 1))); err == nil {
+				t.Fatal("Parse succeeded")
+			}
+		})
+	}
+}
+
+func TestRuntimeImageStillValidatesOptionalFields(t *testing.T) {
+	base := strings.Replace(valid, "  name: node\n  version: \"22\"", "  image: example.invalid/adversary:1", 1)
+	if _, err := Parse([]byte(base)); err != nil {
+		t.Fatal(err)
+	}
+	for name, replacement := range map[string]string{
+		"name":        "  image: example.invalid/adversary:1\n  name: shell",
+		"version":     "  image: example.invalid/adversary:1\n  version: \" 22\"",
+		"empty image": "  image: \"\"",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(strings.Replace(base, "  image: example.invalid/adversary:1", replacement, 1))); err == nil {
+				t.Fatal("Parse succeeded")
+			}
+		})
+	}
+}
+
+func TestOptionalFieldsRejectPresentEmptyValues(t *testing.T) {
+	for name, input := range map[string]string{
+		"version":         strings.Replace(valid, "version: 1.2.3", `version: ""`, 1),
+		"findings format": strings.Replace(valid, "format: adversary.review.v1", `format: ""`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("Parse succeeded")
+			}
+		})
+	}
+}
+
 func TestPublishedFixtures(t *testing.T) {
 	validFixture, err := os.ReadFile(filepath.Join("..", "..", "schema", "fixtures", "adversary.manifest.v1.valid.yaml"))
 	if err != nil {

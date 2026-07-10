@@ -22,6 +22,8 @@ var supportedSDKs = map[string]string{
 	"typescript": "TypeScript",
 }
 
+var publishProject = os.Rename
+
 type Options struct {
 	Destination string
 	SDK         string
@@ -63,20 +65,16 @@ func Create(opts Options) (Result, error) {
 	if err := os.MkdirAll(parent, 0755); err != nil {
 		return Result{}, fmt.Errorf("create destination parent: %w", err)
 	}
-	// Mkdir is the atomic ownership claim. From here on, cleanup is restricted to
-	// the path this invocation exclusively created.
-	if err := os.Mkdir(destination, 0755); err != nil {
-		if os.IsExist(err) {
-			return Result{}, fmt.Errorf("destination already exists: %s", destination)
-		}
-		return Result{}, fmt.Errorf("claim destination: %w", err)
+	if _, err := os.Lstat(destination); err == nil {
+		return Result{}, fmt.Errorf("destination already exists: %s", destination)
+	} else if !os.IsNotExist(err) {
+		return Result{}, err
 	}
-	owned := true
-	defer func() {
-		if owned {
-			_ = os.RemoveAll(destination)
-		}
-	}()
+	staging, err := os.MkdirTemp(parent, ".adversary-init-*")
+	if err != nil {
+		return Result{}, fmt.Errorf("create project staging directory: %w", err)
+	}
+	defer os.RemoveAll(staging)
 	values := map[string]string{
 		"name":        projectName,
 		"description": "Replace with a description.",
@@ -84,7 +82,7 @@ func Create(opts Options) (Result, error) {
 		"sdk":         sdk,
 	}
 
-	err := fs.WalkDir(projecttemplates.FS, templateRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(projecttemplates.FS, templateRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -92,7 +90,7 @@ func Create(opts Options) (Result, error) {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(destination, rel)
+		target := filepath.Join(staging, rel)
 		if rel == "." {
 			return nil
 		}
@@ -113,13 +111,21 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// Rename publishes the fully rendered sibling in one filesystem operation.
+	// A concurrently created non-empty destination cannot be replaced by a
+	// directory rename and is left untouched.
+	if err := publishProject(staging, destination); err != nil {
+		if _, statErr := os.Lstat(destination); statErr == nil {
+			return Result{}, fmt.Errorf("destination already exists: %s", destination)
+		}
+		return Result{}, fmt.Errorf("publish generated project: %w", err)
+	}
 
 	abs, err := filepath.Abs(destination)
 	if err != nil {
 		return Result{}, err
 	}
 
-	owned = false
 	return Result{
 		Location: abs,
 		SDK:      sdkLabel,

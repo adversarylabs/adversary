@@ -272,14 +272,18 @@ func ExtractLayer(layer []byte, destination string) (ManifestMetadata, error) {
 			return ManifestMetadata{}, err
 		}
 	}
-	if metadata.Name == "" {
-		manifestData, err := os.ReadFile(filepath.Join(destination, ManifestFile))
-		if err == nil {
-			if m, parseErr := canonical.Parse(manifestData); parseErr == nil {
-				metadata.Name = m.Name
-				metadata.Version = m.Version
-			}
+	manifestData, err := os.ReadFile(filepath.Join(destination, ManifestFile))
+	if err == nil {
+		m, parseErr := canonical.Parse(manifestData)
+		if parseErr != nil {
+			return ManifestMetadata{}, fmt.Errorf("parse extracted %s: %w", ManifestFile, parseErr)
 		}
+		if metadata.Name != "" && (metadata.Name != m.Name || metadata.Version != m.Version) {
+			return ManifestMetadata{}, fmt.Errorf("extracted manifest identity %s@%s does not match package metadata %s@%s", m.Name, m.Version, metadata.Name, metadata.Version)
+		}
+		metadata.Name, metadata.Version = m.Name, m.Version
+	} else if !os.IsNotExist(err) {
+		return ManifestMetadata{}, err
 	}
 	return metadata, nil
 }
@@ -294,15 +298,4 @@ func shouldSkip(rel string, entry fs.DirEntry) bool {
 		return true
 	}
 	return false
-}
-
-// parseManifestIdentity remains only for the legacy cache fallback. All parsing
-// is delegated to the canonical parser; invalid manifests yield no identity and
-// are rejected by the caller's existing required-manifest check.
-func parseManifestIdentity(text string) (string, string) {
-	m, err := canonical.Parse([]byte(text))
-	if err != nil {
-		return "", ""
-	}
-	return m.Name, m.Version
 }

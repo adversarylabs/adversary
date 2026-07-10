@@ -47,6 +47,52 @@ func TestCreateRejectsUnsafeProjectNamesWithoutCreatingDestination(t *testing.T)
 	}
 }
 
+func TestCreateNeverRemovesExistingDestinationData(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "existing-project")
+	if err := os.Mkdir(dst, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(dst, "another-actors-data")
+	if err := os.WriteFile(sentinel, []byte("preserve me"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Create(Options{Destination: dst}); err == nil {
+		t.Fatal("Create succeeded")
+	}
+	data, err := os.ReadFile(sentinel)
+	if err != nil {
+		t.Fatalf("sentinel removed: %v", err)
+	}
+	if string(data) != "preserve me" {
+		t.Fatalf("sentinel changed: %q", data)
+	}
+}
+
+func TestCreatePreservesDestinationCreatedAtPublishRace(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "raced-project")
+	original := publishProject
+	publishProject = func(staging, destination string) error {
+		if err := os.Mkdir(destination, 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(destination, "other-data"), []byte("safe"), 0644); err != nil {
+			return err
+		}
+		return os.Rename(staging, destination)
+	}
+	t.Cleanup(func() { publishProject = original })
+	if _, err := Create(Options{Destination: dst}); err == nil {
+		t.Fatal("Create succeeded")
+	}
+	data, err := os.ReadFile(filepath.Join(dst, "other-data"))
+	if err != nil {
+		t.Fatalf("racing actor's data removed: %v", err)
+	}
+	if string(data) != "safe" {
+		t.Fatalf("racing actor's data changed: %q", data)
+	}
+}
+
 func TestRenderSuccessUsesLocationAndShellQuotes(t *testing.T) {
 	var out bytes.Buffer
 	location := "/tmp/a path/it's-here"

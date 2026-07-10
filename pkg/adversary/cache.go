@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
 
@@ -30,6 +31,14 @@ func DefaultCache() (Cache, error) {
 }
 
 func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
+	var pulledManifest *canonical.Manifest
+	if len(artifact.AdversaryManifest) > 0 {
+		parsed, err := canonical.Parse(artifact.AdversaryManifest)
+		if err != nil {
+			return InstallRecord{}, fmt.Errorf("parse pulled adversary.yaml: %w", err)
+		}
+		pulledManifest = &parsed
+	}
 	var layer []byte
 	for _, descriptor := range artifact.Manifest.Layers {
 		if descriptor.MediaType == oci.PackageLayerMediaType || layer == nil {
@@ -49,14 +58,13 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		return InstallRecord{}, err
 	}
 	if len(artifact.AdversaryManifest) > 0 {
+		if metadata.Name != "" && (metadata.Name != pulledManifest.Name || metadata.Version != pulledManifest.Version) {
+			return InstallRecord{}, fmt.Errorf("pulled adversary.yaml identity %s@%s does not match package metadata %s@%s", pulledManifest.Name, pulledManifest.Version, metadata.Name, metadata.Version)
+		}
 		if err := os.WriteFile(filepath.Join(destination, ManifestFile), artifact.AdversaryManifest, 0644); err != nil {
 			return InstallRecord{}, err
 		}
-		if metadata.Name == "" {
-			name, version := parseManifestIdentity(string(artifact.AdversaryManifest))
-			metadata.Name = name
-			metadata.Version = version
-		}
+		metadata.Name, metadata.Version = pulledManifest.Name, pulledManifest.Version
 	}
 	if metadata.Name == "" {
 		return InstallRecord{}, fmt.Errorf("%s is required", ManifestFile)

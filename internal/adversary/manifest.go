@@ -1,6 +1,7 @@
 package adversary
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,7 +58,14 @@ func ResolveReference(ref string) (ResolvedAdversary, error) {
 
 	if cache, err := adversarycache.DefaultCache(); err == nil {
 		if record, ok := cache.Resolve(ref); ok {
-			return ResolveReference(record.Path)
+			resolved, err := ResolveReference(record.Path)
+			if err != nil {
+				return ResolvedAdversary{}, err
+			}
+			if resolved.Name != record.Name || (record.Version != "" && resolved.Manifest.Version != record.Version) {
+				return ResolvedAdversary{}, fmt.Errorf("cached manifest identity does not match cache record")
+			}
+			return resolved, nil
 		}
 	}
 

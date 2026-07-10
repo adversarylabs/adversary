@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -59,7 +59,7 @@ type Findings struct {
 
 var (
 	nameRE    = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)*$`)
-	versionRE = regexp.MustCompile(`^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+	versionRE = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
 	envRE     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
@@ -107,11 +107,51 @@ func Parse(data []byte) (Manifest, error) {
 	if err := strict.Decode(&out); err != nil {
 		return Manifest{}, fmt.Errorf("decode manifest YAML: %w", err)
 	}
+	if err := validatePresentFields(doc.Content[0], out); err != nil {
+		return Manifest{}, err
+	}
 	if err := out.Validate(); err != nil {
 		return Manifest{}, err
 	}
 	return out, nil
 }
+
+func validatePresentFields(root *yaml.Node, m Manifest) error {
+	if hasField(root, "version") && m.Version == "" {
+		return errors.New("manifest version must not be empty when present")
+	}
+	runtime := fieldNode(root, "runtime")
+	if runtime != nil {
+		if hasField(runtime, "name") && m.Runtime.Name == "" {
+			return errors.New("manifest runtime.name must not be empty when present")
+		}
+		if hasField(runtime, "image") && m.Runtime.Image == "" {
+			return errors.New("manifest runtime.image must not be empty when present")
+		}
+		if hasField(runtime, "version") && m.Runtime.Version == "" {
+			return errors.New("manifest runtime.version must not be empty when present")
+		}
+	}
+	findings := fieldNode(root, "findings")
+	if findings != nil && hasField(findings, "format") && m.Findings.Format == "" {
+		return errors.New("manifest findings.format must not be empty when present")
+	}
+	return nil
+}
+
+func fieldNode(mapping *yaml.Node, name string) *yaml.Node {
+	if mapping == nil || mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == name {
+			return mapping.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func hasField(mapping *yaml.Node, name string) bool { return fieldNode(mapping, name) != nil }
 
 func safeNode(n *yaml.Node, path string) error {
 	if n.Kind == yaml.AliasNode || n.Anchor != "" {
@@ -150,34 +190,38 @@ func (m Manifest) Validate() error {
 		return fmt.Errorf("manifest version %q must be semantic version x.y.z", m.Version)
 	}
 	if m.Runtime.Image != "" {
-		if m.Runtime.Image != strings.TrimSpace(m.Runtime.Image) || strings.ContainsAny(m.Runtime.Image, " \t\r\n\x00") {
+		if strings.ContainsRune(m.Runtime.Image, 0) || strings.IndexFunc(m.Runtime.Image, unicode.IsSpace) >= 0 {
 			return errors.New("manifest runtime.image must be a normalized image reference")
 		}
-	} else if m.Runtime.Name != "node" && m.Runtime.Name != "process" {
+	}
+	if m.Runtime.Name != "" && m.Runtime.Name != "node" && m.Runtime.Name != "process" {
 		return fmt.Errorf("manifest runtime.name %q is unsupported (supported: node, process)", m.Runtime.Name)
 	}
-	if m.Runtime.Image == "" && (strings.TrimSpace(m.Runtime.Version) == "" || m.Runtime.Version != strings.TrimSpace(m.Runtime.Version)) {
+	if m.Runtime.Image == "" && m.Runtime.Name == "" {
+		return errors.New("manifest runtime.name or runtime.image is required")
+	}
+	if m.Runtime.Image == "" && m.Runtime.Version == "" {
+		return errors.New("manifest runtime.version is required for named runtimes")
+	}
+	if m.Runtime.Version != "" && !normalizedNonEmpty(m.Runtime.Version) {
 		return errors.New("manifest runtime.version must be non-empty and normalized")
 	}
 	if len(m.Runtime.Command) == 0 {
 		return errors.New("manifest runtime.command must not be empty")
 	}
 	for i, arg := range m.Runtime.Command {
-		if strings.TrimSpace(arg) == "" || strings.ContainsRune(arg, 0) {
+		if !normalizedNonEmpty(arg) {
 			return fmt.Errorf("manifest runtime.command[%d] must be non-empty", i)
 		}
 	}
 	for i, glob := range m.Triggers.FilesChanged {
-		if strings.TrimSpace(glob) == "" || strings.ContainsRune(glob, 0) {
+		if !normalizedNonEmpty(glob) {
 			return fmt.Errorf("manifest triggers.files_changed[%d] must be non-empty", i)
-		}
-		if _, err := path.Match(glob, ""); err != nil {
-			return fmt.Errorf("manifest triggers.files_changed[%d] has invalid glob syntax: %w", i, err)
 		}
 	}
 	for kind, paths := range map[string][]string{"read": m.Permissions.Filesystem.Read, "write": m.Permissions.Filesystem.Write} {
 		for i, path := range paths {
-			if strings.TrimSpace(path) == "" || strings.ContainsRune(path, 0) {
+			if !normalizedNonEmpty(path) {
 				return fmt.Errorf("manifest permissions.filesystem.%s[%d] must be a non-empty path", kind, i)
 			}
 		}
@@ -191,6 +235,10 @@ func (m Manifest) Validate() error {
 		return fmt.Errorf("manifest findings.format %q is unsupported", m.Findings.Format)
 	}
 	return nil
+}
+
+func normalizedNonEmpty(value string) bool {
+	return value != "" && !strings.ContainsRune(value, 0) && value == strings.TrimSpace(value)
 }
 
 func ValidateProjectName(name string) error {
