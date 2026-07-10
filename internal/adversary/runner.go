@@ -11,25 +11,30 @@ import (
 	"strings"
 	"time"
 
+	adversarycache "github.com/adversarylabs/adversary/pkg/adversary"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/review"
+	localstore "github.com/adversarylabs/adversary/pkg/store"
 )
 
 type RunOptions struct {
-	AdversaryRef      string
-	RepoPath          string
-	BaseRef           string
-	HeadRef           string
-	Builder           string
-	Force             bool
-	Format            string
-	KeepTemp          bool
-	NoNetwork         bool
-	Verbose           bool
-	IncludeSuppressed bool
-	Shell             bool
-	AllFiles          bool
+	AdversaryRef             string
+	RepoPath                 string
+	BaseRef                  string
+	HeadRef                  string
+	Builder                  string
+	Force                    bool
+	Format                   string
+	KeepTemp                 bool
+	NoNetwork                bool
+	Verbose                  bool
+	IncludeSuppressed        bool
+	Shell                    bool
+	AllFiles                 bool
+	AllowUnsafeHostExecution bool
 }
+
+const maxRunOutputBytes int64 = 16 << 20
 
 type Runner struct {
 	Stdout    io.Writer
@@ -56,7 +61,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	executor := r.Executor
 	if executor == nil {
-		executor = HostExecutor{Stdout: r.Stdout, Stderr: r.Stderr, Stdin: os.Stdin}
+		executor = HostExecutor{Stdout: stderr, Stderr: stderr, Stdin: os.Stdin}
 	}
 
 	mkdirTemp := r.MkdirTemp
@@ -64,15 +69,21 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		mkdirTemp = os.MkdirTemp
 	}
 
+	explicitLocalPath, err := isExplicitLocalAdversaryPath(opts.AdversaryRef)
+	if err != nil {
+		return err
+	}
 	resolved, err := ResolveReference(opts.AdversaryRef)
 	if err != nil {
 		return err
 	}
-	if resolved.StoreBacked && r.Executor == nil {
-		executor = HostExecutor{Stdout: r.Stdout, Stderr: r.Stderr, Stdin: os.Stdin}
-	}
 	if !resolved.LocalDir {
 		return fmt.Errorf("adversary %q is not installed locally; run `adversary pull %s` first", opts.AdversaryRef, opts.AdversaryRef)
+	}
+	if r.Executor == nil {
+		if err := validateHostExecution(resolved, explicitLocalPath, opts); err != nil {
+			return err
+		}
 	}
 
 	repoPath := opts.RepoPath
@@ -102,7 +113,26 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	if resolved.Manifest != nil && len(resolved.Manifest.Triggers.FilesChanged) > 0 && (opts.BaseRef != "" || opts.HeadRef != "") {
 		if !ShouldRunForChangedFiles(resolved.Manifest.Triggers.FilesChanged, changedFiles, opts.Force || opts.AllFiles) {
-			fmt.Fprintf(stdout, "Skipped %s: no changed files matched triggers.files_changed\n", resolved.Name)
+			if opts.Format == "json" {
+				skipped := review.RunEnvelope{
+					ProtocolVersion: review.ProtocolVersion,
+					Result: review.ReviewResult{
+						Adversary:    review.ReviewAdversary{Name: resolved.Name},
+						Target:       review.ReviewTarget{Repository: repoPath},
+						Positives:    []review.Note{},
+						Observations: []review.Note{{Key: "run-skipped", Summary: "No changed files matched triggers.files_changed."}},
+						Findings:     []review.Finding{},
+						Suppressed:   review.Suppressed{},
+					},
+				}
+				encoder := json.NewEncoder(stdout)
+				encoder.SetIndent("", "  ")
+				if err := encoder.Encode(skipped); err != nil {
+					return err
+				}
+			} else {
+				fmt.Fprintf(stdout, "Skipped %s: no changed files matched triggers.files_changed\n", resolved.Name)
+			}
 			return nil
 		}
 	}
@@ -171,28 +201,19 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	if opts.Shell {
 		if opts.KeepTemp {
-			fmt.Fprintf(stdout, "\nTemporary run directory: %s\n", runDir)
+			fmt.Fprintf(stderr, "Temporary run directory: %s\n", runDir)
 		}
 		return nil
 	}
 
-	outputData, err := os.ReadFile(outputPath)
-	if os.IsNotExist(err) || len(outputData) == 0 {
-		if err := review.RenderTerminal(stdout, review.ReviewResult{}); err != nil {
-			return err
-		}
-		if opts.KeepTemp {
-			fmt.Fprintf(stdout, "Temporary run directory: %s\n", runDir)
-		}
-		return nil
-	}
+	outputData, err := readBoundedRunOutput(outputPath)
 	if err != nil {
 		return err
 	}
 
 	envelope, err := review.DecodeRunEnvelope(outputData)
 	if err != nil {
-		return err
+		return fmt.Errorf("adversary output protocol failure: %w", err)
 	}
 
 	if opts.Format == "json" {
@@ -208,9 +229,100 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	}
 
 	if opts.KeepTemp {
-		fmt.Fprintf(stdout, "\nTemporary run directory: %s\n", runDir)
+		fmt.Fprintf(stderr, "Temporary run directory: %s\n", runDir)
 	}
 	return nil
+}
+
+func isExplicitLocalAdversaryPath(ref string) (bool, error) {
+	info, err := os.Stat(filepath.Join(ref, "adversary.yaml"))
+	if err != nil || info.IsDir() {
+		return false, nil
+	}
+	candidate, err := filepath.Abs(ref)
+	if err != nil {
+		return false, fmt.Errorf("classify adversary path: %w", err)
+	}
+	canonicalCandidate, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return false, fmt.Errorf("classify adversary path safely: %w", err)
+	}
+	roots, err := artifactStorageRoots()
+	if err != nil {
+		return false, err
+	}
+	for _, root := range roots {
+		absoluteRoot, err := filepath.Abs(root)
+		if err != nil {
+			return false, fmt.Errorf("classify artifact storage root: %w", err)
+		}
+		if pathWithin(candidate, absoluteRoot) {
+			return false, nil
+		}
+		canonicalRoot, err := filepath.EvalSymlinks(absoluteRoot)
+		if err == nil && pathWithin(canonicalCandidate, canonicalRoot) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func artifactStorageRoots() ([]string, error) {
+	store, err := localstore.Default()
+	if err != nil {
+		return nil, fmt.Errorf("locate local artifact store: %w", err)
+	}
+	cache, err := adversarycache.DefaultCache()
+	if err != nil {
+		return nil, fmt.Errorf("locate pulled artifact cache: %w", err)
+	}
+	return []string{store.Root, cache.Root}, nil
+}
+
+func pathWithin(path, root string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func validateHostExecution(resolved ResolvedAdversary, explicitLocalPath bool, opts RunOptions) error {
+	if opts.Shell && !opts.AllowUnsafeHostExecution {
+		return fmt.Errorf("--shell runs an unrestricted host shell; pass --allow-unsafe-host-execution to acknowledge the risk")
+	}
+	if opts.Shell && opts.Format == "json" {
+		return fmt.Errorf("--shell cannot be combined with JSON output")
+	}
+	if !explicitLocalPath && !opts.AllowUnsafeHostExecution {
+		return fmt.Errorf("installed or pulled adversaries run as unrestricted host processes; pass --allow-unsafe-host-execution to execute trusted code")
+	}
+	if opts.NoNetwork || resolved.NetworkOff {
+		return fmt.Errorf("host execution cannot enforce disabled network access; use a future isolated executor instead of weakening the requested policy")
+	}
+	if resolved.Manifest != nil {
+		permissions := resolved.Manifest.Permissions
+		if len(permissions.Filesystem.Read) > 0 || len(permissions.Filesystem.Write) > 0 || len(permissions.Env) > 0 {
+			return fmt.Errorf("host execution cannot enforce manifest filesystem or environment restrictions; use a future isolated executor")
+		}
+	}
+	return nil
+}
+
+func readBoundedRunOutput(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("adversary output protocol failure: %w", err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxRunOutputBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("adversary output protocol failure: %w", err)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("adversary output protocol failure: output is empty")
+	}
+	if int64(len(data)) > maxRunOutputBytes {
+		return nil, fmt.Errorf("adversary output protocol failure: output exceeds %d bytes", maxRunOutputBytes)
+	}
+	return data, nil
 }
 
 func validateLocalCommandFiles(command []string) error {

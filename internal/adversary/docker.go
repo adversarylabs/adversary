@@ -41,6 +41,9 @@ type ContainerResult struct {
 }
 
 func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
+	if spec.NetworkDisabled {
+		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution cannot enforce disabled network access")
+	}
 	command := spec.Command
 	if spec.Shell {
 		command = []string{"/bin/sh"}

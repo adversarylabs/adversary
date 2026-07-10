@@ -143,6 +143,36 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
+func TestRunRejectsUnsafeShellFlagCombinations(t *testing.T) {
+	for name, args := range map[string][]string{
+		"network": {"run", "./test", "--shell", "--no-network", "--allow-unsafe-host-execution"},
+		"json":    {"run", "./test", "--shell", "--json", "--allow-unsafe-host-execution"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+			cmd.SetArgs(args)
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestRunHelpLabelsUnsafeHostExecution(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(&stdout, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--allow-unsafe-host-execution", "UNSAFE", "fails if the executor cannot enforce it"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("help missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
 func TestLoginHelpShowsAPIURLFlag(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

@@ -2,6 +2,7 @@ package adversary
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,6 +10,13 @@ import (
 	"testing"
 	"time"
 )
+
+func TestHostExecutorRejectsNetworkRestriction(t *testing.T) {
+	result, err := (HostExecutor{}).Run(context.Background(), ContainerSpec{NetworkDisabled: true, Command: []string{"true"}})
+	if err == nil || !strings.Contains(err.Error(), "cannot enforce disabled network") {
+		t.Fatalf("result = %#v, error = %v", result, err)
+	}
+}
 
 func TestHostExecutorArgsUseCommandAndEnvironment(t *testing.T) {
 	args := []string{"node", "/tmp/adversary/dist/index.js"}
