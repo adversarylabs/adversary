@@ -277,8 +277,8 @@ func TestMaterializeExistingFastPathIsReadOnly(t *testing.T) {
 	writeFile(t, destination, "adversary.yaml", string(artifact.AdversaryManifest))
 	writeFile(t, destination, "vendor/adversary-sdk/dist/index.js", "const repoPath = input.source.path;")
 	before, _ := os.ReadFile(filepath.Join(destination, "vendor/adversary-sdk/dist/index.js"))
-	if _, err := s.MaterializeRecord(record); err != nil {
-		t.Fatal(err)
+	if _, err := s.MaterializeRecord(record); err == nil {
+		t.Fatal("accepted writable preexisting materialization")
 	}
 	after, _ := os.ReadFile(filepath.Join(destination, "vendor/adversary-sdk/dist/index.js"))
 	if string(after) != string(before) {
@@ -363,6 +363,7 @@ func TestMaterializeRejectsStagePathSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := Store{Root: t.TempDir()}
+	t.Cleanup(func() { makeStoreWritable(s.Root) })
 	record, err := s.Put(artifact)
 	if err != nil {
 		t.Fatal(err)

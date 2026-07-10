@@ -51,6 +51,38 @@ func Seal(root *os.Root) error {
 	return nil
 }
 
+func ValidateSealed(root *os.Root) error {
+	return fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().Perm()&0222 != 0 {
+			return fmt.Errorf("published path %q is writable", path)
+		}
+		if entry.IsDir() {
+			if info.Mode().Perm()&0555 != 0555 {
+				return fmt.Errorf("published directory %q is not readable/traversable", path)
+			}
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("published path %q is not regular", path)
+		}
+		want := os.FileMode(0444)
+		if info.Mode().Perm()&0111 != 0 {
+			want = 0555
+		}
+		if info.Mode().Perm() != want {
+			return fmt.Errorf("published file %q has mode %o", path, info.Mode().Perm())
+		}
+		return nil
+	})
+}
+
 func Unseal(root *os.Root) error {
 	var dirs []string
 	err := fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {

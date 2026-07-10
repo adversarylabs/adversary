@@ -77,11 +77,27 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 	if err != nil {
 		return Artifact{}, err
 	}
-	m, err := manifest.Load(filepath.Join(dir, manifest.FileName))
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return Artifact{}, err
 	}
-	adversaryManifest, err := os.ReadFile(filepath.Join(dir, manifest.FileName))
+	defer root.Close()
+	before, err := root.Lstat(manifest.FileName)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if beforeManifestRead != nil {
+		beforeManifestRead()
+	}
+	adversaryManifest, err := root.ReadFile(manifest.FileName)
+	if err != nil {
+		return Artifact{}, err
+	}
+	after, err := root.Lstat(manifest.FileName)
+	if err != nil || !os.SameFile(before, after) {
+		return Artifact{}, fmt.Errorf("manifest changed while reading")
+	}
+	m, err := manifest.Parse(adversaryManifest)
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -90,7 +106,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 			return Artifact{}, err
 		}
 	}
-	files, layer, err := collectAndBuildLayer(dir)
+	files, layer, err := collectAndBuildLayer(root, dir)
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -114,6 +130,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		Runtime        string   `json:"runtime"`
 		RuntimeName    string   `json:"runtime_name,omitempty"`
 		RuntimeVersion string   `json:"runtime_version,omitempty"`
+		RuntimeImage   string   `json:"runtime_image,omitempty"`
 		Entrypoint     []string `json:"entrypoint,omitempty"`
 		Files          []File   `json:"files"`
 	}{
@@ -124,6 +141,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		Runtime:        runtime,
 		RuntimeName:    runtimeName(m),
 		RuntimeVersion: m.Runtime.Version,
+		RuntimeImage:   m.Runtime.Image,
 		Entrypoint:     m.Runtime.Command,
 		Files:          files,
 	})
@@ -147,6 +165,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		"ai.adversary.runtime":             runtime,
 		"ai.adversary.runtime.name":        runtimeName(m),
 		"ai.adversary.runtime.version":     m.Runtime.Version,
+		"ai.adversary.runtime.image":       m.Runtime.Image,
 	}
 	manifestData, manifestDigest, ociManifest, err := oci.NewManifest(config, layerDescriptor, annotations)
 	if err != nil {
@@ -176,13 +195,9 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 }
 
 var beforePackOpen func(string)
+var beforeManifestRead func()
 
-func collectAndBuildLayer(dir string) ([]File, []byte, error) {
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer root.Close()
+func collectAndBuildLayer(root *os.Root, dir string) ([]File, []byte, error) {
 	ignore := loadIgnore(dir)
 	files := make([]File, 0)
 	var buf bytes.Buffer

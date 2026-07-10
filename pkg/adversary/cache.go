@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -48,6 +49,7 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		Runtime        string   `json:"runtime"`
 		RuntimeName    string   `json:"runtime_name"`
 		RuntimeVersion string   `json:"runtime_version"`
+		RuntimeImage   string   `json:"runtime_image"`
 		Entrypoint     []string `json:"entrypoint"`
 		Files          []struct {
 			Path   string `json:"path"`
@@ -63,7 +65,7 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		if err := json.Unmarshal(configData, &config); err != nil {
 			return InstallRecord{}, fmt.Errorf("config: %w", err)
 		}
-		for key, want := range map[string]string{"ai.adversary.name": config.Name, "ai.adversary.full_name": config.FullName, "ai.adversary.version": config.Version, "ai.adversary.runtime": config.Runtime, "ai.adversary.runtime.name": config.RuntimeName, "ai.adversary.runtime.version": config.RuntimeVersion} {
+		for key, want := range map[string]string{"ai.adversary.name": config.Name, "ai.adversary.full_name": config.FullName, "ai.adversary.version": config.Version, "ai.adversary.runtime": config.Runtime, "ai.adversary.runtime.name": config.RuntimeName, "ai.adversary.runtime.version": config.RuntimeVersion, "ai.adversary.runtime.image": config.RuntimeImage} {
 			if artifact.Manifest.Annotations[key] != want {
 				return InstallRecord{}, fmt.Errorf("manifest annotation %s conflicts with config", key)
 			}
@@ -113,12 +115,23 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if err := rooted.Mkdir(stageRel, 0700); err != nil {
 		return InstallRecord{}, err
 	}
-	defer rooted.RemoveAll(stageRel)
+	defer func() {
+		if staged, e := rooted.OpenRoot(stageRel); e == nil {
+			_ = archiveutil.Unseal(staged)
+			_ = staged.Close()
+		}
+		_ = rooted.RemoveAll(stageRel)
+	}()
 	stage, err := rooted.OpenRoot(stageRel)
 	if err != nil {
 		return InstallRecord{}, err
 	}
-	defer stage.Close()
+	stageClosed := false
+	defer func() {
+		if !stageClosed {
+			_ = stage.Close()
+		}
+	}()
 	metadata, err := ExtractLayerRoot(layer, stage)
 	if err != nil {
 		return InstallRecord{}, err
@@ -144,13 +157,13 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		return InstallRecord{}, err
 	}
 	pulledManifest = &installedManifest
-	if config.Name == "" || config.FullName == "" || config.Version == "" || config.Runtime == "" || config.RuntimeName == "" || config.RuntimeVersion == "" || config.Entrypoint == nil {
+	if config.Name == "" || config.FullName == "" || config.Version == "" || config.Runtime == "" || config.Entrypoint == nil || (config.RuntimeImage == "" && (config.RuntimeName == "" || config.RuntimeVersion == "")) {
 		return InstallRecord{}, fmt.Errorf("config identity and runtime fields are required")
 	}
 	if config.FullName != pulledManifest.Name || (pulledManifest.Version != "" && config.Version != pulledManifest.Version) {
 		return InstallRecord{}, fmt.Errorf("config identity conflicts with adversary.yaml")
 	}
-	if pulledManifest != nil && (config.RuntimeName != pulledManifest.Runtime.Name || config.RuntimeVersion != pulledManifest.Runtime.Version || !slices.Equal(config.Entrypoint, pulledManifest.Runtime.Command)) {
+	if config.RuntimeImage != pulledManifest.Runtime.Image || (pulledManifest.Runtime.Image == "" && (config.RuntimeName != pulledManifest.Runtime.Name || config.RuntimeVersion != pulledManifest.Runtime.Version)) || (pulledManifest.Runtime.Image != "" && ((config.RuntimeName != "" && config.RuntimeName != pulledManifest.Runtime.Name) || (config.RuntimeVersion != "" && config.RuntimeVersion != pulledManifest.Runtime.Version))) || !slices.Equal(config.Entrypoint, pulledManifest.Runtime.Command) {
 		return InstallRecord{}, fmt.Errorf("config runtime conflicts with adversary.yaml")
 	}
 	if config.Files == nil {
@@ -182,6 +195,16 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if err != nil {
 		return InstallRecord{}, err
 	}
+	if err := archiveutil.Seal(stage); err != nil {
+		return InstallRecord{}, err
+	}
+	if err := archiveutil.ValidateSealed(stage); err != nil {
+		return InstallRecord{}, err
+	}
+	if err := stage.Close(); err != nil {
+		return InstallRecord{}, err
+	}
+	stageClosed = true
 	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(destRel)), 0755); err != nil {
 		return InstallRecord{}, err
 	}
@@ -196,25 +219,12 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		if beforeCacheInstallPublish != nil {
 			beforeCacheInstallPublish(rooted, stageRel)
 		}
-		if err := rooted.Rename(stageRel, destRel); err != nil {
+		if err := renameSealed(rooted, stageRel, destRel); err != nil {
 			if validateErr := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); validateErr != nil {
 				return InstallRecord{}, fmt.Errorf("publish artifact: %w", err)
 			}
 		} else {
 			published = true
-			publishedRoot, openErr := rooted.OpenRoot(destRel)
-			if openErr != nil {
-				_ = rooted.Remove(destRel)
-				return InstallRecord{}, openErr
-			}
-			sealErr := archiveutil.Seal(publishedRoot)
-			closeErr := publishedRoot.Close()
-			if sealErr != nil {
-				return InstallRecord{}, sealErr
-			}
-			if closeErr != nil {
-				return InstallRecord{}, closeErr
-			}
 		}
 	}
 	if published {
@@ -239,6 +249,32 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		return InstallRecord{}, err
 	}
 	return record, nil
+}
+
+func renameSealed(rooted *os.Root, from, to string) error {
+	err := rooted.Rename(from, to)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		return err
+	}
+	if chmodErr := rooted.Chmod(from, 0755); chmodErr != nil {
+		return err
+	}
+	if retryErr := rooted.Rename(from, to); retryErr != nil {
+		return retryErr
+	}
+	dest, openErr := rooted.OpenRoot(to)
+	if openErr != nil {
+		return openErr
+	}
+	sealErr := archiveutil.Seal(dest)
+	closeErr := dest.Close()
+	if sealErr != nil {
+		return sealErr
+	}
+	return closeErr
 }
 
 var beforeCacheInstallPublish func(*os.Root, string)
@@ -281,6 +317,9 @@ func validateInstalledArtifact(rooted *os.Root, rel string, metadata ManifestMet
 		return err
 	}
 	defer sub.Close()
+	if err := archiveutil.ValidateSealed(sub); err != nil {
+		return err
+	}
 	manifest, err := sub.ReadFile(ManifestFile)
 	if err != nil {
 		return err

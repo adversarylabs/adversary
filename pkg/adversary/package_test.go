@@ -250,6 +250,41 @@ func TestCacheInstallRequiresConfigBlob(t *testing.T) {
 	}
 }
 
+func TestCacheInstallImageRuntime(t *testing.T) {
+	dir := t.TempDir()
+	writePackageFile(t, dir, "adversary.yaml", "name: local/image-test\nversion: 1.0.0\nruntime:\n  image: example.com/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  command: [run]\n")
+	writePackageFile(t, dir, "run", "")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := oci.ParseReference("local/image-test:1.0.0")
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.ConfigDigest: artifact.Config, artifact.LayerDigest: artifact.Layer}}
+	cache := Cache{Root: t.TempDir()}
+	t.Cleanup(func() { makeWritable(cache.Root) })
+	if _, err := cache.Install(pulled); err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(artifact.Config, &config); err != nil {
+		t.Fatal(err)
+	}
+	config["runtime_image"] = "example.com/other@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	bad, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badDigest := oci.Digest(bad)
+	pulled.Manifest.Config.Digest = badDigest
+	pulled.Manifest.Config.Size = int64(len(bad))
+	pulled.Manifest.Annotations["ai.adversary.runtime.image"] = config["runtime_image"].(string)
+	pulled.Blobs[badDigest] = bad
+	badCache := Cache{Root: t.TempDir()}
+	if _, err := badCache.Install(pulled); err == nil {
+		t.Fatal("accepted conflicting image runtime")
+	}
+}
+
 func TestCacheInstallRejectsCorruptOrphan(t *testing.T) {
 	dir := t.TempDir()
 	writePackageFile(t, dir, "adversary.yaml", "name: local/test\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
@@ -292,6 +327,7 @@ func TestCacheInstallRejectsStagePathSwap(t *testing.T) {
 	ref, _ := oci.ParseReference("local/test:1.0.0")
 	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.ConfigDigest: artifact.Config, artifact.LayerDigest: artifact.Layer}}
 	cache := Cache{Root: t.TempDir()}
+	t.Cleanup(func() { makeWritable(cache.Root) })
 	outside := t.TempDir()
 	sentinel := filepath.Join(outside, "sentinel")
 	if err := os.WriteFile(sentinel, []byte("safe"), 0644); err != nil {

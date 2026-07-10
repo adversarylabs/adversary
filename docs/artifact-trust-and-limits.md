@@ -19,7 +19,10 @@ sparse entries, duplicate paths, traversal, and paths outside that directory
 are rejected. The config is mandatory and its identity, runtime, annotations,
 complete file set, sizes, modes, and hashes are cross-checked. Published files
 are read-only and every published directory is non-writable; executable intent
-is retained as read-and-execute mode. The package digest, manifest digest, and original
+is retained as read-and-execute mode. Staging trees are sealed and policy-checked
+before atomic publication, then checked again at the destination. Named and
+image-based runtime identities and entrypoints are carried and cross-checked.
+The package digest, manifest digest, and original
 reference are retained by the existing cache record.
 
 Digest verification provides content integrity, not publisher identity. This

@@ -33,9 +33,13 @@ type Package struct {
 }
 
 type ManifestMetadata struct {
-	Name    string         `json:"name"`
-	Version string         `json:"version,omitempty"`
-	Files   []FileMetadata `json:"files"`
+	Name           string         `json:"name"`
+	Version        string         `json:"version,omitempty"`
+	Files          []FileMetadata `json:"files"`
+	RuntimeName    string         `json:"runtime_name,omitempty"`
+	RuntimeVersion string         `json:"runtime_version,omitempty"`
+	RuntimeImage   string         `json:"runtime_image,omitempty"`
+	Entrypoint     []string       `json:"entrypoint,omitempty"`
 }
 
 type FileMetadata struct {
@@ -50,22 +54,23 @@ func PackageDirectory(dir string) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
-	if _, err := os.Stat(filepath.Join(dir, ManifestFile)); err != nil {
-		return Package{}, fmt.Errorf("%s is required: %w", ManifestFile, err)
-	}
-
 	metadata, layer, err := buildMetadataAndLayer(dir)
 	if err != nil {
 		return Package{}, err
 	}
 	config, err := json.Marshal(struct {
-		Created string `json:"created"`
-		Name    string `json:"name"`
-		Version string `json:"version,omitempty"`
+		Created        string   `json:"created"`
+		Name           string   `json:"name"`
+		Version        string   `json:"version,omitempty"`
+		RuntimeName    string   `json:"runtime_name,omitempty"`
+		RuntimeVersion string   `json:"runtime_version,omitempty"`
+		RuntimeImage   string   `json:"runtime_image,omitempty"`
+		Entrypoint     []string `json:"entrypoint,omitempty"`
 	}{
-		Created: "1970-01-01T00:00:00Z",
-		Name:    metadata.Name,
-		Version: metadata.Version,
+		Created:     "1970-01-01T00:00:00Z",
+		Name:        metadata.Name,
+		Version:     metadata.Version,
+		RuntimeName: metadata.RuntimeName, RuntimeVersion: metadata.RuntimeVersion, RuntimeImage: metadata.RuntimeImage, Entrypoint: metadata.Entrypoint,
 	})
 	if err != nil {
 		return Package{}, err
@@ -87,6 +92,7 @@ func PackageDirectory(dir string) (Package, error) {
 }
 
 var beforePackageOpen func(string)
+var beforePackageManifestRead func()
 
 func buildMetadataAndLayer(dir string) (ManifestMetadata, []byte, error) {
 	root, err := os.OpenRoot(dir)
@@ -94,6 +100,13 @@ func buildMetadataAndLayer(dir string) (ManifestMetadata, []byte, error) {
 		return ManifestMetadata{}, nil, err
 	}
 	defer root.Close()
+	before, err := root.Lstat(ManifestFile)
+	if err != nil {
+		return ManifestMetadata{}, nil, err
+	}
+	if beforePackageManifestRead != nil {
+		beforePackageManifestRead()
+	}
 	manifestData, err := root.ReadFile(ManifestFile)
 	if err != nil {
 		return ManifestMetadata{}, nil, err
@@ -102,7 +115,11 @@ func buildMetadataAndLayer(dir string) (ManifestMetadata, []byte, error) {
 	if err != nil {
 		return ManifestMetadata{}, nil, err
 	}
-	metadata := ManifestMetadata{Name: m.Name, Version: m.Version}
+	after, err := root.Lstat(ManifestFile)
+	if err != nil || !os.SameFile(before, after) {
+		return ManifestMetadata{}, nil, fmt.Errorf("manifest changed while reading")
+	}
+	metadata := ManifestMetadata{Name: m.Name, Version: m.Version, RuntimeName: m.Runtime.Name, RuntimeVersion: m.Runtime.Version, RuntimeImage: m.Runtime.Image, Entrypoint: m.Runtime.Command}
 	var buf bytes.Buffer
 	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {
@@ -205,6 +222,9 @@ func BuildOCIManifest(pkg Package) ([]byte, string, error) {
 		annotations["org.opencontainers.image.version"] = pkg.Manifest.Version
 		annotations["ai.adversary.version"] = pkg.Manifest.Version
 	}
+	annotations["ai.adversary.runtime.name"] = pkg.Manifest.RuntimeName
+	annotations["ai.adversary.runtime.version"] = pkg.Manifest.RuntimeVersion
+	annotations["ai.adversary.runtime.image"] = pkg.Manifest.RuntimeImage
 	data, digest, _, err := oci.NewManifest(pkg.Config, pkg.Blob.Descriptor, annotations)
 	return data, digest, err
 }

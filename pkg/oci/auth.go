@@ -153,7 +153,11 @@ func readBearerToken(client *http.Client, challenge bearerChallenge, scope strin
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	data, err := readLimited(resp.Body, 1<<20, "token response")
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
 		return "", err
 	}
 	if body.Token != "" {

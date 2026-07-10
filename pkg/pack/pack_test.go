@@ -45,6 +45,20 @@ func TestCreateRejectsSymlinkSwap(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsManifestSymlinkSwap(t *testing.T) {
+	dir := testProject(t)
+	target := filepath.Join(dir, "adversary.yaml")
+	outside := filepath.Join(t.TempDir(), "adversary.yaml")
+	if err := os.WriteFile(outside, []byte("name: outside/secret\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	beforeManifestRead = func() { beforeManifestRead = nil; _ = os.Remove(target); _ = os.Symlink(outside, target) }
+	t.Cleanup(func() { beforeManifestRead = nil })
+	if _, err := Create(context.Background(), Options{Dir: dir}); err == nil {
+		t.Fatal("pack accepted manifest symlink swap")
+	}
+}
+
 func TestCreatePreservesExecutableMode(t *testing.T) {
 	dir := testProject(t)
 	path := filepath.Join(dir, "run.sh")
