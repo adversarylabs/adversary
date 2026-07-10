@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/adversarylabs/adversary/pkg/manifest"
 	projecttemplates "github.com/adversarylabs/adversary/templates"
 )
 
@@ -46,12 +47,6 @@ func Create(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("unsupported SDK %q; supported SDKs: %s", sdk, strings.Join(SupportedSDKs(), ", "))
 	}
 
-	if _, err := os.Stat(destination); err == nil {
-		return Result{}, fmt.Errorf("destination already exists: %s", destination)
-	} else if !os.IsNotExist(err) {
-		return Result{}, err
-	}
-
 	templateRoot := sdk
 	if _, err := fs.Stat(projecttemplates.FS, templateRoot); err != nil {
 		if os.IsNotExist(err) {
@@ -61,6 +56,27 @@ func Create(opts Options) (Result, error) {
 	}
 
 	projectName := filepath.Base(filepath.Clean(destination))
+	if err := manifest.ValidateProjectName(projectName); err != nil {
+		return Result{}, err
+	}
+	parent := filepath.Dir(destination)
+	if err := os.MkdirAll(parent, 0755); err != nil {
+		return Result{}, fmt.Errorf("create destination parent: %w", err)
+	}
+	// Mkdir is the atomic ownership claim. From here on, cleanup is restricted to
+	// the path this invocation exclusively created.
+	if err := os.Mkdir(destination, 0755); err != nil {
+		if os.IsExist(err) {
+			return Result{}, fmt.Errorf("destination already exists: %s", destination)
+		}
+		return Result{}, fmt.Errorf("claim destination: %w", err)
+	}
+	owned := true
+	defer func() {
+		if owned {
+			_ = os.RemoveAll(destination)
+		}
+	}()
 	values := map[string]string{
 		"name":        projectName,
 		"description": "Replace with a description.",
@@ -78,7 +94,7 @@ func Create(opts Options) (Result, error) {
 		}
 		target := filepath.Join(destination, rel)
 		if rel == "." {
-			return os.MkdirAll(destination, 0755)
+			return nil
 		}
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0755)
@@ -95,7 +111,6 @@ func Create(opts Options) (Result, error) {
 		return os.WriteFile(target, data, writableFileMode(info.Mode()))
 	})
 	if err != nil {
-		_ = os.RemoveAll(destination)
 		return Result{}, err
 	}
 
@@ -104,6 +119,7 @@ func Create(opts Options) (Result, error) {
 		return Result{}, err
 	}
 
+	owned = false
 	return Result{
 		Location: abs,
 		SDK:      sdkLabel,
@@ -119,14 +135,14 @@ func SupportedSDKs() []string {
 	return sdks
 }
 
-func RenderSuccess(w io.Writer, result Result, destination string) {
+func RenderSuccess(w io.Writer, result Result, _ string) {
 	fmt.Fprintln(w, "Creating adversary...")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "✓ Generated project")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Location")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  %s\n", destination)
+	fmt.Fprintf(w, "  %s\n", result.Location)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "SDK")
 	fmt.Fprintln(w)
@@ -134,10 +150,14 @@ func RenderSuccess(w io.Writer, result Result, destination string) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Next steps")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  cd %s\n", destination)
+	fmt.Fprintf(w, "  cd %s\n", shellQuote(result.Location))
 	fmt.Fprintln(w, "  npm install")
 	fmt.Fprintln(w, "  npm run build")
 	fmt.Fprintln(w, "  adversary run . --repo /path/to/repository")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func applyPlaceholders(input string, values map[string]string) string {

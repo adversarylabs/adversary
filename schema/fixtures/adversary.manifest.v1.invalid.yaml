@@ -1,0 +1,6 @@
+name: AdversaryLabs/Invalid
+version: latest
+runtime:
+  name: shell
+  version: "1"
+  command: []

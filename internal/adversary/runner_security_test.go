@@ -82,7 +82,7 @@ func TestExplicitPathClassificationRejectsArtifactStorage(t *testing.T) {
 		if err := os.MkdirAll(project, 0755); err != nil {
 			t.Fatal(err)
 		}
-		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: local/test\nruntime:\n  name: node\n  version: \"22\"\n")
+		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: local/test\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
 	}
 
 	for name, project := range map[string]string{"store": storeProject, "cache": cacheProject} {

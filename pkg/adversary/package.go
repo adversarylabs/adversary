@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
 
@@ -165,11 +166,11 @@ func buildMetadata(dir string) (ManifestMetadata, error) {
 	if err != nil {
 		return ManifestMetadata{}, err
 	}
-	name, version := parseManifestIdentity(string(manifestData))
-	if name == "" {
-		return ManifestMetadata{}, fmt.Errorf("manifest name is required")
+	m, err := canonical.Parse(manifestData)
+	if err != nil {
+		return ManifestMetadata{}, fmt.Errorf("parse %s: %w", ManifestFile, err)
 	}
-	return ManifestMetadata{Name: name, Version: version, Files: files}, nil
+	return ManifestMetadata{Name: m.Name, Version: m.Version, Files: files}, nil
 }
 
 func buildLayer(dir string, metadata ManifestMetadata) ([]byte, error) {
@@ -274,9 +275,10 @@ func ExtractLayer(layer []byte, destination string) (ManifestMetadata, error) {
 	if metadata.Name == "" {
 		manifestData, err := os.ReadFile(filepath.Join(destination, ManifestFile))
 		if err == nil {
-			name, version := parseManifestIdentity(string(manifestData))
-			metadata.Name = name
-			metadata.Version = version
+			if m, parseErr := canonical.Parse(manifestData); parseErr == nil {
+				metadata.Name = m.Name
+				metadata.Version = m.Version
+			}
 		}
 	}
 	return metadata, nil
@@ -294,30 +296,13 @@ func shouldSkip(rel string, entry fs.DirEntry) bool {
 	return false
 }
 
+// parseManifestIdentity remains only for the legacy cache fallback. All parsing
+// is delegated to the canonical parser; invalid manifests yield no identity and
+// are rejected by the caller's existing required-manifest check.
 func parseManifestIdentity(text string) (string, string) {
-	var name string
-	var version string
-	for _, raw := range strings.Split(text, "\n") {
-		if strings.TrimSpace(raw) != raw {
-			continue
-		}
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		key, value, ok := strings.Cut(trimmed, ":")
-		if !ok {
-			continue
-		}
-		value = strings.TrimSpace(value)
-		value = strings.Trim(value, `"`)
-		value = strings.Trim(value, `'`)
-		switch strings.TrimSpace(key) {
-		case "name":
-			name = value
-		case "version":
-			version = value
-		}
+	m, err := canonical.Parse([]byte(text))
+	if err != nil {
+		return "", ""
 	}
-	return name, version
+	return m.Name, m.Version
 }
