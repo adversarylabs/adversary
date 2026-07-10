@@ -54,6 +54,12 @@ func canonicalService(raw string) string {
 	} else {
 		u.Host = hostname
 	}
+	if u.Path != "/" && strings.HasSuffix(u.Path, "/") {
+		u.Path = strings.TrimSuffix(u.Path, "/")
+		if strings.HasSuffix(u.RawPath, "/") {
+			u.RawPath = strings.TrimSuffix(u.RawPath, "/")
+		}
+	}
 	return u.String()
 }
 

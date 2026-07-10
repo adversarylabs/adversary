@@ -40,6 +40,12 @@ func TestAuthKeyCanonicalizesHostWithoutCollapsingServicePath(t *testing.T) {
 	if AuthKey("https://user@api.example/api", "default") == AuthKey("https://api.example/api", "default") {
 		t.Fatal("userinfo collided")
 	}
+	if AuthKey("https://api.example/api", "default") != AuthKey("https://api.example/api/", "default") {
+		t.Fatal("trailing service slash should canonicalize")
+	}
+	if AuthKey("https://api.example/TenantA/", "default") == AuthKey("https://api.example/tenanta/", "default") {
+		t.Fatal("nontrailing path case distinction was lost")
+	}
 }
 
 func TestConfigStoreHardeningAndServiceFallback(t *testing.T) {
