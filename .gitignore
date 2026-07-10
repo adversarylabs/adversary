@@ -6,3 +6,4 @@ dist/
 !templates/typescript/dist/index.d.ts
 result
 .direnv/
+docs/cli-audit.md

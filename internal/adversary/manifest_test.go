@@ -35,7 +35,7 @@ permissions:
   network: false
   env: []
 findings:
-  format: adversary.findings.v1
+  format: adversary.review.v1
 `)
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func (e *recordingExecutor) Run(ctx context.Context, spec ContainerSpec) (Contai
 		return ContainerResult{}, err
 	}
 
-	output := `{"schema_version":"adversary.findings.v1","findings":[]}`
+	output := `{"protocolVersion":1,"result":{"adversary":{"name":"local/adversary"},"target":{},"positives":[],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0}}}`
 	if err := os.WriteFile(filepath.Join(spec.RunDir, "output.json"), []byte(output), 0644); err != nil {
 		return ContainerResult{}, err
 	}
@@ -276,7 +276,7 @@ runtime:
 	if err := os.MkdirAll(filepath.Join(adversaryDir, "node_modules"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(adversaryDir, "vendor", "adversary-sdk", "dist", "index.js"), `export const DEFAULT_INPUT_PATH = "/adversary/input.json";
+	sdkFixture := `export const DEFAULT_INPUT_PATH = "/adversary/input.json";
 export const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
 export class Adversary {
   async run(options = {}) {
@@ -286,7 +286,11 @@ export class Adversary {
 }
 export async function parseInput(path = DEFAULT_INPUT_PATH) {}
 export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
-`)
+`
+	vendoredSDKPath := filepath.Join(adversaryDir, "vendor", "adversary-sdk", "dist", "index.js")
+	nodeModulesSDKPath := filepath.Join(adversaryDir, "node_modules", "@adversary", "sdk", "dist", "index.js")
+	writeFile(t, vendoredSDKPath, sdkFixture)
+	writeFile(t, nodeModulesSDKPath, sdkFixture)
 	binDir := t.TempDir()
 	npmPath := filepath.Join(binDir, "npm")
 	writeFile(t, npmPath, "#!/bin/sh\n/bin/mkdir -p dist\nprintf 'console.log(\"built\")\\n' > dist/index.js\n")
@@ -318,14 +322,13 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 	if len(executor.spec.Command) < 2 || executor.spec.Command[1] != builtPath {
 		t.Fatalf("command = %#v, want built entrypoint %q", executor.spec.Command, builtPath)
 	}
-	sdkData, err := os.ReadFile(filepath.Join(adversaryDir, "vendor", "adversary-sdk", "dist", "index.js"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sdk := string(sdkData)
-	for _, want := range []string{"process.env.ADVERSARY_INPUT", "process.env.ADVERSARY_OUTPUT", "process.env.ADVERSARY_REPO"} {
-		if !strings.Contains(sdk, want) {
-			t.Fatalf("patched SDK missing %s:\n%s", want, sdk)
+	for _, path := range []string{vendoredSDKPath, nodeModulesSDKPath} {
+		sdkData, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(sdkData) != sdkFixture {
+			t.Fatalf("SDK file was modified at %s:\n%s", path, string(sdkData))
 		}
 	}
 }
@@ -411,5 +414,194 @@ runtime:
 	}
 	if len(executor.input.Change.ChangedFiles) != 1 || executor.input.Change.ChangedFiles[0] != "README.md" {
 		t.Fatalf("ChangedFiles = %#v", executor.input.Change.ChangedFiles)
+	}
+}
+
+func TestRunDefaultOutputIsConciseReview(t *testing.T) {
+	adversaryDir := t.TempDir()
+	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), `name: local/adversary
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.js
+`)
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+	err := Runner{
+		Stdout:   &stdout,
+		Stderr:   &stderr,
+		Executor: &recordingExecutor{},
+	}.Run(context.Background(), RunOptions{
+		AdversaryRef: adversaryDir,
+		RepoPath:     t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stderr.String(), "Running ") || strings.Contains(stderr.String(), "exit code") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Review complete") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "Scan complete") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunRendersVersionedReviewEnvelopeFromChildProcess(t *testing.T) {
+	adversaryDir := t.TempDir()
+	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), `name: dockerfile
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.js
+`)
+	writeFile(t, filepath.Join(adversaryDir, "dist", "index.js"), `import { writeFileSync } from "node:fs";
+
+const output = {
+  protocolVersion: 1,
+  result: {
+    adversary: { name: "dockerfile" },
+    target: { repository: process.env.ADVERSARY_REPO, filesScanned: 1 },
+    assessment: { risk: "low", summary: "This is a well-structured multi-stage Node Dockerfile with one low-risk reproducibility concern." },
+    positives: [
+      { key: "dependency-build-runtime", summary: "Dependency installation, build, and runtime are separated cleanly." }
+    ],
+    observations: [
+      { key: "stage-layout", summary: "The Dockerfile defines deps, builder, and runner stages." }
+    ],
+    findings: [
+      {
+        id: "base-image",
+        ruleId: "dockerfile.base-image.unpinned-digest",
+        title: "Base images are not pinned by digest",
+        category: "supply-chain",
+        severity: "low",
+        confidence: "high",
+        summary: "Three stages reference node:22-bookworm-slim by tag rather than digest.",
+        whyItMatters: "Container image tags are mutable and can resolve to different image contents over time.",
+        impact: "Future builds may consume different base images even when the Dockerfile itself has not changed.",
+        evidence: [
+          { file: "Dockerfile", line: 3, message: "deps stage", snippet: "FROM node:22-bookworm-slim AS deps", metadata: { image: "node:22-bookworm-slim" } },
+          { file: "Dockerfile", line: 11, message: "builder stage", snippet: "FROM node:22-bookworm-slim AS builder" },
+          { file: "Dockerfile", line: 20, message: "runner stage", snippet: "FROM node:22-bookworm-slim AS runner" }
+        ],
+        recommendation: "Pin production base images using image:tag@sha256:<digest> when reproducibility and auditability matter.\n\nUse Renovate or Dependabot to keep pinned digests current.",
+        remediation: { estimate: "10-20 minutes", complexity: "small" }
+      }
+    ],
+    opinion: { ship: true, summary: "I would ship this Dockerfile as-is. Digest pinning is the only material improvement identified." },
+    suppressed: { observations: 0, findings: 0 }
+  }
+};
+
+writeFileSync(process.env.ADVERSARY_OUTPUT, JSON.stringify(output, null, 2));
+`)
+	repoDir := t.TempDir()
+
+	var stdout strings.Builder
+	err := Runner{
+		Stdout: &stdout,
+		Stderr: &strings.Builder{},
+	}.Run(context.Background(), RunOptions{
+		AdversaryRef: adversaryDir,
+		RepoPath:     repoDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := stdout.String()
+	for _, want := range []string{
+		"Overall assessment",
+		"Positive signals",
+		"Observations",
+		"Overall opinion",
+		"Category: supply-chain",
+		"Confidence: high",
+		"Why it matters",
+		"Impact",
+		"- Dockerfile:3 - deps stage",
+		"  FROM node:22-bookworm-slim AS deps",
+		"Estimated remediation",
+		"10-20 minutes",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stdout missing %q in:\n%s", want, got)
+		}
+	}
+	for _, notWant := range []string{`"image"`, "Evidence:", "Recommendation:"} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("stdout contains %q in:\n%s", notWant, got)
+		}
+	}
+}
+
+func TestRunJSONPrintsCompleteReviewEnvelope(t *testing.T) {
+	adversaryDir := t.TempDir()
+	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), `name: dockerfile
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.js
+`)
+	writeFile(t, filepath.Join(adversaryDir, "dist", "index.js"), `import { writeFileSync } from "node:fs";
+
+writeFileSync(process.env.ADVERSARY_OUTPUT, JSON.stringify({
+  protocolVersion: 1,
+  result: {
+    adversary: { name: "dockerfile" },
+    target: { repository: process.env.ADVERSARY_REPO, filesScanned: 1 },
+    assessment: { risk: "low", summary: "Well structured." },
+    positives: [{ key: "positive", summary: "Good stage separation." }],
+    observations: [],
+    findings: [{
+      id: "base-image",
+      title: "Base image is not pinned by digest",
+      category: "supply-chain",
+      severity: "low",
+      confidence: "high",
+      summary: "Base image uses a mutable tag.",
+      impact: "Builds may drift.",
+      evidence: [{ file: "Dockerfile", line: 3, message: "deps stage", metadata: { image: "node:22-bookworm-slim" } }],
+      remediation: { estimate: "10-20 minutes" }
+    }],
+    opinion: { ship: true, summary: "Ship it." },
+    suppressed: { observations: 0, findings: 0 }
+  }
+}));
+`)
+
+	var stdout strings.Builder
+	err := Runner{
+		Stdout: &stdout,
+		Stderr: &strings.Builder{},
+	}.Run(context.Background(), RunOptions{
+		AdversaryRef: adversaryDir,
+		RepoPath:     t.TempDir(),
+		Format:       "json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(stdout.String()), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["protocolVersion"].(float64) != 1 {
+		t.Fatalf("protocolVersion = %v", got["protocolVersion"])
+	}
+	result := got["result"].(map[string]any)
+	if result["assessment"].(map[string]any)["risk"] != "low" {
+		t.Fatalf("assessment = %#v", result["assessment"])
+	}
+	finding := result["findings"].([]any)[0].(map[string]any)
+	evidence := finding["evidence"].([]any)[0].(map[string]any)
+	if evidence["metadata"].(map[string]any)["image"] != "node:22-bookworm-slim" {
+		t.Fatalf("evidence = %#v", evidence)
 	}
 }

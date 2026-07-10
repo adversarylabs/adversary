@@ -12,21 +12,23 @@ import (
 	"time"
 
 	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/adversarylabs/adversary/pkg/review"
 )
 
 type RunOptions struct {
-	AdversaryRef string
-	RepoPath     string
-	BaseRef      string
-	HeadRef      string
-	Builder      string
-	Force        bool
-	Format       string
-	KeepTemp     bool
-	NoNetwork    bool
-	Verbose      bool
-	Shell        bool
-	AllFiles     bool
+	AdversaryRef      string
+	RepoPath          string
+	BaseRef           string
+	HeadRef           string
+	Builder           string
+	Force             bool
+	Format            string
+	KeepTemp          bool
+	NoNetwork         bool
+	Verbose           bool
+	IncludeSuppressed bool
+	Shell             bool
+	AllFiles          bool
 }
 
 type Runner struct {
@@ -119,9 +121,6 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			return err
 		}
 		buildDuration = time.Since(buildStarted)
-		if err := patchLocalVendoredSDK(resolved.BuildContext); err != nil {
-			return err
-		}
 		if err := validateLocalCommandFiles(resolved.Command); err != nil {
 			return err
 		}
@@ -158,14 +157,14 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	if opts.Verbose {
 		PrintVerboseLaunch(stderr, config)
-	} else {
-		fmt.Fprintf(stderr, "Running %s\n", displayRunName(opts.AdversaryRef, resolved))
 	}
 	runStarted := time.Now()
 	result, err := executor.Run(ctx, config.ContainerSpec())
 	scanDuration := time.Since(runStarted)
 	totalDuration := time.Since(started)
-	printExecutionSummary(stderr, result, buildDuration, scanDuration, totalDuration)
+	if opts.Verbose {
+		printExecutionSummary(stderr, result, buildDuration, scanDuration, totalDuration)
+	}
 	if err != nil {
 		return err
 	}
@@ -179,13 +178,9 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	outputData, err := os.ReadFile(outputPath)
 	if os.IsNotExist(err) || len(outputData) == 0 {
-		fmt.Fprintln(stdout, "Scan complete")
-		fmt.Fprintln(stdout)
-		fmt.Fprintln(stdout, "Files scanned: 0")
-		fmt.Fprintln(stdout, "Rules executed: 0")
-		fmt.Fprintln(stdout, "Findings: 0")
-		fmt.Fprintln(stdout)
-		fmt.Fprintln(stdout, "No findings output was produced.")
+		if err := review.RenderTerminal(stdout, review.ReviewResult{}); err != nil {
+			return err
+		}
 		if opts.KeepTemp {
 			fmt.Fprintf(stdout, "Temporary run directory: %s\n", runDir)
 		}
@@ -195,7 +190,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 
-	findings, err := ParseFindings(outputData)
+	envelope, err := review.DecodeRunEnvelope(outputData)
 	if err != nil {
 		return err
 	}
@@ -203,11 +198,11 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	if opts.Format == "json" {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(findings); err != nil {
+		if err := encoder.Encode(envelope); err != nil {
 			return err
 		}
 	} else {
-		if err := RenderTextFindings(stdout, findings); err != nil {
+		if err := review.RenderTerminal(stdout, envelope.Result); err != nil {
 			return err
 		}
 	}
@@ -229,28 +224,6 @@ func validateLocalCommandFiles(command []string) error {
 		}
 	}
 	return nil
-}
-
-func patchLocalVendoredSDK(adversaryPath string) error {
-	indexPath := filepath.Join(adversaryPath, "vendor", "adversary-sdk", "dist", "index.js")
-	data, err := os.ReadFile(indexPath)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	text := string(data)
-	text = strings.ReplaceAll(text, "const repoPath = input.source.path;", "const repoPath = process.env.ADVERSARY_REPO ?? input.source.path ?? \"/workspace\";")
-	text = strings.ReplaceAll(text, "export async function parseInput(path = DEFAULT_INPUT_PATH)", "export async function parseInput(path = process.env.ADVERSARY_INPUT ?? DEFAULT_INPUT_PATH)")
-	text = strings.ReplaceAll(text, "export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH)", "export async function writeOutput(output, path = process.env.ADVERSARY_OUTPUT ?? DEFAULT_OUTPUT_PATH)")
-	if !strings.Contains(text, "DEFAULT_REPO_PATH") {
-		text = strings.Replace(text, "export const DEFAULT_OUTPUT_PATH = \"/adversary/output.json\";", "export const DEFAULT_OUTPUT_PATH = \"/adversary/output.json\";\nexport const DEFAULT_REPO_PATH = \"/workspace\";", 1)
-	}
-	if text == string(data) {
-		return nil
-	}
-	return os.WriteFile(indexPath, []byte(text), 0644)
 }
 
 func displayRunName(ref string, resolved ResolvedAdversary) string {
@@ -300,10 +273,11 @@ func NewRunConfig(resolved ResolvedAdversary, repoPath, runDir string, opts RunO
 		outputPath = filepath.Join(runDir, "output.json")
 	}
 	env := map[string]string{
-		"ADVERSARY_REPO":    repoPath,
-		"ADVERSARY_INPUT":   inputPath,
-		"ADVERSARY_OUTPUT":  outputPath,
-		"ADVERSARY_VERBOSE": boolEnv(opts.Verbose),
+		"ADVERSARY_REPO":               repoPath,
+		"ADVERSARY_INPUT":              inputPath,
+		"ADVERSARY_OUTPUT":             outputPath,
+		"ADVERSARY_VERBOSE":            boolEnv(opts.Verbose),
+		"ADVERSARY_INCLUDE_SUPPRESSED": boolEnv(opts.IncludeSuppressed),
 	}
 	return RunConfig{
 		Resolved: resolved,

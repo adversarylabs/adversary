@@ -3,7 +3,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 export const DEFAULT_INPUT_PATH = "/adversary/input.json";
 export const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
 export const DEFAULT_REPO_PATH = "/workspace";
-export const FINDINGS_SCHEMA_VERSION = "adversary.findings.v1";
+export const REVIEW_SCHEMA_VERSION = "adversary.review.v1";
 const verboseValues = new Set(["1", "true", "TRUE", "yes", "YES"]);
 export const Severity = {
     Info: "info",
@@ -83,11 +83,11 @@ export class Adversary {
         if (options.name.length === 0) {
             throw new Error("Adversary name must be a non-empty string.");
         }
-        if (options.schemaVersion !== undefined && options.schemaVersion !== FINDINGS_SCHEMA_VERSION) {
+        if (options.schemaVersion !== undefined && options.schemaVersion !== REVIEW_SCHEMA_VERSION) {
             throw new Error(`Unsupported schemaVersion "${options.schemaVersion}".`);
         }
         this.name = options.name;
-        this.schemaVersion = options.schemaVersion ?? FINDINGS_SCHEMA_VERSION;
+        this.schemaVersion = options.schemaVersion ?? REVIEW_SCHEMA_VERSION;
     }
     rule(id, handler) {
         if (id.length === 0) {
@@ -117,7 +117,7 @@ export class Adversary {
             findings: sortFindings(findings),
         };
         if (options.write !== false) {
-            await writeOutput(output, options.outputPath);
+            await writeOutput(createAdversaryRunEnvelope(output, repoPath), options.outputPath);
         }
         return output;
     }
@@ -279,5 +279,82 @@ function isRecord(value) {
 }
 function omitUndefined(value) {
     return Object.fromEntries(Object.entries(value).filter(([, entryValue]) => entryValue !== undefined));
+}
+function createAdversaryRunEnvelope(output, repoPath) {
+    return {
+        protocolVersion: 1,
+        result: normalizeReviewResult(output, repoPath),
+    };
+}
+function normalizeReviewResult(output, repoPath) {
+    const summary = output.summary ?? {};
+    return omitUndefined({
+        adversary: normalizeAdversary(output.adversary),
+        target: omitUndefined({
+            repository: repoPath,
+            filesScanned: summary.files_scanned ?? summary.filesScanned,
+        }),
+        positives: [],
+        observations: [],
+        findings: Array.isArray(output.findings) ? output.findings.map(normalizeReviewFinding) : [],
+        suppressed: { observations: 0, findings: 0 },
+    });
+}
+function normalizeAdversary(value) {
+    if (typeof value === "object" && value !== null) {
+        return value;
+    }
+    return { name: String(value ?? "adversary") };
+}
+function normalizeReviewFinding(finding) {
+    return omitUndefined({
+        id: finding.id ?? finding.rule_id ?? finding.ruleId ?? finding.title,
+        ruleId: finding.ruleId ?? finding.rule_id,
+        title: finding.title,
+        category: finding.category ?? "general",
+        severity: finding.severity,
+        confidence: finding.confidence ?? "medium",
+        summary: finding.summary ?? finding.message ?? finding.title,
+        whyItMatters: finding.whyItMatters ?? finding.why_it_matters,
+        impact: finding.impact,
+        evidence: normalizeReviewEvidence(finding.evidence, finding.file ?? finding.path, finding.line),
+        recommendation: normalizeRecommendation(finding.recommendation),
+        remediation: finding.remediation,
+        tags: finding.tags,
+        metadata: finding.metadata,
+    });
+}
+function normalizeReviewEvidence(evidence, file, line) {
+    if (Array.isArray(evidence)) {
+        return evidence.map((item) => normalizeEvidenceItem(item));
+    }
+    if (file !== undefined || line !== undefined || evidence !== undefined) {
+        return [normalizeEvidenceItem({ file, line, message: typeof evidence === "string" ? evidence : undefined, metadata: typeof evidence === "object" ? evidence : undefined })];
+    }
+    return [];
+}
+function normalizeEvidenceItem(item) {
+    if (item?.file !== undefined || item?.message !== undefined || item?.snippet !== undefined) {
+        return item;
+    }
+    const location = item?.location ?? {};
+    const data = item?.data ?? item?.evidence ?? {};
+    return omitUndefined({
+        file: location.file,
+        line: location.line,
+        endLine: location.endLine ?? location.end_line,
+        message: typeof data.stage === "string" ? `${data.stage} stage` : item?.message,
+        snippet: typeof data.instruction === "string" ? data.instruction : item?.snippet,
+        metadata: Object.keys(data).length > 0 ? data : undefined,
+    });
+}
+function normalizeRecommendation(value) {
+    if (typeof value === "string") {
+        return value;
+    }
+    if (value !== undefined && value !== null) {
+        return [value.summary, value.details].filter((item) => typeof item === "string" && item.length > 0).join("\n\n");
+    }
+    return undefined;
 }
 //# sourceMappingURL=index.js.map
