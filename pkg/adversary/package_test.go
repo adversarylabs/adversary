@@ -192,6 +192,62 @@ func TestCacheInstallRejectsEscapingDigestSymlink(t *testing.T) {
 	}
 }
 
+func TestCacheInstallRepairsMissingIndexFromValidOrphan(t *testing.T) {
+	dir := t.TempDir()
+	writePackageFile(t, dir, "adversary.yaml", "name: local/test\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writePackageFile(t, dir, "dist/index.js", "")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := oci.ParseReference("local/test:1.0.0")
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.LayerDigest: artifact.Layer}}
+	cache := Cache{Root: t.TempDir()}
+	first, err := cache.Install(pulled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(cache.Root, "index")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(cache.Root, "digests")); err != nil {
+		t.Fatal(err)
+	}
+	second, err := cache.Install(pulled)
+	if err != nil {
+		t.Fatalf("repair install: %v", err)
+	}
+	if second.Path != first.Path {
+		t.Fatalf("repair path = %q, want %q", second.Path, first.Path)
+	}
+	if _, ok := cache.ResolveDigest(artifact.ManifestDigest); !ok {
+		t.Fatal("digest index was not repaired")
+	}
+}
+
+func TestCacheInstallRejectsCorruptOrphan(t *testing.T) {
+	dir := t.TempDir()
+	writePackageFile(t, dir, "adversary.yaml", "name: local/test\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writePackageFile(t, dir, "dist/index.js", "")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := oci.ParseReference("local/test:1.0.0")
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.LayerDigest: artifact.Layer}}
+	cache := Cache{Root: t.TempDir()}
+	record, err := cache.Install(pulled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(record.Path, ManifestFile), []byte("name: wrong/name\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.Install(pulled); err == nil {
+		t.Fatal("accepted corrupt orphan")
+	}
+}
+
 func writePackageFile(t *testing.T, dir, rel, content string) {
 	t.Helper()
 	path := filepath.Join(dir, rel)

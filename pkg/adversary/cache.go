@@ -1,10 +1,12 @@
 package adversary
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,11 +69,6 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		return InstallRecord{}, err
 	}
 	destRel := filepath.ToSlash(filepath.Join("artifacts", digestPath))
-	if _, err := rooted.Lstat(destRel); err == nil {
-		return InstallRecord{}, fmt.Errorf("artifact destination already exists")
-	} else if !os.IsNotExist(err) {
-		return InstallRecord{}, err
-	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return InstallRecord{}, err
@@ -102,14 +99,26 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if metadata.Name == "" {
 		return InstallRecord{}, fmt.Errorf("%s is required", ManifestFile)
 	}
+	expectedFiles, err := snapshotFiles(stage)
+	if err != nil {
+		return InstallRecord{}, err
+	}
 	if err := stage.Close(); err != nil {
 		return InstallRecord{}, err
 	}
 	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(destRel)), 0755); err != nil {
 		return InstallRecord{}, err
 	}
-	if err := rooted.Rename(stageRel, destRel); err != nil {
-		return InstallRecord{}, fmt.Errorf("publish artifact: %w", err)
+	if _, err := rooted.Lstat(destRel); err == nil {
+		if err := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); err != nil {
+			return InstallRecord{}, fmt.Errorf("invalid existing artifact: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return InstallRecord{}, err
+	} else if err := rooted.Rename(stageRel, destRel); err != nil {
+		if validateErr := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); validateErr != nil {
+			return InstallRecord{}, fmt.Errorf("publish artifact: %w", err)
+		}
 	}
 	destination := filepath.Join(c.Root, filepath.FromSlash(destRel))
 	record := InstallRecord{
@@ -123,6 +132,72 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		return InstallRecord{}, err
 	}
 	return record, nil
+}
+
+type installedFile struct {
+	size   int64
+	digest [sha256.Size]byte
+}
+
+func snapshotFiles(rooted *os.Root) (map[string]installedFile, error) {
+	files := map[string]installedFile{}
+	err := fs.WalkDir(rooted.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("non-regular file %q", path)
+		}
+		data, err := rooted.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[path] = installedFile{size: int64(len(data)), digest: sha256.Sum256(data)}
+		return nil
+	})
+	return files, err
+}
+
+func validateInstalledArtifact(rooted *os.Root, rel string, metadata ManifestMetadata, expectedManifest []byte, expected map[string]installedFile) error {
+	sub, err := rooted.OpenRoot(rel)
+	if err != nil {
+		return err
+	}
+	defer sub.Close()
+	manifest, err := sub.ReadFile(ManifestFile)
+	if err != nil {
+		return err
+	}
+	parsed, err := canonical.Parse(manifest)
+	if err != nil {
+		return err
+	}
+	if parsed.Name != metadata.Name || parsed.Version != metadata.Version {
+		return fmt.Errorf("manifest identity mismatch")
+	}
+	if len(expectedManifest) > 0 && !bytes.Equal(manifest, expectedManifest) {
+		return fmt.Errorf("manifest content mismatch")
+	}
+	actual, err := snapshotFiles(sub)
+	if err != nil {
+		return err
+	}
+	if len(actual) != len(expected) {
+		return fmt.Errorf("installed file set mismatch")
+	}
+	for path, want := range expected {
+		if got, ok := actual[path]; !ok || got != want {
+			return fmt.Errorf("file mismatch %q", path)
+		}
+	}
+	return nil
 }
 
 func (c Cache) Resolve(name string) (InstallRecord, bool) {

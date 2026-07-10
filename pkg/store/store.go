@@ -3,6 +3,7 @@ package store
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -318,18 +319,22 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		return "", err
 	}
 	destination := filepath.Join(s.Root, "artifacts", digestPath)
-	if info, err := os.Stat(filepath.Join(destination, "adversary.yaml")); err == nil && !info.IsDir() {
-		data, err := os.ReadFile(filepath.Join(destination, "adversary.yaml"))
-		if err != nil {
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
+		return "", err
+	}
+	rooted, err := os.OpenRoot(s.Root)
+	if err != nil {
+		return "", err
+	}
+	defer rooted.Close()
+	destRel := filepath.ToSlash(filepath.Join("artifacts", digestPath))
+	if _, err := rooted.Lstat(destRel); err == nil {
+		if err := validateMaterialized(rooted, destRel, record, nil); err != nil {
 			return "", err
 		}
-		if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
-			return "", fmt.Errorf("validate materialized adversary.yaml: %w", err)
-		}
-		if err := prepareRuntimeNodeModules(destination); err != nil {
-			return "", err
-		}
-		return destination, nil
+		return destination, nil // Existing digest materializations are immutable.
+	} else if !os.IsNotExist(err) {
+		return "", err
 	}
 	if _, err := oci.ParseDigest(record.LayerDigest); err != nil {
 		return "", err
@@ -345,12 +350,23 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		return "", err
 	}
 	defer file.Close()
-	if err := os.RemoveAll(destination); err != nil {
+	if err := rooted.MkdirAll("artifacts", 0755); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(destination, 0755); err != nil {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
 		return "", err
 	}
+	stageRel := fmt.Sprintf("artifacts/.materialize-%x", nonce)
+	if err := rooted.Mkdir(stageRel, 0700); err != nil {
+		return "", err
+	}
+	defer rooted.RemoveAll(stageRel)
+	stage, err := rooted.OpenRoot(stageRel)
+	if err != nil {
+		return "", err
+	}
+	defer stage.Close()
 	gz, err := gzip.NewReader(file)
 	if err != nil {
 		return "", err
@@ -365,45 +381,135 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		clean := filepath.Clean(header.Name)
-		if clean == "." || strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
+		clean := filepath.ToSlash(filepath.Clean(header.Name))
+		rel, pathErr := safepath.Relative(strings.Split(clean, "/")...)
+		if pathErr != nil || clean == "." || clean != header.Name {
 			return "", fmt.Errorf("unsafe package path %q", header.Name)
 		}
-		target := filepath.Join(destination, filepath.FromSlash(header.Name))
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		if err := stage.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
 			return "", err
 		}
 		data, err := io.ReadAll(tr)
 		if err != nil {
 			return "", err
 		}
-		if err := os.WriteFile(target, data, 0644); err != nil {
+		if err := stage.WriteFile(rel, data, 0644); err != nil {
 			return "", err
 		}
 	}
-	manifestPath := filepath.Join(destination, "adversary.yaml")
-	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
-		data, err := s.AdversaryManifest(record)
+	if _, err := stage.Stat("adversary.yaml"); os.IsNotExist(err) {
+		if record.AdversaryManifestDigest == "" {
+			return "", fmt.Errorf("adversary.yaml missing from package")
+		}
+		data, err := s.readRooted(s.contentPath("adversary-manifests", record.AdversaryManifestDigest))
 		if err != nil {
 			return "", err
 		}
-		if err := os.WriteFile(manifestPath, data, 0644); err != nil {
+		if err := stage.WriteFile("adversary.yaml", data, 0644); err != nil {
 			return "", err
 		}
 	} else if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(manifestPath)
+	data, err := stage.ReadFile("adversary.yaml")
 	if err != nil {
 		return "", err
 	}
 	if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
 		return "", fmt.Errorf("validate materialized adversary.yaml: %w", err)
 	}
-	if err := prepareRuntimeNodeModules(destination); err != nil {
+	stageAbs := filepath.Join(s.Root, filepath.FromSlash(stageRel))
+	if err := prepareRuntimeNodeModules(stageAbs); err != nil {
 		return "", err
 	}
+	expected, err := snapshotMaterialized(stage)
+	if err != nil {
+		return "", err
+	}
+	if err := stage.Close(); err != nil {
+		return "", err
+	}
+	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(destRel)), 0755); err != nil {
+		return "", err
+	}
+	if err := rooted.Rename(stageRel, destRel); err != nil {
+		if validateErr := validateMaterialized(rooted, destRel, record, expected); validateErr == nil {
+			return destination, nil
+		}
+		return "", fmt.Errorf("publish materialization: %w", err)
+	}
 	return destination, nil
+}
+
+type materializedFile struct {
+	size   int64
+	digest [sha256.Size]byte
+}
+
+func snapshotMaterialized(rooted *os.Root) (map[string]materializedFile, error) {
+	files := map[string]materializedFile{}
+	err := fs.WalkDir(rooted.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("non-regular materialized file %q", path)
+		}
+		data, err := rooted.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[path] = materializedFile{size: int64(len(data)), digest: sha256.Sum256(data)}
+		return nil
+	})
+	return files, err
+}
+
+func validateMaterialized(rooted *os.Root, rel string, record Record, expected map[string]materializedFile) error {
+	sub, err := rooted.OpenRoot(rel)
+	if err != nil {
+		return fmt.Errorf("unsafe materialization: %w", err)
+	}
+	defer sub.Close()
+	data, err := sub.ReadFile("adversary.yaml")
+	if err != nil {
+		return err
+	}
+	if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
+		return fmt.Errorf("validate materialized adversary.yaml: %w", err)
+	}
+	actual, err := snapshotMaterialized(sub)
+	if err != nil {
+		return err
+	}
+	for _, file := range record.Files {
+		clean := filepath.ToSlash(filepath.Clean(file.Path))
+		if clean != file.Path {
+			return fmt.Errorf("unsafe materialized path %q", file.Path)
+		}
+		got, ok := actual[clean]
+		if !ok || got.size != file.Size || fmt.Sprintf("%x", got.digest) != file.SHA256 {
+			return fmt.Errorf("materialized file mismatch %q", file.Path)
+		}
+	}
+	if expected != nil {
+		if len(actual) != len(expected) {
+			return fmt.Errorf("materialized file set mismatch")
+		}
+		for path, want := range expected {
+			if got, ok := actual[path]; !ok || got != want {
+				return fmt.Errorf("materialized file mismatch %q", path)
+			}
+		}
+	}
+	return nil
 }
 
 func parseAndCheckManifest(data []byte, name, version string) (canonical.Manifest, error) {

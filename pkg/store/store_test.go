@@ -1,6 +1,9 @@
 package store
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"os"
 	"path/filepath"
@@ -240,6 +243,102 @@ func TestMaterializeRejectsTamperedPreexistingManifest(t *testing.T) {
 	}
 	if _, err := localStore.MaterializeRecord(record); err == nil {
 		t.Fatal("MaterializeRecord accepted tampered manifest")
+	}
+}
+
+func TestMaterializeExistingFastPathIsReadOnly(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Store{Root: t.TempDir()}
+	record, err := s.Put(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestPath, _ := oci.DigestPath(record.Digest)
+	record.Files = nil // This test isolates fast-path mutation behavior.
+	destination := filepath.Join(s.Root, "artifacts", digestPath)
+	writeFile(t, destination, "adversary.yaml", string(artifact.AdversaryManifest))
+	writeFile(t, destination, "vendor/adversary-sdk/dist/index.js", "const repoPath = input.source.path;")
+	before, _ := os.ReadFile(filepath.Join(destination, "vendor/adversary-sdk/dist/index.js"))
+	if _, err := s.MaterializeRecord(record); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(filepath.Join(destination, "vendor/adversary-sdk/dist/index.js"))
+	if string(after) != string(before) {
+		t.Fatal("existing materialization was patched")
+	}
+	if _, err := os.Stat(filepath.Join(destination, "node_modules")); !os.IsNotExist(err) {
+		t.Fatal("existing materialization was mutated")
+	}
+}
+
+func TestMaterializeRejectsEscapingDigestSymlink(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Store{Root: t.TempDir()}
+	record, err := s.Put(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	sentinel := filepath.Join(outside, "adversary.yaml")
+	if err := os.WriteFile(sentinel, []byte("outside"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(s.Root, "artifacts"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(s.Root, "artifacts", "sha256")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := s.MaterializeRecord(record); err == nil {
+		t.Fatal("materialized through escaping symlink")
+	}
+	data, _ := os.ReadFile(sentinel)
+	if string(data) != "outside" {
+		t.Fatalf("outside file changed: %q", data)
+	}
+}
+
+func TestMaterializeExtractionRejectsTraversal(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Store{Root: t.TempDir()}
+	record, err := s.Put(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	data := []byte("escape")
+	if err := tw.WriteHeader(&tar.Header{Name: "../escape", Mode: 0644, Size: int64(len(data))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	record.LayerDigest = oci.Digest(buf.Bytes())
+	if err := s.writeContent("blobs", record.LayerDigest, buf.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MaterializeRecord(record); err == nil {
+		t.Fatal("accepted traversal layer")
+	}
+	if _, err := os.Stat(filepath.Join(s.Root, "escape")); !os.IsNotExist(err) {
+		t.Fatal("traversal wrote outside staging")
 	}
 }
 
