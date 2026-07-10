@@ -93,6 +93,51 @@ func TestCreatePreservesDestinationCreatedAtPublishRace(t *testing.T) {
 	}
 }
 
+func TestCreateDoesNotReplaceConcurrentEmptyDestination(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "empty-race")
+	original := publishProject
+	var before os.FileInfo
+	publishProject = func(staging, destination string) error {
+		if err := os.Mkdir(destination, 0711); err != nil {
+			return err
+		}
+		var err error
+		before, err = os.Stat(destination)
+		if err != nil {
+			return err
+		}
+		return original(staging, destination)
+	}
+	t.Cleanup(func() { publishProject = original })
+	if _, err := Create(Options{Destination: dst}); err == nil {
+		t.Fatal("Create succeeded")
+	}
+	after, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("concurrent empty destination was replaced")
+	}
+	if after.Mode().Perm() != 0711 {
+		t.Fatalf("destination mode = %o, want 711", after.Mode().Perm())
+	}
+}
+
+func TestCreatePublishesProjectRootMode(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "mode-project")
+	if _, err := Create(Options{Destination: dst}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0755 {
+		t.Fatalf("project root mode = %o, want 755", info.Mode().Perm())
+	}
+}
+
 func TestRenderSuccessUsesLocationAndShellQuotes(t *testing.T) {
 	var out bytes.Buffer
 	location := "/tmp/a path/it's-here"

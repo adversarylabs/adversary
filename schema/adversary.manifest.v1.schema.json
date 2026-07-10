@@ -31,7 +31,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^[^\\u0000\\s](?:[^\\u0000]*[^\\u0000\\s])?$"
+            "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
           }
         }
       }
@@ -64,18 +64,18 @@
         },
         "image": {
           "type": "string",
-          "pattern": "^[^\\u0000\\s]+$"
+          "pattern": "^[^\\x00\\s]+$"
         },
         "version": {
           "type": "string",
-          "pattern": "^[^\\u0000\\s](?:[^\\u0000]*[^\\u0000\\s])?$"
+          "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
         },
         "command": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^[^\\u0000\\s](?:[^\\u0000]*[^\\u0000\\s])?$"
+            "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
           }
         }
       }
@@ -92,14 +92,14 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[^\\u0000\\s](?:[^\\u0000]*[^\\u0000\\s])?$"
+                "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
               }
             },
             "write": {
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[^\\u0000\\s](?:[^\\u0000]*[^\\u0000\\s])?$"
+                "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
               }
             }
           }

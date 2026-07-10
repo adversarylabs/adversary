@@ -22,7 +22,7 @@ var supportedSDKs = map[string]string{
 	"typescript": "TypeScript",
 }
 
-var publishProject = os.Rename
+var publishProject = publishNoReplace
 
 type Options struct {
 	Destination string
@@ -111,9 +111,11 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	// Rename publishes the fully rendered sibling in one filesystem operation.
-	// A concurrently created non-empty destination cannot be replaced by a
-	// directory rename and is left untouched.
+	if err := os.Chmod(staging, 0755); err != nil {
+		return Result{}, fmt.Errorf("set project root permissions: %w", err)
+	}
+	// The platform helper publishes the fully rendered sibling atomically and
+	// fails if any destination was created concurrently.
 	if err := publishProject(staging, destination); err != nil {
 		if _, statErr := os.Lstat(destination); statErr == nil {
 			return Result{}, fmt.Errorf("destination already exists: %s", destination)

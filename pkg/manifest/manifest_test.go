@@ -1,10 +1,14 @@
 package manifest
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+	"go.yaml.in/yaml/v3"
 )
 
 const valid = `name: adversarylabs/example
@@ -130,6 +134,55 @@ func TestPublishedFixtures(t *testing.T) {
 	}
 	if _, err := Parse(invalidFixture); err == nil {
 		t.Fatal("invalid fixture parsed successfully")
+	}
+}
+
+func TestPublishedDraft2020SchemaMatchesCanonicalFixtures(t *testing.T) {
+	schemaData, err := os.ReadFile(filepath.Join("..", "..", "schema", "adversary.manifest.v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schemaDocument any
+	if err := json.Unmarshal(schemaData, &schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	const schemaURL = "https://adversary.dev/schemas/adversary.manifest.v1.schema.json"
+	if err := compiler.AddResource(schemaURL, schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := compiler.Compile(schemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := map[string]struct {
+		input string
+		valid bool
+	}{
+		"valid":               {valid, true},
+		"unknown":             {valid + "unknown: true\n", false},
+		"bad semver":          {strings.Replace(valid, "1.2.3", "1.2.3-01", 1), false},
+		"unsupported runtime": {strings.Replace(valid, "name: node", "name: shell", 1), false},
+		"empty command":       {strings.Replace(valid, "command: [dist/index.js]", "command: []", 1), false},
+		"whitespace path":     {strings.Replace(valid, `read: ["."]`, `read: [" ."]`, 1), false},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			var document any
+			if err := yaml.Unmarshal([]byte(tc.input), &document); err != nil {
+				t.Fatal(err)
+			}
+			schemaErr := compiled.Validate(document)
+			_, parseErr := Parse([]byte(tc.input))
+			if tc.valid && (schemaErr != nil || parseErr != nil) {
+				t.Fatalf("validity mismatch: schema=%v parser=%v", schemaErr, parseErr)
+			}
+			if !tc.valid && (schemaErr == nil || parseErr == nil) {
+				t.Fatalf("invalid input accepted: schema=%v parser=%v", schemaErr, parseErr)
+			}
+		})
 	}
 }
 

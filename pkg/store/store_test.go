@@ -73,23 +73,6 @@ export class Adversary {
     const repoPath = input.source.path;
   }
 }
-
-func TestPutRejectsManifestMetadataMismatch(t *testing.T) {
-	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
-	if err != nil { t.Fatal(err) }
-	artifact.Name = "another-name"
-	if _, err := (Store{Root: t.TempDir()}).Put(artifact); err == nil { t.Fatal("Put succeeded") }
-}
-
-func TestMaterializeRejectsTamperedPreexistingManifest(t *testing.T) {
-	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
-	if err != nil { t.Fatal(err) }
-	localStore := Store{Root: t.TempDir()}
-	record, err := localStore.Put(artifact); if err != nil { t.Fatal(err) }
-	path, err := localStore.MaterializeRecord(record); if err != nil { t.Fatal(err) }
-	if err := os.WriteFile(filepath.Join(path, "adversary.yaml"), []byte("name: wrong/name\n"), 0644); err != nil { t.Fatal(err) }
-	if _, err := localStore.MaterializeRecord(record); err == nil { t.Fatal("MaterializeRecord accepted tampered manifest") }
-}
 export async function parseInput(path = DEFAULT_INPUT_PATH) {}
 export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 `)
@@ -118,6 +101,98 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 		if !strings.Contains(text, want) {
 			t.Fatalf("patched SDK missing %s:\n%s", want, text)
 		}
+	}
+}
+
+func TestPutRejectsManifestMetadataMismatch(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact.ManifestName = "another/name"
+	if _, err := (Store{Root: t.TempDir()}).Put(artifact); err == nil {
+		t.Fatal("Put succeeded")
+	}
+}
+
+func TestPutSeparatesAliasFromCanonicalManifestName(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t), NameOverride: "ghcr.io/other/different-alias"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localStore := Store{Root: t.TempDir()}
+	record, err := localStore.Put(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Name != "ghcr.io/other/different-alias" {
+		t.Fatalf("record alias = %q", record.Name)
+	}
+	if record.ManifestName != "local/security-reviewer" {
+		t.Fatalf("record manifest name = %q", record.ManifestName)
+	}
+	persisted, err := localStore.Inspect(record.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ManifestName != record.ManifestName {
+		t.Fatalf("persisted manifest name = %q", persisted.ManifestName)
+	}
+}
+
+func TestPutRejectsSameBasenameDifferentCanonicalNamespace(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t), NameOverride: "ghcr.io/other/security-reviewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact.ManifestName = "other/security-reviewer"
+	if _, err := (Store{Root: t.TempDir()}).Put(artifact); err == nil {
+		t.Fatal("Put succeeded")
+	}
+}
+
+func TestPutAllowsDefaultTagForOptionalManifestVersion(t *testing.T) {
+	dir := testProject(t)
+	manifestPath := filepath.Join(dir, "adversary.yaml")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, []byte(strings.Replace(string(data), "version: 0.1.0\n", "", 1)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := (Store{Root: t.TempDir()}).Put(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Version != "latest" {
+		t.Fatalf("record version = %q", record.Version)
+	}
+}
+
+func TestMaterializeRejectsTamperedPreexistingManifest(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localStore := Store{Root: t.TempDir()}
+	record, err := localStore.Put(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := localStore.MaterializeRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "adversary.yaml"), []byte("name: wrong/name\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localStore.MaterializeRecord(record); err == nil {
+		t.Fatal("MaterializeRecord accepted tampered manifest")
 	}
 }
 

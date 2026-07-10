@@ -24,6 +24,7 @@ type Store struct {
 
 type Record struct {
 	Name                    string            `json:"name"`
+	ManifestName            string            `json:"manifestName,omitempty"`
 	Version                 string            `json:"version"`
 	Digest                  string            `json:"digest"`
 	AdversaryManifestDigest string            `json:"adversaryManifestDigest,omitempty"`
@@ -69,7 +70,7 @@ func Default() (Store, error) {
 }
 
 func (s Store) Put(artifact pack.Artifact) (Record, error) {
-	_, err := parseAndCheckManifest(artifact.AdversaryManifest, artifact.Name, artifact.Version)
+	_, err := parseAndCheckManifest(artifact.AdversaryManifest, artifact.ManifestName, artifact.Version)
 	if err != nil {
 		return Record{}, fmt.Errorf("validate packed adversary.yaml: %w", err)
 	}
@@ -87,6 +88,7 @@ func (s Store) Put(artifact pack.Artifact) (Record, error) {
 	}
 	record := Record{
 		Name:                    artifact.Name,
+		ManifestName:            artifact.ManifestName,
 		Version:                 artifact.Version,
 		Digest:                  artifact.ManifestDigest,
 		AdversaryManifestDigest: artifact.AdversaryManifestDigest,
@@ -275,7 +277,7 @@ func (s Store) AdversaryManifest(record Record) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("adversary.yaml is required for publishing: %w", err)
 	}
-	if _, err := parseAndCheckManifest(data, record.Name, record.Version); err != nil {
+	if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
 		return nil, err
 	}
 	if record.AdversaryManifestDigest != "" {
@@ -297,7 +299,7 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if _, err := parseAndCheckManifest(data, record.Name, record.Version); err != nil {
+		if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
 			return "", fmt.Errorf("validate materialized adversary.yaml: %w", err)
 		}
 		if err := prepareRuntimeNodeModules(destination); err != nil {
@@ -366,7 +368,7 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := parseAndCheckManifest(data, record.Name, record.Version); err != nil {
+	if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
 		return "", fmt.Errorf("validate materialized adversary.yaml: %w", err)
 	}
 	if err := prepareRuntimeNodeModules(destination); err != nil {
@@ -380,10 +382,13 @@ func parseAndCheckManifest(data []byte, name, version string) (canonical.Manifes
 	if err != nil {
 		return canonical.Manifest{}, err
 	}
-	if name != "" && name != m.Name && canonical.ShortName(name) != canonical.ShortName(m.Name) {
+	if name != "" && name != m.Name {
 		return canonical.Manifest{}, fmt.Errorf("manifest name %q does not match metadata name %q", m.Name, name)
 	}
-	if version != "" && version != m.Version {
+	if m.Version == "" && version != "" && version != oci.DefaultTag {
+		return canonical.Manifest{}, fmt.Errorf("manifest has no version but metadata version is %q", version)
+	}
+	if m.Version != "" && version != "" && version != m.Version {
 		return canonical.Manifest{}, fmt.Errorf("manifest version %q does not match metadata version %q", m.Version, version)
 	}
 	return m, nil
