@@ -847,3 +847,55 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+func TestBrowserCallbackRejectsMismatchTokenAndRepeatWithoutBlocking(t *testing.T) {
+	results := make(chan browserLoginOutcome, 1)
+	calls := 0
+	h := browserCallbackHandler("expected", results, func(code string) (adversarylabs.TokenResponse, error) {
+		calls++
+		return adversarylabs.TokenResponse{Token: "exchanged"}, nil
+	})
+	for _, tc := range []struct {
+		target, method string
+		status         int
+	}{
+		{"/?code=ok&state=wrong", http.MethodGet, http.StatusBadRequest},
+		{"/?code=ok&state=expected&token=leaked", http.MethodGet, http.StatusBadRequest},
+		{"/?code=ok&state=expected", http.MethodPost, http.StatusMethodNotAllowed},
+	} {
+		req := httptest.NewRequest(tc.method, tc.target, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.status {
+			t.Fatalf("%s: status = %d", tc.target, rec.Code)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/?code=ok&state=expected", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		want := http.StatusOK
+		if i == 1 {
+			want = http.StatusConflict
+		}
+		if rec.Code != want {
+			t.Fatalf("repeat %d: status = %d", i, rec.Code)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("exchange calls = %d", calls)
+	}
+	if got := <-results; got.token.Token != "exchanged" {
+		t.Fatalf("outcome = %#v", got)
+	}
+}
+
+func TestReadPasswordLine(t *testing.T) {
+	got, err := readPasswordLine(strings.NewReader("secret\r\n"))
+	if err != nil || got != "secret" {
+		t.Fatalf("password = %q, err = %v", got, err)
+	}
+	if _, err := readPasswordLine(strings.NewReader("\n")); err == nil {
+		t.Fatal("expected empty password error")
+	}
+}

@@ -1,8 +1,10 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -26,6 +29,7 @@ import (
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/store"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 func Execute() error {
@@ -91,10 +95,10 @@ type initOptions struct {
 }
 
 type loginOptions struct {
-	ci           bool
-	name         string
-	emailAddress string
-	password     string
+	ci            bool
+	name          string
+	emailAddress  string
+	passwordStdin bool
 }
 
 type logoutOptions struct {
@@ -359,7 +363,7 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
   adversary login --name "Marc's MacBook Pro"
   adversary login --ci
   adversary login --email-address marc@example.com
-  adversary login --email-address marc@example.com --password "$ADVERSARY_PASSWORD"`,
+  printf '%s\n' "$ADVERSARY_PASSWORD" | adversary login --email-address marc@example.com --password-stdin`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := adversarylabs.DefaultConfigStore()
@@ -368,12 +372,14 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			}
 			client := adversarylabs.NewClientWithBaseURL(store, valueOf(apiURL))
 			var token adversarylabs.TokenResponse
-			if opts.emailAddress != "" || opts.password != "" {
+			if opts.emailAddress != "" || opts.passwordStdin {
 				if opts.emailAddress == "" {
-					return fmt.Errorf("--email-address is required when --password is provided")
+					return fmt.Errorf("--email-address is required when --password-stdin is provided")
 				}
-				password := opts.password
-				if password == "" {
+				var password string
+				if opts.passwordStdin {
+					password, err = readPasswordLine(os.Stdin)
+				} else {
 					var err error
 					password, err = promptPassword(stderr)
 					if err != nil {
@@ -395,13 +401,14 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 					return err
 				}
 			}
-			if err := store.SetAuth(adversarylabs.ResolveRegistryHost(), adversarylabs.Auth{
+			if err := store.SetAuth(adversarylabs.AuthKey(valueOf(apiURL), "default"), adversarylabs.Auth{
 				Token:             token.Token,
 				ClientID:          token.ClientID,
 				ExpiresAt:         token.ExpiresAt,
 				RegistryNamespace: token.RegistryNamespace,
 				Namespace:         token.Namespace,
 				Team:              token.Team,
+				RegistryHost:      adversarylabs.ResolveRegistryHost(),
 			}); err != nil {
 				return err
 			}
@@ -413,7 +420,7 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.ci, "ci", false, "request a short-lived automation token")
 	cmd.Flags().StringVar(&opts.name, "name", "", "friendly name for this client")
 	cmd.Flags().StringVar(&opts.emailAddress, "email-address", "", "email address for password login")
-	cmd.Flags().StringVar(&opts.password, "password", "", "password for password login; if omitted with --email-address, prompt securely")
+	cmd.Flags().BoolVar(&opts.passwordStdin, "password-stdin", false, "read the password from standard input")
 	return cmd
 }
 
@@ -430,9 +437,17 @@ func newLogoutCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			auth, ok, err := store.RemoveAuth(adversarylabs.ResolveRegistryHost())
+			key := adversarylabs.AuthKey(valueOf(apiURL), "default")
+			auth, ok, err := store.AuthE(key)
 			if err != nil {
 				return err
+			}
+			if !ok { // migration fallback
+				auth, ok, err = store.AuthE(adversarylabs.ResolveRegistryHost())
+				key = adversarylabs.ResolveRegistryHost()
+				if err != nil {
+					return err
+				}
 			}
 			if !ok {
 				fmt.Fprintln(stdout, "No Adversary Labs login was configured.")
@@ -441,10 +456,11 @@ func newLogoutCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if !opts.localOnly && auth.Token != "" {
 				client := adversarylabs.NewClientWithBaseURL(store, valueOf(apiURL))
 				if err := client.Revoke(cmd.Context(), auth.Token); err != nil {
-					fmt.Fprintf(stderr, "Token revocation failed: %v\n", err)
-					fmt.Fprintln(stdout, "Removed local Adversary Labs credentials.")
-					return nil
+					return fmt.Errorf("token revocation failed; local credentials preserved: %w", err)
 				}
+			}
+			if _, _, err := store.RemoveAuth(key); err != nil {
+				return err
 			}
 			fmt.Fprintln(stdout, "Logged out of Adversary Labs.")
 			return nil
@@ -591,7 +607,11 @@ func newSearchCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 				return err
 			}
 			var token string
-			if auth, ok := store.Auth(adversarylabs.ResolveRegistryHost()); ok {
+			auth, ok, err := store.AuthE(adversarylabs.ResolveRegistryHost())
+			if err != nil {
+				return err
+			}
+			if ok {
 				token = auth.Token
 			}
 			client := adversarylabs.NewClientWithBaseURL(store, valueOf(apiURL))
@@ -635,7 +655,10 @@ func newWhoamiCommand(stdout, stderr io.Writer, apiURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			auth, ok := store.Auth(adversarylabs.ResolveRegistryHost())
+			auth, ok, err := store.AuthE(adversarylabs.ResolveRegistryHost())
+			if err != nil {
+				return err
+			}
 			if !ok {
 				fmt.Fprintln(stdout, "Not logged in.")
 				fmt.Fprintln(stdout)
@@ -804,59 +827,54 @@ func waitForLogin(ctx context.Context, client adversarylabs.Client, login advers
 }
 
 func loginWithBrowser(ctx context.Context, stdout io.Writer, client adversarylabs.Client, opts *loginOptions) (adversarylabs.TokenResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	state, err := randomURLToken(32)
+	if err != nil {
+		return adversarylabs.TokenResponse{}, fmt.Errorf("generate login state: %w", err)
+	}
+	verifier, err := randomURLToken(48)
+	if err != nil {
+		return adversarylabs.TokenResponse{}, fmt.Errorf("generate PKCE verifier: %w", err)
+	}
+	pathToken, err := randomURLToken(24)
+	if err != nil {
+		return adversarylabs.TokenResponse{}, fmt.Errorf("generate callback path: %w", err)
+	}
+	callbackPath := "/callback/" + pathToken
+	challengeBytes := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(challengeBytes[:])
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return adversarylabs.TokenResponse{}, fmt.Errorf("start local login callback: %w", err)
 	}
 	defer listener.Close()
 
-	result := make(chan adversarylabs.TokenResponse, 1)
-	failures := make(chan error, 1)
-	server := &http.Server{}
+	result := make(chan browserLoginOutcome, 1)
+	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 15 * time.Second}
 	mux := http.NewServeMux()
 	server.Handler = mux
-	callbackURL := "http://" + listener.Addr().String() + "/callback"
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, req *http.Request) {
-		query := req.URL.Query()
-		if message := query.Get("error"); message != "" {
-			failures <- fmt.Errorf("login failed: %s", message)
-			http.Error(w, "Login failed. You can close this window.", http.StatusBadRequest)
-			return
-		}
-		if token := query.Get("token"); token != "" {
-			result <- adversarylabs.TokenResponse{
-				Token:     token,
-				ClientID:  query.Get("client_id"),
-				ExpiresAt: query.Get("expires_at"),
-			}
-			fmt.Fprintln(w, "Login complete. You can close this window.")
-			return
-		}
-		if code := query.Get("code"); code != "" {
-			token, err := client.ExchangeCode(req.Context(), code)
-			if err != nil {
-				failures <- err
-				http.Error(w, "Login failed. You can close this window.", http.StatusBadGateway)
-				return
-			}
-			result <- token
-			fmt.Fprintln(w, "Login complete. You can close this window.")
-			return
-		}
-		failures <- fmt.Errorf("login callback did not include a token or code")
-		http.Error(w, "Login callback was missing credentials.", http.StatusBadRequest)
-	})
+	callbackURL := "http://" + listener.Addr().String() + callbackPath
+	mux.Handle(callbackPath, browserCallbackHandler(state, result, func(code string) (adversarylabs.TokenResponse, error) {
+		return client.ExchangeCode(ctx, code, verifier, callbackURL)
+	}))
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			failures <- err
+			publishBrowserOutcome(result, browserLoginOutcome{err: err})
 		}
 	}()
-	defer server.Close()
+	defer func() {
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stop()
+		_ = server.Shutdown(shutdownCtx)
+	}()
 
 	loginURL, err := client.BrowserLoginURL(adversarylabs.BrowserLoginOptions{
-		RedirectURI: callbackURL,
-		Name:        opts.name,
-		CI:          opts.ci,
+		RedirectURI:   callbackURL,
+		State:         state,
+		CodeChallenge: challenge,
+		Name:          opts.name,
+		CI:            opts.ci,
 	})
 	if err != nil {
 		return adversarylabs.TokenResponse{}, err
@@ -872,36 +890,93 @@ func loginWithBrowser(ctx context.Context, stdout io.Writer, client adversarylab
 	}
 	fmt.Fprintln(stdout, "Waiting for browser authentication...")
 	select {
-	case token := <-result:
-		return token, nil
-	case err := <-failures:
-		return adversarylabs.TokenResponse{}, err
+	case outcome := <-result:
+		return outcome.token, outcome.err
 	case <-ctx.Done():
 		return adversarylabs.TokenResponse{}, ctx.Err()
 	}
+}
+
+type browserLoginOutcome struct {
+	token adversarylabs.TokenResponse
+	err   error
+}
+
+func publishBrowserOutcome(ch chan<- browserLoginOutcome, outcome browserLoginOutcome) {
+	select {
+	case ch <- outcome:
+	default:
+	}
+}
+
+func browserCallbackHandler(state string, result chan<- browserLoginOutcome, exchange func(string) (adversarylabs.TokenResponse, error)) http.Handler {
+	var once sync.Once
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			http.Error(w, "Method not allowed.", http.StatusMethodNotAllowed)
+			return
+		}
+		query := req.URL.Query()
+		if query.Get("state") != state {
+			http.Error(w, "Invalid login state.", http.StatusBadRequest)
+			return
+		}
+		code := query.Get("code")
+		if code == "" || query.Get("token") != "" {
+			http.Error(w, "Login callback was missing a code.", http.StatusBadRequest)
+			return
+		}
+		handled := false
+		once.Do(func() {
+			handled = true
+			token, err := exchange(code)
+			if err != nil {
+				publishBrowserOutcome(result, browserLoginOutcome{err: err})
+				http.Error(w, "Login failed. You can close this window.", http.StatusBadGateway)
+				return
+			}
+			publishBrowserOutcome(result, browserLoginOutcome{token: token})
+			fmt.Fprintln(w, "Login complete. You can close this window.")
+		})
+		if !handled {
+			http.Error(w, "Login callback was already handled.", http.StatusConflict)
+		}
+	})
+}
+
+func randomURLToken(size int) (string, error) {
+	b := make([]byte, size)
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func readPasswordLine(r io.Reader) (string, error) {
+	data, err := io.ReadAll(io.LimitReader(r, 64*1024))
+	if err != nil {
+		return "", err
+	}
+	password := strings.TrimRight(string(data), "\r\n")
+	if password == "" {
+		return "", fmt.Errorf("password from standard input is empty")
+	}
+	return password, nil
 }
 
 func promptPassword(stderr io.Writer) (string, error) {
 	fmt.Fprint(stderr, "Password: ")
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return "", fmt.Errorf("--password is required when no interactive terminal is available")
+		return "", fmt.Errorf("no interactive terminal; use --password-stdin")
 	}
 	defer tty.Close()
-	disableEcho := exec.Command("stty", "-echo")
-	disableEcho.Stdin = tty
-	_ = disableEcho.Run()
-	defer func() {
-		enableEcho := exec.Command("stty", "echo")
-		enableEcho.Stdin = tty
-		_ = enableEcho.Run()
-	}()
-	password, err := bufio.NewReader(tty).ReadString('\n')
+	password, err := term.ReadPassword(int(tty.Fd()))
 	fmt.Fprintln(stderr)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(password, "\r\n"), nil
+	return string(password), nil
 }
 
 func openBrowser(url string) error {
@@ -979,7 +1054,10 @@ func defaultAdversaryLabsPushRef(ctx context.Context, localRef string, record st
 		return "", err
 	}
 	registryHost := adversarylabs.ResolveRegistryHost()
-	auth, ok := configStore.Auth(registryHost)
+	auth, ok, err := configStore.AuthE(registryHost)
+	if err != nil {
+		return "", err
+	}
 	if !ok {
 		if registryHost != adversarylabs.DefaultRegistry {
 			namespace := cleanRegistryNamespace(os.Getenv("ADVERSARY_REGISTRY_NAMESPACE"))
