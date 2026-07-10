@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/archiveutil"
+	"github.com/adversarylabs/adversary/internal/publock"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
@@ -98,6 +98,11 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if err := os.MkdirAll(c.Root, 0755); err != nil {
 		return InstallRecord{}, err
 	}
+	publicationLock, err := publock.Acquire(c.Root, artifact.ManifestDigest)
+	if err != nil {
+		return InstallRecord{}, err
+	}
+	defer publicationLock.Close()
 	rooted, err := os.OpenRoot(c.Root)
 	if err != nil {
 		return InstallRecord{}, err
@@ -195,10 +200,10 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if err != nil {
 		return InstallRecord{}, err
 	}
-	if err := archiveutil.Seal(stage); err != nil {
+	if err := archiveutil.PreparePublish(stage); err != nil {
 		return InstallRecord{}, err
 	}
-	if err := archiveutil.ValidateSealed(stage); err != nil {
+	if err := archiveutil.ValidatePrepared(stage); err != nil {
 		return InstallRecord{}, err
 	}
 	if err := stage.Close(); err != nil {
@@ -219,9 +224,14 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 		if beforeCacheInstallPublish != nil {
 			beforeCacheInstallPublish(rooted, stageRel)
 		}
-		if err := renameSealed(rooted, stageRel, destRel); err != nil {
+		didPublish, publishErr := archiveutil.PublishSealed(c.Root, rooted, stageRel, destRel)
+		if publishErr != nil {
+			if didPublish {
+				cleanupPublished(rooted, destRel)
+				return InstallRecord{}, publishErr
+			}
 			if validateErr := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); validateErr != nil {
-				return InstallRecord{}, fmt.Errorf("publish artifact: %w", err)
+				return InstallRecord{}, fmt.Errorf("publish artifact: %w", publishErr)
 			}
 		} else {
 			published = true
@@ -251,30 +261,12 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	return record, nil
 }
 
-func renameSealed(rooted *os.Root, from, to string) error {
-	err := rooted.Rename(from, to)
-	if err == nil {
-		return nil
+func cleanupPublished(rooted *os.Root, rel string) {
+	if doomed, e := rooted.OpenRoot(rel); e == nil {
+		_ = archiveutil.Unseal(doomed)
+		_ = doomed.Close()
 	}
-	if !errors.Is(err, fs.ErrPermission) {
-		return err
-	}
-	if chmodErr := rooted.Chmod(from, 0755); chmodErr != nil {
-		return err
-	}
-	if retryErr := rooted.Rename(from, to); retryErr != nil {
-		return retryErr
-	}
-	dest, openErr := rooted.OpenRoot(to)
-	if openErr != nil {
-		return openErr
-	}
-	sealErr := archiveutil.Seal(dest)
-	closeErr := dest.Close()
-	if sealErr != nil {
-		return sealErr
-	}
-	return closeErr
+	_ = rooted.RemoveAll(rel)
 }
 
 var beforeCacheInstallPublish func(*os.Root, string)
@@ -358,6 +350,11 @@ func (c Cache) Resolve(name string) (InstallRecord, bool) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return InstallRecord{}, false
 	}
+	lock, err := publock.Acquire(c.Root, record.ManifestDigest)
+	if err != nil {
+		return InstallRecord{}, false
+	}
+	defer lock.Close()
 	matched := record.Name == name
 	if !matched {
 		for _, alias := range referenceAliases(record.Reference) {
@@ -374,6 +371,11 @@ func (c Cache) ResolveDigest(digest string) (InstallRecord, bool) {
 	if _, err := oci.ParseDigest(digest); err != nil {
 		return InstallRecord{}, false
 	}
+	lock, err := publock.Acquire(c.Root, digest)
+	if err != nil {
+		return InstallRecord{}, false
+	}
+	defer lock.Close()
 	data, err := c.readCacheRecord("digests", digest)
 	if err != nil {
 		return InstallRecord{}, false

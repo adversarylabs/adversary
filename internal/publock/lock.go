@@ -1,0 +1,38 @@
+package publock
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+type Lock struct{ file *os.File }
+
+func Acquire(root, key string) (*Lock, error) {
+	dir := filepath.Join(root, ".publication-locks")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%x.lock", sha256.Sum256([]byte(key))))
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := lockFile(f); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &Lock{file: f}, nil
+}
+func (l *Lock) Close() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+	unlockErr := unlockFile(l.file)
+	closeErr := l.file.Close()
+	if unlockErr != nil {
+		return unlockErr
+	}
+	return closeErr
+}

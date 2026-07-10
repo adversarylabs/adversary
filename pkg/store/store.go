@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/archiveutil"
+	"github.com/adversarylabs/adversary/internal/publock"
 	"github.com/adversarylabs/adversary/internal/safepath"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
@@ -321,6 +321,11 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	if err := os.MkdirAll(s.Root, 0755); err != nil {
 		return "", err
 	}
+	publicationLock, err := publock.Acquire(s.Root, record.Digest)
+	if err != nil {
+		return "", err
+	}
+	defer publicationLock.Close()
 	rooted, err := os.OpenRoot(s.Root)
 	if err != nil {
 		return "", err
@@ -408,10 +413,10 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := archiveutil.Seal(stage); err != nil {
+	if err := archiveutil.PreparePublish(stage); err != nil {
 		return "", err
 	}
-	if err := archiveutil.ValidateSealed(stage); err != nil {
+	if err := archiveutil.ValidatePrepared(stage); err != nil {
 		return "", err
 	}
 	if err := stage.Close(); err != nil {
@@ -424,11 +429,16 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	if beforeStoreMaterializePublish != nil {
 		beforeStoreMaterializePublish(rooted, stageRel)
 	}
-	if err := renameSealedMaterialization(rooted, stageRel, destRel); err != nil {
+	didPublish, publishErr := archiveutil.PublishSealed(s.Root, rooted, stageRel, destRel)
+	if publishErr != nil {
+		if didPublish {
+			cleanupMaterialized(rooted, destRel)
+			return "", publishErr
+		}
 		if validateErr := validateMaterialized(rooted, destRel, record, expected); validateErr == nil {
 			return destination, nil
 		}
-		return "", fmt.Errorf("publish materialization: %w", err)
+		return "", fmt.Errorf("publish materialization: %w", publishErr)
 	}
 	if err := validateMaterialized(rooted, destRel, record, expected); err != nil {
 		if doomed, openErr := rooted.OpenRoot(destRel); openErr == nil {
@@ -441,30 +451,12 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	return destination, nil
 }
 
-func renameSealedMaterialization(rooted *os.Root, from, to string) error {
-	err := rooted.Rename(from, to)
-	if err == nil {
-		return nil
+func cleanupMaterialized(rooted *os.Root, rel string) {
+	if doomed, e := rooted.OpenRoot(rel); e == nil {
+		_ = archiveutil.Unseal(doomed)
+		_ = doomed.Close()
 	}
-	if !errors.Is(err, fs.ErrPermission) {
-		return err
-	}
-	if chmodErr := rooted.Chmod(from, 0755); chmodErr != nil {
-		return err
-	}
-	if retryErr := rooted.Rename(from, to); retryErr != nil {
-		return retryErr
-	}
-	dest, openErr := rooted.OpenRoot(to)
-	if openErr != nil {
-		return openErr
-	}
-	sealErr := archiveutil.Seal(dest)
-	closeErr := dest.Close()
-	if sealErr != nil {
-		return sealErr
-	}
-	return closeErr
+	_ = rooted.RemoveAll(rel)
 }
 
 var beforeStoreMaterializePublish func(*os.Root, string)
