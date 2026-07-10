@@ -248,6 +248,45 @@ func TestCacheInstallRejectsCorruptOrphan(t *testing.T) {
 	}
 }
 
+func TestCacheInstallRejectsStagePathSwap(t *testing.T) {
+	dir := t.TempDir()
+	writePackageFile(t, dir, "adversary.yaml", "name: local/test\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writePackageFile(t, dir, "dist/index.js", "")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := oci.ParseReference("local/test:1.0.0")
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.LayerDigest: artifact.Layer}}
+	cache := Cache{Root: t.TempDir()}
+	outside := t.TempDir()
+	sentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("safe"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	beforeCacheInstallPublish = func(_ *os.Root, stageRel string) {
+		stagePath := filepath.Join(cache.Root, filepath.FromSlash(stageRel))
+		if err := os.Rename(stagePath, stagePath+".held"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, stagePath); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { beforeCacheInstallPublish = nil }()
+	if _, err := cache.Install(pulled); err == nil {
+		t.Fatal("accepted swapped staging pathname")
+	}
+	data, _ := os.ReadFile(sentinel)
+	if string(data) != "safe" {
+		t.Fatalf("outside changed: %q", data)
+	}
+	digestPath, _ := oci.DigestPath(artifact.ManifestDigest)
+	if _, err := os.Lstat(filepath.Join(cache.Root, "artifacts", digestPath)); !os.IsNotExist(err) {
+		t.Fatalf("published entry remains: %v", err)
+	}
+}
+
 func writePackageFile(t *testing.T, dir, rel, content string) {
 	t.Helper()
 	path := filepath.Join(dir, rel)

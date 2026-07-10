@@ -418,19 +418,18 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 	if _, err := parseAndCheckManifest(data, record.ManifestName, record.Version); err != nil {
 		return "", fmt.Errorf("validate materialized adversary.yaml: %w", err)
 	}
-	stageAbs := filepath.Join(s.Root, filepath.FromSlash(stageRel))
-	if err := prepareRuntimeNodeModules(stageAbs); err != nil {
+	if err := prepareRuntimeNodeModules(stage); err != nil {
 		return "", err
 	}
 	expected, err := snapshotMaterialized(stage)
 	if err != nil {
 		return "", err
 	}
-	if err := stage.Close(); err != nil {
-		return "", err
-	}
 	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(destRel)), 0755); err != nil {
 		return "", err
+	}
+	if beforeStoreMaterializePublish != nil {
+		beforeStoreMaterializePublish(rooted, stageRel)
 	}
 	if err := rooted.Rename(stageRel, destRel); err != nil {
 		if validateErr := validateMaterialized(rooted, destRel, record, expected); validateErr == nil {
@@ -438,8 +437,14 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		}
 		return "", fmt.Errorf("publish materialization: %w", err)
 	}
+	if err := validateMaterialized(rooted, destRel, record, expected); err != nil {
+		_ = rooted.RemoveAll(destRel)
+		return "", fmt.Errorf("verify published materialization: %w", err)
+	}
 	return destination, nil
 }
+
+var beforeStoreMaterializePublish func(*os.Root, string)
 
 type materializedFile struct {
 	size   int64
@@ -529,27 +534,27 @@ func parseAndCheckManifest(data []byte, name, version string) (canonical.Manifes
 	return m, nil
 }
 
-func prepareRuntimeNodeModules(destination string) error {
-	vendorSDK := filepath.Join(destination, "vendor", "adversary-sdk")
-	if info, err := os.Stat(vendorSDK); err != nil || !info.IsDir() {
+func prepareRuntimeNodeModules(rooted *os.Root) error {
+	vendorSDK := "vendor/adversary-sdk"
+	if info, err := rooted.Stat(vendorSDK); err != nil || !info.IsDir() {
 		return nil
 	}
-	target := filepath.Join(destination, "node_modules", "@adversary", "sdk")
-	if info, err := os.Stat(target); err == nil && info.IsDir() {
-		return patchVendoredSDK(target)
+	target := "node_modules/@adversary/sdk"
+	if info, err := rooted.Stat(target); err == nil && info.IsDir() {
+		return patchVendoredSDK(rooted, target)
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+	if err := rooted.MkdirAll("node_modules/@adversary", 0755); err != nil {
 		return err
 	}
-	if err := copyDir(vendorSDK, target); err != nil {
+	if err := copyRootDir(rooted, vendorSDK, target); err != nil {
 		return err
 	}
-	return patchVendoredSDK(target)
+	return patchVendoredSDK(rooted, target)
 }
 
-func patchVendoredSDK(sdkDir string) error {
-	indexPath := filepath.Join(sdkDir, "dist", "index.js")
-	data, err := os.ReadFile(indexPath)
+func patchVendoredSDK(rooted *os.Root, sdkDir string) error {
+	indexPath := sdkDir + "/dist/index.js"
+	data, err := rooted.ReadFile(indexPath)
 	if err != nil {
 		return nil
 	}
@@ -563,11 +568,11 @@ func patchVendoredSDK(sdkDir string) error {
 	if text == string(data) {
 		return nil
 	}
-	return os.WriteFile(indexPath, []byte(text), 0644)
+	return rooted.WriteFile(indexPath, []byte(text), 0644)
 }
 
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
+func copyRootDir(rooted *os.Root, src, dst string) error {
+	return fs.WalkDir(rooted.FS(), src, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -575,15 +580,15 @@ func copyDir(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dst, rel)
+		target := filepath.ToSlash(filepath.Join(dst, rel))
 		if entry.IsDir() {
-			return os.MkdirAll(target, 0755)
+			return rooted.MkdirAll(target, 0755)
 		}
-		data, err := os.ReadFile(path)
+		data, err := rooted.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, data, 0644)
+		return rooted.WriteFile(target, data, 0644)
 	})
 }
 

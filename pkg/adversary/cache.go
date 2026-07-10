@@ -103,21 +103,32 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	if err != nil {
 		return InstallRecord{}, err
 	}
-	if err := stage.Close(); err != nil {
-		return InstallRecord{}, err
-	}
 	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(destRel)), 0755); err != nil {
 		return InstallRecord{}, err
 	}
+	published := false
 	if _, err := rooted.Lstat(destRel); err == nil {
 		if err := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); err != nil {
 			return InstallRecord{}, fmt.Errorf("invalid existing artifact: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
 		return InstallRecord{}, err
-	} else if err := rooted.Rename(stageRel, destRel); err != nil {
-		if validateErr := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); validateErr != nil {
-			return InstallRecord{}, fmt.Errorf("publish artifact: %w", err)
+	} else {
+		if beforeCacheInstallPublish != nil {
+			beforeCacheInstallPublish(rooted, stageRel)
+		}
+		if err := rooted.Rename(stageRel, destRel); err != nil {
+			if validateErr := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); validateErr != nil {
+				return InstallRecord{}, fmt.Errorf("publish artifact: %w", err)
+			}
+		} else {
+			published = true
+		}
+	}
+	if published {
+		if err := validateInstalledArtifact(rooted, destRel, metadata, artifact.AdversaryManifest, expectedFiles); err != nil {
+			_ = rooted.RemoveAll(destRel)
+			return InstallRecord{}, fmt.Errorf("verify published artifact: %w", err)
 		}
 	}
 	destination := filepath.Join(c.Root, filepath.FromSlash(destRel))
@@ -133,6 +144,8 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 	}
 	return record, nil
 }
+
+var beforeCacheInstallPublish func(*os.Root, string)
 
 type installedFile struct {
 	size   int64

@@ -342,6 +342,44 @@ func TestMaterializeExtractionRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestMaterializeRejectsStagePathSwap(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Store{Root: t.TempDir()}
+	record, err := s.Put(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	sentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("safe"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	beforeStoreMaterializePublish = func(_ *os.Root, stageRel string) {
+		stagePath := filepath.Join(s.Root, filepath.FromSlash(stageRel))
+		if err := os.Rename(stagePath, stagePath+".held"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, stagePath); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { beforeStoreMaterializePublish = nil }()
+	if _, err := s.MaterializeRecord(record); err == nil {
+		t.Fatal("accepted swapped staging pathname")
+	}
+	data, _ := os.ReadFile(sentinel)
+	if string(data) != "safe" {
+		t.Fatalf("outside changed: %q", data)
+	}
+	digestPath, _ := oci.DigestPath(record.Digest)
+	if _, err := os.Lstat(filepath.Join(s.Root, "artifacts", digestPath)); !os.IsNotExist(err) {
+		t.Fatalf("published entry remains: %v", err)
+	}
+}
+
 func testProject(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
