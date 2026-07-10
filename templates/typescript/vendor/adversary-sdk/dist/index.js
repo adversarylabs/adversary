@@ -84,9 +84,7 @@ export class Adversary {
     schemaVersion;
     rules = [];
     constructor(options) {
-        if (options.name.length === 0) {
-            throw new Error("Adversary name must be a non-empty string.");
-        }
+        requireString(options.name, "Adversary name");
         if (options.schemaVersion !== undefined && options.schemaVersion !== REVIEW_SCHEMA_VERSION) {
             throw new Error(`Unsupported schemaVersion "${options.schemaVersion}".`);
         }
@@ -94,9 +92,7 @@ export class Adversary {
         this.schemaVersion = options.schemaVersion ?? REVIEW_SCHEMA_VERSION;
     }
     rule(id, handler) {
-        if (id.length === 0) {
-            throw new Error("Rule id must be a non-empty string.");
-        }
+        requireString(id, "Rule id");
         this.rules.push({ id, handler });
     }
     async run(options = {}) {
@@ -261,7 +257,7 @@ function basename(path) {
     return path.split("/").at(-1) ?? path;
 }
 function requireString(value, field) {
-    if (typeof value !== "string" || value.length === 0) {
+    if (typeof value !== "string" || value.trim().length === 0) {
         throw new Error(`${field} must be a non-empty string.`);
     }
 }
@@ -392,7 +388,7 @@ function validateRuntimeInput(value) {
         if (value.change.scan_mode !== "changed" && value.change.scan_mode !== "all") {
             throw new Error('change.scan_mode must be "changed" or "all".');
         }
-        if (!Array.isArray(value.change.changed_files) || value.change.changed_files.some((path) => typeof path !== "string" || path.length === 0)) {
+        if (!Array.isArray(value.change.changed_files) || value.change.changed_files.some((path) => typeof path !== "string" || path.trim().length === 0)) {
             throw new Error("change.changed_files must contain only non-empty strings.");
         }
         if (new Set(value.change.changed_files).size !== value.change.changed_files.length) {

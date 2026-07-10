@@ -16,7 +16,7 @@
       "additionalProperties": false,
       "required": ["name"],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1, "pattern": "\\S" },
         "version": { "type": "string" }
       }
     },
@@ -46,8 +46,8 @@
       "additionalProperties": false,
       "required": ["key", "summary"],
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "summary": { "type": "string", "minLength": 1 },
+        "key": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "summary": { "type": "string", "minLength": 1, "pattern": "\\S" },
         "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
         "metadata": { "$ref": "#/$defs/metadata" }
       }
@@ -57,14 +57,14 @@
       "additionalProperties": false,
       "required": ["id", "title", "category", "severity", "confidence", "summary", "evidence"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1, "pattern": "\\S" },
         "ruleId": { "type": "string" },
         "groupKey": { "type": "string" },
-        "title": { "type": "string", "minLength": 1 },
-        "category": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "category": { "type": "string", "minLength": 1, "pattern": "\\S" },
         "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
         "confidence": { "enum": ["low", "medium", "high"] },
-        "summary": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1, "pattern": "\\S" },
         "whyItMatters": { "type": "string" },
         "impact": { "type": "string" },
         "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
@@ -106,7 +106,7 @@
           "required": ["summary"],
           "properties": {
             "ship": { "type": "boolean" },
-            "summary": { "type": "string", "minLength": 1 }
+            "summary": { "type": "string", "minLength": 1, "pattern": "\\S" }
           }
         },
         "suppressed": {

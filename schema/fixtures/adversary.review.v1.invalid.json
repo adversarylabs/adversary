@@ -26,5 +26,9 @@
   {
     "name": "timing values are non-negative",
     "envelope": {"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0},"timing":{"scanMs":-1}}}
+  },
+  {
+    "name": "required strings cannot be whitespace-only",
+    "envelope": {"protocolVersion":1,"result":{"adversary":{"name":"test"},"target":{},"positives":[{"key":"one","summary":" \t\n"}],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0}}}
   }
 ]
