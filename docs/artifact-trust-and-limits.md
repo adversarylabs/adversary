@@ -26,10 +26,9 @@ The package digest, manifest digest, and original
 reference are retained by the existing cache record.
 
 Publication uses a validated staging directory and an atomic no-follow,
-no-replace rename into the canonical digest path. On Linux and Windows the
-entire stage is sealed first. Darwin cannot rename a non-writable directory, so
-all children are sealed first, the private stage root remains `0755` for the
-rename, and the destination root is immediately changed to `0555` and validated
+no-replace rename into the canonical digest path. On every platform all children
+are sealed first, the private stage root remains `0755` for the rename, and the
+destination root is immediately changed to `0555` and validated
 while a per-digest interprocess lock excludes cooperating publishers and
 resolvers. Cooperating CLI processes therefore see only absent or complete
 digest paths; a losing publisher validates the sealed winner. No remote
