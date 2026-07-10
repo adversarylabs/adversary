@@ -169,6 +169,24 @@ func TestStoreRejectsUnsafeRefs(t *testing.T) {
 	}
 }
 
+func TestStoreRootRejectsEscapingRefSymlink(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(s.Root, "refs-v2")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := s.WriteRef("safe/name", "latest", oci.Digest(nil)); err == nil {
+		t.Fatal("wrote through escaping symlink")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("outside files created: %v", entries)
+	}
+}
+
 func TestPutRejectsSameBasenameDifferentCanonicalNamespace(t *testing.T) {
 	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t), NameOverride: "ghcr.io/other/security-reviewer"})
 	if err != nil {
@@ -254,7 +272,7 @@ func writeFile(t *testing.T, dir, rel, content string) {
 
 func readRef(t *testing.T, root, name, tag string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, "refs", name, tag))
+	data, err := os.ReadFile(filepath.Join(root, "refs-v2", refNameKey(name), tag))
 	if err != nil {
 		t.Fatal(err)
 	}

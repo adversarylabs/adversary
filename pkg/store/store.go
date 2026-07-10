@@ -3,9 +3,11 @@ package store
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -126,51 +128,45 @@ func (s Store) Put(artifact pack.Artifact) (Record, error) {
 }
 
 func (s Store) List() ([]Record, error) {
-	root := filepath.Join(s.Root, "store", "records")
-	algorithms, err := os.ReadDir(root)
+	rooted, err := os.OpenRoot(s.Root)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	defer rooted.Close()
 	var records []Record
-	for _, algorithm := range algorithms {
-		if !algorithm.IsDir() {
-			continue
-		}
-		err := filepath.WalkDir(filepath.Join(root, algorithm.Name()), func(path string, entry os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if entry.IsDir() {
-				return nil
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			var record Record
-			if err := json.Unmarshal(data, &record); err != nil {
-				return err
-			}
-			if err := validateRecordDigests(record); err != nil {
-				return err
-			}
-			expected, err := filepath.Abs(s.recordPath(record.Digest))
-			if err != nil {
-				return err
-			}
-			actual, err := filepath.Abs(path)
-			if err != nil || actual != expected {
-				return fmt.Errorf("persisted record path does not match digest %q", record.Digest)
-			}
-			records = append(records, record)
-			return nil
-		})
+	err = fs.WalkDir(rooted.FS(), "store/records", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			return nil, err
+			if os.IsNotExist(err) {
+				return fs.SkipAll
+			}
+			return err
 		}
+		if entry.IsDir() {
+			return nil
+		}
+		data, err := rooted.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var record Record
+		if err := json.Unmarshal(data, &record); err != nil {
+			return err
+		}
+		if err := validateRecordDigests(record); err != nil {
+			return err
+		}
+		expected, err := filepath.Rel(s.Root, s.recordPath(record.Digest))
+		if err != nil || filepath.ToSlash(expected) != path {
+			return fmt.Errorf("persisted record path does not match digest %q", record.Digest)
+		}
+		records = append(records, record)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].Name == records[j].Name {
@@ -194,13 +190,23 @@ func (s Store) Inspect(ref string) (Record, error) {
 		name = before
 		tag = after
 	}
-	components := append([]string{"refs"}, strings.Split(name, "/")...)
-	components = append(components, tag)
-	refPath, pathErr := safepath.Join(s.Root, components...)
-	if pathErr != nil {
-		return Record{}, fmt.Errorf("invalid local adversary reference %q: %w", ref, pathErr)
+	if _, err := oci.ParseReference(name + ":" + tag); err != nil {
+		return Record{}, fmt.Errorf("invalid local adversary reference %q: %w", ref, err)
 	}
-	digestData, err := os.ReadFile(refPath)
+	rooted, err := os.OpenRoot(s.Root)
+	if err != nil {
+		return Record{}, err
+	}
+	defer rooted.Close()
+	refRel, _ := safepath.Relative("refs-v2", refNameKey(name), tag)
+	digestData, err := rooted.ReadFile(refRel)
+	if os.IsNotExist(err) {
+		components := append([]string{"refs"}, strings.Split(name, "/")...)
+		components = append(components, tag)
+		if legacy, legacyErr := safepath.Relative(components...); legacyErr == nil {
+			digestData, err = rooted.ReadFile(legacy)
+		}
+	}
 	if err != nil {
 		return Record{}, fmt.Errorf("local adversary %q not found", ref)
 	}
@@ -238,17 +244,17 @@ func (s Store) OCIPayload(record Record) ([]byte, []oci.Blob, error) {
 		return nil, nil, err
 	}
 	manifestPath := s.contentPath("manifests", record.Digest)
-	manifestData, err := os.ReadFile(manifestPath)
+	manifestData, err := s.readRooted(manifestPath)
 	if err != nil {
 		return nil, nil, err
 	}
 	configPath := s.contentPath("blobs", record.ConfigDigest)
-	configData, err := os.ReadFile(configPath)
+	configData, err := s.readRooted(configPath)
 	if err != nil {
 		return nil, nil, err
 	}
 	layerPath := s.contentPath("blobs", record.LayerDigest)
-	layerData, err := os.ReadFile(layerPath)
+	layerData, err := s.readRooted(layerPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -291,7 +297,7 @@ func (s Store) AdversaryManifest(record Record) ([]byte, error) {
 		}
 		path = filepath.Join(materialized, "adversary.yaml")
 	}
-	data, err := os.ReadFile(path)
+	data, err := s.readRooted(path)
 	if err != nil {
 		return nil, fmt.Errorf("adversary.yaml is required for publishing: %w", err)
 	}
@@ -329,7 +335,12 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		return "", err
 	}
 	layerPath := s.contentPath("blobs", record.LayerDigest)
-	file, err := os.Open(layerPath)
+	layerRoot, layerRel, err := s.rootForPath(layerPath)
+	if err != nil {
+		return "", err
+	}
+	defer layerRoot.Close()
+	file, err := layerRoot.Open(layerRel)
 	if err != nil {
 		return "", err
 	}
@@ -474,18 +485,25 @@ func (s Store) WriteRef(name, tag, digest string) error {
 	if _, err := oci.ParseDigest(digest); err != nil {
 		return err
 	}
-	components := []string{"refs"}
-	components = append(components, strings.Split(name, "/")...)
-	components = append(components, tag)
-	path, err := safepath.Join(s.Root, components...)
+	if _, err := oci.ParseReference(name + ":" + tag); err != nil {
+		return fmt.Errorf("invalid local reference: %w", err)
+	}
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
+		return err
+	}
+	rooted, err := os.OpenRoot(s.Root)
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	defer rooted.Close()
+	rel, err := safepath.Relative("refs-v2", refNameKey(name), tag)
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(digest+"\n"), 0644)
+	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
+		return err
+	}
+	return rooted.WriteFile(rel, []byte(digest+"\n"), 0644)
 }
 
 func (s Store) BlobCount() (int, error) {
@@ -497,17 +515,25 @@ func (s Store) writeContent(kind, digest string, data []byte) error {
 		return err
 	}
 	path := s.contentPath(kind, digest)
-	if _, err := os.Stat(path); err == nil {
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
+		return err
+	}
+	rooted, rel, err := s.rootForPath(path)
+	if err != nil {
+		return err
+	}
+	defer rooted.Close()
+	if _, err := rooted.Stat(rel); err == nil {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	tmp := rel + ".tmp"
+	if err := rooted.WriteFile(tmp, data, 0644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return rooted.Rename(tmp, rel)
 }
 
 func (s Store) writeRecord(record Record) error {
@@ -517,17 +543,25 @@ func (s Store) writeRecord(record Record) error {
 	}
 	data = append(data, '\n')
 	path := s.recordPath(record.Digest)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	rooted, rel, err := s.rootForPath(path)
+	if err != nil {
+		return err
+	}
+	defer rooted.Close()
+	if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
+		return err
+	}
+	return rooted.WriteFile(rel, data, 0644)
 }
 
 func (s Store) resolveDigest(digest string) (Record, bool) {
 	if _, err := oci.ParseDigest(digest); err != nil {
 		return Record{}, false
 	}
-	data, err := os.ReadFile(s.recordPath(digest))
+	data, err := s.readRooted(s.recordPath(digest))
 	if err != nil {
 		return Record{}, false
 	}
@@ -577,6 +611,29 @@ func validateRecordDigests(record Record) error {
 		}
 	}
 	return nil
+}
+
+func refNameKey(name string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(name))) }
+
+func (s Store) rootForPath(path string) (*os.Root, string, error) {
+	rel, err := filepath.Rel(s.Root, path)
+	if err != nil {
+		return nil, "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, "", fmt.Errorf("path escapes store root")
+	}
+	rooted, err := os.OpenRoot(s.Root)
+	return rooted, filepath.ToSlash(rel), err
+}
+
+func (s Store) readRooted(path string) ([]byte, error) {
+	rooted, rel, err := s.rootForPath(path)
+	if err != nil {
+		return nil, err
+	}
+	defer rooted.Close()
+	return rooted.ReadFile(rel)
 }
 
 func countFiles(root string) (int, error) {

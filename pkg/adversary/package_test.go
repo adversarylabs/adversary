@@ -75,6 +75,9 @@ func TestCacheReferenceAliases(t *testing.T) {
 		ManifestDigest: digest,
 		Path:           filepath.Join(cache.Root, "artifacts", digestPath),
 	}
+	if err := os.MkdirAll(record.Path, 0755); err != nil {
+		t.Fatal(err)
+	}
 	if err := cache.writeRecord(record); err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +105,9 @@ func TestCacheKeysDoNotCollideAndLegacyRecordsRemainReadable(t *testing.T) {
 	digest := oci.Digest([]byte("legacy"))
 	digestPath, _ := oci.DigestPath(digest)
 	record := InstallRecord{Name: "a/b", ManifestDigest: digest, Path: filepath.Join(cache.Root, "artifacts", digestPath)}
+	if err := os.MkdirAll(record.Path, 0755); err != nil {
+		t.Fatal(err)
+	}
 	data, _ := json.Marshal(record)
 	if err := os.MkdirAll(filepath.Join(cache.Root, "index"), 0755); err != nil {
 		t.Fatal(err)
@@ -111,6 +117,78 @@ func TestCacheKeysDoNotCollideAndLegacyRecordsRemainReadable(t *testing.T) {
 	}
 	if got, ok := cache.Resolve(record.Name); !ok || got.Name != record.Name {
 		t.Fatalf("legacy record was not resolved: %#v, %v", got, ok)
+	}
+}
+
+func TestCacheRejectsLegacyCollisionAndTamperedDigestRecord(t *testing.T) {
+	cache := Cache{Root: t.TempDir()}
+	digest := oci.Digest([]byte("one"))
+	digestPath, _ := oci.DigestPath(digest)
+	wrong := InstallRecord{Name: "a_b", ManifestDigest: digest, Path: filepath.Join(cache.Root, "artifacts", digestPath)}
+	data, _ := json.Marshal(wrong)
+	if err := os.MkdirAll(filepath.Join(cache.Root, "index"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache.Root, "index", sanitize("a/b")+".json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := cache.Resolve("a/b"); ok {
+		t.Fatalf("legacy collision returned %#v", got)
+	}
+
+	requested := oci.Digest([]byte("requested"))
+	if err := os.MkdirAll(filepath.Join(cache.Root, "digests"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache.Root, "digests", cacheKey(requested)+".json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := cache.ResolveDigest(requested); ok {
+		t.Fatalf("tampered digest record returned %#v", got)
+	}
+}
+
+func TestCacheRootRejectsEscapingIndexSymlink(t *testing.T) {
+	cache := Cache{Root: t.TempDir()}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(cache.Root, "index")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, ok := cache.Resolve("anything"); ok {
+		t.Fatal("resolved through escaping symlink")
+	}
+}
+
+func TestCacheInstallRejectsEscapingDigestSymlink(t *testing.T) {
+	dir := t.TempDir()
+	writePackageFile(t, dir, "adversary.yaml", "name: local/test\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writePackageFile(t, dir, "dist/index.js", "")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := oci.ParseReference("local/test:1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulled := oci.PulledArtifact{Reference: ref, Manifest: artifact.OCIManifest, ManifestDigest: artifact.ManifestDigest, AdversaryManifest: artifact.AdversaryManifest, Blobs: map[string][]byte{artifact.LayerDigest: artifact.Layer}}
+	cache := Cache{Root: t.TempDir()}
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache.Root, "artifacts"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cache.Root, "artifacts", "sha256")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := cache.Install(pulled); err == nil {
+		t.Fatal("installed through escaping digest symlink")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("outside files created: %v", entries)
 	}
 }
 

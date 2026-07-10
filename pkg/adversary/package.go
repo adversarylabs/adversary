@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/safepath"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
@@ -235,6 +236,15 @@ func ExtractLayer(layer []byte, destination string) (ManifestMetadata, error) {
 	if err := os.MkdirAll(destination, 0755); err != nil {
 		return ManifestMetadata{}, err
 	}
+	rooted, err := os.OpenRoot(destination)
+	if err != nil {
+		return ManifestMetadata{}, err
+	}
+	defer rooted.Close()
+	return ExtractLayerRoot(layer, rooted)
+}
+
+func ExtractLayerRoot(layer []byte, rooted *os.Root) (ManifestMetadata, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(layer))
 	if err != nil {
 		return ManifestMetadata{}, err
@@ -250,8 +260,10 @@ func ExtractLayer(layer []byte, destination string) (ManifestMetadata, error) {
 		if err != nil {
 			return ManifestMetadata{}, err
 		}
-		clean := filepath.Clean(header.Name)
-		if clean == "." || strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
+		clean := filepath.ToSlash(filepath.Clean(header.Name))
+		components := strings.Split(clean, "/")
+		rel, pathErr := safepath.Relative(components...)
+		if pathErr != nil || clean == "." || clean != header.Name {
 			return ManifestMetadata{}, fmt.Errorf("unsafe package path %q", header.Name)
 		}
 		data, err := io.ReadAll(tr)
@@ -264,15 +276,14 @@ func ExtractLayer(layer []byte, destination string) (ManifestMetadata, error) {
 			}
 			continue
 		}
-		target := filepath.Join(destination, filepath.FromSlash(header.Name))
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		if err := rooted.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
 			return ManifestMetadata{}, err
 		}
-		if err := os.WriteFile(target, data, 0644); err != nil {
+		if err := rooted.WriteFile(rel, data, 0644); err != nil {
 			return ManifestMetadata{}, err
 		}
 	}
-	manifestData, err := os.ReadFile(filepath.Join(destination, ManifestFile))
+	manifestData, err := rooted.ReadFile(ManifestFile)
 	if err == nil {
 		m, parseErr := canonical.Parse(manifestData)
 		if parseErr != nil {
