@@ -56,6 +56,44 @@ func TestParseReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestParseReferenceRejectsInvalid(t *testing.T) {
+	long := make([]byte, 256)
+	for i := range long {
+		long[i] = 'a'
+	}
+	for _, input := range []string{"UPPER/repo", "repo@@sha256:" + string(make([]byte, 64)), "repo//name", "repo:bad tag", "repo\x00name", string(long)} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := ParseReference(input); err == nil {
+				t.Fatalf("accepted %q", input)
+			}
+		})
+	}
+}
+
+func TestParseReferenceIPv6(t *testing.T) {
+	r, err := ParseReference("[2001:db8::1]:5000/acme/tool:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Registry != "[2001:db8::1]:5000" || r.Repository != "acme/tool" {
+		t.Fatalf("reference = %#v", r)
+	}
+}
+
+func FuzzParseReference(f *testing.F) {
+	for _, seed := range []string{"repo", "ghcr.io/a/b:v1", "repo@@sha256:00", "a//b", "é", "e\u0301"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		ref, err := ParseReference(input)
+		if err == nil {
+			if _, err := ParseReference(ref.Locator()); err != nil {
+				t.Fatalf("locator did not round trip: %v", err)
+			}
+		}
+	})
+}
+
 func TestParseReferenceUsesRegistryHostOverride(t *testing.T) {
 	t.Setenv("ADVERSARY_REGISTRY_HOST", "localhost:5000")
 	ref, err := ParseReference("security-reviewer")

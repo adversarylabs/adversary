@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/safepath"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
@@ -125,8 +126,8 @@ func (s Store) Put(artifact pack.Artifact) (Record, error) {
 }
 
 func (s Store) List() ([]Record, error) {
-	root := filepath.Join(s.Root, "store", "records", "sha256")
-	entries, err := os.ReadDir(root)
+	root := filepath.Join(s.Root, "store", "records")
+	algorithms, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -134,27 +135,41 @@ func (s Store) List() ([]Record, error) {
 		return nil, err
 	}
 	var records []Record
-	for _, prefix := range entries {
-		if !prefix.IsDir() {
+	for _, algorithm := range algorithms {
+		if !algorithm.IsDir() {
 			continue
 		}
-		files, err := os.ReadDir(filepath.Join(root, prefix.Name()))
-		if err != nil {
-			return nil, err
-		}
-		for _, file := range files {
-			if file.IsDir() {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(root, prefix.Name(), file.Name()))
+		err := filepath.WalkDir(filepath.Join(root, algorithm.Name()), func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
-				return nil, err
+				return err
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
 			}
 			var record Record
 			if err := json.Unmarshal(data, &record); err != nil {
-				return nil, err
+				return err
+			}
+			if err := validateRecordDigests(record); err != nil {
+				return err
+			}
+			expected, err := filepath.Abs(s.recordPath(record.Digest))
+			if err != nil {
+				return err
+			}
+			actual, err := filepath.Abs(path)
+			if err != nil || actual != expected {
+				return fmt.Errorf("persisted record path does not match digest %q", record.Digest)
 			}
 			records = append(records, record)
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
 	sort.Slice(records, func(i, j int) bool {
@@ -167,7 +182,7 @@ func (s Store) List() ([]Record, error) {
 }
 
 func (s Store) Inspect(ref string) (Record, error) {
-	if strings.HasPrefix(ref, "sha256:") {
+	if _, err := oci.ParseDigest(ref); err == nil {
 		if record, ok := s.resolveDigest(ref); ok {
 			return record, nil
 		}
@@ -179,7 +194,13 @@ func (s Store) Inspect(ref string) (Record, error) {
 		name = before
 		tag = after
 	}
-	digestData, err := os.ReadFile(filepath.Join(s.Root, "refs", name, tag))
+	components := append([]string{"refs"}, strings.Split(name, "/")...)
+	components = append(components, tag)
+	refPath, pathErr := safepath.Join(s.Root, components...)
+	if pathErr != nil {
+		return Record{}, fmt.Errorf("invalid local adversary reference %q: %w", ref, pathErr)
+	}
+	digestData, err := os.ReadFile(refPath)
 	if err != nil {
 		return Record{}, fmt.Errorf("local adversary %q not found", ref)
 	}
@@ -213,26 +234,20 @@ func (s Store) Materialize(ref string) (string, Record, error) {
 }
 
 func (s Store) OCIPayload(record Record) ([]byte, []oci.Blob, error) {
-	manifestPath := record.ManifestPath
-	if manifestPath == "" {
-		manifestPath = s.contentPath("manifests", record.Digest)
+	if err := validateRecordDigests(record); err != nil {
+		return nil, nil, err
 	}
+	manifestPath := s.contentPath("manifests", record.Digest)
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	configPath := record.ConfigPath
-	if configPath == "" {
-		configPath = s.contentPath("blobs", record.ConfigDigest)
-	}
+	configPath := s.contentPath("blobs", record.ConfigDigest)
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	layerPath := record.LayerPath
-	if layerPath == "" {
-		layerPath = s.contentPath("blobs", record.LayerDigest)
-	}
+	layerPath := s.contentPath("blobs", record.LayerDigest)
 	layerData, err := os.ReadFile(layerPath)
 	if err != nil {
 		return nil, nil, err
@@ -262,8 +277,11 @@ func (s Store) OCIPayload(record Record) ([]byte, []oci.Blob, error) {
 }
 
 func (s Store) AdversaryManifest(record Record) ([]byte, error) {
-	path := record.AdversaryManifestPath
-	if path == "" && record.AdversaryManifestDigest != "" {
+	if err := validateRecordDigests(record); err != nil {
+		return nil, err
+	}
+	path := ""
+	if record.AdversaryManifestDigest != "" {
 		path = s.contentPath("adversary-manifests", record.AdversaryManifestDigest)
 	}
 	if path == "" {
@@ -289,11 +307,11 @@ func (s Store) AdversaryManifest(record Record) ([]byte, error) {
 }
 
 func (s Store) MaterializeRecord(record Record) (string, error) {
-	algo, value, ok := strings.Cut(record.Digest, ":")
-	if !ok || algo == "" || value == "" {
-		return "", fmt.Errorf("invalid digest %q", record.Digest)
+	digestPath, err := oci.DigestPath(record.Digest)
+	if err != nil {
+		return "", err
 	}
-	destination := filepath.Join(s.Root, "artifacts", algo, value)
+	destination := filepath.Join(s.Root, "artifacts", digestPath)
 	if info, err := os.Stat(filepath.Join(destination, "adversary.yaml")); err == nil && !info.IsDir() {
 		data, err := os.ReadFile(filepath.Join(destination, "adversary.yaml"))
 		if err != nil {
@@ -307,10 +325,10 @@ func (s Store) MaterializeRecord(record Record) (string, error) {
 		}
 		return destination, nil
 	}
-	layerPath := record.LayerPath
-	if layerPath == "" {
-		layerPath = s.contentPath("blobs", record.LayerDigest)
+	if _, err := oci.ParseDigest(record.LayerDigest); err != nil {
+		return "", err
 	}
+	layerPath := s.contentPath("blobs", record.LayerDigest)
 	file, err := os.Open(layerPath)
 	if err != nil {
 		return "", err
@@ -453,11 +471,21 @@ func copyDir(src, dst string) error {
 }
 
 func (s Store) WriteRef(name, tag, digest string) error {
-	dir := filepath.Join(s.Root, "refs", name)
+	if _, err := oci.ParseDigest(digest); err != nil {
+		return err
+	}
+	components := []string{"refs"}
+	components = append(components, strings.Split(name, "/")...)
+	components = append(components, tag)
+	path, err := safepath.Join(s.Root, components...)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, tag), []byte(digest+"\n"), 0644)
+	return os.WriteFile(path, []byte(digest+"\n"), 0644)
 }
 
 func (s Store) BlobCount() (int, error) {
@@ -465,6 +493,9 @@ func (s Store) BlobCount() (int, error) {
 }
 
 func (s Store) writeContent(kind, digest string, data []byte) error {
+	if _, err := oci.ParseDigest(digest); err != nil {
+		return err
+	}
 	path := s.contentPath(kind, digest)
 	if _, err := os.Stat(path); err == nil {
 		return nil
@@ -493,6 +524,9 @@ func (s Store) writeRecord(record Record) error {
 }
 
 func (s Store) resolveDigest(digest string) (Record, bool) {
+	if _, err := oci.ParseDigest(digest); err != nil {
+		return Record{}, false
+	}
 	data, err := os.ReadFile(s.recordPath(digest))
 	if err != nil {
 		return Record{}, false
@@ -501,11 +535,18 @@ func (s Store) resolveDigest(digest string) (Record, bool) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return Record{}, false
 	}
+	if record.Digest != digest || validateRecordDigests(record) != nil {
+		return Record{}, false
+	}
 	return record, true
 }
 
 func (s Store) contentPath(kind, digest string) string {
-	algo, value, _ := strings.Cut(digest, ":")
+	d, err := oci.ParseDigest(digest)
+	if err != nil {
+		return ""
+	}
+	algo, value := d.Algorithm().String(), d.Encoded()
 	if len(value) < 2 {
 		return filepath.Join(s.Root, "store", kind, algo, value)
 	}
@@ -513,11 +554,29 @@ func (s Store) contentPath(kind, digest string) string {
 }
 
 func (s Store) recordPath(digest string) string {
-	algo, value, _ := strings.Cut(digest, ":")
+	d, err := oci.ParseDigest(digest)
+	if err != nil {
+		return ""
+	}
+	algo, value := d.Algorithm().String(), d.Encoded()
 	if len(value) < 2 {
 		return filepath.Join(s.Root, "store", "records", algo, value+".json")
 	}
 	return filepath.Join(s.Root, "store", "records", algo, value[:2], value+".json")
+}
+
+func validateRecordDigests(record Record) error {
+	for label, value := range map[string]string{"manifest": record.Digest, "config": record.ConfigDigest, "layer": record.LayerDigest} {
+		if _, err := oci.ParseDigest(value); err != nil {
+			return fmt.Errorf("invalid persisted %s digest: %w", label, err)
+		}
+	}
+	if record.AdversaryManifestDigest != "" {
+		if _, err := oci.ParseDigest(record.AdversaryManifestDigest); err != nil {
+			return fmt.Errorf("invalid persisted adversary manifest digest: %w", err)
+		}
+	}
+	return nil
 }
 
 func countFiles(root string) (int, error) {

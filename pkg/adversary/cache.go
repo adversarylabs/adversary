@@ -1,10 +1,12 @@
 package adversary
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
@@ -83,7 +85,7 @@ func (c Cache) Install(artifact oci.PulledArtifact) (InstallRecord, error) {
 }
 
 func (c Cache) Resolve(name string) (InstallRecord, bool) {
-	data, err := os.ReadFile(filepath.Join(c.Root, "index", sanitize(name)+".json"))
+	data, err := readCacheRecord(c.Root, "index", name)
 	if err != nil {
 		return InstallRecord{}, false
 	}
@@ -91,11 +93,14 @@ func (c Cache) Resolve(name string) (InstallRecord, bool) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return InstallRecord{}, false
 	}
-	return record, true
+	return record, c.validRecord(record)
 }
 
 func (c Cache) ResolveDigest(digest string) (InstallRecord, bool) {
-	data, err := os.ReadFile(filepath.Join(c.Root, "digests", sanitize(digest)+".json"))
+	if _, err := oci.ParseDigest(digest); err != nil {
+		return InstallRecord{}, false
+	}
+	data, err := readCacheRecord(c.Root, "digests", digest)
 	if err != nil {
 		return InstallRecord{}, false
 	}
@@ -103,7 +108,7 @@ func (c Cache) ResolveDigest(digest string) (InstallRecord, bool) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return InstallRecord{}, false
 	}
-	return record, true
+	return record, c.validRecord(record)
 }
 
 func (c Cache) writeRecord(record InstallRecord) error {
@@ -120,7 +125,10 @@ func (c Cache) writeRecord(record InstallRecord) error {
 		return err
 	}
 	if record.ManifestDigest != "" {
-		if err := os.WriteFile(filepath.Join(digestsDir, sanitize(record.ManifestDigest)+".json"), data, 0644); err != nil {
+		if _, err := oci.ParseDigest(record.ManifestDigest); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(digestsDir, cacheKey(record.ManifestDigest)+".json"), data, 0644); err != nil {
 			return err
 		}
 	}
@@ -129,7 +137,7 @@ func (c Cache) writeRecord(record InstallRecord) error {
 		keys = append(keys, referenceAliases(record.Reference)...)
 	}
 	for _, key := range keys {
-		if err := os.WriteFile(filepath.Join(indexDir, sanitize(key)+".json"), data, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(indexDir, cacheKey(key)+".json"), data, 0644); err != nil {
 			return err
 		}
 	}
@@ -182,4 +190,30 @@ func sanitize(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// cacheKey hashes the exact UTF-8 bytes. Canonically equivalent Unicode strings
+// intentionally remain distinct; reference and manifest parsers define identity.
+func cacheKey(s string) string { return fmt.Sprintf("v2-%x", sha256.Sum256([]byte(s))) }
+
+func readCacheRecord(root, kind, key string) ([]byte, error) {
+	data, err := os.ReadFile(filepath.Join(root, kind, cacheKey(key)+".json"))
+	if err == nil || !os.IsNotExist(err) {
+		return data, err
+	}
+	// Compatibility: read pre-v2 lossy keys, but all new writes use v2 keys.
+	return os.ReadFile(filepath.Join(root, kind, sanitize(key)+".json"))
+}
+
+func (c Cache) validRecord(record InstallRecord) bool {
+	d, err := oci.DigestPath(record.ManifestDigest)
+	if err != nil {
+		return false
+	}
+	expected, err := filepath.Abs(filepath.Join(c.Root, "artifacts", d))
+	if err != nil {
+		return false
+	}
+	actual, err := filepath.Abs(filepath.Clean(record.Path))
+	return err == nil && actual == expected && !strings.ContainsRune(record.Path, '\x00')
 }

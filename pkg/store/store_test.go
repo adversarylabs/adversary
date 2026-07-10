@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 )
 
@@ -137,6 +138,34 @@ func TestPutSeparatesAliasFromCanonicalManifestName(t *testing.T) {
 	}
 	if persisted.ManifestName != record.ManifestName {
 		t.Fatalf("persisted manifest name = %q", persisted.ManifestName)
+	}
+}
+
+func TestPersistedAbsolutePathsAreNotTrusted(t *testing.T) {
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: testProject(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Store{Root: t.TempDir()}
+	record, err := s.Put(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.ManifestPath = filepath.Join(t.TempDir(), "attacker-manifest")
+	record.ConfigPath = filepath.Join(t.TempDir(), "attacker-config")
+	record.LayerPath = filepath.Join(t.TempDir(), "attacker-layer")
+	if _, _, err := s.OCIPayload(record); err != nil {
+		t.Fatalf("derived content paths failed: %v", err)
+	}
+}
+
+func TestStoreRejectsUnsafeRefs(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	digest := oci.Digest(nil)
+	for _, value := range []string{"../escape", "a//b", `C:\escape`, `\\server`} {
+		if err := s.WriteRef(value, "latest", digest); err == nil {
+			t.Fatalf("accepted ref %q", value)
+		}
 	}
 }
 

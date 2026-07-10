@@ -2,6 +2,7 @@ package adversary
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,12 +63,17 @@ func TestCacheInstallRejectsInvalidPulledManifest(t *testing.T) {
 
 func TestCacheReferenceAliases(t *testing.T) {
 	cache := Cache{Root: t.TempDir()}
+	digest := oci.Digest([]byte("manifest"))
+	digestPath, err := oci.DigestPath(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	record := InstallRecord{
 		Name:           "local/security-reviewer",
 		Version:        "1.4.2",
 		Reference:      "registry.adversarylabs.ai/adversarylabs/security-reviewer:latest",
-		ManifestDigest: "sha256:abc",
-		Path:           "/tmp/security-reviewer",
+		ManifestDigest: digest,
+		Path:           filepath.Join(cache.Root, "artifacts", digestPath),
 	}
 	if err := cache.writeRecord(record); err != nil {
 		t.Fatal(err)
@@ -85,6 +91,26 @@ func TestCacheReferenceAliases(t *testing.T) {
 		if got.ManifestDigest != record.ManifestDigest {
 			t.Fatalf("alias %q resolved digest %q", key, got.ManifestDigest)
 		}
+	}
+}
+
+func TestCacheKeysDoNotCollideAndLegacyRecordsRemainReadable(t *testing.T) {
+	if cacheKey("a/b") == cacheKey("a_b") || cacheKey("é") == cacheKey("e\u0301") {
+		t.Fatal("v2 cache keys collided")
+	}
+	cache := Cache{Root: t.TempDir()}
+	digest := oci.Digest([]byte("legacy"))
+	digestPath, _ := oci.DigestPath(digest)
+	record := InstallRecord{Name: "a/b", ManifestDigest: digest, Path: filepath.Join(cache.Root, "artifacts", digestPath)}
+	data, _ := json.Marshal(record)
+	if err := os.MkdirAll(filepath.Join(cache.Root, "index"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache.Root, "index", sanitize(record.Name)+".json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := cache.Resolve(record.Name); !ok || got.Name != record.Name {
+		t.Fatalf("legacy record was not resolved: %#v, %v", got, ok)
 	}
 }
 
