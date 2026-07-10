@@ -3,6 +3,8 @@ package adversarylabs
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,12 +24,37 @@ func ResolveRegistryHost() string { return oci.DefaultRegistryHost() }
 // AuthKey isolates credentials by API service and profile. The legacy registry
 // key remains readable so existing installations and OCI credential lookup keep working.
 func AuthKey(apiURL, profile string) string {
-	service := strings.ToLower(strings.TrimRight(ResolveAPIURL(apiURL), "/"))
+	raw := strings.TrimSpace(apiURL)
+	if raw == "" {
+		raw = ResolveAPIURL("")
+	}
+	service := canonicalService(raw)
 	profile = strings.ToLower(strings.TrimSpace(profile))
 	if profile == "" {
 		profile = "default"
 	}
-	return service + "#" + profile
+	return fmt.Sprintf("auth:v2:%d:%s:%s", len(service), service, profile)
+}
+
+func canonicalService(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "invalid:" + raw
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	hostname := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if port == "443" && u.Scheme == "https" || port == "80" && u.Scheme == "http" {
+		port = ""
+	}
+	if port != "" {
+		u.Host = net.JoinHostPort(hostname, port)
+	} else if strings.Contains(hostname, ":") {
+		u.Host = "[" + hostname + "]"
+	} else {
+		u.Host = hostname
+	}
+	return u.String()
 }
 
 type Config struct {

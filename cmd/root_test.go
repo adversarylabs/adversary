@@ -1014,6 +1014,59 @@ func TestWaitForLoginExpiry(t *testing.T) {
 	}
 }
 
+func TestWaitForLoginCancelsBlockedPollAtExpiryWithoutExtraPoll(t *testing.T) {
+	var polls int
+	canceled := make(chan struct{})
+	client := adversarylabs.Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: cmdRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		polls++
+		<-req.Context().Done()
+		close(canceled)
+		return nil, req.Context().Err()
+	})}}
+	_, err := waitForLogin(context.Background(), client, adversarylabs.DeviceLogin{DeviceCode: "device", ExpiresIn: 1, Interval: 1})
+	if err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("error = %v", err)
+	}
+	select {
+	case <-canceled:
+	default:
+		t.Fatal("in-flight poll context was not canceled")
+	}
+	if polls != 1 {
+		t.Fatalf("polls = %d", polls)
+	}
+}
+
+func TestNewOCIRegistryAlwaysIncludesDockerFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	registry, err := newOCIRegistry("https://service.example/api", "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, ok := registry.Credentials.(oci.ChainCredentialStore)
+	if !ok || len(chain) != 1 {
+		t.Fatalf("credentials = %#v", registry.Credentials)
+	}
+	if _, ok := chain[0].(oci.DockerCredentialStore); !ok {
+		t.Fatalf("fallback = %T", chain[0])
+	}
+	store, _ := adversarylabs.DefaultConfigStore()
+	if err := store.SetAuth(adversarylabs.AuthKey("https://service.example/api", "work"), adversarylabs.Auth{Token: "token", RegistryHost: adversarylabs.ResolveRegistryHost()}); err != nil {
+		t.Fatal(err)
+	}
+	registry, err = newOCIRegistry("https://service.example/api", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, ok = registry.Credentials.(oci.ChainCredentialStore)
+	if !ok || len(chain) != 2 {
+		t.Fatalf("scoped credentials = %#v", registry.Credentials)
+	}
+	if _, ok := chain[1].(oci.DockerCredentialStore); !ok {
+		t.Fatalf("fallback = %T", chain[1])
+	}
+}
+
 type cmdRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f cmdRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }

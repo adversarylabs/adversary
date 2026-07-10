@@ -822,23 +822,37 @@ func valueOf(value *string) string {
 
 func waitForLogin(ctx context.Context, client adversarylabs.Client, login adversarylabs.DeviceLogin) (adversarylabs.TokenResponse, error) {
 	interval := adversarylabs.PollInterval(login)
-	deadline := time.Now().Add(time.Duration(login.ExpiresIn) * time.Second)
+	expiresAt := time.Now().Add(time.Duration(login.ExpiresIn) * time.Second)
 	if login.ExpiresIn <= 0 {
-		deadline = time.Now().Add(10 * time.Minute)
+		expiresAt = time.Now().Add(10 * time.Minute)
 	}
+	pollCtx, cancel := context.WithDeadline(ctx, expiresAt)
+	defer cancel()
 	for {
-		token, err := client.PollToken(ctx, login.DeviceCode)
+		if err := pollCtx.Err(); err != nil {
+			if ctx.Err() != nil {
+				return adversarylabs.TokenResponse{}, ctx.Err()
+			}
+			return adversarylabs.TokenResponse{}, fmt.Errorf("login expired before authentication completed")
+		}
+		token, err := client.PollToken(pollCtx, login.DeviceCode)
 		if err == nil {
 			return token, nil
 		}
-		if time.Now().After(deadline) {
+		if pollCtx.Err() != nil {
+			if ctx.Err() != nil {
+				return adversarylabs.TokenResponse{}, ctx.Err()
+			}
 			return adversarylabs.TokenResponse{}, fmt.Errorf("login expired before authentication completed")
 		}
 		timer := time.NewTimer(interval)
 		select {
-		case <-ctx.Done():
+		case <-pollCtx.Done():
 			timer.Stop()
-			return adversarylabs.TokenResponse{}, ctx.Err()
+			if ctx.Err() != nil {
+				return adversarylabs.TokenResponse{}, ctx.Err()
+			}
+			return adversarylabs.TokenResponse{}, fmt.Errorf("login expired before authentication completed")
 		case <-timer.C:
 		}
 	}
@@ -1080,9 +1094,11 @@ func newOCIRegistry(apiURL, profile string) (*oci.HTTPRegistry, error) {
 	if err != nil {
 		return nil, err
 	}
+	stores := oci.ChainCredentialStore{oci.DockerCredentialStore{}}
 	if ok {
-		registry.Credentials = oci.ChainCredentialStore{scopedCredentialStore{registry: adversarylabs.ResolveRegistryHost(), token: auth.Token}, oci.DockerCredentialStore{}}
+		stores = append(oci.ChainCredentialStore{scopedCredentialStore{registry: adversarylabs.ResolveRegistryHost(), token: auth.Token}}, stores...)
 	}
+	registry.Credentials = stores
 	return registry, nil
 }
 

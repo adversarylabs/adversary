@@ -27,6 +27,21 @@ func TestResolveAPIURLDefaultEnvAndOverride(t *testing.T) {
 	}
 }
 
+func TestAuthKeyCanonicalizesHostWithoutCollapsingServicePath(t *testing.T) {
+	if AuthKey("HTTPS://API.Example:443/TenantA", "default") != AuthKey("https://api.example/TenantA", "default") {
+		t.Fatal("scheme/host/default port should canonicalize")
+	}
+	if AuthKey("https://api.example/TenantA", "default") == AuthKey("https://api.example/tenanta", "default") {
+		t.Fatal("case-sensitive service paths collided")
+	}
+	if AuthKey("https://api.example/api?q=A", "default") == AuthKey("https://api.example/api?q=a", "default") {
+		t.Fatal("queries collided")
+	}
+	if AuthKey("https://user@api.example/api", "default") == AuthKey("https://api.example/api", "default") {
+		t.Fatal("userinfo collided")
+	}
+}
+
 func TestConfigStoreHardeningAndServiceFallback(t *testing.T) {
 	dir := t.TempDir()
 	store := ConfigStore{Path: filepath.Join(dir, "private", "config.json")}
