@@ -37,6 +37,12 @@ func AuthKey(apiURL, profile string) string {
 }
 
 func canonicalService(raw string) string {
+	trimmed := strings.TrimRight(raw, "/")
+	if trimmed != "" {
+		raw = trimmed
+	} else {
+		raw = "/"
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "invalid:" + raw
@@ -53,12 +59,6 @@ func canonicalService(raw string) string {
 		u.Host = "[" + hostname + "]"
 	} else {
 		u.Host = hostname
-	}
-	if u.Path != "/" && strings.HasSuffix(u.Path, "/") {
-		u.Path = strings.TrimSuffix(u.Path, "/")
-		if strings.HasSuffix(u.RawPath, "/") {
-			u.RawPath = strings.TrimSuffix(u.RawPath, "/")
-		}
 	}
 	return u.String()
 }

@@ -43,6 +43,12 @@ func TestAuthKeyCanonicalizesHostWithoutCollapsingServicePath(t *testing.T) {
 	if AuthKey("https://api.example/api", "default") != AuthKey("https://api.example/api/", "default") {
 		t.Fatal("trailing service slash should canonicalize")
 	}
+	if AuthKey("https://api.example/api", "default") != AuthKey("https://api.example/api//", "default") {
+		t.Fatal("repeated trailing service slashes should canonicalize")
+	}
+	if AuthKey("https://api.example/api/%2F", "default") == AuthKey("https://api.example/api", "default") {
+		t.Fatal("escaped path segment collided with trailing slash normalization")
+	}
 	if AuthKey("https://api.example/TenantA/", "default") == AuthKey("https://api.example/tenanta/", "default") {
 		t.Fatal("nontrailing path case distinction was lost")
 	}
