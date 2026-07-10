@@ -135,7 +135,7 @@ func (r *HTTPRegistry) Pull(ctx context.Context, ref Reference) (PulledArtifact,
 	if err != nil {
 		return PulledArtifact{}, err
 	}
-	return PulledArtifact{Reference: ref, Manifest: manifest, ManifestDigest: manifestDigest, AdversaryManifest: adversaryManifest, Blobs: blobs}, nil
+	return PulledArtifact{Reference: ref, RawManifest: append([]byte(nil), manifestData...), Manifest: manifest, ManifestDigest: manifestDigest, AdversaryManifest: adversaryManifest, Blobs: blobs}, nil
 }
 
 func validatePulledManifest(manifest Manifest) error {

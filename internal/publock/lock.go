@@ -10,12 +10,24 @@ import (
 type Lock struct{ file *os.File }
 
 func Acquire(root, key string) (*Lock, error) {
-	dir := filepath.Join(root, ".publication-locks")
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, fmt.Sprintf("%x.lock", sha256.Sum256([]byte(key))))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	rooted, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer rooted.Close()
+	if err := rooted.MkdirAll(".publication-locks", 0700); err != nil {
+		return nil, err
+	}
+	path := filepath.ToSlash(filepath.Join(".publication-locks", fmt.Sprintf("%x.lock", sha256.Sum256([]byte(key)))))
+	f, err := rooted.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if os.IsNotExist(err) {
+		if e := rooted.MkdirAll(".publication-locks", 0700); e == nil {
+			f, err = rooted.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
