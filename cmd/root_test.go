@@ -179,6 +179,35 @@ func TestRunHelpLabelsUnsafeHostExecution(t *testing.T) {
 	}
 }
 
+func TestRunHelpDocumentsExplicitLifecycleControls(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := NewRootCommand(&stdout, &bytes.Buffer{})
+	cmd.SetArgs([]string{"run", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--build", "--build-timeout", "--timeout"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("help missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestRunRejectsConflictingAndNegativeLifecycleFlagsBeforeWork(t *testing.T) {
+	for name, args := range map[string][]string{
+		"build policy":     {"run", "./test", "--build", "--no-build"},
+		"negative timeout": {"run", "./test", "--timeout=-1s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+			cmd.SetArgs(args)
+			if err := cmd.Execute(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
 func TestLoginHelpShowsAPIURLFlag(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

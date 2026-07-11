@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 type ContainerExecutor interface {
@@ -40,6 +41,18 @@ type ContainerResult struct {
 	Kind     string
 }
 
+// ChildExitError preserves the child status while retaining the cancellation or
+// operating-system cause for process-edge exit classification.
+type ChildExitError struct {
+	ExitCode int
+	Err      error
+}
+
+func (e *ChildExitError) Error() string {
+	return fmt.Sprintf("host execution failed (child exit %d): %v", e.ExitCode, e.Err)
+}
+func (e *ChildExitError) Unwrap() error { return e.Err }
+
 func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
 	if spec.NetworkDisabled {
 		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution cannot enforce disabled network access")
@@ -58,7 +71,8 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 		}
 		command = append([]string{node}, command[1:]...)
 	}
-	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd := exec.Command(command[0], command[1:]...)
+	configureProcess(cmd)
 	cmd.Dir = spec.AdversaryPath
 	cmd.Stdout = e.Stdout
 	cmd.Stderr = e.Stderr
@@ -67,10 +81,37 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 	for _, key := range sortedEnvKeys(spec.Env) {
 		cmd.Env = append(cmd.Env, key+"="+spec.Env[key])
 	}
-	if err := cmd.Run(); err != nil {
-		return ContainerResult{ExitCode: exitCode(err), Kind: "Process"}, fmt.Errorf("host execution failed: %w", err)
+	if err := cmd.Start(); err != nil {
+		return ContainerResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
 	}
-	return ContainerResult{ExitCode: 0, Kind: "Process"}, nil
+	group := supervisedProcessGroup(cmd)
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			code := exitCode(err)
+			return ContainerResult{ExitCode: code, Kind: "Process"}, &ChildExitError{ExitCode: code, Err: err}
+		}
+		return ContainerResult{ExitCode: 0, Kind: "Process"}, nil
+	case <-ctx.Done():
+		requestProcessTermination(cmd, group)
+		timer := time.NewTimer(750 * time.Millisecond)
+		var err error
+		reaped := false
+		select {
+		case err = <-done:
+			reaped = true
+			<-timer.C
+		case <-timer.C:
+		}
+		killProcessTree(cmd, group)
+		if !reaped {
+			err = <-done
+		}
+		code := exitCode(err)
+		return ContainerResult{ExitCode: code, Kind: "Process"}, &ChildExitError{ExitCode: code, Err: ctx.Err()}
+	}
 }
 
 func findNode(version string) (string, error) {

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -29,13 +30,19 @@ import (
 )
 
 func Execute() error {
+	ctx, stop := signal.NotifyContext(context.Background(), processSignals()...)
+	defer stop()
 	app, err := newProcessApp(os.Stdin, os.Stdout, os.Stderr)
 	if err != nil {
 		return err
 	}
 	root := NewRootCommandWithApp(app)
+	root.SetContext(ctx)
 	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		var findings *internaladversary.FindingsError
+		if !errors.As(err, &findings) {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		return err
 	}
 	return nil
@@ -77,7 +84,52 @@ func newRootCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 	cmd.AddCommand(newSearchCommand(app, stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newWhoamiCommand(app, stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newStoreCommand(app))
+	classifyCommandErrors(cmd)
 	return cmd
+}
+
+func classifyCommandErrors(root *cobra.Command) {
+	var visit func(*cobra.Command)
+	visit = func(command *cobra.Command) {
+		if command.Args != nil {
+			args := command.Args
+			command.Args = func(cmd *cobra.Command, values []string) error {
+				if err := args(cmd, values); err != nil {
+					return &application.Error{Operation: "parse arguments", Kind: "usage", Err: err}
+				}
+				return nil
+			}
+		}
+		command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+			return &application.Error{Operation: "parse flags", Kind: "usage", Err: err}
+		})
+		if command.RunE != nil {
+			run := command.RunE
+			command.RunE = func(cmd *cobra.Command, values []string) error {
+				err := run(cmd, values)
+				if err == nil || isTypedCommandError(err) {
+					return err
+				}
+				return &application.Error{Operation: cmd.CommandPath(), Kind: "configuration", Err: err}
+			}
+		}
+		for _, child := range command.Commands() {
+			visit(child)
+		}
+	}
+	visit(root)
+}
+
+func isTypedCommandError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var appErr *application.Error
+	var findings *internaladversary.FindingsError
+	var child *internaladversary.ChildExitError
+	var protocol *internaladversary.ProtocolError
+	var execution *internaladversary.ExecutionError
+	return errors.As(err, &appErr) || errors.As(err, &findings) || errors.As(err, &child) || errors.As(err, &protocol) || errors.As(err, &execution)
 }
 
 type runOptions struct {
@@ -96,6 +148,10 @@ type runOptions struct {
 	shell                    bool
 	allFiles                 bool
 	allowUnsafeHostExecution bool
+	build                    bool
+	noBuild                  bool
+	runTimeout               time.Duration
+	buildTimeout             time.Duration
 }
 
 type initOptions struct {
@@ -156,6 +212,12 @@ func newRunCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comman
 			if opts.shell && (opts.json || opts.format == "json") {
 				return fmt.Errorf("--shell cannot be combined with JSON output")
 			}
+			if opts.build && opts.noBuild {
+				return fmt.Errorf("--build and --no-build cannot be combined")
+			}
+			if opts.runTimeout < 0 || opts.buildTimeout < 0 {
+				return fmt.Errorf("timeouts cannot be negative")
+			}
 
 			err := app.Dependencies().Runtime.Run(cmd.Context(), application.AdversaryRunOptions{
 				AdversaryRef:             args[0],
@@ -172,6 +234,9 @@ func newRunCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comman
 				Shell:                    opts.shell,
 				AllFiles:                 opts.allFiles,
 				AllowUnsafeHostExecution: opts.allowUnsafeHostExecution,
+				Build:                    opts.build,
+				RunTimeout:               opts.runTimeout,
+				BuildTimeout:             opts.buildTimeout,
 				Stdout:                   stdout,
 				Stderr:                   stderr,
 			})
@@ -197,6 +262,11 @@ func newRunCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comman
 	cmd.Flags().BoolVar(&opts.shell, "shell", false, "UNSAFE: launch an unrestricted host shell in the adversary working directory")
 	cmd.Flags().BoolVar(&opts.allowUnsafeHostExecution, "allow-unsafe-host-execution", false, "acknowledge unrestricted host execution of installed or pulled code and --shell")
 	cmd.Flags().BoolVar(&opts.allFiles, "all-files", false, "scan all files even when diff refs are provided")
+	cmd.Flags().BoolVar(&opts.build, "build", false, "build a local adversary before running (may update dist)")
+	cmd.Flags().BoolVar(&opts.noBuild, "no-build", false, "deprecated compatibility flag; local builds are skipped by default")
+	_ = cmd.Flags().MarkDeprecated("no-build", "local builds are skipped by default; omit this flag")
+	cmd.Flags().DurationVar(&opts.runTimeout, "timeout", 0, "maximum adversary execution time (0 disables the deadline)")
+	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
 
 	return cmd
 }

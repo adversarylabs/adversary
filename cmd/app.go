@@ -92,7 +92,7 @@ func (p processRuntime) Inspect(ctx context.Context, opts application.AdversaryR
 	return r.Inspect(toInternalRunOptions(opts))
 }
 func toInternalRunOptions(opts application.AdversaryRunOptions) internaladversary.RunOptions {
-	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution}
+	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout}
 }
 
 type processTTY struct{}
@@ -110,12 +110,74 @@ type processAPIFactory struct {
 func (f processAPIFactory) BindingIdentity() string { return f.store.Path }
 
 func (f processAPIFactory) New(base string) application.APIClient {
-	return adversarylabs.Client{BaseURL: strings.TrimRight(base, "/"), HTTP: f.http, Store: f.store}
+	return classifiedAPIClient{inner: adversarylabs.Client{BaseURL: strings.TrimRight(base, "/"), HTTP: f.http, Store: f.store}}
+}
+
+type classifiedAPIClient struct{ inner application.APIClient }
+
+func authError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &application.Error{Operation: operation, Kind: "auth", Err: err}
+}
+func (c classifiedAPIClient) BeginLogin(ctx context.Context, o adversarylabs.LoginOptions) (adversarylabs.DeviceLogin, error) {
+	v, e := c.inner.BeginLogin(ctx, o)
+	return v, authError("begin login", e)
+}
+func (c classifiedAPIClient) LoginWithPassword(ctx context.Context, o adversarylabs.PasswordLoginOptions) (adversarylabs.TokenResponse, error) {
+	v, e := c.inner.LoginWithPassword(ctx, o)
+	return v, authError("password login", e)
+}
+func (c classifiedAPIClient) BrowserLoginURL(o adversarylabs.BrowserLoginOptions) (string, error) {
+	v, e := c.inner.BrowserLoginURL(o)
+	return v, authError("browser login URL", e)
+}
+func (c classifiedAPIClient) ExchangeCode(ctx context.Context, a, b, d string) (adversarylabs.TokenResponse, error) {
+	v, e := c.inner.ExchangeCode(ctx, a, b, d)
+	return v, authError("exchange login code", e)
+}
+func (c classifiedAPIClient) PollToken(ctx context.Context, token string) (adversarylabs.TokenResponse, error) {
+	v, e := c.inner.PollToken(ctx, token)
+	return v, authError("poll login token", e)
+}
+func (c classifiedAPIClient) Revoke(ctx context.Context, token string) error {
+	return authError("revoke token", c.inner.Revoke(ctx, token))
+}
+func (c classifiedAPIClient) Search(ctx context.Context, token, query string) ([]adversarylabs.SearchResult, error) {
+	v, e := c.inner.Search(ctx, token, query)
+	return v, authError("search API", e)
+}
+func (c classifiedAPIClient) Whoami(ctx context.Context, token string) (adversarylabs.WhoamiResponse, error) {
+	v, e := c.inner.Whoami(ctx, token)
+	return v, authError("whoami API", e)
 }
 
 type processOCIRegistry struct{ *oci.HTTPRegistry }
 
 func (r processOCIRegistry) SetPlainHTTP(v bool) { r.PlainHTTP = v }
+func networkError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &application.Error{Operation: operation, Kind: "network", Err: err}
+}
+func (r processOCIRegistry) Push(ctx context.Context, ref oci.Reference, manifest []byte, blobs []oci.Blob) (string, error) {
+	v, e := r.HTTPRegistry.Push(ctx, ref, manifest, blobs)
+	return v, networkError("OCI push", e)
+}
+func (r processOCIRegistry) PushAdversaryManifestReferrer(ctx context.Context, ref oci.Reference, digest string, manifest []byte) (string, string, error) {
+	a, b, e := r.HTTPRegistry.PushAdversaryManifestReferrer(ctx, ref, digest, manifest)
+	return a, b, networkError("OCI referrer push", e)
+}
+func (r processOCIRegistry) Pull(ctx context.Context, ref oci.Reference) (oci.PulledArtifact, error) {
+	v, e := r.HTTPRegistry.Pull(ctx, ref)
+	return v, networkError("OCI pull", e)
+}
+func (r processOCIRegistry) Resolve(ctx context.Context, ref oci.Reference) (string, error) {
+	v, e := r.HTTPRegistry.Resolve(ctx, ref)
+	return v, networkError("OCI resolve", e)
+}
 
 type processAuthStore struct{ adversarylabs.ConfigStore }
 

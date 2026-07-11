@@ -107,6 +107,8 @@ type AdversaryRunOptions struct {
 	AdversaryRef, RepoPath, BaseRef, HeadRef, Builder, Format string
 	Force, KeepTemp, NoNetwork, Verbose, IncludeSuppressed    bool
 	Shell, AllFiles, AllowUnsafeHostExecution                 bool
+	Build                                                     bool
+	RunTimeout, BuildTimeout                                  time.Duration
 	Stdout, Stderr                                            io.Writer
 }
 type Browser interface {
