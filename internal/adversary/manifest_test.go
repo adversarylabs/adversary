@@ -310,6 +310,11 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 	if err := os.Chmod(npmPath, 0755); err != nil {
 		t.Fatal(err)
 	}
+	nodePath := filepath.Join(binDir, "node")
+	writeFile(t, nodePath, "#!/bin/sh\nprintf 'v22.14.0\\n'\n")
+	if err := os.Chmod(nodePath, 0755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", binDir)
 	t.Setenv("HOME", t.TempDir())
 

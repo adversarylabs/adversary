@@ -10,9 +10,22 @@ func ShouldRunForChangedFiles(patterns, changedFiles []string, force bool) bool 
 	if force || len(patterns) == 0 {
 		return true
 	}
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		pattern = filepath.ToSlash(strings.TrimSpace(pattern))
+		if pattern == "" {
+			continue
+		}
+		re, err := regexp.Compile(globToRegexp(pattern))
+		if err != nil {
+			continue
+		}
+		compiled = append(compiled, re)
+	}
 	for _, file := range changedFiles {
-		for _, pattern := range patterns {
-			if globMatch(pattern, file) {
+		name := filepath.ToSlash(file)
+		for _, pattern := range compiled {
+			if name != "" && pattern.MatchString(name) {
 				return true
 			}
 		}
@@ -22,13 +35,14 @@ func ShouldRunForChangedFiles(patterns, changedFiles []string, force bool) bool 
 
 func globMatch(pattern, name string) bool {
 	pattern = filepath.ToSlash(strings.TrimSpace(pattern))
-	name = filepath.ToSlash(strings.TrimSpace(name))
+	name = filepath.ToSlash(name)
 	if pattern == "" || name == "" {
 		return false
 	}
 
 	regex := globToRegexp(pattern)
-	return regexp.MustCompile(regex).MatchString(name)
+	re, err := regexp.Compile(regex)
+	return err == nil && re.MatchString(name)
 }
 
 func globToRegexp(pattern string) string {
