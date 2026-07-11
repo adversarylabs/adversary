@@ -7,9 +7,10 @@ import (
 	"testing"
 
 	"github.com/adversarylabs/adversary/pkg/blobsource"
+	"github.com/adversarylabs/adversary/pkg/oci"
 )
 
-func TestArtifactSourcesAdaptPackedContent(t *testing.T) {
+func TestArtifactSourcesExposeOwnedPackedContent(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "adversary.yaml"), []byte("name: local/source\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [index.js]\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -32,5 +33,11 @@ func TestArtifactSourcesAdaptPackedContent(t *testing.T) {
 		if err := blobsource.Verify(source.Source); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestArtifactSourcesRejectMissingOwnedLayer(t *testing.T) {
+	if _, err := (Artifact{OCIManifest: oci.Manifest{Layers: []oci.Descriptor{{}}}}).Sources(); err == nil {
+		t.Fatal("missing owned layer source accepted")
 	}
 }

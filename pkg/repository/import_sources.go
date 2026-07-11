@@ -98,10 +98,10 @@ func (r Repository) ImportSources(in SourceImport) (_ Record, retErr error) {
 			}
 		}
 	}
-	return r.importData(Import{Reference: in.Reference, Name: in.Name, Version: in.Version,
+	return r.importData(importMetadata{Reference: in.Reference, Name: in.Name, Version: in.Version,
 		Manifest: manifest, Config: configData, AdversaryManifest: adversary,
 		ManifestDigest: in.Manifest.Digest(), ConfigDigest: config.Digest(), LayerDigest: layer.Digest(),
-		AdversaryManifestDigest: sourceDigest(in.AdversaryManifest)}, true, true)
+		AdversaryManifestDigest: sourceDigest(in.AdversaryManifest)}, true)
 }
 
 func descriptorMatches(a, b oci.Descriptor) bool {

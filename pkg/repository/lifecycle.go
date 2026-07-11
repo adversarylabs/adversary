@@ -13,6 +13,7 @@ import (
 
 	"github.com/adversarylabs/adversary/internal/archiveutil"
 	"github.com/adversarylabs/adversary/internal/publock"
+	"github.com/adversarylabs/adversary/pkg/blobsource"
 )
 
 const maxLifecycleEntries = 100000
@@ -448,25 +449,26 @@ func (r Repository) CheckAll() (CheckReport, error) {
 	return report, nil
 }
 
-func (r Repository) RepairAll(sources map[string][]byte) (RepairReport, error) {
+func (r Repository) RepairAll(sources map[string]blobsource.Source) (RepairReport, error) {
 	report := RepairReport{}
-	check, err := r.CheckAll()
+	lifecycle, err := publock.Acquire(r.Root, "repo-lifecycle")
 	if err != nil {
 		return report, err
 	}
-	for _, item := range check.Records {
-		if len(item.Missing)+len(item.Corrupt) == 0 {
-			continue
-		}
-		rec, err := r.record(item.Digest)
+	defer lifecycle.Close()
+	records, err := r.scanRecords(false)
+	if err != nil {
+		return report, err
+	}
+	for _, rec := range records {
+		repaired, err := r.repairLocked(rec, sources)
 		if err != nil {
-			return report, err
-		}
-		if err := r.Repair(rec, sources); err != nil {
-			report.Unresolved = append(report.Unresolved, item.Digest)
+			report.Unresolved = append(report.Unresolved, rec.Digest)
 			continue
 		}
-		report.Repaired = append(report.Repaired, item.Digest)
+		if repaired {
+			report.Repaired = append(report.Repaired, rec.Digest)
+		}
 	}
 	sort.Strings(report.Repaired)
 	sort.Strings(report.Unresolved)
@@ -527,6 +529,10 @@ func (r Repository) enumerateAll() ([]Record, error) {
 }
 
 func (r Repository) scanAllRecords() ([]Record, error) {
+	return r.scanRecords(true)
+}
+
+func (r Repository) scanRecords(validateContent bool) ([]Record, error) {
 	root, err := os.OpenRoot(r.Root)
 	if err != nil {
 		return nil, err
@@ -558,9 +564,14 @@ func (r Repository) scanAllRecords() ([]Record, error) {
 			if json.Unmarshal(data, &rec) != nil || rec.Digest == "" || entry.Name() != key(rec.Digest)+".json" {
 				return nil, fmt.Errorf("malformed repository record")
 			}
-			canonical, loadErr := r.loadRecord(rec.Digest, false)
+			canonical, loadErr := r.loadRecordMetadata(rec.Digest, false)
 			if loadErr != nil || canonical != rec {
 				return nil, fmt.Errorf("corrupt repository record %s", rec.Digest)
+			}
+			if validateContent {
+				if _, loadErr := r.loadRecord(rec.Digest, false); loadErr != nil {
+					return nil, fmt.Errorf("corrupt repository record %s", rec.Digest)
+				}
 			}
 			out = append(out, rec)
 		}

@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,7 +76,8 @@ func TestCreatePreservesExecutableMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gz, err := gzip.NewReader(bytes.NewReader(artifact.Layer))
+	layer := readArtifactLayer(t, artifact)
+	gz, err := gzip.NewReader(bytes.NewReader(layer))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,9 +110,25 @@ func TestCreateIsDeterministic(t *testing.T) {
 	if first.ManifestDigest != second.ManifestDigest {
 		t.Fatalf("digest mismatch: %s != %s", first.ManifestDigest, second.ManifestDigest)
 	}
-	if string(first.Layer) != string(second.Layer) {
+	if string(readArtifactLayer(t, first)) != string(readArtifactLayer(t, second)) {
 		t.Fatal("layer is not deterministic")
 	}
+}
+
+func readArtifactLayer(t *testing.T, artifact Artifact) []byte {
+	t.Helper()
+	r, err := artifact.LayerSource.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(r)
+	if closeErr := r.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestCreateStoresRuntimeRequirement(t *testing.T) {

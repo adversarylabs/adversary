@@ -34,7 +34,7 @@ func newPackCommand(app *application.App) *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "Packing adversary...")
-			artifact, err := pack.Create(cmd.Context(), pack.Options{Dir: args[0], NameOverride: opts.name, Build: true, Builder: opts.builder, Stdout: cmd.ErrOrStderr(), Stderr: cmd.ErrOrStderr(), Streaming: true})
+			artifact, err := pack.Create(cmd.Context(), pack.Options{Dir: args[0], NameOverride: opts.name, Build: true, Builder: opts.builder, Stdout: cmd.ErrOrStderr(), Stderr: cmd.ErrOrStderr()})
 			if err != nil {
 				return err
 			}

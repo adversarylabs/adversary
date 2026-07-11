@@ -2,7 +2,6 @@ package pack
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/rand"
@@ -35,8 +34,6 @@ type Options struct {
 	Builder      string
 	Stdout       io.Writer
 	Stderr       io.Writer
-	// Streaming writes the compressed layer to an owned temporary source.
-	Streaming bool
 }
 
 type BuildOptions struct {
@@ -67,7 +64,6 @@ type Artifact struct {
 	Entrypoint              []string
 	Permissions             any
 	Config                  []byte
-	Layer                   []byte
 	AdversaryManifest       []byte
 	Manifest                []byte
 	ManifestDigest          string
@@ -136,7 +132,6 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		}
 	}
 	var files []File
-	var layer []byte
 	var layerSource blobsource.SourceCloser
 	var layerSize int64
 	var layerDigest string
@@ -146,7 +141,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 			_ = layerSource.Close()
 		}
 	}()
-	if opts.Streaming {
+	{
 		tmp, createErr := os.CreateTemp("", "adversary-pack-*.tar.gz")
 		if createErr != nil {
 			return Artifact{}, createErr
@@ -182,12 +177,6 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		}
 		layerSource = blobsource.Owned(src, func() error { return os.Remove(name) })
 		keep = true
-	} else {
-		files, layer, err = collectAndBuildLayer(root, dir)
-		if err == nil {
-			layerSize = int64(len(layer))
-			layerDigest = oci.Digest(layer)
-		}
 	}
 	if err != nil {
 		return Artifact{}, err
@@ -263,7 +252,6 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		Entrypoint:              m.Runtime.Command,
 		Permissions:             m.Permissions,
 		Config:                  config,
-		Layer:                   layer,
 		AdversaryManifest:       adversaryManifest,
 		Manifest:                manifestData,
 		ManifestDigest:          manifestDigest,
@@ -281,12 +269,6 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 
 var beforePackOpen func(string)
 var beforeManifestRead func()
-
-func collectAndBuildLayer(root *os.Root, dir string) ([]File, []byte, error) {
-	var buf bytes.Buffer
-	files, err := collectAndBuildLayerTo(root, dir, &buf)
-	return files, buf.Bytes(), err
-}
 
 func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, error) {
 	ignore := loadIgnore(dir)
@@ -1544,50 +1526,6 @@ func collectFiles(dir string) ([]File, error) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
-}
-
-func buildLayer(dir string, files []File) ([]byte, error) {
-	var buf bytes.Buffer
-	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	if err != nil {
-		return nil, err
-	}
-	gz.Name = ""
-	gz.ModTime = time.Unix(0, 0).UTC()
-	tw := tar.NewWriter(gz)
-	defer tw.Close()
-	defer gz.Close()
-	for _, file := range files {
-		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(file.Path)))
-		if err != nil {
-			return nil, err
-		}
-		header := &tar.Header{
-			Name:    file.Path,
-			Mode:    0644 | file.Mode,
-			Size:    file.Size,
-			ModTime: time.Unix(0, 0).UTC(),
-			Format:  tar.FormatPAX,
-		}
-		if err := tw.WriteHeader(header); err != nil {
-			f.Close()
-			return nil, err
-		}
-		if _, err := io.CopyBuffer(tw, f, make([]byte, 32<<10)); err != nil {
-			f.Close()
-			return nil, err
-		}
-		if err := f.Close(); err != nil {
-			return nil, err
-		}
-	}
-	if err := tw.Close(); err != nil {
-		return nil, err
-	}
-	if err := gz.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 func detectRuntime(dir string, m manifest.Manifest) string {

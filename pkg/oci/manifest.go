@@ -25,15 +25,6 @@ type Manifest struct {
 	Annotations   map[string]string `json:"annotations,omitempty"`
 }
 
-type PulledArtifact struct {
-	Reference         Reference
-	RawManifest       []byte
-	Manifest          Manifest
-	ManifestDigest    string
-	AdversaryManifest []byte
-	Blobs             map[string][]byte
-}
-
 type ArtifactManifest struct {
 	MediaType    string            `json:"mediaType"`
 	ArtifactType string            `json:"artifactType"`

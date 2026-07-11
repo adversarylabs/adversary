@@ -6,9 +6,9 @@ import (
 	"github.com/adversarylabs/adversary/pkg/blobsource"
 )
 
-// SourceBlob is the streaming counterpart to Blob. Source must report the
+// SourceBlob is the blob transport contract. Source must report the
 // descriptor size and digest; consumers may reopen it for authenticated HTTP
-// retries. This additive type does not change Registry yet.
+// retries.
 type SourceBlob struct {
 	Descriptor Descriptor
 	Source     blobsource.Source
@@ -27,9 +27,4 @@ func NewSourceBlob(descriptor Descriptor, source blobsource.Source) (SourceBlob,
 		return SourceBlob{}, err
 	}
 	return SourceBlob{Descriptor: descriptor, Source: source}, nil
-}
-
-// Source adapts the legacy in-memory blob without copying it.
-func (b Blob) Source() (SourceBlob, error) {
-	return NewSourceBlob(b.Descriptor, blobsource.Bytes(b.Data))
 }

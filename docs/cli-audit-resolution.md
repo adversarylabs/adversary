@@ -24,7 +24,7 @@ are the maintained contract after merge.
 | CLI-016 | PR #3 and contracts-closure PR; atomic init, deterministic TypeScript lockfile/`npm ci`, and injected render/write cleanup tests |
 | CLI-017 | PRs #17 and #18; `docs/cli-output-contract.md`, help goldens, DTO tests |
 | CLI-018 | PR #19; `docs/platform-runtime-support.md`, native CI matrix |
-| CLI-019 | PR #6 plus streaming additive/migration/cleanup PRs; production pack, repository import/payload, OCI upload, and OCI download/materialization now use bounded repeatable sources with explicit leases/cleanup; the cleanup PR only removes legacy byte-slice compatibility APIs |
+| CLI-019 | PR #6 plus streaming additive/migration/cleanup PRs; production pack, repository import/payload/repair, OCI upload, and OCI download/materialization use bounded repeatable sources with explicit leases/cleanup; the cleanup PR removes the legacy byte-slice compatibility APIs |
 | CLI-020 | PR #6; sealed publication and cross-process locking tests |
 | CLI-021 | PRs #1, #8, #9, #11, #12, and #15 through #19; versioned protocol, resolver, build, lifecycle, output, and platform contracts |
 | CLI-022 | Release-hardening PR; pinned workflows, deterministic archive test, SBOM and attestation policy in `docs/release.md` |
@@ -34,3 +34,24 @@ are the maintained contract after merge.
 Rollback notes are recorded in each linked PR and its maintained decision
 document. `scripts/test-release-contract.sh` prevents release, formula, license,
 version, and README command-surface drift.
+
+## CLI-019 bounded-memory decision
+
+Artifact layers are never represented by a production `[]byte`: packing writes
+an owned temporary source, repository import/repair and payload leases copy or
+open verified sources, and OCI upload/download use repeatable file-backed
+sources. Command flows call these source APIs directly, so there is no
+compatibility fallback.
+
+Small control-plane documents intentionally remain byte slices because their
+parsers and JSON/YAML encoders require complete documents. They are rejected
+above fixed ingestion limits: OCI image manifests at 4 MiB, configs and
+adversary manifests at 1 MiB. These limits do not apply to package layers,
+which are streamed with a 256 MiB compressed-ingestion ceiling.
+
+`BenchmarkCreateStreamingLargeLayer` exercises a 64 MiB incompressible layer,
+and `TestCreateStreamingAllocationStaysBoundedForIncompressibleLayer` enforces
+that total allocations stay below 8 MiB. Repository source tests use a 12 MiB
+random layer and assert the packed artifact carries only an owned source;
+repository and OCI tests also cover repeatable reads, size/digest mismatch,
+overflow, stalled readers, cleanup on failure, and post-close invalidation.

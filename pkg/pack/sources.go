@@ -19,11 +19,10 @@ func (a Artifact) Sources() ([]oci.SourceBlob, error) {
 	if err != nil {
 		return nil, err
 	}
-	layerSource := blobsource.Source(blobsource.Bytes(a.Layer))
-	if a.LayerSource != nil {
-		layerSource = a.LayerSource
+	if a.LayerSource == nil {
+		return nil, fmt.Errorf("packed artifact layer source is closed or unavailable")
 	}
-	layer, err := oci.NewSourceBlob(a.OCIManifest.Layers[0], layerSource)
+	layer, err := oci.NewSourceBlob(a.OCIManifest.Layers[0], a.LayerSource)
 	if err != nil {
 		return nil, err
 	}

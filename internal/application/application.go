@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -61,9 +62,9 @@ type APIClient interface {
 }
 type APIFactory interface{ New(string) APIClient }
 type OCIRegistry interface {
-	Push(context.Context, oci.Reference, []byte, []oci.Blob) (string, error)
+	PushSources(context.Context, oci.Reference, []byte, []oci.SourceBlob) (string, error)
 	PushAdversaryManifestReferrer(context.Context, oci.Reference, string, []byte) (string, string, error)
-	Pull(context.Context, oci.Reference) (oci.PulledArtifact, error)
+	PullSources(context.Context, oci.Reference) (*oci.PulledSources, error)
 	Resolve(context.Context, oci.Reference) (string, error)
 	SetPlainHTTP(bool)
 }
@@ -76,7 +77,7 @@ type Repository interface {
 	PlanGC() (repository.GCPlan, error)
 	ApplyGC(repository.GCPlan, bool) (repository.GCReport, error)
 	CheckAll() (repository.CheckReport, error)
-	RepairAll(map[string][]byte) (repository.RepairReport, error)
+	RepairAll(map[string]blobsource.Source) (repository.RepairReport, error)
 	DeleteRef(string, string) error
 	MigrationStatus(string) (repository.MigrationStatus, error)
 	LeaseMaterialized(repository.Record) (*repository.MaterializationLease, error)
@@ -93,9 +94,9 @@ type Resolver interface {
 	ResolveRecord(string) (repository.Record, error)
 	HasExact(string) (bool, error)
 	Entries(int) ([]repository.Entry, error)
-	Payload(repository.Record) ([]byte, []oci.Blob, []byte, error)
+	PayloadSources(repository.Record) (*repository.PayloadLease, error)
 	ImportPacked(pack.Artifact, string) (repository.Record, error)
-	ImportPulled(oci.PulledArtifact) (repository.Record, error)
+	ImportSources(repository.SourceImport) (repository.Record, error)
 	UpdateRef(string, string, string) error
 }
 type Runtime interface {

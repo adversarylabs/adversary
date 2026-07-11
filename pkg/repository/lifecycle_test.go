@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 )
@@ -363,7 +364,7 @@ func TestCheckRepairAndMigrationStatus(t *testing.T) {
 	if err != nil || check.Healthy {
 		t.Fatalf("check=%#v err=%v", check, err)
 	}
-	repaired, err := r.RepairAll(map[string][]byte{rec.LayerDigest: a.Layer})
+	repaired, err := r.RepairAll(map[string]blobsource.Source{rec.LayerDigest: blobsource.Bytes(artifactLayer(t, a))})
 	if err != nil || len(repaired.Repaired) != 1 {
 		t.Fatalf("repair=%#v err=%v", repaired, err)
 	}

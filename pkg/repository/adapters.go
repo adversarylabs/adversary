@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/adversarylabs/adversary/pkg/oci"
 )
 
 type Entry struct {
@@ -18,36 +16,6 @@ type Entry struct {
 	Digest             string `json:"digest"`
 }
 
-func (r Repository) Payload(rec Record) ([]byte, []oci.Blob, []byte, error) {
-	canonical, err := r.record(rec.Digest)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	manifest, err := r.readLimit("manifests/"+key(canonical.ManifestDigest), 4<<20)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	config, err := r.readLimit("blobs/"+key(canonical.ConfigDigest), 1<<20)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	layer, err := r.readLimit("blobs/"+key(canonical.LayerDigest), 256<<20)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	var adversary []byte
-	if canonical.AdversaryManifestDigest != "" {
-		adversary, err = r.readLimit("adversary-manifests/"+key(canonical.AdversaryManifestDigest), 1<<20)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-	}
-	var m oci.Manifest
-	if err := json.Unmarshal(manifest, &m); err != nil {
-		return nil, nil, nil, err
-	}
-	return manifest, []oci.Blob{{Descriptor: m.Config, Data: config}, {Descriptor: m.Layers[0], Data: layer}}, adversary, nil
-}
 func (r Repository) List(limit int) ([]Record, error) {
 	if limit <= 0 {
 		limit = 10000

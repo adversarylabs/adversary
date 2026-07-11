@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/adversarylabs/adversary/internal/rootreplace"
+	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 )
@@ -26,6 +28,22 @@ func artifact(t *testing.T, content string) pack.Artifact {
 		t.Fatal(err)
 	}
 	return a
+}
+
+func artifactLayer(t *testing.T, a pack.Artifact) []byte {
+	t.Helper()
+	r, err := a.LayerSource.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(r)
+	if closeErr := r.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 func write(t *testing.T, root, rel, data string) {
 	t.Helper()
@@ -133,7 +151,7 @@ func TestVerifyAndRepairCorruption(t *testing.T) {
 	if v := r.Verify(rec); len(v.Corrupt) != 1 {
 		t.Fatalf("verify=%#v", v)
 	}
-	if err := r.Repair(rec, map[string][]byte{rec.LayerDigest: a.Layer}); err != nil {
+	if err := r.Repair(rec, map[string]blobsource.Source{rec.LayerDigest: blobsource.Bytes(artifactLayer(t, a))}); err != nil {
 		t.Fatal(err)
 	}
 	if v := r.Verify(rec); len(v.Corrupt) != 0 {
@@ -157,9 +175,12 @@ func TestPulledImportPreservesRawManifestIdentity(t *testing.T) {
 	}
 	raw := pretty.Bytes()
 	ref, _ := oci.ParseReference("registry.example/local/test:1.0.0")
-	pulled := oci.PulledArtifact{Reference: ref, RawManifest: raw, Manifest: a.OCIManifest, ManifestDigest: oci.Digest(raw), AdversaryManifest: a.AdversaryManifest, Blobs: map[string][]byte{a.ConfigDigest: a.Config, a.LayerDigest: a.Layer}}
 	r := Repository{Root: t.TempDir()}
-	rec, err := r.ImportPulled(pulled)
+	blobs, err := a.Sources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := r.ImportSources(SourceImport{Reference: ref.Locator(), Name: a.ManifestName, Version: a.Version, Manifest: blobsource.Bytes(raw), AdversaryManifest: blobsource.Bytes(a.AdversaryManifest), Blobs: blobs})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/adversarylabs/adversary/internal/application"
@@ -62,27 +61,15 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 				return resolveErr
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "Downloading layers...")
-			streamRegistry, ok := registry.(interface {
-				PullSources(context.Context, oci.Reference) (*oci.PulledSources, error)
-			})
-			if !ok {
-				return fmt.Errorf("registry does not support streaming downloads")
-			}
-			artifact, err := streamRegistry.PullSources(cmd.Context(), ref)
+			artifact, err := registry.PullSources(cmd.Context(), ref)
 			if err != nil {
 				return err
-			}
-			streamResolver, ok := resolver.(interface {
-				ImportSources(repository.SourceImport) (repository.Record, error)
-			})
-			if !ok {
-				return errors.Join(fmt.Errorf("resolver does not support streaming imports"), artifact.Close())
 			}
 			var adversarySource blobsource.Source
 			if len(artifact.AdversaryManifest) > 0 {
 				adversarySource = blobsource.Bytes(artifact.AdversaryManifest)
 			}
-			unified, importErr := streamResolver.ImportSources(repository.SourceImport{Reference: ref.Locator(), Name: artifact.Manifest.Annotations["ai.adversary.full_name"], Version: artifact.Manifest.Annotations["ai.adversary.version"], Manifest: blobsource.Bytes(artifact.RawManifest), Blobs: artifact.Blobs, AdversaryManifest: adversarySource})
+			unified, importErr := resolver.ImportSources(repository.SourceImport{Reference: ref.Locator(), Name: artifact.Manifest.Annotations["ai.adversary.full_name"], Version: artifact.Manifest.Annotations["ai.adversary.version"], Manifest: blobsource.Bytes(artifact.RawManifest), Blobs: artifact.Blobs, AdversaryManifest: adversarySource})
 			if err := errors.Join(importErr, artifact.Close()); err != nil {
 				return err
 			}

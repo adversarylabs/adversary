@@ -7,7 +7,6 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/spf13/cobra"
 	"io"
 	"os"
@@ -69,13 +68,7 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 	if resolution.Local {
 		return true, fmt.Errorf("artifact %q is not present in the unified repository", args[0])
 	}
-	streamResolver, ok := resolver.(interface {
-		PayloadSources(repository.Record) (*repository.PayloadLease, error)
-	})
-	if !ok {
-		return true, fmt.Errorf("resolver does not support streaming payloads")
-	}
-	lease, err := streamResolver.PayloadSources(resolution.Record)
+	lease, err := resolver.PayloadSources(resolution.Record)
 	if err != nil {
 		return true, err
 	}
@@ -109,13 +102,7 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 		registry.SetPlainHTTP(true)
 	}
 	fmt.Fprintf(stderr, "Pushing %s (%s) to %s\n", resolution.CanonicalReference, resolution.Digest, ref.Locator())
-	streamRegistry, ok := registry.(interface {
-		PushSources(context.Context, oci.Reference, []byte, []oci.SourceBlob) (string, error)
-	})
-	if !ok {
-		return true, fmt.Errorf("registry does not support streaming uploads")
-	}
-	digest, err := streamRegistry.PushSources(ctx, ref, manifest, lease.Blobs)
+	digest, err := registry.PushSources(ctx, ref, manifest, lease.Blobs)
 	if err != nil {
 		return true, err
 	}

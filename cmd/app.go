@@ -65,17 +65,11 @@ func (p processResolver) HasExact(value string) (bool, error) {
 func (p processResolver) Entries(limit int) ([]repository.Entry, error) {
 	return p.resolver.Repository.Entries(limit)
 }
-func (p processResolver) Payload(record repository.Record) ([]byte, []oci.Blob, []byte, error) {
-	return p.resolver.Repository.Payload(record)
-}
 func (p processResolver) PayloadSources(record repository.Record) (*repository.PayloadLease, error) {
 	return p.resolver.Repository.PayloadSources(record)
 }
 func (p processResolver) ImportPacked(a pack.Artifact, ref string) (repository.Record, error) {
 	return p.resolver.ImportPacked(a, ref)
-}
-func (p processResolver) ImportPulled(a oci.PulledArtifact) (repository.Record, error) {
-	return p.resolver.ImportPulled(a)
 }
 func (p processResolver) ImportSources(in repository.SourceImport) (repository.Record, error) {
 	return p.resolver.Repository.ImportSources(in)
@@ -174,10 +168,6 @@ func networkError(operation string, err error) error {
 	}
 	return &application.Error{Operation: operation, Kind: "network", Err: err}
 }
-func (r processOCIRegistry) Push(ctx context.Context, ref oci.Reference, manifest []byte, blobs []oci.Blob) (string, error) {
-	v, e := r.HTTPRegistry.Push(ctx, ref, manifest, blobs)
-	return v, networkError("OCI push", e)
-}
 func (r processOCIRegistry) PushSources(ctx context.Context, ref oci.Reference, manifest []byte, blobs []oci.SourceBlob) (string, error) {
 	v, e := r.HTTPRegistry.PushSources(ctx, ref, manifest, blobs)
 	return v, networkError("OCI push", e)
@@ -185,10 +175,6 @@ func (r processOCIRegistry) PushSources(ctx context.Context, ref oci.Reference, 
 func (r processOCIRegistry) PushAdversaryManifestReferrer(ctx context.Context, ref oci.Reference, digest string, manifest []byte) (string, string, error) {
 	a, b, e := r.HTTPRegistry.PushAdversaryManifestReferrer(ctx, ref, digest, manifest)
 	return a, b, networkError("OCI referrer push", e)
-}
-func (r processOCIRegistry) Pull(ctx context.Context, ref oci.Reference) (oci.PulledArtifact, error) {
-	v, e := r.HTTPRegistry.Pull(ctx, ref)
-	return v, networkError("OCI pull", e)
 }
 func (r processOCIRegistry) PullSources(ctx context.Context, ref oci.Reference) (*oci.PulledSources, error) {
 	v, e := r.HTTPRegistry.PullSources(ctx, ref)

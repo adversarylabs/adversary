@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
-	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
@@ -134,7 +133,4 @@ func isLocalNameTag(v string) bool {
 }
 func (r Resolver) ImportPacked(a pack.Artifact, reference string) (repository.Record, error) {
 	return r.Repository.ImportPacked(a, reference)
-}
-func (r Resolver) ImportPulled(a oci.PulledArtifact) (repository.Record, error) {
-	return r.Repository.ImportPulled(a)
 }

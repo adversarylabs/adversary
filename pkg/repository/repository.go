@@ -38,11 +38,11 @@ type Record struct {
 	LayerDigest             string `json:"layerDigest"`
 	AdversaryManifestDigest string `json:"adversaryManifestDigest"`
 }
-type Import struct {
+type importMetadata struct {
 	Reference                                                          string
 	Name                                                               string
 	Version                                                            string
-	Manifest, Config, Layer, AdversaryManifest                         []byte
+	Manifest, Config, AdversaryManifest                                []byte
 	ManifestDigest, ConfigDigest, LayerDigest, AdversaryManifestDigest string
 }
 type VerifyResult struct{ Missing, Corrupt []string }
@@ -56,37 +56,14 @@ const maxIndexBytes int64 = 4 << 20
 var importStepHook func(string) error
 
 func (r Repository) ImportPacked(a pack.Artifact, reference string) (Record, error) {
-	if a.LayerSource != nil {
-		blobs, err := a.Sources()
-		if err != nil {
-			return Record{}, err
-		}
-		return r.ImportSources(SourceImport{Reference: reference, Name: a.ManifestName, Version: a.Version, Manifest: blobsource.Bytes(a.Manifest), Blobs: blobs, AdversaryManifest: blobsource.Bytes(a.AdversaryManifest)})
+	blobs, err := a.Sources()
+	if err != nil {
+		return Record{}, err
 	}
-	return r.Import(Import{Reference: reference, Name: a.ManifestName, Version: a.Version, Manifest: a.Manifest, Config: a.Config, Layer: a.Layer, AdversaryManifest: a.AdversaryManifest, ManifestDigest: a.ManifestDigest, ConfigDigest: a.ConfigDigest, LayerDigest: a.LayerDigest, AdversaryManifestDigest: a.AdversaryManifestDigest})
-}
-func (r Repository) ImportPulled(a oci.PulledArtifact) (Record, error) {
-	if len(a.Manifest.Layers) != 1 {
-		return Record{}, fmt.Errorf("pulled artifact must have one layer")
-	}
-	manifest := append([]byte(nil), a.RawManifest...)
-	if len(manifest) == 0 || oci.Digest(manifest) != a.ManifestDigest {
-		return Record{}, fmt.Errorf("exact pulled manifest bytes are required")
-	}
-	config := a.Blobs[a.Manifest.Config.Digest]
-	layer := a.Blobs[a.Manifest.Layers[0].Digest]
-	adversaryDigest := ""
-	if len(a.AdversaryManifest) > 0 {
-		adversaryDigest = oci.Digest(a.AdversaryManifest)
-	}
-	return r.Import(Import{Reference: a.Reference.Locator(), Name: a.Manifest.Annotations["ai.adversary.full_name"], Version: a.Manifest.Annotations["ai.adversary.version"], Manifest: manifest, Config: config, Layer: layer, AdversaryManifest: a.AdversaryManifest, ManifestDigest: a.ManifestDigest, ConfigDigest: a.Manifest.Config.Digest, LayerDigest: a.Manifest.Layers[0].Digest, AdversaryManifestDigest: adversaryDigest})
+	return r.ImportSources(SourceImport{Reference: reference, Name: a.ManifestName, Version: a.Version, Manifest: blobsource.Bytes(a.Manifest), Blobs: blobs, AdversaryManifest: blobsource.Bytes(a.AdversaryManifest)})
 }
 
-func (r Repository) Import(in Import) (Record, error) {
-	return r.importData(in, false, false)
-}
-
-func (r Repository) importData(in Import, prewritten, lifecycleHeld bool) (Record, error) {
+func (r Repository) importData(in importMetadata, lifecycleHeld bool) (Record, error) {
 	if err := r.init(); err != nil {
 		return Record{}, err
 	}
@@ -102,8 +79,8 @@ func (r Repository) importData(in Import, prewritten, lifecycleHeld bool) (Recor
 	for label, v := range map[string]struct {
 		data   []byte
 		digest string
-	}{"manifest": {in.Manifest, in.ManifestDigest}, "config": {in.Config, in.ConfigDigest}, "layer": {in.Layer, in.LayerDigest}, "adversary manifest": {in.AdversaryManifest, in.AdversaryManifestDigest}} {
-		if (len(v.data) > 0 && (v.digest == "" || oci.Digest(v.data) != v.digest)) || (!prewritten && len(v.data) == 0 && v.digest != "") {
+	}{"manifest": {in.Manifest, in.ManifestDigest}, "config": {in.Config, in.ConfigDigest}, "adversary manifest": {in.AdversaryManifest, in.AdversaryManifestDigest}} {
+		if len(v.data) > 0 && (v.digest == "" || oci.Digest(v.data) != v.digest) {
 			return Record{}, fmt.Errorf("%s digest mismatch", label)
 		}
 	}
@@ -111,7 +88,7 @@ func (r Repository) importData(in Import, prewritten, lifecycleHeld bool) (Recor
 	if err != nil {
 		return Record{}, err
 	}
-	rec, err := deriveRecord(in.Manifest, in.Config, in.Layer, in.AdversaryManifest, in.AdversaryManifestDigest)
+	rec, err := deriveRecord(in.Manifest, in.Config, in.AdversaryManifest, in.AdversaryManifestDigest)
 	if err != nil {
 		return Record{}, err
 	}
@@ -123,17 +100,6 @@ func (r Repository) importData(in Import, prewritten, lifecycleHeld bool) (Recor
 		return Record{}, err
 	}
 	defer lock.Close()
-	for _, v := range []struct {
-		kind   string
-		digest string
-		data   []byte
-	}{{"manifests", in.ManifestDigest, in.Manifest}, {"blobs", in.ConfigDigest, in.Config}, {"blobs", in.LayerDigest, in.Layer}, {"adversary-manifests", in.AdversaryManifestDigest, in.AdversaryManifest}} {
-		if len(v.data) > 0 {
-			if err := r.putContent(v.kind, v.digest, v.data); err != nil {
-				return Record{}, err
-			}
-		}
-	}
 	data, _ := json.MarshalIndent(rec, "", "  ")
 	recordPath := "records/" + key(rec.Digest) + ".json"
 	if existing, e := r.read(recordPath); e == nil {
@@ -187,8 +153,8 @@ func (r Repository) importData(in Import, prewritten, lifecycleHeld bool) (Recor
 	return rec, nil
 }
 
-func deriveRecord(manifestData, configData, layer, adversary []byte, adversaryDigest string) (Record, error) {
-	if len(manifestData) == 0 || len(manifestData) > 4<<20 || len(configData) == 0 || len(configData) > 1<<20 || len(layer) > 256<<20 {
+func deriveRecord(manifestData, configData, adversary []byte, adversaryDigest string) (Record, error) {
+	if len(manifestData) == 0 || len(manifestData) > 4<<20 || len(configData) == 0 || len(configData) > 1<<20 {
 		return Record{}, fmt.Errorf("artifact component size invalid")
 	}
 	md := oci.Digest(manifestData)
@@ -201,9 +167,6 @@ func deriveRecord(manifestData, configData, layer, adversary []byte, adversaryDi
 		return Record{}, fmt.Errorf("unsupported or conflicting OCI manifest")
 	}
 	ld := m.Layers[0].Digest
-	if len(layer) > 0 && (oci.Digest(layer) != ld || m.Layers[0].Size != int64(len(layer))) {
-		return Record{}, fmt.Errorf("layer descriptor conflicts with content")
-	}
 	var c struct {
 		FullName string `json:"full_name"`
 		Version  string `json:"version"`
@@ -378,22 +341,9 @@ func (r Repository) record(d string) (Record, error) {
 	return r.loadRecord(d, true)
 }
 func (r Repository) loadRecord(d string, requireCommit bool) (Record, error) {
-	if requireCommit {
-		marker, err := r.read("commits/" + key(d) + ".json")
-		if err != nil || string(marker) != d {
-			return Record{}, os.ErrNotExist
-		}
-	}
-	data, err := r.read("records/" + key(d) + ".json")
+	rec, err := r.loadRecordMetadata(d, requireCommit)
 	if err != nil {
-		return Record{}, err
-	}
-	var rec Record
-	if err := json.Unmarshal(data, &rec); err != nil {
 		return rec, err
-	}
-	if rec.Digest != d {
-		return rec, fmt.Errorf("record digest conflict")
 	}
 	manifest, err := r.readLimit("manifests/"+key(rec.ManifestDigest), 4<<20)
 	if err != nil {
@@ -410,12 +360,33 @@ func (r Repository) loadRecord(d string, requireCommit bool) (Record, error) {
 			return rec, err
 		}
 	}
-	derived, err := deriveRecord(manifest, config, nil, adversary, rec.AdversaryManifestDigest)
+	derived, err := deriveRecord(manifest, config, adversary, rec.AdversaryManifestDigest)
 	if err != nil {
 		return rec, err
 	}
 	if derived != rec {
 		return rec, fmt.Errorf("persisted record conflicts with artifact content")
+	}
+	return rec, nil
+}
+
+func (r Repository) loadRecordMetadata(d string, requireCommit bool) (Record, error) {
+	if requireCommit {
+		marker, err := r.read("commits/" + key(d) + ".json")
+		if err != nil || string(marker) != d {
+			return Record{}, os.ErrNotExist
+		}
+	}
+	data, err := r.read("records/" + key(d) + ".json")
+	if err != nil {
+		return Record{}, err
+	}
+	var rec Record
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return rec, err
+	}
+	if rec.Digest != d {
+		return rec, fmt.Errorf("record digest conflict")
 	}
 	return rec, nil
 }
@@ -439,41 +410,133 @@ func (r Repository) Verify(rec Record) VerifyResult {
 	}
 	return out
 }
-func (r Repository) Repair(rec Record, sources map[string][]byte) error {
-	canonical, err := r.record(rec.Digest)
+func (r Repository) Repair(rec Record, sources map[string]blobsource.Source) error {
+	lifecycle, err := publock.Acquire(r.Root, "repo-lifecycle")
 	if err != nil {
 		return err
 	}
+	defer lifecycle.Close()
+	_, err = r.repairLocked(rec, sources)
+	return err
+}
+
+func (r Repository) repairLocked(rec Record, sources map[string]blobsource.Source) (bool, error) {
+	canonical, err := r.loadRecordMetadata(rec.Digest, true)
+	if err != nil {
+		return false, err
+	}
 	rec = canonical
-	for _, d := range append(append([]string{}, r.Verify(rec).Missing...), r.Verify(rec).Corrupt...) {
-		contentLock, err := publock.Acquire(r.Root, "repo-content\x00"+d)
-		if err != nil {
-			return err
+	repaired := false
+	manifestExpectation := repairExpectation{kind: "manifests", size: -1, limit: 4 << 20}
+	if err := r.verifyContent("manifests", rec.ManifestDigest); err != nil {
+		if err := r.repairComponent(rec.ManifestDigest, manifestExpectation, sources); err != nil {
+			return false, err
 		}
-		data, ok := sources[d]
-		if !ok || oci.Digest(data) != d {
-			_ = contentLock.Close()
-			return fmt.Errorf("verified repair source missing for %s", d)
+		repaired = true
+	}
+	expected, err := r.repairExpectations(rec)
+	if err != nil {
+		return false, err
+	}
+	delete(expected, rec.ManifestDigest)
+	for d, expect := range expected {
+		if err := r.verifyContent(expect.kind, d); err == nil {
+			continue
 		}
-		kind := "blobs"
-		if d == rec.ManifestDigest {
-			kind = "manifests"
+		if err := r.repairComponent(d, expect, sources); err != nil {
+			return repaired, err
 		}
-		if d == rec.AdversaryManifestDigest {
-			kind = "adversary-manifests"
-		}
-		if err := r.atomic(filepath.ToSlash(filepath.Join(kind, key(d))), data); err != nil {
-			_ = contentLock.Close()
-			return err
-		}
-		if err := r.verifyContent(kind, d); err != nil {
-			_ = contentLock.Close()
-			return err
-		}
-		if err := contentLock.Close(); err != nil {
-			return err
+		repaired = true
+	}
+	if _, err := r.record(rec.Digest); err != nil {
+		return repaired, err
+	}
+	return repaired, nil
+}
+
+func (r Repository) repairComponent(d string, expect repairExpectation, sources map[string]blobsource.Source) error {
+	source, ok := sources[d]
+	if !ok || source == nil || source.Digest() != d {
+		return fmt.Errorf("verified repair source missing for %s", d)
+	}
+	if source.Size() < 0 || source.Size() > expect.limit || (expect.size >= 0 && source.Size() != expect.size) {
+		return fmt.Errorf("repair source %s has invalid size %d", d, source.Size())
+	}
+	contentLock, err := publock.Acquire(r.Root, "repo-content\x00"+d)
+	if err != nil {
+		return err
+	}
+	if err := r.replaceSource(expect.kind, source); err != nil {
+		_ = contentLock.Close()
+		return err
+	}
+	if err := r.verifyContent(expect.kind, d); err != nil {
+		_ = contentLock.Close()
+		return err
+	}
+	return contentLock.Close()
+}
+
+type repairExpectation struct {
+	kind        string
+	size, limit int64
+}
+
+func (r Repository) repairExpectations(rec Record) (map[string]repairExpectation, error) {
+	manifestData, err := r.readLimit("manifests/"+key(rec.ManifestDigest), 4<<20)
+	if err != nil {
+		return nil, err
+	}
+	var manifest oci.Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return nil, err
+	}
+	if len(manifest.Layers) != 1 || manifest.Config.Digest != rec.ConfigDigest || manifest.Layers[0].Digest != rec.LayerDigest {
+		return nil, fmt.Errorf("canonical manifest descriptors conflict with record")
+	}
+	expected := map[string]repairExpectation{
+		rec.ManifestDigest: {kind: "manifests", size: -1, limit: 4 << 20},
+		rec.ConfigDigest:   {kind: "blobs", size: manifest.Config.Size, limit: 1 << 20},
+		rec.LayerDigest:    {kind: "blobs", size: manifest.Layers[0].Size, limit: 256 << 20},
+	}
+	if rec.AdversaryManifestDigest != "" {
+		expected[rec.AdversaryManifestDigest] = repairExpectation{kind: "adversary-manifests", size: -1, limit: 1 << 20}
+	}
+	for digest, item := range expected {
+		if item.size < -1 || item.size > item.limit {
+			return nil, fmt.Errorf("canonical descriptor %s has invalid size %d", digest, item.size)
 		}
 	}
+	return expected, nil
+}
+
+func (r Repository) replaceSource(kind string, source blobsource.Source) (retErr error) {
+	root, err := os.OpenRoot(r.Root)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, root.Close()) }()
+	tmp := filepath.ToSlash(filepath.Join(kind, ".repair-"+nonce()))
+	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			retErr = errors.Join(retErr, root.Remove(tmp))
+		}
+	}()
+	copyErr := copyVerifiedSource(f, source)
+	closeErr := f.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		return err
+	}
+	dst := filepath.ToSlash(filepath.Join(kind, key(source.Digest())))
+	if err := rootreplace.Mutable(root, tmp, dst); err != nil {
+		return err
+	}
+	cleanup = false
 	return nil
 }
 func (r Repository) Materialize(rec Record) (string, error) {
@@ -695,19 +758,6 @@ func (r Repository) init() error {
 		}
 	}
 	return rootreplace.SyncDirectory(root, ".")
-}
-func (r Repository) putContent(kind, digest string, data []byte) error {
-	lock, err := publock.Acquire(r.Root, "repo-content\x00"+digest)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if old, err := r.read(filepath.ToSlash(filepath.Join(kind, key(digest)))); err == nil {
-		return oci.VerifyDigest(old, digest)
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	return r.atomicImmutable(filepath.ToSlash(filepath.Join(kind, key(digest))), data)
 }
 func (r Repository) addAlias(alias, digest string) error {
 	lock, err := publock.Acquire(r.Root, "repo-alias\x00"+alias)

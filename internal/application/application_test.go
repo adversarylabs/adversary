@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -56,11 +57,11 @@ func (fakeCreds) Credentials(string) (oci.Credentials, bool) { return oci.Creden
 
 type fakeRegistry struct{}
 
-func (fakeRegistry) Push(context.Context, oci.Reference, []byte, []oci.Blob) (string, error) {
+func (fakeRegistry) PushSources(context.Context, oci.Reference, []byte, []oci.SourceBlob) (string, error) {
 	return "", nil
 }
-func (fakeRegistry) Pull(context.Context, oci.Reference) (oci.PulledArtifact, error) {
-	return oci.PulledArtifact{}, nil
+func (fakeRegistry) PullSources(context.Context, oci.Reference) (*oci.PulledSources, error) {
+	return &oci.PulledSources{}, nil
 }
 func (fakeRegistry) Resolve(context.Context, oci.Reference) (string, error) { return "", nil }
 
@@ -114,7 +115,7 @@ func TestDependencyBindingMismatchFailsClosed(t *testing.T) {
 	}
 }
 func (fakeRepo) CheckAll() (repository.CheckReport, error) { return repository.CheckReport{}, nil }
-func (fakeRepo) RepairAll(map[string][]byte) (repository.RepairReport, error) {
+func (fakeRepo) RepairAll(map[string]blobsource.Source) (repository.RepairReport, error) {
 	return repository.RepairReport{}, nil
 }
 func (fakeRepo) DeleteRef(string, string) error { return nil }
@@ -133,13 +134,13 @@ func (fakeResolver) Lookup(context.Context, string) (Resolution, error)  { retur
 func (fakeResolver) ResolveRecord(string) (repository.Record, error)     { return repository.Record{}, nil }
 func (fakeResolver) HasExact(string) (bool, error)                       { return false, nil }
 func (fakeResolver) Entries(int) ([]repository.Entry, error)             { return nil, nil }
-func (fakeResolver) Payload(repository.Record) ([]byte, []oci.Blob, []byte, error) {
-	return nil, nil, nil, nil
+func (fakeResolver) PayloadSources(repository.Record) (*repository.PayloadLease, error) {
+	return nil, nil
 }
 func (fakeResolver) ImportPacked(pack.Artifact, string) (repository.Record, error) {
 	return repository.Record{}, nil
 }
-func (fakeResolver) ImportPulled(oci.PulledArtifact) (repository.Record, error) {
+func (fakeResolver) ImportSources(repository.SourceImport) (repository.Record, error) {
 	return repository.Record{}, nil
 }
 func (fakeResolver) UpdateRef(string, string, string) error { return nil }
