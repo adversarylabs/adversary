@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -20,7 +19,6 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/internal/dependencies"
 	"github.com/adversarylabs/adversary/internal/initproject"
 	"github.com/adversarylabs/adversary/internal/version"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
@@ -43,41 +41,12 @@ func Execute() error {
 	return nil
 }
 
-func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
-	return newRootCommand(nil, stdout, stderr)
-}
 func NewRootCommandWithApp(app *application.App) *cobra.Command {
 	deps := app.Dependencies()
-	root := newRootCommand(app, deps.Stdout, deps.Stderr)
-	if err := validateAppRepositoryBinding(app); err != nil {
-		root.PersistentPreRunE = func(*cobra.Command, []string) error { return err }
-	}
-	return root
-}
-func validateAppRepositoryBinding(app *application.App) error {
-	deps := app.Dependencies()
-	provider, ok := deps.Resolver.(interface {
-		InternalResolver() internaladversary.Resolver
-		RepositoryIdentity() string
-	})
-	if !ok {
-		return &application.Error{Operation: "compose", Kind: "invalid-dependency", Resource: "resolver", Err: fmt.Errorf("resolver is not bound to an internal repository")}
-	}
-	identity := ""
-	switch repo := deps.Repository.(type) {
-	case repository.Repository:
-		identity = repo.RootPath()
-	case *repository.Repository:
-		identity = repo.RootPath()
-	case interface{ RootPath() string }:
-		identity = repo.RootPath()
-	}
-	if identity == "" || provider.RepositoryIdentity() != identity {
-		return &application.Error{Operation: "compose", Kind: "invalid-dependency", Resource: "resolver/repository", Err: fmt.Errorf("resolver repository identity mismatch")}
-	}
-	return nil
+	return newRootCommand(app, deps.Stdout, deps.Stderr)
 }
 func newRootCommand(app *application.App, stdout, stderr io.Writer) *cobra.Command {
+	deps := app.Dependencies()
 	var apiURL string
 	var profile string
 	cmd := &cobra.Command{
@@ -91,7 +60,7 @@ func newRootCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 	}
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
-	cmd.PersistentFlags().StringVar(&apiURL, "api-url", adversarylabs.ResolveAPIURL(""), "Adversary Labs API endpoint (or ADVERSARY_API_URL)")
+	cmd.PersistentFlags().StringVar(&apiURL, "api-url", deps.DefaultAPIURL, "Adversary Labs API endpoint (or ADVERSARY_API_URL)")
 	cmd.PersistentFlags().StringVar(&profile, "profile", "default", "credential profile")
 
 	cmd.AddCommand(newRunCommand(app, stdout, stderr))
@@ -102,14 +71,12 @@ func newRootCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 	cmd.AddCommand(newLSCommand(app, stdout, "list"))
 	cmd.AddCommand(newVersionCommand(stdout))
 	cmd.AddCommand(newLoginCommand(app, stdout, stderr, &apiURL, &profile))
-	cmd.AddCommand(newLogoutCommand(stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newLogoutCommand(app, stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newPushCommand(app, stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newPullCommand(app, stdout, stderr, &apiURL, &profile))
-	cmd.AddCommand(newSearchCommand(stdout, stderr, &apiURL, &profile))
-	cmd.AddCommand(newWhoamiCommand(stdout, stderr, &apiURL, &profile))
-	if app != nil {
-		cmd.AddCommand(newStoreCommand(app))
-	}
+	cmd.AddCommand(newSearchCommand(app, stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newWhoamiCommand(app, stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newStoreCommand(app))
 	return cmd
 }
 
@@ -190,27 +157,7 @@ func newRunCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comman
 				return fmt.Errorf("--shell cannot be combined with JSON output")
 			}
 
-			runner := internaladversary.Runner{
-				Stdout: stdout,
-				Stderr: stderr,
-			}
-			if app != nil {
-				runner.RequireInjectedResolver = true
-				switch repo := app.Dependencies().Repository.(type) {
-				case repository.Repository:
-					runner.Repository = &repo
-				case *repository.Repository:
-					runner.Repository = repo
-				}
-				if provider, ok := app.Dependencies().Resolver.(interface {
-					InternalResolver() internaladversary.Resolver
-				}); ok {
-					resolved := provider.InternalResolver()
-					runner.Resolver = &resolved
-				}
-			}
-
-			err := runner.Run(cmd.Context(), internaladversary.RunOptions{
+			err := app.Dependencies().Runtime.Run(cmd.Context(), application.AdversaryRunOptions{
 				AdversaryRef:             args[0],
 				RepoPath:                 opts.repo,
 				BaseRef:                  opts.base,
@@ -225,6 +172,8 @@ func newRunCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comman
 				Shell:                    opts.shell,
 				AllFiles:                 opts.allFiles,
 				AllowUnsafeHostExecution: opts.allowUnsafeHostExecution,
+				Stdout:                   stdout,
+				Stderr:                   stderr,
 			})
 			if errors.Is(err, context.Canceled) {
 				return err
@@ -266,26 +215,14 @@ func newInspectCommand(app *application.App, stdout, stderr io.Writer) *cobra.Co
   adversary inspect sha256:abc123`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var resolver internaladversary.Resolver
-			var err error
-			if app != nil {
-				provider := app.Dependencies().Resolver.(interface {
-					InternalResolver() internaladversary.Resolver
-				})
-				resolver = provider.InternalResolver()
-			} else {
-				resolver, err = internaladversary.DefaultResolver()
-			}
-			if err != nil {
-				return err
-			}
-			resolution, lookupErr := resolver.Lookup(args[0])
+			deps := app.Dependencies()
+			resolution, lookupErr := deps.Resolver.Lookup(cmd.Context(), args[0])
 			if lookupErr == nil && !resolution.Local {
 				if inspectOpts.json {
 					return json.NewEncoder(stdout).Encode(struct {
-						CanonicalReference string `json:"canonicalReference"`
-						Digest             string `json:"digest"`
-						Record             any    `json:"record"`
+						CanonicalReference string            `json:"canonicalReference"`
+						Digest             string            `json:"digest"`
+						Record             repository.Record `json:"record"`
 					}{resolution.CanonicalReference, resolution.Digest, resolution.Record})
 				}
 				fmt.Fprintf(stdout, "Canonical reference: %s\nDigest: %s\nName: %s\nVersion: %s\n", resolution.CanonicalReference, resolution.Digest, resolution.Record.Name, resolution.Record.Version)
@@ -297,23 +234,12 @@ func newInspectCommand(app *application.App, stdout, stderr io.Writer) *cobra.Co
 			if inspectOpts.json {
 				return fmt.Errorf("--json is only supported for locally stored adversaries")
 			}
-			runner := internaladversary.Runner{
-				Stdout: stdout,
-				Stderr: stderr,
-			}
-			if app != nil {
-				runner.RequireInjectedResolver = true
-				if provider, ok := app.Dependencies().Resolver.(interface {
-					InternalResolver() internaladversary.Resolver
-				}); ok {
-					resolved := provider.InternalResolver()
-					runner.Resolver = &resolved
-				}
-			}
-			return runner.Inspect(internaladversary.RunOptions{
+			return deps.Runtime.Inspect(cmd.Context(), application.AdversaryRunOptions{
 				AdversaryRef: args[0],
 				RepoPath:     opts.repo,
 				NoNetwork:    opts.noNetwork,
+				Stdout:       stdout,
+				Stderr:       stderr,
 			})
 		},
 	}
@@ -323,18 +249,6 @@ func newInspectCommand(app *application.App, stdout, stderr io.Writer) *cobra.Co
 	cmd.Flags().BoolVar(&inspectOpts.json, "json", false, "print local store metadata as JSON")
 
 	return cmd
-}
-
-func commandResolver(app *application.App) (internaladversary.Resolver, error) {
-	if app != nil {
-		if provider, ok := app.Dependencies().Resolver.(interface {
-			InternalResolver() internaladversary.Resolver
-		}); ok {
-			return provider.InternalResolver(), nil
-		}
-		return internaladversary.Resolver{}, &application.Error{Operation: "command resolver", Kind: "invalid-dependency", Err: fmt.Errorf("bound resolver required")}
-	}
-	return internaladversary.DefaultResolver()
 }
 
 func newPackCommand(app *application.App, stdout, stderr io.Writer) *cobra.Command {
@@ -349,17 +263,14 @@ func newPackCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 			if err != nil {
 				return err
 			}
-			resolver, err := commandResolver(app)
-			if err != nil {
-				return err
-			}
+			resolver := app.Dependencies().Resolver
 			canonical := artifact.Name + ":" + artifact.Version
 			unified, err := resolver.ImportPacked(artifact, canonical)
 			if err != nil {
 				return err
 			}
 			latest := artifact.Name + ":" + oci.DefaultTag
-			if err := registerExactRef(resolver.Repository, latest, unified.Digest); err != nil {
+			if err := registerExactRef(resolver, latest, unified.Digest); err != nil {
 				return err
 			}
 			fmt.Fprintln(stdout)
@@ -392,11 +303,7 @@ func newLSCommand(app *application.App, stdout io.Writer, use string) *cobra.Com
 		Short: "List locally stored adversaries",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resolver, err := commandResolver(app)
-			if err != nil {
-				return err
-			}
-			entries, err := resolver.Repository.Entries(10000)
+			entries, err := app.Dependencies().Resolver.Entries(10000)
 			if err != nil {
 				return err
 			}
@@ -543,25 +450,14 @@ func newLoginCommand(app *application.App, stdout, stderr io.Writer, apiURL, pro
   printf '%s\n' "$ADVERSARY_PASSWORD" | adversary login --email-address marc@example.com --password-stdin`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			stdin := io.Reader(os.Stdin)
-			clock := newSystemClock()
-			browser := application.Browser(dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(u) }})
-			tty := application.TTY(processTTY{})
-			if app != nil {
-				deps := app.Dependencies()
-				stdin = deps.Stdin
-				clock = deps.Clock
-				browser = deps.Browser
-				tty = deps.TTY
-			}
-			store, err := adversarylabs.DefaultConfigStore()
-			if err != nil {
-				return err
-			}
+			deps := app.Dependencies()
+			stdin, clock, browser, tty := deps.Stdin, deps.Clock, deps.Browser, deps.TTY
+			store := deps.Auth
+			var err error
 			if _, _, err := store.ExactAuthE(adversarylabs.AuthKey(valueOf(apiURL), valueOf(profile))); err != nil {
 				return err
 			}
-			client := adversarylabs.NewClientWithBaseURL(store, valueOf(apiURL))
+			client := deps.API.New(valueOf(apiURL))
 			var token adversarylabs.TokenResponse
 			if opts.emailAddress != "" || opts.passwordStdin {
 				if opts.emailAddress == "" {
@@ -608,7 +504,7 @@ func newLoginCommand(app *application.App, stdout, stderr io.Writer, apiURL, pro
 				RegistryNamespace: token.RegistryNamespace,
 				Namespace:         token.Namespace,
 				Team:              token.Team,
-				RegistryHost:      adversarylabs.ResolveRegistryHost(),
+				RegistryHost:      deps.RegistryHost,
 			}); err != nil {
 				return err
 			}
@@ -625,7 +521,7 @@ func newLoginCommand(app *application.App, stdout, stderr io.Writer, apiURL, pro
 	return cmd
 }
 
-func newLogoutCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
+func newLogoutCommand(app *application.App, stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	opts := &logoutOptions{}
 	cmd := &cobra.Command{
 		Use:   "logout",
@@ -634,18 +530,16 @@ func newLogoutCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.
   adversary logout --local-only`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			store, err := adversarylabs.DefaultConfigStore()
-			if err != nil {
-				return err
-			}
+			deps := app.Dependencies()
+			store := deps.Auth
 			key := adversarylabs.AuthKey(valueOf(apiURL), valueOf(profile))
 			auth, ok, err := store.ExactAuthE(key)
 			if err != nil {
 				return err
 			}
 			if !ok && key == adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, "default") { // exact legacy migration fallback
-				auth, ok, err = store.ExactAuthE(adversarylabs.ResolveRegistryHost())
-				key = adversarylabs.ResolveRegistryHost()
+				auth, ok, err = store.ExactAuthE(deps.RegistryHost)
+				key = deps.RegistryHost
 				if err != nil {
 					return err
 				}
@@ -655,12 +549,12 @@ func newLogoutCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.
 				return nil
 			}
 			if !opts.localOnly && auth.Token != "" {
-				client := adversarylabs.NewClientWithBaseURL(store, valueOf(apiURL))
+				client := deps.API.New(valueOf(apiURL))
 				if err := client.Revoke(cmd.Context(), auth.Token); err != nil {
 					return fmt.Errorf("token revocation failed; local credentials preserved: %w", err)
 				}
 			}
-			if _, _, err := store.RemoveAuth(key); err != nil {
+			if err := store.RemoveAuthCAS(key, auth); err != nil {
 				return err
 			}
 			fmt.Fprintln(stdout, "Logged out of Adversary Labs.")
@@ -681,19 +575,16 @@ func newPushCommand(app *application.App, stdout, stderr io.Writer, apiURL, prof
   adversary push ghcr.io/acme/security-reviewer:0.1.0`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resolver, resolveErr := commandResolver(app)
-			if resolveErr != nil {
-				return resolveErr
-			}
-			_, err := pushUnified(cmd.Context(), resolver, stdout, stderr, args, valueOf(apiURL), valueOf(profile))
+			resolver := app.Dependencies().Resolver
+			_, err := pushUnified(cmd.Context(), app, resolver, stdout, stderr, args, valueOf(apiURL), valueOf(profile))
 			return err
 		},
 	}
 }
 
-func pushUnified(ctx context.Context, resolver internaladversary.Resolver, stdout, stderr io.Writer, args []string, apiURL, profile string) (bool, error) {
-	hasExact, _ := resolver.Repository.HasExact(args[0])
-	resolution, err := resolver.Lookup(args[0])
+func pushUnified(ctx context.Context, app *application.App, resolver application.Resolver, stdout, stderr io.Writer, args []string, apiURL, profile string) (bool, error) {
+	hasExact, _ := resolver.HasExact(args[0])
+	resolution, err := resolver.Lookup(ctx, args[0])
 	if err != nil {
 		if os.IsNotExist(err) && !hasExact {
 			return true, fmt.Errorf("artifact %q is not present in the unified repository", args[0])
@@ -703,7 +594,7 @@ func pushUnified(ctx context.Context, resolver internaladversary.Resolver, stdou
 	if resolution.Local {
 		return true, fmt.Errorf("artifact %q is not present in the unified repository", args[0])
 	}
-	manifest, blobs, yaml, err := resolver.Repository.Payload(resolution.Record)
+	manifest, blobs, yaml, err := resolver.Payload(resolution.Record)
 	if err != nil {
 		return true, err
 	}
@@ -711,7 +602,7 @@ func pushUnified(ctx context.Context, resolver internaladversary.Resolver, stdou
 	if len(args) == 2 {
 		remote = args[1]
 	} else if !hasExplicitRegistry(args[0]) {
-		remote, err = defaultAdversaryLabsPushRef(ctx, args[0], pushRecord{Name: resolution.Record.Name, ManifestName: resolution.Record.Name, Version: resolution.Record.Version, Digest: resolution.Record.Digest}, apiURL, profile)
+		remote, err = defaultAdversaryLabsPushRef(ctx, app.Dependencies(), args[0], pushRecord{Name: resolution.Record.Name, ManifestName: resolution.Record.Name, Version: resolution.Record.Version, Digest: resolution.Record.Digest}, apiURL, profile)
 		if err != nil {
 			return true, err
 		}
@@ -720,12 +611,12 @@ func pushUnified(ctx context.Context, resolver internaladversary.Resolver, stdou
 	if err != nil {
 		return true, err
 	}
-	registry, err := newOCIRegistry(apiURL, profile)
+	registry, err := app.Dependencies().Registries.New(apiURL, profile)
 	if err != nil {
 		return true, err
 	}
 	if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
-		registry.PlainHTTP = true
+		registry.SetPlainHTTP(true)
 	}
 	fmt.Fprintf(stderr, "Pushing %s (%s) to %s\n", resolution.CanonicalReference, resolution.Digest, ref.Locator())
 	digest, err := registry.Push(ctx, ref, manifest, blobs)
@@ -736,7 +627,7 @@ func pushUnified(ctx context.Context, resolver internaladversary.Resolver, stdou
 	if err != nil {
 		return true, err
 	}
-	if err := registerExactRef(resolver.Repository, ref.Locator(), digest); err != nil {
+	if err := registerExactRef(resolver, ref.Locator(), digest); err != nil {
 		return true, err
 	}
 	fmt.Fprintf(stdout, "Canonical reference: %s\nImage digest\n\n%s\nDigest: %s\nPublished adversary manifest referrer\n\n%s\n", ref.Locator(), digest, digest, artifactDigest)
@@ -753,20 +644,17 @@ func newPullCommand(app *application.App, stdout, stderr io.Writer, apiURL, prof
   adversary pull localhost:5000/security-reviewer`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resolver, resolverErr := commandResolver(app)
-			if resolverErr != nil {
-				return resolverErr
-			}
+			resolver := app.Dependencies().Resolver
 			ref, err := oci.ParseReference(args[0])
 			if err != nil {
 				return err
 			}
-			registry, err := newOCIRegistry(valueOf(apiURL), valueOf(profile))
+			registry, err := app.Dependencies().Registries.New(valueOf(apiURL), valueOf(profile))
 			if err != nil {
 				return err
 			}
 			if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
-				registry.PlainHTTP = true
+				registry.SetPlainHTTP(true)
 			}
 			fmt.Fprintln(stderr, "Pulling manifest...")
 			fmt.Fprintln(stderr)
@@ -774,24 +662,19 @@ func newPullCommand(app *application.App, stdout, stderr io.Writer, apiURL, prof
 			if err != nil {
 				return err
 			}
-			if resolverErr == nil {
-				if existing, resolveErr := resolver.Repository.Resolve(digest); resolveErr == nil {
-					if err := registerExactRef(resolver.Repository, ref.Locator(), existing.Digest); err != nil {
-						return err
-					}
-					fmt.Fprintf(stdout, "Installed: %s\nVersion: %s\nCanonical reference: %s\nDigest: %s\n", existing.Name, existing.Version, ref.Locator(), existing.Digest)
-					return nil
-				} else if !os.IsNotExist(resolveErr) {
-					return resolveErr
+			if existing, resolveErr := resolver.ResolveRecord(digest); resolveErr == nil {
+				if err := registerExactRef(resolver, ref.Locator(), existing.Digest); err != nil {
+					return err
 				}
+				fmt.Fprintf(stdout, "Installed: %s\nVersion: %s\nCanonical reference: %s\nDigest: %s\n", existing.Name, existing.Version, ref.Locator(), existing.Digest)
+				return nil
+			} else if !os.IsNotExist(resolveErr) {
+				return resolveErr
 			}
 			fmt.Fprintln(stderr, "Downloading layers...")
 			artifact, err := registry.Pull(cmd.Context(), ref)
 			if err != nil {
 				return err
-			}
-			if resolverErr != nil {
-				return resolverErr
 			}
 			unified, err := resolver.ImportPulled(artifact)
 			if err != nil {
@@ -802,8 +685,8 @@ func newPullCommand(app *application.App, stdout, stderr io.Writer, apiURL, prof
 		},
 	}
 }
-func registerExactRef(repo repository.Repository, ref, digest string) error {
-	current, err := repo.Resolve(ref)
+func registerExactRef(resolver application.Resolver, ref, digest string) error {
+	current, err := resolver.ResolveRecord(ref)
 	if err == nil {
 		if current.Digest == digest {
 			return nil
@@ -813,10 +696,10 @@ func registerExactRef(repo repository.Repository, ref, digest string) error {
 	if !os.IsNotExist(err) {
 		return err
 	}
-	return repo.UpdateRef(ref, "", digest)
+	return resolver.UpdateRef(ref, "", digest)
 }
 
-func newSearchCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
+func newSearchCommand(app *application.App, stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search Adversary Labs adversaries",
@@ -824,19 +707,17 @@ func newSearchCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.
   adversary search security-reviewer`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			store, err := adversarylabs.DefaultConfigStore()
-			if err != nil {
-				return err
-			}
+			deps := app.Dependencies()
+			store := deps.Auth
 			var token string
-			auth, ok, err := scopedAuth(store, valueOf(apiURL), valueOf(profile))
+			auth, ok, err := scopedAuth(store, valueOf(apiURL), valueOf(profile), deps.RegistryHost)
 			if err != nil {
 				return err
 			}
 			if ok {
 				token = auth.Token
 			}
-			client := adversarylabs.NewClientWithBaseURL(store, valueOf(apiURL))
+			client := deps.API.New(valueOf(apiURL))
 			results, err := client.Search(cmd.Context(), args[0], token)
 			if err != nil {
 				return err
@@ -865,7 +746,7 @@ func newSearchCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.
 	}
 }
 
-func newWhoamiCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
+func newWhoamiCommand(app *application.App, stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "whoami",
 		Short: "Show the current Adversary Labs login",
@@ -873,11 +754,9 @@ func newWhoamiCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.
   adversary whoami --api-url http://localhost:3000/api`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			store, err := adversarylabs.DefaultConfigStore()
-			if err != nil {
-				return err
-			}
-			auth, ok, err := scopedAuth(store, valueOf(apiURL), valueOf(profile))
+			deps := app.Dependencies()
+			store := deps.Auth
+			auth, ok, err := scopedAuth(store, valueOf(apiURL), valueOf(profile), deps.RegistryHost)
 			if err != nil {
 				return err
 			}
@@ -887,7 +766,7 @@ func newWhoamiCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.
 				fmt.Fprintln(stdout, "Run `adversary login` to authenticate with Adversary Labs.")
 				return nil
 			}
-			client := adversarylabs.NewClientWithBaseURL(store, valueOf(apiURL))
+			client := deps.API.New(valueOf(apiURL))
 			account, err := client.Whoami(cmd.Context(), auth.Token)
 			if err != nil {
 				return err
@@ -977,7 +856,7 @@ func valueOf(value *string) string {
 	return *value
 }
 
-func waitForLogin(ctx context.Context, clock application.Clock, client adversarylabs.Client, login adversarylabs.DeviceLogin) (adversarylabs.TokenResponse, error) {
+func waitForLogin(ctx context.Context, clock application.Clock, client application.APIClient, login adversarylabs.DeviceLogin) (adversarylabs.TokenResponse, error) {
 	interval := adversarylabs.PollInterval(login)
 	expiresAt := clock.Now().Add(time.Duration(login.ExpiresIn) * time.Second)
 	if login.ExpiresIn <= 0 {
@@ -1015,7 +894,7 @@ func waitForLogin(ctx context.Context, clock application.Clock, client adversary
 	}
 }
 
-func loginWithDevice(ctx context.Context, clock application.Clock, stdout io.Writer, client adversarylabs.Client, opts *loginOptions) (adversarylabs.TokenResponse, error) {
+func loginWithDevice(ctx context.Context, clock application.Clock, stdout io.Writer, client application.APIClient, opts *loginOptions) (adversarylabs.TokenResponse, error) {
 	login, err := client.BeginLogin(ctx, adversarylabs.LoginOptions{Name: opts.name, CI: opts.ci})
 	if err != nil {
 		return adversarylabs.TokenResponse{}, err
@@ -1031,7 +910,7 @@ func loginWithDevice(ctx context.Context, clock application.Clock, stdout io.Wri
 	return waitForLogin(ctx, clock, client, login)
 }
 
-func loginWithBrowser(ctx context.Context, browser application.Browser, stdout io.Writer, client adversarylabs.Client, opts *loginOptions) (adversarylabs.TokenResponse, error) {
+func loginWithBrowser(ctx context.Context, browser application.Browser, stdout io.Writer, client application.APIClient, opts *loginOptions) (adversarylabs.TokenResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	state, err := randomURLToken(32)
@@ -1190,46 +1069,20 @@ func (s scopedCredentialStore) Credentials(registry string) (oci.Credentials, bo
 	return oci.Credentials{Token: s.token}, true
 }
 
-func scopedAuth(store adversarylabs.ConfigStore, apiURL, profile string) (adversarylabs.Auth, bool, error) {
+func scopedAuth(store application.AuthStore, apiURL, profile, registryHost string) (adversarylabs.Auth, bool, error) {
 	key := adversarylabs.AuthKey(apiURL, profile)
 	auth, ok, err := store.ExactAuthE(key)
 	if err != nil || ok {
 		return auth, ok, err
 	}
 	if key == adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, "default") {
-		return store.ExactAuthE(adversarylabs.ResolveRegistryHost())
+		return store.ExactAuthE(registryHost)
 	}
 	return adversarylabs.Auth{}, false, nil
 }
 
-func newOCIRegistry(apiURL, profile string) (*oci.HTTPRegistry, error) {
-	registry := oci.NewHTTPRegistry()
-	if strings.TrimSpace(os.Getenv("ADVERSARY_OCI_DEBUG")) != "" {
-		registry.Debug = os.Stderr
-	}
-	registry.BearerRealm = registryAuthRealm(apiURL)
-	registry.BearerService = adversarylabs.ResolveRegistryHost()
-	if realm, parseErr := url.Parse(registry.BearerRealm); parseErr == nil && realm.Host != "" {
-		registry.TokenAuthorities[registry.BearerService] = oci.TokenAuthority{Origin: realm.Scheme + "://" + realm.Host, Service: registry.BearerService}
-	}
-	store, err := adversarylabs.DefaultConfigStore()
-	if err != nil {
-		return nil, err
-	}
-	auth, ok, err := scopedAuth(store, apiURL, profile)
-	if err != nil {
-		return nil, err
-	}
-	stores := oci.ChainCredentialStore{oci.DockerCredentialStore{}}
-	if ok {
-		stores = append(oci.ChainCredentialStore{scopedCredentialStore{registry: adversarylabs.ResolveRegistryHost(), token: auth.Token}}, stores...)
-	}
-	registry.Credentials = stores
-	return registry, nil
-}
-
 func registryAuthRealm(apiURL string) string {
-	base := strings.TrimRight(adversarylabs.ResolveAPIURL(apiURL), "/")
+	base := strings.TrimRight(apiURL, "/")
 	base = strings.TrimSuffix(base, "/api")
 	return base + "/auth/registry"
 }
@@ -1259,19 +1112,15 @@ func hasExplicitRegistry(ref string) bool {
 
 type pushRecord struct{ Name, ManifestName, Version, Digest string }
 
-func defaultAdversaryLabsPushRef(ctx context.Context, localRef string, record pushRecord, apiURL, profile string) (string, error) {
-	configStore, err := adversarylabs.DefaultConfigStore()
-	if err != nil {
-		return "", err
-	}
-	registryHost := adversarylabs.ResolveRegistryHost()
-	auth, ok, err := scopedAuth(configStore, apiURL, profile)
+func defaultAdversaryLabsPushRef(ctx context.Context, deps application.Dependencies, localRef string, record pushRecord, apiURL, profile string) (string, error) {
+	registryHost := deps.RegistryHost
+	auth, ok, err := scopedAuth(deps.Auth, apiURL, profile, registryHost)
 	if err != nil {
 		return "", err
 	}
 	if !ok {
 		if registryHost != adversarylabs.DefaultRegistry {
-			namespace := cleanRegistryNamespace(os.Getenv("ADVERSARY_REGISTRY_NAMESPACE"))
+			namespace := cleanRegistryNamespace(deps.RegistryNS)
 			if namespace == "" {
 				namespace = oci.DefaultNamespace
 			}
@@ -1279,9 +1128,9 @@ func defaultAdversaryLabsPushRef(ctx context.Context, localRef string, record pu
 		}
 		return "", fmt.Errorf("remote reference is required for unqualified local ref %q; run adversary login or provide a remote reference", localRef)
 	}
-	namespace := registryNamespaceFromAuth(auth)
+	namespace := registryNamespaceFromAuth(auth, deps.RegistryNS)
 	if namespace == "" {
-		client := adversarylabs.NewClientWithBaseURL(configStore, apiURL)
+		client := deps.API.New(apiURL)
 		account, err := client.Whoami(ctx, auth.Token)
 		if err != nil {
 			if registryHost != adversarylabs.DefaultRegistry {
@@ -1332,10 +1181,19 @@ func pushErrorWithNamespaceHint(err error, localRef string, ref oci.Reference) e
 }
 
 func isRegistryAccessDenied(err error) bool {
-	text := err.Error()
-	return strings.Contains(text, "token request failed: 403 Forbidden") ||
-		strings.Contains(text, `"code":"DENIED"`) ||
-		strings.Contains(text, "Requested registry access is not authorized")
+	var registryErr *oci.RegistryError
+	if !errors.As(err, &registryErr) {
+		return false
+	}
+	if registryErr.StatusCode == http.StatusForbidden {
+		return true
+	}
+	for _, code := range registryErr.Codes {
+		if strings.EqualFold(code.Code, "DENIED") || strings.EqualFold(code.Code, "UNAUTHORIZED") {
+			return true
+		}
+	}
+	return false
 }
 
 func registryNamespaceFromReference(ref oci.Reference) string {
@@ -1346,9 +1204,9 @@ func registryNamespaceFromReference(ref oci.Reference) string {
 	return namespace
 }
 
-func registryNamespaceFromAuth(auth adversarylabs.Auth) string {
+func registryNamespaceFromAuth(auth adversarylabs.Auth, configured string) string {
 	for _, value := range []string{
-		os.Getenv("ADVERSARY_REGISTRY_NAMESPACE"),
+		configured,
 		auth.RegistryNamespace,
 		auth.Namespace,
 		auth.Team,

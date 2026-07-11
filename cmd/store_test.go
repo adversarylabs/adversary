@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +23,6 @@ import (
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
-type injectedResolver struct{}
 type exactSecretTTY struct{ secret []byte }
 
 func (exactSecretTTY) Interactive(io.Reader) bool { return true }
@@ -48,10 +48,6 @@ func (c fakeClock) NewTimer(time.Duration) application.Timer {
 	return fakeTimer{ch: make(chan time.Time), stopped: c.stopped}
 }
 
-func (injectedResolver) Resolve(context.Context, string) (application.Resolution, error) {
-	return application.Resolution{}, errors.New("unused")
-}
-
 func TestLoginInjectedTTYPreservesWhitespace(t *testing.T) {
 	var got string
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +60,6 @@ func TestLoginInjectedTTYPreservesWhitespace(t *testing.T) {
 		_, _ = w.Write([]byte(`{"token":"ok"}`))
 	}))
 	defer s.Close()
-	t.Setenv("HOME", t.TempDir())
 	repo := repository.Repository{Root: t.TempDir()}
 	var out, errOut bytes.Buffer
 	base := lifecycleTestApp(t, repo, &out, &errOut).Dependencies()
@@ -80,6 +75,53 @@ func TestLoginInjectedTTYPreservesWhitespace(t *testing.T) {
 	}
 	if got != "  pass word\t\n" {
 		t.Fatalf("password=%q", got)
+	}
+}
+
+func TestInjectedAuthSearchAndWhoamiNeedNoProcessEnvironment(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/search":
+			_, _ = w.Write([]byte(`{"results":[{"reference":"acme/reviewer","version":"1.2.3"}]}`))
+		case "/v1/auth/whoami":
+			_, _ = w.Write([]byte(`{"name":"Injected User","email_address":"user@example.test","subscription":{"name":"Team","status":"active"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	repo := repository.Repository{Root: t.TempDir()}
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repo, &out, &errOut).Dependencies()
+	store := base.Auth.(processAuthStore).ConfigStore
+	if err := store.SetAuth(adversarylabs.AuthKey(server.URL, "work"), adversarylabs.Auth{Token: "injected-token"}); err != nil {
+		t.Fatal(err)
+	}
+	base.API = processAPIFactory{store: store, http: server.Client()}
+	base.Registries = processRegistryFactory{store: store, docker: base.Credentials, host: base.RegistryHost, identity: store.Path}
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	search := NewRootCommandWithApp(app)
+	search.SetArgs([]string{"--api-url", server.URL, "--profile", "work", "search", "reviewer"})
+	if err := search.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "acme/reviewer\t1.2.3") {
+		t.Fatalf("search output=%q", out.String())
+	}
+	out.Reset()
+	whoami := NewRootCommandWithApp(app)
+	whoami.SetArgs([]string{"--api-url", server.URL, "--profile", "work", "whoami"})
+	if err := whoami.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Name: Injected User") {
+		t.Fatalf("whoami output=%q", out.String())
 	}
 }
 
@@ -124,14 +166,64 @@ func TestProcessAppResolverRepositoryBindingAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateAppRepositoryBinding(app); err != nil {
+	_ = app
+}
+
+func TestLogoutPreservesCredentialReplacedDuringRevocation(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/auth/revoke" {
+			http.NotFound(w, r)
+			return
+		}
+		close(started)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	repo := repository.Repository{Root: t.TempDir()}
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repo, &out, &errOut).Dependencies()
+	store := adversarylabs.ConfigStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	key := adversarylabs.AuthKey(server.URL, "default")
+	stale := adversarylabs.Auth{Token: "stale", ClientID: "old", RegistryHost: adversarylabs.DefaultRegistry}
+	fresh := adversarylabs.Auth{Token: "fresh", ClientID: "new", RegistryHost: adversarylabs.DefaultRegistry}
+	if err := store.SetAuth(key, stale); err != nil {
 		t.Fatal(err)
+	}
+	base.Auth = processAuthStore{store}
+	base.API = processAPIFactory{store: store, http: server.Client()}
+	base.Registries = processRegistryFactory{store: base.Auth, docker: base.Credentials, host: adversarylabs.DefaultRegistry, identity: store.Path}
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := NewRootCommandWithApp(app)
+	command.SetArgs([]string{"--api-url", server.URL, "logout"})
+	done := make(chan error, 1)
+	go func() { done <- command.Execute() }()
+	<-started
+	if err := store.SetAuth(key, fresh); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; !errors.Is(err, adversarylabs.ErrAuthCAS) {
+		t.Fatalf("logout error=%v", err)
+	}
+	got, ok, err := store.ExactAuthE(key)
+	if err != nil || !ok || got != fresh {
+		t.Fatalf("got=%#v ok=%v err=%v", got, ok, err)
 	}
 }
 
 func lifecycleTestApp(t *testing.T, repo repository.Repository, stdout, stderr *bytes.Buffer) *application.App {
 	t.Helper()
-	app, err := application.New(application.Dependencies{Stdin: &bytes.Buffer{}, Stdout: stdout, Stderr: stderr, Clock: dependencies.Clock{NowFunc: func() time.Time { return time.Unix(1, 0) }, TimerFunc: func(time.Duration) application.Timer { return processTimer{time.NewTimer(time.Hour)} }}, Env: dependencies.Environment{LookupFunc: func(string) (string, bool) { return "", false }}, Config: processConfig{}, Paths: processPaths{data: repo.Root}, HTTP: dependencies.HTTPClient{DoFunc: func(*http.Request) (*http.Response, error) { return nil, errors.New("unused") }}, Credentials: oci.DockerCredentialStore{}, Registry: oci.NewHTTPRegistry(), Repository: repo, Resolver: processResolver{resolver: internaladversary.Resolver{Repository: repo}}, Runtime: processRuntime{}, Browser: dependencies.Browser{OpenFunc: func(context.Context, string) error { return nil }}, TTY: processTTY{}})
+	store := adversarylabs.ConfigStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	docker := oci.DockerCredentialStore{}
+	resolver := internaladversary.Resolver{Repository: repo}
+	app, err := application.New(application.Dependencies{Stdin: &bytes.Buffer{}, Stdout: stdout, Stderr: stderr, Clock: dependencies.Clock{NowFunc: func() time.Time { return time.Unix(1, 0) }, TimerFunc: func(time.Duration) application.Timer { return processTimer{time.NewTimer(time.Hour)} }}, Env: dependencies.Environment{LookupFunc: func(string) (string, bool) { return "", false }}, Config: processConfig{}, Paths: processPaths{data: repo.Root}, HTTP: dependencies.HTTPClient{DoFunc: http.DefaultClient.Do}, Credentials: docker, Auth: processAuthStore{store}, API: processAPIFactory{store: store, http: http.DefaultClient}, Registries: processRegistryFactory{store: store, docker: docker, host: adversarylabs.DefaultRegistry, identity: store.Path}, DefaultAPIURL: adversarylabs.DefaultAPIURL, RegistryHost: adversarylabs.DefaultRegistry, Repository: processRepository{repo}, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{resolver: resolver}, Browser: dependencies.Browser{OpenFunc: func(context.Context, string) error { return nil }}, TTY: processTTY{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +279,7 @@ func TestStoreLifecycleJSONAndConfirmation(t *testing.T) {
 	}
 }
 
-func TestAppCommandsRejectUnboundAndMismatchedResolvers(t *testing.T) {
+func TestApplicationRejectsMismatchedResolverAtConstruction(t *testing.T) {
 	dataA := t.TempDir()
 	repoA := repository.Repository{Root: filepath.Join(dataA, "repository-v1")}
 	if err := os.MkdirAll(repoA.Root, 0700); err != nil {
@@ -216,31 +308,9 @@ func TestAppCommandsRejectUnboundAndMismatchedResolvers(t *testing.T) {
 	}
 	var out, errOut bytes.Buffer
 	base := lifecycleTestApp(t, repoB, &out, &errOut).Dependencies()
-	for _, tc := range []struct {
-		name     string
-		resolver application.Resolver
-	}{{"generic", injectedResolver{}}, {"mismatch", processResolver{resolver: internaladversary.Resolver{Repository: repoA}}}} {
-		t.Run(tc.name, func(t *testing.T) {
-			deps := base
-			deps.Resolver = tc.resolver
-			app, err := application.New(deps)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, args := range [][]string{{"run", "registry.example/team/tool:1.0.0"}, {"inspect", "registry.example/team/tool:1.0.0"}} {
-				cmd := NewRootCommandWithApp(app)
-				cmd.SetArgs(args)
-				err := cmd.Execute()
-				if err == nil || !application.IsKind(err, "invalid-dependency") {
-					t.Fatalf("args=%v err=%v", args, err)
-				}
-			}
-			if _, err := os.Stat(filepath.Join(repoB.Root, "materialized")); err == nil {
-				entries, _ := os.ReadDir(filepath.Join(repoB.Root, "materialized"))
-				if len(entries) > 0 {
-					t.Fatal("invalid App materialized an artifact")
-				}
-			}
-		})
+	deps := base
+	deps.Resolver = processResolver{resolver: internaladversary.Resolver{Repository: repoA}}
+	if _, err := application.New(deps); err == nil || !application.IsKind(err, "invalid-dependency") {
+		t.Fatalf("error=%v", err)
 	}
 }

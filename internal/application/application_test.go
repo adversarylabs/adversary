@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
@@ -62,12 +64,54 @@ func (fakeRegistry) Pull(context.Context, oci.Reference) (oci.PulledArtifact, er
 }
 func (fakeRegistry) Resolve(context.Context, oci.Reference) (string, error) { return "", nil }
 
+type fakeAuth struct{}
+
+func (fakeAuth) BindingIdentity() string { return "test" }
+
+func (fakeAuth) ExactAuthE(string) (adversarylabs.Auth, bool, error) {
+	return adversarylabs.Auth{}, false, nil
+}
+func (fakeAuth) SetAuth(string, adversarylabs.Auth) error       { return nil }
+func (fakeAuth) RemoveAuthCAS(string, adversarylabs.Auth) error { return nil }
+
+type fakeAPI struct{}
+
+func (fakeAPI) BindingIdentity() string { return "test" }
+
+func (fakeAPI) New(string) APIClient { return adversarylabs.Client{} }
+
+type fakeOCIRegistry struct{ fakeRegistry }
+
+func (fakeOCIRegistry) PushAdversaryManifestReferrer(context.Context, oci.Reference, string, []byte) (string, string, error) {
+	return "", "", nil
+}
+func (fakeOCIRegistry) SetPlainHTTP(bool) {}
+
+type fakeRegistryFactory struct{}
+
+func (fakeRegistryFactory) BindingIdentity() string { return "test" }
+
+func (fakeRegistryFactory) New(string, string) (OCIRegistry, error) { return fakeOCIRegistry{}, nil }
+
 type fakeRepo struct{}
 
+func (fakeRepo) BindingIdentity() string                   { return "artifacts" }
 func (fakeRepo) Resolve(string) (repository.Record, error) { return repository.Record{}, nil }
 func (fakeRepo) PlanGC() (repository.GCPlan, error)        { return repository.GCPlan{}, nil }
 func (fakeRepo) ApplyGC(repository.GCPlan, bool) (repository.GCReport, error) {
 	return repository.GCReport{}, nil
+}
+
+type mismatchedAPI struct{ fakeAPI }
+
+func (mismatchedAPI) BindingIdentity() string { return "other" }
+
+func TestDependencyBindingMismatchFailsClosed(t *testing.T) {
+	b := &bytes.Buffer{}
+	_, err := New(Dependencies{Stdin: b, Stdout: b, Stderr: b, Clock: fakeClock{}, Env: fakeEnv{}, Config: fakeConfig{}, Paths: fakePaths{}, HTTP: fakeHTTP{}, Credentials: fakeCreds{}, Auth: fakeAuth{}, API: mismatchedAPI{}, Registries: fakeRegistryFactory{}, DefaultAPIURL: "https://api.test", RegistryHost: "registry.test", Repository: fakeRepo{}, Resolver: fakeResolver{}, Runtime: fakeRuntime{}, Browser: fakeBrowser{}, TTY: fakeTTY{}})
+	if err == nil || !IsKind(err, "invalid-dependency") {
+		t.Fatalf("error=%v", err)
+	}
 }
 func (fakeRepo) CheckAll() (repository.CheckReport, error) { return repository.CheckReport{}, nil }
 func (fakeRepo) RepairAll(map[string][]byte) (repository.RepairReport, error) {
@@ -83,11 +127,40 @@ func (fakeRepo) LeaseMaterialized(repository.Record) (*repository.Materializatio
 
 type fakeResolver struct{}
 
+func (fakeResolver) BindingIdentity() string                             { return "artifacts" }
 func (fakeResolver) Resolve(context.Context, string) (Resolution, error) { return Resolution{}, nil }
+func (fakeResolver) Lookup(context.Context, string) (Resolution, error)  { return Resolution{}, nil }
+func (fakeResolver) ResolveRecord(string) (repository.Record, error)     { return repository.Record{}, nil }
+func (fakeResolver) HasExact(string) (bool, error)                       { return false, nil }
+func (fakeResolver) Entries(int) ([]repository.Entry, error)             { return nil, nil }
+func (fakeResolver) Payload(repository.Record) ([]byte, []oci.Blob, []byte, error) {
+	return nil, nil, nil, nil
+}
+func (fakeResolver) ImportPacked(pack.Artifact, string) (repository.Record, error) {
+	return repository.Record{}, nil
+}
+func (fakeResolver) ImportPulled(oci.PulledArtifact) (repository.Record, error) {
+	return repository.Record{}, nil
+}
+func (fakeResolver) UpdateRef(string, string, string) error { return nil }
 
 type fakeRuntime struct{}
 
-func (fakeRuntime) Run(context.Context, []string, RunOptions) error { return nil }
+func (fakeRuntime) BindingIdentity() string                            { return "artifacts" }
+func (fakeRuntime) Run(context.Context, AdversaryRunOptions) error     { return nil }
+func (fakeRuntime) Inspect(context.Context, AdversaryRunOptions) error { return nil }
+
+type mismatchedResolver struct{ fakeResolver }
+
+func (mismatchedResolver) BindingIdentity() string { return "other-artifacts" }
+
+func TestArtifactBindingMismatchFailsClosed(t *testing.T) {
+	b := &bytes.Buffer{}
+	_, err := New(Dependencies{Stdin: b, Stdout: b, Stderr: b, Clock: fakeClock{}, Env: fakeEnv{}, Config: fakeConfig{}, Paths: fakePaths{}, HTTP: fakeHTTP{}, Credentials: fakeCreds{}, Auth: fakeAuth{}, API: fakeAPI{}, Registries: fakeRegistryFactory{}, DefaultAPIURL: "https://api.test", RegistryHost: "registry.test", Repository: fakeRepo{}, Resolver: mismatchedResolver{}, Runtime: fakeRuntime{}, Browser: fakeBrowser{}, TTY: fakeTTY{}})
+	if err == nil || !IsKind(err, "invalid-dependency") {
+		t.Fatalf("error=%v", err)
+	}
+}
 
 type fakeBrowser struct{}
 
@@ -100,7 +173,7 @@ func (fakeTTY) ReadSecret(context.Context, io.Reader, io.Writer) ([]byte, error)
 
 func TestFullyPopulatedDependencyGraphIsConstructible(t *testing.T) {
 	b := &bytes.Buffer{}
-	app, err := New(Dependencies{Stdin: b, Stdout: b, Stderr: b, Clock: fakeClock{}, Env: fakeEnv{}, Config: fakeConfig{}, Paths: fakePaths{}, HTTP: fakeHTTP{}, Credentials: fakeCreds{}, Registry: fakeRegistry{}, Repository: fakeRepo{}, Resolver: fakeResolver{}, Runtime: fakeRuntime{}, Browser: fakeBrowser{}, TTY: fakeTTY{}})
+	app, err := New(Dependencies{Stdin: b, Stdout: b, Stderr: b, Clock: fakeClock{}, Env: fakeEnv{}, Config: fakeConfig{}, Paths: fakePaths{}, HTTP: fakeHTTP{}, Credentials: fakeCreds{}, Auth: fakeAuth{}, API: fakeAPI{}, Registries: fakeRegistryFactory{}, DefaultAPIURL: "https://api.test", RegistryHost: "registry.test", Repository: fakeRepo{}, Resolver: fakeResolver{}, Runtime: fakeRuntime{}, Browser: fakeBrowser{}, TTY: fakeTTY{}})
 	if err != nil || app == nil {
 		t.Fatalf("app=%v err=%v", app, err)
 	}

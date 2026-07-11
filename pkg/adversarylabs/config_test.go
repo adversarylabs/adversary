@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -166,6 +167,30 @@ func TestConfigStoreTokenStorageAndLogoutCleanup(t *testing.T) {
 	}
 	if _, ok := store.Auth(DefaultRegistry); ok {
 		t.Fatal("expected auth to be removed")
+	}
+}
+
+func TestRemoveAuthCASPreservesConcurrentReplacement(t *testing.T) {
+	store := ConfigStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	key := AuthKey(DefaultAPIURL, "default")
+	stale := Auth{Token: "revoked", ClientID: "old"}
+	fresh := Auth{Token: "fresh", ClientID: "new"}
+	if err := store.SetAuth(key, stale); err != nil {
+		t.Fatal(err)
+	}
+	loaded, ok, err := store.ExactAuthE(key)
+	if err != nil || !ok {
+		t.Fatalf("loaded=%#v ok=%v err=%v", loaded, ok, err)
+	}
+	if err := store.SetAuth(key, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveAuthCAS(key, loaded); !errors.Is(err, ErrAuthCAS) {
+		t.Fatalf("RemoveAuthCAS error=%v", err)
+	}
+	got, ok, err := store.ExactAuthE(key)
+	if err != nil || !ok || got != fresh {
+		t.Fatalf("got=%#v ok=%v err=%v", got, ok, err)
 	}
 }
 
