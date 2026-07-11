@@ -93,11 +93,11 @@ type Subscription struct {
 }
 
 func NewClient(store ConfigStore) Client {
-	return Client{BaseURL: ResolveAPIURL(""), HTTP: newHTTPClient(), Store: store}
+	return Client{BaseURL: ResolveAPIURL(""), HTTP: NewHTTPClient(), Store: store}
 }
 
 func NewClientWithBaseURL(store ConfigStore, baseURL string) Client {
-	return Client{BaseURL: ResolveAPIURL(baseURL), HTTP: newHTTPClient(), Store: store}
+	return Client{BaseURL: ResolveAPIURL(baseURL), HTTP: NewHTTPClient(), Store: store}
 }
 
 func ResolveAPIURL(override string) string {
@@ -294,7 +294,7 @@ func (c Client) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return newHTTPClient()
+	return NewHTTPClient()
 }
 
 func validateBaseURL(value string) (*url.URL, error) {
@@ -310,10 +310,17 @@ func validateBaseURL(value string) (*url.URL, error) {
 	return u, nil
 }
 
-func newHTTPClient() *http.Client {
+// NewHTTPClient returns the hardened, bounded client used for API traffic.
+// Callers that replace it are responsible for preserving its timeout,
+// redirect, and retry policies.
+func NewHTTPClient() *http.Client {
+	return newHTTPClientWithTimeout(2 * time.Minute)
+}
+
+func newHTTPClientWithTimeout(timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: dialer.DialContext, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 30 * time.Second, ExpectContinueTimeout: time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 32, MaxIdleConnsPerHost: 8}
-	return &http.Client{Transport: apiRetryTransport{base: transport}, Timeout: 2 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	return &http.Client{Transport: apiRetryTransport{base: transport}, Timeout: timeout, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
 			return fmt.Errorf("too many redirects")
 		}

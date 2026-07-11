@@ -9,12 +9,12 @@ are the maintained contract after merge.
 | CLI-001 | PR #2; `docs/trust-model.md`; host-boundary security tests |
 | CLI-002 | PRs #7, #8, and #9; unified repository migration and cleanup records |
 | CLI-003 | PR #4; OAuth state/PKCE/device-flow tests |
-| CLI-004 | PR #2; JSON purity, output-bound, and unsafe-execution tests |
+| CLI-004 | PRs #1, #2, #16, and #17; strict protocol, JSON purity, output-bound, DTO, and unsafe-execution tests |
 | CLI-005 | PR #6; bounded ingestion and archive regression tests |
 | CLI-006 | PR #5; `docs/artifact-trust-and-limits.md` and digest tests |
 | CLI-007 | PRs #15 and #16; `docs/build-and-git-contract.md` and build/git tests |
-| CLI-008 | PR #10; `docs/network-oci-policy.md` and transport tests |
-| CLI-009 | PR #10; OCI auth/redirect/debug-redaction tests |
+| CLI-008 | PRs #10 and #21; `docs/network-oci-policy.md`, production API-client, fallback-tag, and transport tests |
+| CLI-009 | PRs #10 and #21; OCI fallback integrity, auth/redirect/debug-redaction tests |
 | CLI-010 | PR #4; `docs/auth-credential-storage.md` and locked-store tests |
 | CLI-011 | PR #3; canonical manifest parser/schema parity tests |
 | CLI-012 | PRs #5, #6, #7, #8, #9, #11, and #12; staged repository migration and publication tests |
