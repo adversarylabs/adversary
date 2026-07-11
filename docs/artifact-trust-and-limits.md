@@ -22,8 +22,8 @@ are read-only and every published directory is non-writable; executable intent
 is retained as read-and-execute mode. Staging trees are sealed and policy-checked
 before atomic publication, then checked again at the destination. Named and
 image-based runtime identities and entrypoints are carried and cross-checked.
-The package digest, manifest digest, and original
-reference are retained by the existing cache record.
+The package digest, manifest digest, and original reference are retained by the
+unified repository record and durable reference index.
 
 Publication uses a validated staging directory and an atomic no-follow,
 no-replace rename into the canonical digest path. On every platform all children
@@ -44,11 +44,9 @@ remain stable for each operation. Defending against a hostile same-UID process
 that swaps that configured ancestor is outside the cooperative CLI boundary,
 just like post-install permission changes by that same principal.
 
-Cache name and reference aliases have exact-byte interprocess locks and atomic
-record replacement, so readers observe one complete record. Concurrent writers
-use last-writer-wins semantics per alias. Compare-and-swap or conflict prompts
-are deferred to the CLI-012 reference-resolution policy rather than being
-silently inferred during artifact ingestion.
+Repository name and reference aliases have exact-byte interprocess locks and
+atomic record replacement, so readers observe one complete record. Reference
+updates use compare-and-swap and aliases fail closed when ambiguous.
 
 Digest verification provides content integrity, not publisher identity. This
 change does not introduce signatures because the repository has no configured

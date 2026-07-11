@@ -71,7 +71,7 @@ func ResolveReference(ref string) (ResolvedAdversary, error) {
 			resolved.Command = typeScriptHostCommand(resolution.Path, resolved.RuntimeName, resolved.Command)
 		}
 		return resolved, nil
-	} else if errors.Is(resolveErr, repository.ErrAmbiguous) || errors.Is(resolveErr, ErrMigrationRequired) {
+	} else if errors.Is(resolveErr, repository.ErrAmbiguous) {
 		return ResolvedAdversary{}, resolveErr
 	} else if !errors.Is(resolveErr, ErrNotFound) {
 		return ResolvedAdversary{}, resolveErr

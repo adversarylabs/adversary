@@ -11,10 +11,8 @@ import (
 	"strings"
 	"time"
 
-	adversarycache "github.com/adversarylabs/adversary/pkg/adversary"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/review"
-	localstore "github.com/adversarylabs/adversary/pkg/store"
 )
 
 type RunOptions struct {
@@ -268,15 +266,18 @@ func isExplicitLocalAdversaryPath(ref string) (bool, error) {
 }
 
 func artifactStorageRoots() ([]string, error) {
-	store, err := localstore.Default()
+	dataRoot, err := resolverDataRoot()
 	if err != nil {
-		return nil, fmt.Errorf("locate local artifact store: %w", err)
+		return nil, fmt.Errorf("locate unified artifact repository: %w", err)
 	}
-	cache, err := adversarycache.DefaultCache()
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("locate pulled artifact cache: %w", err)
+		return nil, fmt.Errorf("locate retired artifact cache: %w", err)
 	}
-	return []string{store.Root, cache.Root}, nil
+	// Classify the whole data root as artifact-controlled, not just the unified
+	// repository subtree. This preserves the host-execution boundary for paths
+	// left by retired stores without consulting those stores at runtime.
+	return []string{dataRoot, filepath.Join(home, ".adversary", "cache")}, nil
 }
 
 func pathWithin(path, root string) bool {

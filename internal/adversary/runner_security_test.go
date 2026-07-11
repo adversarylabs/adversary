@@ -75,17 +75,22 @@ func TestExplicitPathClassificationRejectsArtifactStorage(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("ADVERSARY_DATA_DIR", data)
 
-	storeProject := filepath.Join(data, "materialized", "artifact")
-	cacheProject := filepath.Join(home, ".adversary", "cache", "artifacts", "artifact")
+	unifiedProject := filepath.Join(data, "repository-v1", "materialized", "artifact")
+	legacyStoreProject := filepath.Join(data, "materialized", "artifact")
+	legacyCacheProject := filepath.Join(home, ".adversary", "cache", "artifacts", "artifact")
 	localProject := filepath.Join(t.TempDir(), "source")
-	for _, project := range []string{storeProject, cacheProject, localProject} {
+	for _, project := range []string{unifiedProject, legacyStoreProject, legacyCacheProject, localProject} {
 		if err := os.MkdirAll(project, 0755); err != nil {
 			t.Fatal(err)
 		}
 		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: local/test\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
 	}
 
-	for name, project := range map[string]string{"store": storeProject, "cache": cacheProject} {
+	for name, project := range map[string]string{
+		"unified repository": unifiedProject,
+		"retired store":      legacyStoreProject,
+		"retired cache":      legacyCacheProject,
+	} {
 		t.Run(name, func(t *testing.T) {
 			explicit, err := isExplicitLocalAdversaryPath(project)
 			if err != nil {
@@ -120,7 +125,7 @@ func TestDefaultPlatformStorePathRequiresAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project := filepath.Join(roots[0], "materialized", "artifact")
+	project := filepath.Join(roots[0], "repository-v1", "materialized", "artifact")
 	if err := os.MkdirAll(project, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -136,15 +141,16 @@ func TestDefaultPlatformStorePathRequiresAcknowledgement(t *testing.T) {
 
 func TestArtifactStorageSymlinkCannotBypassAcknowledgement(t *testing.T) {
 	home := t.TempDir()
+	data := filepath.Join(t.TempDir(), "data")
 	t.Setenv("HOME", home)
-	t.Setenv("ADVERSARY_DATA_DIR", filepath.Join(t.TempDir(), "data"))
-	cacheProject := filepath.Join(home, ".adversary", "cache", "artifacts", "artifact")
-	if err := os.MkdirAll(cacheProject, 0755); err != nil {
+	t.Setenv("ADVERSARY_DATA_DIR", data)
+	materializedProject := filepath.Join(data, "repository-v1", "materialized", "artifact")
+	if err := os.MkdirAll(materializedProject, 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(cacheProject, "adversary.yaml"), "name: local/test\nruntime:\n  name: node\n  version: \"22\"\n")
+	writeFile(t, filepath.Join(materializedProject, "adversary.yaml"), "name: local/test\nruntime:\n  name: node\n  version: \"22\"\n")
 	link := filepath.Join(t.TempDir(), "apparently-local")
-	if err := os.Symlink(cacheProject, link); err != nil {
+	if err := os.Symlink(materializedProject, link); err != nil {
 		t.Fatal(err)
 	}
 	explicit, err := isExplicitLocalAdversaryPath(link)
@@ -152,7 +158,7 @@ func TestArtifactStorageSymlinkCannotBypassAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	if explicit {
-		t.Fatal("symlink into pulled cache classified as explicit local source")
+		t.Fatal("symlink into unified materialization classified as explicit local source")
 	}
 }
 

@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -23,12 +22,10 @@ import (
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/initproject"
 	"github.com/adversarylabs/adversary/internal/version"
-	adversarypkg "github.com/adversarylabs/adversary/pkg/adversary"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
-	"github.com/adversarylabs/adversary/pkg/store"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -510,75 +507,8 @@ func newPushCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Co
   adversary push ghcr.io/acme/security-reviewer:0.1.0`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if handled, err := pushUnified(cmd.Context(), stdout, stderr, args, valueOf(apiURL), valueOf(profile)); handled {
-				return err
-			}
-			localRef := args[0]
-			remoteRef := ""
-			if len(args) == 2 {
-				remoteRef = args[1]
-			} else {
-				remoteRef = localRef
-			}
-			localStore, err := store.Default()
-			if err != nil {
-				return err
-			}
-			record, err := localStore.Inspect(localRef)
-			if err != nil {
-				return err
-			}
-			adversaryManifest, err := localStore.AdversaryManifest(record)
-			if err != nil {
-				return err
-			}
-			if len(args) == 1 && !hasExplicitRegistry(localRef) {
-				remoteRef, err = defaultAdversaryLabsPushRef(cmd.Context(), localRef, record, valueOf(apiURL), valueOf(profile))
-				if err != nil {
-					return err
-				}
-			}
-			ref, err := oci.ParseReference(remoteRef)
-			if err != nil {
-				return err
-			}
-			manifest, blobs, err := localStore.OCIPayload(record)
-			if err != nil {
-				return err
-			}
-			registry, err := newOCIRegistry(valueOf(apiURL), valueOf(profile))
-			if err != nil {
-				return err
-			}
-			if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
-				registry.PlainHTTP = true
-			}
-			fmt.Fprintln(stderr, "Pushing adversary...")
-			fmt.Fprintf(stderr, "Local:  %s\n", localRef)
-			fmt.Fprintf(stderr, "Remote: %s\n", ref.Locator())
-			fmt.Fprintln(stderr, "Pushing layers...")
-			fmt.Fprintln(stderr, "Pushing manifest...")
-			digest, err := registry.Push(cmd.Context(), ref, manifest, blobs)
-			if err != nil {
-				return pushErrorWithNamespaceHint(err, localRef, ref)
-			}
-			artifactDigest, _, err := registry.PushAdversaryManifestReferrer(cmd.Context(), ref, digest, adversaryManifest)
-			if err != nil {
-				return fmt.Errorf("image pushed, but adversary.yaml referrer publish failed for %s with image digest %s: %w", ref.Locator(), digest, err)
-			}
-			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, "Pushed image")
-			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, ref.Locator())
-			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, "Image digest")
-			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, digest)
-			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, "Published adversary manifest referrer")
-			fmt.Fprintln(stdout)
-			fmt.Fprintln(stdout, artifactDigest)
-			return nil
+			_, err := pushUnified(cmd.Context(), stdout, stderr, args, valueOf(apiURL), valueOf(profile))
+			return err
 		},
 	}
 }
@@ -586,18 +516,18 @@ func newPushCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Co
 func pushUnified(ctx context.Context, stdout, stderr io.Writer, args []string, apiURL, profile string) (bool, error) {
 	resolver, err := internaladversary.DefaultResolver()
 	if err != nil {
-		return false, nil
+		return true, err
 	}
 	hasExact, _ := resolver.Repository.HasExact(args[0])
 	resolution, err := resolver.Lookup(args[0])
 	if err != nil {
 		if os.IsNotExist(err) && !hasExact {
-			return false, nil
+			return true, fmt.Errorf("artifact %q is not present in the unified repository", args[0])
 		}
 		return true, err
 	}
 	if resolution.Local {
-		return false, nil
+		return true, fmt.Errorf("artifact %q is not present in the unified repository", args[0])
 	}
 	manifest, blobs, yaml, err := resolver.Repository.Payload(resolution.Record)
 	if err != nil {
@@ -607,7 +537,7 @@ func pushUnified(ctx context.Context, stdout, stderr io.Writer, args []string, a
 	if len(args) == 2 {
 		remote = args[1]
 	} else if !hasExplicitRegistry(args[0]) {
-		remote, err = defaultAdversaryLabsPushRef(ctx, args[0], store.Record{Name: resolution.Record.Name, ManifestName: resolution.Record.Name, Version: resolution.Record.Version, Digest: resolution.Record.Digest}, apiURL, profile)
+		remote, err = defaultAdversaryLabsPushRef(ctx, args[0], pushRecord{Name: resolution.Record.Name, ManifestName: resolution.Record.Name, Version: resolution.Record.Version, Digest: resolution.Record.Digest}, apiURL, profile)
 		if err != nil {
 			return true, err
 		}
@@ -820,53 +750,6 @@ func printWhoami(stdout io.Writer, account adversarylabs.WhoamiResponse) {
 	fmt.Fprintf(stdout, "Email: %s\n", email)
 	fmt.Fprintf(stdout, "Subscription: %s\n", subscription)
 	fmt.Fprintf(stdout, "Status: %s\n", status)
-}
-
-func renderStoreInspect(stdout io.Writer, record store.Record, asJSON bool) error {
-	if asJSON {
-		encoder := json.NewEncoder(stdout)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(record)
-	}
-	fmt.Fprintf(stdout, "Name: %s\n", record.Name)
-	fmt.Fprintf(stdout, "Version: %s\n", record.Version)
-	fmt.Fprintf(stdout, "Digest: %s\n", record.Digest)
-	fmt.Fprintf(stdout, "Runtime: %s\n", record.Runtime)
-	if record.RuntimeName != "" {
-		fmt.Fprintf(stdout, "Runtime Requirement: %s@%s\n", record.RuntimeName, record.RuntimeVersion)
-	}
-	fmt.Fprintf(stdout, "Entrypoint: %s\n", strings.Join(record.Entrypoint, " "))
-	permissions, _ := json.Marshal(record.Permissions)
-	if len(permissions) == 0 || string(permissions) == "null" {
-		permissions = []byte("{}")
-	}
-	fmt.Fprintf(stdout, "Permissions: %s\n", permissions)
-	fmt.Fprintf(stdout, "Size: %s\n", humanSize(record.Size))
-	fmt.Fprintf(stdout, "Created: %s\n", record.Created.Format(time.RFC3339))
-	fmt.Fprintln(stdout)
-	fmt.Fprintln(stdout, "Layers:")
-	fmt.Fprintf(stdout, "  config  %s\n", record.ConfigDigest)
-	fmt.Fprintf(stdout, "  layer   %s\n", record.LayerDigest)
-	if len(record.Annotations) > 0 {
-		fmt.Fprintln(stdout)
-		fmt.Fprintln(stdout, "Manifest annotations:")
-		keys := make([]string, 0, len(record.Annotations))
-		for key := range record.Annotations {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			fmt.Fprintf(stdout, "  %s: %s\n", key, record.Annotations[key])
-		}
-	}
-	if len(record.Files) > 0 {
-		fmt.Fprintln(stdout)
-		fmt.Fprintln(stdout, "Files:")
-		for _, file := range record.Files {
-			fmt.Fprintf(stdout, "  %s  %s\n", file.Path, humanSize(file.Size))
-		}
-	}
-	return nil
 }
 
 func shortDigest(digest string) string {
@@ -1205,21 +1088,6 @@ func registryAuthRealm(apiURL string) string {
 	return base + "/auth/registry"
 }
 
-func printInstallRecord(stdout io.Writer, record adversarypkg.InstallRecord) {
-	fmt.Fprintln(stdout)
-	fmt.Fprintln(stdout, "Installed:")
-	fmt.Fprintln(stdout)
-	fmt.Fprintln(stdout, record.Name)
-	fmt.Fprintln(stdout)
-	fmt.Fprintln(stdout, "Version:")
-	fmt.Fprintln(stdout)
-	if record.Version == "" {
-		fmt.Fprintln(stdout, "(none)")
-	} else {
-		fmt.Fprintln(stdout, record.Version)
-	}
-}
-
 func hasLocalhostPort(registry string) bool {
 	return registry == "127.0.0.1" || registry == "[::1]" ||
 		len(registry) > len("localhost:") && registry[:len("localhost:")] == "localhost:" ||
@@ -1243,7 +1111,9 @@ func hasExplicitRegistry(ref string) bool {
 	return strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost"
 }
 
-func defaultAdversaryLabsPushRef(ctx context.Context, localRef string, record store.Record, apiURL, profile string) (string, error) {
+type pushRecord struct{ Name, ManifestName, Version, Digest string }
+
+func defaultAdversaryLabsPushRef(ctx context.Context, localRef string, record pushRecord, apiURL, profile string) (string, error) {
 	configStore, err := adversarylabs.DefaultConfigStore()
 	if err != nil {
 		return "", err
@@ -1289,7 +1159,7 @@ func defaultAdversaryLabsPushRef(ctx context.Context, localRef string, record st
 	return defaultRegistryPushRef(registryHost, namespace, record), nil
 }
 
-func defaultRegistryPushRef(registryHost, namespace string, record store.Record) string {
+func defaultRegistryPushRef(registryHost, namespace string, record pushRecord) string {
 	name := manifestNameForRemote(record.Name)
 	tag := record.Version
 	if tag == "" {
