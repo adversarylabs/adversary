@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
 
@@ -78,14 +79,21 @@ type Auth struct {
 	Namespace         string `json:"namespace,omitempty"`
 	Team              string `json:"team,omitempty"`
 }
-type ConfigStore struct{ Path string }
+type ConfigStore struct {
+	Path       string
+	LegacyPath string
+}
 
 func DefaultConfigStore() (ConfigStore, error) {
+	dir, err := internalpaths.ConfigDir()
+	if err != nil {
+		return ConfigStore{}, err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ConfigStore{}, err
 	}
-	return ConfigStore{Path: filepath.Join(home, ".adversary", "config.json")}, nil
+	return ConfigStore{Path: filepath.Join(dir, "config.json"), LegacyPath: filepath.Join(home, ".adversary", "config.json")}, nil
 }
 
 func (s ConfigStore) rejectSymlink() error {
@@ -110,7 +118,17 @@ func (s ConfigStore) Load() (Config, error) {
 	}
 	data, err := readCredentialFile(s.Path)
 	if os.IsNotExist(err) {
-		return Config{Auths: map[string]Auth{}}, nil
+		if s.LegacyPath == "" {
+			return Config{Auths: map[string]Auth{}}, nil
+		}
+		legacy := ConfigStore{Path: s.LegacyPath}
+		if err := legacy.rejectSymlink(); err != nil {
+			return Config{}, fmt.Errorf("read legacy credentials: %w", err)
+		}
+		data, err = readCredentialFile(s.LegacyPath)
+		if os.IsNotExist(err) {
+			return Config{Auths: map[string]Auth{}}, nil
+		}
 	}
 	if err != nil {
 		return Config{}, fmt.Errorf("read credentials: %w", err)

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
+	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -40,24 +40,7 @@ func DefaultResolver() (Resolver, error) {
 }
 
 func resolverDataRoot() (string, error) {
-	if override := strings.TrimSpace(os.Getenv("ADVERSARY_DATA_DIR")); override != "" {
-		return override, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(home, "Library", "Application Support", "Adversary"), nil
-	case "linux":
-		if xdg := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); xdg != "" {
-			return filepath.Join(xdg, "adversary"), nil
-		}
-		return filepath.Join(home, ".local", "share", "adversary"), nil
-	default:
-		return filepath.Join(home, ".adversary"), nil
-	}
+	return internalpaths.DataDir()
 }
 
 func (r Resolver) Resolve(value string) (Resolution, error) {

@@ -84,7 +84,7 @@ runtime:
 	if resolved.Name != "local/adversary" {
 		t.Fatalf("Name = %q", resolved.Name)
 	}
-	if resolved.Image != "adversary-local-typescript" {
+	if resolved.Image != "host:node" {
 		t.Fatalf("Image = %q", resolved.Image)
 	}
 	if resolved.RuntimeName != "node" || resolved.RuntimeVersion != "22" {
@@ -101,6 +101,25 @@ runtime:
 	}
 	if resolved.ExecutionPath != dir {
 		t.Fatalf("ExecutionPath = %q", resolved.ExecutionPath)
+	}
+}
+
+func TestResolveReferenceDoesNotInferNodeFromProjectFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "adversary.yaml"), `name: local/process
+runtime:
+  name: process
+  version: "1"
+  command: [tool]
+`)
+	writeFile(t, filepath.Join(dir, "package.json"), `{}`)
+	writeFile(t, filepath.Join(dir, "dist", "index.js"), `ignored`)
+	resolved, err := ResolveReference(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.RuntimeName != "process" || strings.Join(resolved.Command, " ") != "tool" {
+		t.Fatalf("inferred runtime: %#v", resolved)
 	}
 }
 
@@ -162,7 +181,7 @@ permissions:
 		if resolved.Name != "local/dockerfile-adversary" {
 			t.Fatalf("resolve %q name = %q", ref, resolved.Name)
 		}
-		if resolved.Image != "adversary-local-typescript" {
+		if resolved.Image != "host:node" {
 			t.Fatalf("resolve %q image = %q", ref, resolved.Image)
 		}
 		if resolved.RuntimeName != "node" || resolved.RuntimeVersion != "22" {

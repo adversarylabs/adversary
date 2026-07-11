@@ -9,8 +9,12 @@ on:
       - main
 
 jobs:
-  test:
-    runs-on: ubuntu-24.04
+  native-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -31,3 +35,16 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+  # Preserve the existing required "test" check while making it dependent on
+  # every native platform result.
+  test:
+    name: test
+    if: ${{ always() }}
+    needs: native-test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require native platform tests
+        env:
+          NATIVE_TEST_RESULT: ${{ needs.native-test.result }}
+        run: test "$NATIVE_TEST_RESULT" = success

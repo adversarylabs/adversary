@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/dependencies"
+	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
@@ -34,11 +36,11 @@ type processConfig struct{}
 func (processConfig) Get(context.Context, string) (string, error) { return "", nil }
 func (processConfig) Set(context.Context, string, string) error   { return nil }
 
-type processPaths struct{ data string }
+type processPaths struct{ data, config string }
 
 func (p processPaths) DataDir() (string, error)   { return p.data, nil }
-func (p processPaths) ConfigDir() (string, error) { return p.data, nil }
-func (processPaths) TempDir() string              { return os.TempDir() }
+func (p processPaths) ConfigDir() (string, error) { return p.config, nil }
+func (processPaths) TempDir() string              { return internalpaths.TempDir() }
 
 type processResolver struct{ resolver internaladversary.Resolver }
 
@@ -234,6 +236,7 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	if err != nil {
 		return nil, err
 	}
+	configDir := filepath.Dir(store.Path)
 	apiURL := envDefault("ADVERSARY_API_URL", adversarylabs.DefaultAPIURL)
 	host := envDefault("ADVERSARY_REGISTRY_HOST", adversarylabs.DefaultRegistry)
 	namespace := envDefault("ADVERSARY_REGISTRY_NAMESPACE", "")
@@ -245,7 +248,7 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	authStore := processAuthStore{store}
 	apiFactory := processAPIFactory{store: store, http: http.DefaultClient}
 	registryFactory := processRegistryFactory{store: authStore, docker: docker, host: host, namespace: namespace, debug: debug, identity: store.Path}
-	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Env: dependencies.Environment{LookupFunc: os.LookupEnv}, Config: processConfig{}, Paths: processPaths{data: resolver.Repository.Root}, HTTP: dependencies.HTTPClient{DoFunc: http.DefaultClient.Do}, Credentials: docker, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{resolver: resolver}, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(u) }}, TTY: processTTY{}})
+	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Env: dependencies.Environment{LookupFunc: os.LookupEnv}, Config: processConfig{}, Paths: processPaths{data: resolver.Repository.Root, config: configDir}, HTTP: dependencies.HTTPClient{DoFunc: http.DefaultClient.Do}, Credentials: docker, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{resolver: resolver}, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(u) }}, TTY: processTTY{}})
 }
 
 func envDefault(key, fallback string) string {
