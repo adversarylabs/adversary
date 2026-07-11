@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
 
@@ -35,11 +36,14 @@ type RunOptions struct {
 const maxRunOutputBytes int64 = 16 << 20
 
 type Runner struct {
-	Stdout    io.Writer
-	Stderr    io.Writer
-	Git       GitDiffer
-	Executor  ContainerExecutor
-	MkdirTemp func(dir, pattern string) (string, error)
+	Stdout                  io.Writer
+	Stderr                  io.Writer
+	Git                     GitDiffer
+	Executor                ContainerExecutor
+	MkdirTemp               func(dir, pattern string) (string, error)
+	Repository              *repository.Repository
+	Resolver                *Resolver
+	RequireInjectedResolver bool
 }
 
 func (r Runner) Run(ctx context.Context, opts RunOptions) error {
@@ -71,12 +75,37 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	if err != nil {
 		return err
 	}
-	resolved, err := ResolveReference(opts.AdversaryRef)
+	var resolved ResolvedAdversary
+	if r.Resolver != nil {
+		resolved, err = ResolveReferenceWithResolver(opts.AdversaryRef, *r.Resolver)
+	} else if r.RequireInjectedResolver {
+		return fmt.Errorf("injected resolver is required")
+	} else {
+		resolved, err = ResolveReference(opts.AdversaryRef)
+	}
 	if err != nil {
 		return err
 	}
 	if !resolved.LocalDir {
 		return fmt.Errorf("adversary %q is not installed locally; run `adversary pull %s` first", opts.AdversaryRef, opts.AdversaryRef)
+	}
+	if resolved.StoreBacked {
+		repo := r.Repository
+		if repo == nil {
+			resolver, resolverErr := DefaultResolver()
+			if resolverErr != nil {
+				return resolverErr
+			}
+			repo = &resolver.Repository
+		}
+		lease, leaseErr := repo.LeaseMaterialized(resolved.StoreRecord)
+		if leaseErr != nil {
+			return leaseErr
+		}
+		defer lease.Close()
+		resolved.ExecutionPath = lease.Path
+		resolved.BuildContext = lease.Path
+		resolved.StorePath = lease.Path
 	}
 	if r.Executor == nil {
 		if err := validateHostExecution(resolved, explicitLocalPath, opts); err != nil {
@@ -352,7 +381,15 @@ func (r Runner) Inspect(opts RunOptions) error {
 		stdout = io.Discard
 	}
 
-	resolved, err := ResolveReference(opts.AdversaryRef)
+	var resolved ResolvedAdversary
+	var err error
+	if r.Resolver != nil {
+		resolved, err = ResolveReferenceWithResolver(opts.AdversaryRef, *r.Resolver)
+	} else if r.RequireInjectedResolver {
+		return fmt.Errorf("injected resolver is required")
+	} else {
+		resolved, err = ResolveReference(opts.AdversaryRef)
+	}
 	if err != nil {
 		return err
 	}

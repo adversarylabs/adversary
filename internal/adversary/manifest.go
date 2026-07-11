@@ -26,6 +26,12 @@ func parseManifest(data []byte) (Manifest, error) {
 }
 
 func ResolveReference(ref string) (ResolvedAdversary, error) {
+	return resolveReference(ref, nil)
+}
+func ResolveReferenceWithResolver(ref string, resolver Resolver) (ResolvedAdversary, error) {
+	return resolveReference(ref, &resolver)
+}
+func resolveReference(ref string, resolver *Resolver) (ResolvedAdversary, error) {
 	manifestPath := filepath.Join(ref, "adversary.yaml")
 	if info, err := os.Stat(manifestPath); err == nil && !info.IsDir() {
 		buildContext, err := filepath.Abs(ref)
@@ -54,16 +60,20 @@ func ResolveReference(ref string) (ResolvedAdversary, error) {
 		}
 		return resolved, nil
 	}
-	resolver, resolverErr := DefaultResolver()
-	if resolverErr != nil {
-		return ResolvedAdversary{}, resolverErr
+	if resolver == nil {
+		defaultResolver, err := DefaultResolver()
+		if err != nil {
+			return ResolvedAdversary{}, err
+		}
+		resolver = &defaultResolver
 	}
 	if resolution, resolveErr := resolver.Resolve(ref); resolveErr == nil && !resolution.Local {
-		resolved, err := ResolveReference(resolution.Path)
+		resolved, err := resolveReference(resolution.Path, resolver)
 		if err != nil {
 			return ResolvedAdversary{}, err
 		}
 		resolved.StoreBacked = true
+		resolved.StoreRecord = resolution.Record
 		resolved.StorePath = resolution.Path
 		resolved.ExecutionPath = resolution.Path
 		if resolved.RuntimeName == "node" {
@@ -129,6 +139,7 @@ type ResolvedAdversary struct {
 	LocalDir       bool
 	BuildContext   string
 	StoreBacked    bool
+	StoreRecord    repository.Record
 	StorePath      string
 	ExecutionPath  string
 }

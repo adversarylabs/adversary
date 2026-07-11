@@ -70,6 +70,16 @@ func (fakeRepo) ApplyGC(repository.GCPlan, bool) (repository.GCReport, error) {
 	return repository.GCReport{}, nil
 }
 func (fakeRepo) CheckAll() (repository.CheckReport, error) { return repository.CheckReport{}, nil }
+func (fakeRepo) RepairAll(map[string][]byte) (repository.RepairReport, error) {
+	return repository.RepairReport{}, nil
+}
+func (fakeRepo) DeleteRef(string, string) error { return nil }
+func (fakeRepo) MigrationStatus(string) (repository.MigrationStatus, error) {
+	return repository.MigrationStatus{}, nil
+}
+func (fakeRepo) LeaseMaterialized(repository.Record) (*repository.MaterializationLease, error) {
+	return nil, nil
+}
 
 type fakeResolver struct{}
 

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
+	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/initproject"
 	"github.com/adversarylabs/adversary/internal/version"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
@@ -32,7 +33,11 @@ import (
 )
 
 func Execute() error {
-	root := NewRootCommand(os.Stdout, os.Stderr)
+	app, err := newProcessApp(os.Stdin, os.Stdout, os.Stderr)
+	if err != nil {
+		return err
+	}
+	root := NewRootCommandWithApp(app)
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return err
@@ -41,6 +46,40 @@ func Execute() error {
 }
 
 func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
+	return newRootCommand(nil, stdout, stderr)
+}
+func NewRootCommandWithApp(app *application.App) *cobra.Command {
+	deps := app.Dependencies()
+	root := newRootCommand(app, deps.Stdout, deps.Stderr)
+	if err := validateAppRepositoryBinding(app); err != nil {
+		root.PersistentPreRunE = func(*cobra.Command, []string) error { return err }
+	}
+	return root
+}
+func validateAppRepositoryBinding(app *application.App) error {
+	deps := app.Dependencies()
+	provider, ok := deps.Resolver.(interface {
+		InternalResolver() internaladversary.Resolver
+		RepositoryIdentity() string
+	})
+	if !ok {
+		return &application.Error{Operation: "compose", Kind: "invalid-dependency", Resource: "resolver", Err: fmt.Errorf("resolver is not bound to an internal repository")}
+	}
+	identity := ""
+	switch repo := deps.Repository.(type) {
+	case repository.Repository:
+		identity = repo.RootPath()
+	case *repository.Repository:
+		identity = repo.RootPath()
+	case interface{ RootPath() string }:
+		identity = repo.RootPath()
+	}
+	if identity == "" || provider.RepositoryIdentity() != identity {
+		return &application.Error{Operation: "compose", Kind: "invalid-dependency", Resource: "resolver/repository", Err: fmt.Errorf("resolver repository identity mismatch")}
+	}
+	return nil
+}
+func newRootCommand(app *application.App, stdout, stderr io.Writer) *cobra.Command {
 	var apiURL string
 	var profile string
 	cmd := &cobra.Command{
@@ -57,8 +96,8 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&apiURL, "api-url", adversarylabs.ResolveAPIURL(""), "Adversary Labs API endpoint (or ADVERSARY_API_URL)")
 	cmd.PersistentFlags().StringVar(&profile, "profile", "default", "credential profile")
 
-	cmd.AddCommand(newRunCommand(stdout, stderr))
-	cmd.AddCommand(newInspectCommand(stdout, stderr))
+	cmd.AddCommand(newRunCommand(app, stdout, stderr))
+	cmd.AddCommand(newInspectCommand(app, stdout, stderr))
 	cmd.AddCommand(newInitCommand(stdout, stderr))
 	cmd.AddCommand(newPackCommand(stdout, stderr))
 	cmd.AddCommand(newLSCommand(stdout, "ls"))
@@ -70,6 +109,9 @@ func NewRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	cmd.AddCommand(newPullCommand(stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newSearchCommand(stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newWhoamiCommand(stdout, stderr, &apiURL, &profile))
+	if app != nil {
+		cmd.AddCommand(newStoreCommand(app))
+	}
 	return cmd
 }
 
@@ -120,7 +162,7 @@ type packOptions struct {
 	name    string
 }
 
-func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
+func newRunCommand(app *application.App, stdout, stderr io.Writer) *cobra.Command {
 	opts := &runOptions{}
 
 	cmd := &cobra.Command{
@@ -153,6 +195,21 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 			runner := internaladversary.Runner{
 				Stdout: stdout,
 				Stderr: stderr,
+			}
+			if app != nil {
+				runner.RequireInjectedResolver = true
+				switch repo := app.Dependencies().Repository.(type) {
+				case repository.Repository:
+					runner.Repository = &repo
+				case *repository.Repository:
+					runner.Repository = repo
+				}
+				if provider, ok := app.Dependencies().Resolver.(interface {
+					InternalResolver() internaladversary.Resolver
+				}); ok {
+					resolved := provider.InternalResolver()
+					runner.Resolver = &resolved
+				}
 			}
 
 			err := runner.Run(cmd.Context(), internaladversary.RunOptions{
@@ -197,7 +254,7 @@ func newRunCommand(stdout, stderr io.Writer) *cobra.Command {
 	return cmd
 }
 
-func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
+func newInspectCommand(app *application.App, stdout, stderr io.Writer) *cobra.Command {
 	opts := &runOptions{}
 	inspectOpts := &inspectOptions{}
 
@@ -211,7 +268,16 @@ func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
   adversary inspect sha256:abc123`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resolver, err := internaladversary.DefaultResolver()
+			var resolver internaladversary.Resolver
+			var err error
+			if app != nil {
+				provider := app.Dependencies().Resolver.(interface {
+					InternalResolver() internaladversary.Resolver
+				})
+				resolver = provider.InternalResolver()
+			} else {
+				resolver, err = internaladversary.DefaultResolver()
+			}
 			if err != nil {
 				return err
 			}
@@ -236,6 +302,15 @@ func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
 			runner := internaladversary.Runner{
 				Stdout: stdout,
 				Stderr: stderr,
+			}
+			if app != nil {
+				runner.RequireInjectedResolver = true
+				if provider, ok := app.Dependencies().Resolver.(interface {
+					InternalResolver() internaladversary.Resolver
+				}); ok {
+					resolved := provider.InternalResolver()
+					runner.Resolver = &resolved
+				}
 			}
 			return runner.Inspect(internaladversary.RunOptions{
 				AdversaryRef: args[0],
@@ -371,6 +446,79 @@ func newVersionCommand(stdout io.Writer) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newStoreCommand(app *application.App) *cobra.Command {
+	deps := app.Dependencies()
+	root := &cobra.Command{Use: "store", Short: "Inspect and maintain the artifact repository"}
+	checkJSON := false
+	check := &cobra.Command{Use: "check", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		report, err := deps.Repository.CheckAll()
+		if err != nil {
+			return &application.Error{Operation: "store check", Kind: "repository", Err: err}
+		}
+		if checkJSON {
+			return json.NewEncoder(deps.Stdout).Encode(report)
+		}
+		fmt.Fprintf(deps.Stdout, "Healthy: %t\nRecords: %d\nReferences: %d\n", report.Healthy, len(report.Records), len(report.References))
+		if !report.Healthy {
+			return &application.Error{Operation: "store check", Kind: "corrupt", Err: fmt.Errorf("repository check failed")}
+		}
+		return nil
+	}}
+	check.Flags().BoolVar(&checkJSON, "json", false, "emit JSON")
+	dry, apply, yes, gcJSON := false, false, false, false
+	gc := &cobra.Command{Use: "gc", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		plan, err := deps.Repository.PlanGC()
+		if err != nil {
+			return &application.Error{Operation: "store gc plan", Kind: "repository", Err: err}
+		}
+		if apply && !yes {
+			return &application.Error{Operation: "store gc apply", Kind: "confirmation", Err: fmt.Errorf("--apply requires --yes")}
+		}
+		if !apply {
+			dry = true
+		}
+		report, err := deps.Repository.ApplyGC(plan, dry)
+		if err != nil {
+			return &application.Error{Operation: "store gc apply", Kind: "repository", Resource: plan.ID, Err: err}
+		}
+		if gcJSON {
+			return json.NewEncoder(deps.Stdout).Encode(report)
+		}
+		fmt.Fprintf(deps.Stdout, "Plan: %s\nDry run: %t\nPlanned records: %d\nDeleted records: %d\n", report.PlanID, report.DryRun, len(report.PlannedRecords), len(report.DeletedRecords))
+		return nil
+	}}
+	gc.Flags().BoolVar(&dry, "dry-run", false, "plan without deletion")
+	gc.Flags().BoolVar(&apply, "apply", false, "apply the current plan")
+	gc.Flags().BoolVar(&yes, "yes", false, "confirm deletion")
+	gc.Flags().BoolVar(&gcJSON, "json", false, "emit JSON")
+	refYes := false
+	refDelete := &cobra.Command{Use: "ref-delete <reference> <expected-digest>", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		if !refYes {
+			return &application.Error{Operation: "store ref-delete", Kind: "confirmation", Resource: args[0], Err: fmt.Errorf("ref-delete requires --yes")}
+		}
+		if err := deps.Repository.DeleteRef(args[0], args[1]); err != nil {
+			return &application.Error{Operation: "store ref-delete", Kind: "repository", Resource: args[0], Err: err}
+		}
+		return nil
+	}}
+	refDelete.Flags().BoolVar(&refYes, "yes", false, "confirm reference deletion")
+	statusJSON := false
+	status := &cobra.Command{Use: "migration-status <name>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		got, err := deps.Repository.MigrationStatus(args[0])
+		if err != nil {
+			return &application.Error{Operation: "store migration-status", Kind: "repository", Resource: args[0], Err: err}
+		}
+		if statusJSON {
+			return json.NewEncoder(deps.Stdout).Encode(got)
+		}
+		fmt.Fprintf(deps.Stdout, "Migration: %s\nImported: %d\nRemaining: %d\nComplete: %t\n", got.Name, got.Checkpoint.Imported, got.Remaining, got.Complete)
+		return nil
+	}}
+	status.Flags().BoolVar(&statusJSON, "json", false, "emit JSON")
+	root.AddCommand(check, gc, refDelete, status)
+	return root
 }
 
 func newLoginCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
