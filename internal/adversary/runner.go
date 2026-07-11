@@ -3,6 +3,7 @@ package adversary
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -31,9 +32,30 @@ type RunOptions struct {
 	Shell                    bool
 	AllFiles                 bool
 	AllowUnsafeHostExecution bool
+	Build                    bool
+	RunTimeout               time.Duration
+	BuildTimeout             time.Duration
 }
 
 const maxRunOutputBytes int64 = 16 << 20
+
+type FindingsError struct{ Count int }
+
+func (e *FindingsError) Error() string {
+	return fmt.Sprintf("adversary reported %d finding(s)", e.Count)
+}
+
+type ProtocolError struct{ Err error }
+
+func (e *ProtocolError) Error() string {
+	return fmt.Sprintf("adversary output protocol failure: %v", e.Err)
+}
+func (e *ProtocolError) Unwrap() error { return e.Err }
+
+type ExecutionError struct{ Err error }
+
+func (e *ExecutionError) Error() string { return fmt.Sprintf("adversary execution failed: %v", e.Err) }
+func (e *ExecutionError) Unwrap() error { return e.Err }
 
 type Runner struct {
 	Stdout                  io.Writer
@@ -41,6 +63,7 @@ type Runner struct {
 	Git                     GitDiffer
 	Executor                ContainerExecutor
 	MkdirTemp               func(dir, pattern string) (string, error)
+	RemoveAll               func(string) error
 	Repository              *repository.Repository
 	Resolver                *Resolver
 	RequireInjectedResolver bool
@@ -166,19 +189,31 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	started := time.Now()
 	var buildDuration time.Duration
-	if resolved.LocalDir && !resolved.StoreBacked {
+	if resolved.LocalDir && !resolved.StoreBacked && opts.Build {
 		buildStarted := time.Now()
-		if err := pack.BuildProject(ctx, pack.BuildOptions{
+		buildCtx := ctx
+		cancelBuild := func() {}
+		if opts.BuildTimeout > 0 {
+			buildCtx, cancelBuild = context.WithTimeout(ctx, opts.BuildTimeout)
+		}
+		if err := pack.BuildProject(buildCtx, pack.BuildOptions{
 			Dir:     resolved.BuildContext,
 			Builder: opts.Builder,
 			Stdout:  stderr,
 			Stderr:  stderr,
 			Strict:  true,
 		}); err != nil {
+			cancelBuild()
 			return err
 		}
+		cancelBuild()
 		buildDuration = time.Since(buildStarted)
+	}
+	if resolved.LocalDir && !resolved.StoreBacked {
 		if err := validateLocalCommandFiles(resolved.Command); err != nil {
+			if !opts.Build {
+				return fmt.Errorf("local build output is unavailable or stale; rerun with --build: %w", err)
+			}
 			return err
 		}
 	}
@@ -188,7 +223,15 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	if !opts.KeepTemp {
-		defer os.RemoveAll(runDir)
+		removeAll := r.RemoveAll
+		if removeAll == nil {
+			removeAll = os.RemoveAll
+		}
+		defer func() {
+			if err := removeAll(runDir); err != nil && opts.Verbose {
+				fmt.Fprintf(stderr, "warning: remove temporary run directory %s: %v\n", runDir, err)
+			}
+		}()
 	}
 	config.RunDir = runDir
 
@@ -216,14 +259,27 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		PrintVerboseLaunch(stderr, config)
 	}
 	runStarted := time.Now()
-	result, err := executor.Run(ctx, config.ContainerSpec())
+	runCtx := ctx
+	cancelRun := func() {}
+	if opts.RunTimeout > 0 {
+		runCtx, cancelRun = context.WithTimeout(ctx, opts.RunTimeout)
+	}
+	result, err := executor.Run(runCtx, config.ContainerSpec())
+	cancelRun()
 	scanDuration := time.Since(runStarted)
 	totalDuration := time.Since(started)
 	if opts.Verbose {
 		printExecutionSummary(stderr, result, buildDuration, scanDuration, totalDuration)
 	}
 	if err != nil {
-		return err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		var child *ChildExitError
+		if errors.As(err, &child) {
+			return err
+		}
+		return &ExecutionError{Err: err}
 	}
 
 	if opts.Shell {
@@ -240,7 +296,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	envelope, err := review.DecodeRunEnvelope(outputData)
 	if err != nil {
-		return fmt.Errorf("adversary output protocol failure: %w", err)
+		return &ProtocolError{Err: err}
 	}
 
 	if opts.Format == "json" {
@@ -257,6 +313,9 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	if opts.KeepTemp {
 		fmt.Fprintf(stderr, "Temporary run directory: %s\n", runDir)
+	}
+	if len(envelope.Result.Findings) > 0 {
+		return &FindingsError{Count: len(envelope.Result.Findings)}
 	}
 	return nil
 }
@@ -339,18 +398,18 @@ func validateHostExecution(resolved ResolvedAdversary, explicitLocalPath bool, o
 func readBoundedRunOutput(path string) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("adversary output protocol failure: %w", err)
+		return nil, &ProtocolError{Err: err}
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxRunOutputBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("adversary output protocol failure: %w", err)
+		return nil, &ProtocolError{Err: err}
 	}
 	if len(data) == 0 {
-		return nil, fmt.Errorf("adversary output protocol failure: output is empty")
+		return nil, &ProtocolError{Err: fmt.Errorf("output is empty")}
 	}
 	if int64(len(data)) > maxRunOutputBytes {
-		return nil, fmt.Errorf("adversary output protocol failure: output exceeds %d bytes", maxRunOutputBytes)
+		return nil, &ProtocolError{Err: fmt.Errorf("output exceeds %d bytes", maxRunOutputBytes)}
 	}
 	return data, nil
 }
@@ -366,13 +425,6 @@ func validateLocalCommandFiles(command []string) error {
 		}
 	}
 	return nil
-}
-
-func displayRunName(ref string, resolved ResolvedAdversary) string {
-	if resolved.LocalDir && ref != "" {
-		return ref
-	}
-	return resolved.Image
 }
 
 func (r Runner) Inspect(opts RunOptions) error {

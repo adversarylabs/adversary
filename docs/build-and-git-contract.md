@@ -81,7 +81,7 @@ platform-specific exchange APIs.
 Compatibility decision: local `adversary run` still invokes `BuildProject`
 automatically today. Removing that behavior in this package would break the
 existing local-development command without giving users an explicit replacement
-command. The runner lifecycle PR assigned to CLI-014/CLI-017 will add that
+command. The lifecycle contract in `process-lifecycle-and-exit-contract.md` adds that
 replacement and migrate `run` to immutable output. Until then, this PR makes the
 automatic build isolated and transactional rather than silently changing its
 CLI contract. Rollback of that later migration is to restore the automatic call;

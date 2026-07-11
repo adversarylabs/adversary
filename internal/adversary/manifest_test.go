@@ -3,6 +3,7 @@ package adversary
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -326,6 +327,7 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 	}.Run(context.Background(), RunOptions{
 		AdversaryRef: adversaryDir,
 		RepoPath:     t.TempDir(),
+		Build:        true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -529,8 +531,9 @@ writeFileSync(process.env.ADVERSARY_OUTPUT, JSON.stringify(output, null, 2));
 		AdversaryRef: adversaryDir,
 		RepoPath:     repoDir,
 	})
-	if err != nil {
-		t.Fatal(err)
+	var findings *FindingsError
+	if !errors.As(err, &findings) {
+		t.Fatalf("expected findings status, got %v", err)
 	}
 	got := stdout.String()
 	for _, want := range []string{
@@ -603,8 +606,9 @@ writeFileSync(process.env.ADVERSARY_OUTPUT, JSON.stringify({
 		RepoPath:     t.TempDir(),
 		Format:       "json",
 	})
-	if err != nil {
-		t.Fatal(err)
+	var findings *FindingsError
+	if !errors.As(err, &findings) {
+		t.Fatalf("expected findings status, got %v", err)
 	}
 	var got map[string]any
 	if err := json.Unmarshal([]byte(stdout.String()), &got); err != nil {

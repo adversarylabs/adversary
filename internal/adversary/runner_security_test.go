@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/adversarylabs/adversary/pkg/review"
 )
@@ -16,6 +18,13 @@ import (
 type outputExecutor struct {
 	output []byte
 	log    string
+}
+
+type cancelExecutor struct{}
+
+func (cancelExecutor) Run(ctx context.Context, _ ContainerSpec) (ContainerResult, error) {
+	<-ctx.Done()
+	return ContainerResult{ExitCode: -1, Kind: "Process"}, ctx.Err()
 }
 
 func (e outputExecutor) Run(_ context.Context, spec ContainerSpec) (ContainerResult, error) {
@@ -293,5 +302,61 @@ func TestHostChildStdoutIsRoutedToStderr(t *testing.T) {
 	var envelope map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
 		t.Fatalf("stdout is not pure JSON: %v\n%s", err, stdout.String())
+	}
+}
+
+func TestRunCleansTemporaryDirectoryAfterExecutorReturns(t *testing.T) {
+	project := writeRunnerProject(t, "")
+	parent := t.TempDir()
+	runDir := filepath.Join(parent, "run")
+	err := Runner{
+		Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: outputExecutor{output: minimalEnvelope()},
+		MkdirTemp: func(string, string) (string, error) {
+			if err := os.Mkdir(runDir, 0700); err != nil {
+				return "", err
+			}
+			return runDir, nil
+		},
+	}.Run(context.Background(), RunOptions{AdversaryRef: project, RepoPath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(runDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary directory remains: %v", err)
+	}
+}
+
+func TestRunReportsCleanupFailureOnlyInVerboseDiagnostics(t *testing.T) {
+	project := writeRunnerProject(t, "")
+	var stderr bytes.Buffer
+	err := Runner{
+		Stdout: &bytes.Buffer{}, Stderr: &stderr, Executor: outputExecutor{output: minimalEnvelope()},
+		RemoveAll: func(string) error { return errors.New("injected cleanup failure") },
+	}.Run(context.Background(), RunOptions{AdversaryRef: project, RepoPath: t.TempDir(), Verbose: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "injected cleanup failure") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunTimeoutCleansTemporaryDirectoryAfterChildShutdown(t *testing.T) {
+	project := writeRunnerProject(t, "")
+	runDir := filepath.Join(t.TempDir(), "run")
+	err := Runner{
+		Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: cancelExecutor{},
+		MkdirTemp: func(string, string) (string, error) {
+			if err := os.Mkdir(runDir, 0700); err != nil {
+				return "", err
+			}
+			return runDir, nil
+		},
+	}.Run(context.Background(), RunOptions{AdversaryRef: project, RepoPath: t.TempDir(), RunTimeout: 10 * time.Millisecond})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := os.Stat(runDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary directory remains: %v", err)
 	}
 }
