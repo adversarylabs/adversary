@@ -48,6 +48,10 @@ type Repository interface {
 	PlanGC() (repository.GCPlan, error)
 	ApplyGC(repository.GCPlan, bool) (repository.GCReport, error)
 	CheckAll() (repository.CheckReport, error)
+	RepairAll(map[string][]byte) (repository.RepairReport, error)
+	DeleteRef(string, string) error
+	MigrationStatus(string) (repository.MigrationStatus, error)
+	LeaseMaterialized(repository.Record) (*repository.MaterializationLease, error)
 }
 type Resolution struct {
 	Reference, Digest, Path string
