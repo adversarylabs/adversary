@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
+	semver "github.com/Masterminds/semver/v3"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -203,8 +205,13 @@ func (m Manifest) Validate() error {
 	if m.Runtime.Image == "" && m.Runtime.Version == "" {
 		return errors.New("manifest runtime.version is required for named runtimes")
 	}
-	if m.Runtime.Version != "" && !normalizedNonEmpty(m.Runtime.Version) {
-		return errors.New("manifest runtime.version must be non-empty and normalized")
+	if m.Runtime.Version != "" {
+		if !normalizedNonEmpty(m.Runtime.Version) {
+			return errors.New("manifest runtime.version must be non-empty and normalized")
+		}
+		if _, err := RuntimeConstraint(m.Runtime.Version); err != nil {
+			return fmt.Errorf("manifest runtime.version %q is not a semantic-version constraint: %w", m.Runtime.Version, err)
+		}
 	}
 	if len(m.Runtime.Command) == 0 {
 		return errors.New("manifest runtime.command must not be empty")
@@ -214,16 +221,31 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("manifest runtime.command[%d] must be non-empty", i)
 		}
 	}
+	if m.Runtime.Name == "node" {
+		if err := validateNodeEntrypoint(m.Runtime.Command[0]); err != nil {
+			return fmt.Errorf("manifest runtime.command[0]: %w", err)
+		}
+	}
 	for i, glob := range m.Triggers.FilesChanged {
 		if !normalizedNonEmpty(glob) {
 			return fmt.Errorf("manifest triggers.files_changed[%d] must be non-empty", i)
 		}
 	}
-	for kind, paths := range map[string][]string{"read": m.Permissions.Filesystem.Read, "write": m.Permissions.Filesystem.Write} {
+	permissionOwners := map[string]string{}
+	for _, group := range []struct {
+		kind  string
+		paths []string
+	}{{"read", m.Permissions.Filesystem.Read}, {"write", m.Permissions.Filesystem.Write}} {
+		kind, paths := group.kind, group.paths
 		for i, path := range paths {
-			if !normalizedNonEmpty(path) {
-				return fmt.Errorf("manifest permissions.filesystem.%s[%d] must be a non-empty path", kind, i)
+			if err := validatePermissionPath(path); err != nil {
+				return fmt.Errorf("manifest permissions.filesystem.%s[%d]: %w", kind, i, err)
 			}
+			clean := filepath.ToSlash(filepath.Clean(path))
+			if owner, exists := permissionOwners[clean]; exists {
+				return fmt.Errorf("manifest permissions.filesystem.%s[%d] duplicates/conflicts with %s permission %q", kind, i, owner, clean)
+			}
+			permissionOwners[clean] = kind
 		}
 	}
 	for i, env := range m.Permissions.Env {
@@ -233,6 +255,91 @@ func (m Manifest) Validate() error {
 	}
 	if m.Findings.Format != "" && m.Findings.Format != "adversary.review.v1" {
 		return fmt.Errorf("manifest findings.format %q is unsupported", m.Findings.Format)
+	}
+	return nil
+}
+
+// RuntimeConstraint parses the manifest's maintained semantic-version constraint
+// syntax. A bare major/minor is intentionally shorthand for that release line.
+func RuntimeConstraint(requirement string) (*semver.Constraints, error) {
+	v := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(requirement), "node@"), "v")
+	parts := strings.Split(v, ".")
+	if len(parts) <= 2 && strings.IndexAny(v, "<>=~^*xX ,|") < 0 {
+		for _, part := range parts {
+			if part == "" || strings.IndexFunc(part, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+				return nil, fmt.Errorf("invalid bare version %q", requirement)
+			}
+		}
+		if len(parts) == 1 {
+			n, err := strconv.ParseUint(parts[0], 10, 64)
+			if err != nil || n == ^uint64(0) {
+				return nil, fmt.Errorf("invalid bare version %q", requirement)
+			}
+			v = fmt.Sprintf(">=%s.0.0, <%d.0.0", v, n+1)
+		} else {
+			n, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil || n == ^uint64(0) {
+				return nil, fmt.Errorf("invalid bare version %q", requirement)
+			}
+			v = fmt.Sprintf(">=%s.0, <%s.%d.0", v, parts[0], n+1)
+		}
+	}
+	return semver.NewConstraint(v)
+}
+
+func validatePermissionPath(path string) error {
+	if !normalizedNonEmpty(path) {
+		return errors.New("must be a non-empty normalized path")
+	}
+	if filepath.IsAbs(path) || filepath.VolumeName(path) != "" || strings.HasPrefix(path, "/") || strings.HasPrefix(path, `\`) || strings.Contains(path, ":") {
+		return errors.New("must be relative to the project root")
+	}
+	if strings.Contains(path, `\`) {
+		return errors.New("must use portable forward-slash separators")
+	}
+	clean := filepath.Clean(path)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return errors.New("must remain within the project root")
+	}
+	if clean != path && filepath.ToSlash(clean) != path {
+		return errors.New("must be lexically normalized")
+	}
+	return nil
+}
+
+func validateNodeEntrypoint(entrypoint string) error {
+	if filepath.IsAbs(entrypoint) || filepath.VolumeName(entrypoint) != "" || strings.HasPrefix(entrypoint, "/") || strings.HasPrefix(entrypoint, `\`) || (len(entrypoint) >= 2 && entrypoint[1] == ':') {
+		return errors.New("Node entry point must be relative to the project root")
+	}
+	if strings.Contains(entrypoint, `\`) {
+		return errors.New("Node entry point must use portable forward-slash separators")
+	}
+	clean := filepath.Clean(entrypoint)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return errors.New("Node entry point must remain within the project root")
+	}
+	if clean != entrypoint {
+		return errors.New("Node entry point must be lexically normalized")
+	}
+	if !(strings.HasSuffix(entrypoint, ".js") || strings.HasSuffix(entrypoint, ".mjs") || strings.HasSuffix(entrypoint, ".cjs")) {
+		return errors.New("must be a JavaScript entry point for runtime.name node")
+	}
+	return nil
+}
+
+// ValidateProject checks runtime declarations against the project contract
+// without guessing a runtime from files present in the directory.
+func (m Manifest) ValidateProject(root string) error {
+	if err := m.Validate(); err != nil {
+		return err
+	}
+	if m.Runtime.Image != "" {
+		return nil
+	}
+	if m.Runtime.Name == "node" {
+		if _, err := os.Stat(filepath.Join(root, "package.json")); err != nil {
+			return fmt.Errorf("node runtime requires package.json: %w", err)
+		}
 	}
 	return nil
 }

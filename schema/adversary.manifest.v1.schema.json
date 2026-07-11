@@ -2,6 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://adversary.dev/schemas/adversary.manifest.v1.schema.json",
   "title": "Adversary Manifest v1",
+  "x-adversary-semanticRules": [
+    "The canonical Go manifest parser validates runtime.version with Masterminds semver constraints.",
+    "The canonical Go manifest parser rejects duplicate or conflicting paths across filesystem read/write arrays.",
+    "The canonical Go manifest parser requires Node entry points to be portable relative paths contained by the project root without requiring build output to exist.",
+    "The canonical Go manifest parser validates declared runtime/project consistency."
+  ],
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -68,7 +74,7 @@
         },
         "version": {
           "type": "string",
-          "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
+          "pattern": "^(?:node@|v)?(?:[0-9]+(?:\\.[0-9]+){0,2}|[<>=~^*xX0-9., |+\\-]+)$"
         },
         "command": {
           "type": "array",
@@ -90,16 +96,18 @@
           "properties": {
             "read": {
               "type": "array",
+              "uniqueItems": true,
               "items": {
                 "type": "string",
-                "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
+                "pattern": "^(?:\\.|[^./:\\\\\\x00\\s](?:[^/:\\\\\\x00]*[^/:\\\\\\x00\\s])?|\\.[^./:\\\\\\x00\\s](?:[^/:\\\\\\x00]*[^/:\\\\\\x00\\s])?)(?:/(?:[^./:\\\\\\x00\\s](?:[^/:\\\\\\x00]*[^/:\\\\\\x00\\s])?|\\.[^./:\\\\\\x00\\s](?:[^/:\\\\\\x00]*[^/:\\\\\\x00\\s])?))*$"
               }
             },
             "write": {
               "type": "array",
+              "uniqueItems": true,
               "items": {
                 "type": "string",
-                "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
+                "pattern": "^(?:\\.|[^./:\\\\\\x00\\s](?:[^/:\\\\\\x00]*[^/:\\\\\\x00\\s])?|\\.[^./:\\\\\\x00\\s](?:[^/:\\\\\\x00]*[^/:\\\\\\x00\\s])?)(?:/(?:[^./:\\\\\\x00\\s](?:[^/:\\\\\\x00]*[^/:\\\\\\x00\\s])?|\\.[^./:\\\\\\x00\\s](?:[^/:\\\\\\x00]*[^/:\\\\\\x00\\s])?))*$"
               }
             }
           }

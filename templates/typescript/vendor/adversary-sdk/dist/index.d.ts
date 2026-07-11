@@ -3,6 +3,11 @@ export declare const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
 export declare const DEFAULT_REPO_PATH = "/workspace";
 export declare const INPUT_SCHEMA_VERSION = "adversary.input.v1";
 export declare const REVIEW_SCHEMA_VERSION = "adversary.review.v1";
+export declare const ERROR_PROTOCOL_VERSION = 1;
+export interface ErrorEnvelope {
+    protocolVersion: typeof ERROR_PROTOCOL_VERSION;
+    error: { code: string; message: string; retryable: boolean; details: Record<string, unknown> };
+}
 export declare const Severity: {
     readonly Info: "info";
     readonly Low: "low";
@@ -165,4 +170,6 @@ export declare function parseInput(path?: string): Promise<RuntimeInput>;
 export declare function writeOutput(output: Output | AdversaryRunEnvelope, path?: string): Promise<void>;
 export declare function sortFindings(findings: SerializedFinding[]): SerializedFinding[];
 export declare function validateReviewEnvelope(value: unknown): asserts value is AdversaryRunEnvelope;
+export declare function validateErrorEnvelope(value: unknown): asserts value is ErrorEnvelope;
+export declare function encodeErrorEnvelope(value: ErrorEnvelope): string;
 //# sourceMappingURL=index.d.ts.map

@@ -16,12 +16,12 @@ are the maintained contract after merge.
 | CLI-008 | PRs #10 and #21; `docs/network-oci-policy.md`, production API-client, fallback-tag, and transport tests |
 | CLI-009 | PRs #10 and #21; OCI fallback integrity, auth/redirect/debug-redaction tests |
 | CLI-010 | PR #4; `docs/auth-credential-storage.md` and locked-store tests |
-| CLI-011 | PR #3; canonical manifest parser/schema parity tests |
+| CLI-011 | PR #3 and contracts-closure PR; canonical `validate` surface, semantic runtime/path/project checks, and malformed YAML policy corpus |
 | CLI-012 | PRs #5, #6, #7, #8, #9, #11, and #12; staged repository migration and publication tests |
-| CLI-013 | PR #1; canonical protocol schemas and Go/TypeScript parity tests |
+| CLI-013 | PR #1 and contracts-closure PR; canonical input/review plus error schemas, Go/TypeScript validation, version rejection, and ordering parity tests |
 | CLI-014 | PR #16; lifecycle contracts and signal tests |
 | CLI-015 | PR #15; deterministic git/build decision and regression tests |
-| CLI-016 | PR #3; atomic init and manifest trust-boundary tests |
+| CLI-016 | PR #3 and contracts-closure PR; atomic init, deterministic TypeScript lockfile/`npm ci`, and injected render/write cleanup tests |
 | CLI-017 | PRs #17 and #18; `docs/cli-output-contract.md`, help goldens, DTO tests |
 | CLI-018 | PR #19; `docs/platform-runtime-support.md`, native CI matrix |
 | CLI-019 | PR #6; decompression/size/checksum limit tests |

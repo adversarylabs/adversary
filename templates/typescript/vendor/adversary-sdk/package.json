@@ -12,7 +12,8 @@
       "import": "./dist/index.js"
     },
     "./schemas/adversary.input.v1": "./schemas/adversary.input.v1.schema.json",
-    "./schemas/adversary.review.v1": "./schemas/adversary.review.v1.schema.json"
+    "./schemas/adversary.review.v1": "./schemas/adversary.review.v1.schema.json",
+    "./schemas/adversary.error.v1": "./schemas/adversary.error.v1.schema.json"
   },
   "files": ["dist", "schemas", "templates", "README.md"],
   "engines": {
@@ -27,7 +28,6 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^22.10.2",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "typescript": "^5.7.2"
   }
 }

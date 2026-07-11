@@ -209,3 +209,17 @@ func TestProtocolSchemasAreValidJSONAndSDKCopiesMatch(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalEnvelopePreservesSharedProducerOrder(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "fixtures", "adversary.review.v1.order.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := DecodeRunEnvelope(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded := EncodeEnvelope(envelope.Result); string(encoded) != strings.TrimSpace(string(data)) {
+		t.Fatalf("canonical encoding reordered shared fixture:\n%s", encoded)
+	}
+}
