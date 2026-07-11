@@ -105,6 +105,7 @@ runtime:
 }
 
 func TestResolveReferenceUnknownRemoteRefDoesNotBecomeExecutableImage(t *testing.T) {
+	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
 	resolved, err := ResolveReference("ghcr.io/adversarylabs/dockerfile:0.1.0")
 	if err != nil {
 		t.Fatal(err)

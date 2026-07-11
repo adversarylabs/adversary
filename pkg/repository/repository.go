@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -489,6 +490,9 @@ func (r Repository) Materialize(rec Record) (string, error) {
 		}
 	}
 	if err == nil {
+		err = prepareDerivedSDK(sr)
+	}
+	if err == nil {
 		err = archiveutil.PreparePublish(sr)
 	}
 	if err == nil {
@@ -506,6 +510,57 @@ func (r Repository) Materialize(rec Record) (string, error) {
 		return "", err
 	}
 	return dest, nil
+}
+
+func prepareDerivedSDK(root *os.Root) error {
+	src := "vendor/adversary-sdk"
+	info, err := root.Stat(src)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("vendored SDK is not a directory")
+	}
+	packageData, err := root.ReadFile(src + "/package.json")
+	if err != nil {
+		return fmt.Errorf("vendored SDK package metadata: %w", err)
+	}
+	var metadata struct{ Name, Version, Type, Main string }
+	if json.Unmarshal(packageData, &metadata) != nil || metadata.Name != "@adversary/sdk" || metadata.Version == "" || metadata.Type != "module" || metadata.Main != "./dist/index.js" {
+		return fmt.Errorf("vendored SDK package identity is invalid")
+	}
+	if info, err := root.Stat(src + "/dist/index.js"); err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("vendored SDK entrypoint is missing or invalid")
+	}
+	dst := "node_modules/@adversary/sdk"
+	if err := root.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+	return fs.WalkDir(root.FS(), src, func(path string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.ToSlash(filepath.Join(dst, rel))
+		if e.IsDir() {
+			return root.MkdirAll(target, 0755)
+		}
+		data, err := root.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0444)
+		if sourceInfo, infoErr := e.Info(); infoErr == nil && sourceInfo.Mode().Perm()&0111 != 0 {
+			mode = 0555
+		}
+		return root.WriteFile(target, data, mode)
+	})
 }
 
 func (r Repository) init() error {

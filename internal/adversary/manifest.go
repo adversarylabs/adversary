@@ -1,14 +1,13 @@
 package adversary
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 
-	adversarycache "github.com/adversarylabs/adversary/pkg/adversary"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
-	localstore "github.com/adversarylabs/adversary/pkg/store"
+	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
 type Manifest = canonical.Manifest
@@ -55,39 +54,28 @@ func ResolveReference(ref string) (ResolvedAdversary, error) {
 		}
 		return resolved, nil
 	}
-
-	if cache, err := adversarycache.DefaultCache(); err == nil {
-		if record, ok := cache.Resolve(ref); ok {
-			resolved, err := ResolveReference(record.Path)
-			if err != nil {
-				return ResolvedAdversary{}, err
-			}
-			if resolved.Name != record.Name || (record.Version != "" && resolved.Manifest.Version != record.Version) {
-				return ResolvedAdversary{}, fmt.Errorf("cached manifest identity does not match cache record")
-			}
-			return resolved, nil
-		}
+	resolver, resolverErr := DefaultResolver()
+	if resolverErr != nil {
+		return ResolvedAdversary{}, resolverErr
 	}
-
-	if store, err := localstore.Default(); err == nil {
-		if path, record, err := store.Materialize(ref); err == nil {
-			resolved, err := ResolveReference(path)
-			if err != nil {
-				return ResolvedAdversary{}, err
-			}
-			resolved.StoreBacked = true
-			resolved.StorePath = path
-			resolved.ExecutionPath = path
-			if record.Runtime == "typescript" {
-				resolved.Image = "adversary-local-typescript"
-				resolved.RuntimeName = "node"
-				resolved.RuntimeVersion = record.RuntimeVersion
-				resolved.Command = typeScriptHostCommand(path, resolved.RuntimeName, resolved.Command)
-			}
-			return resolved, nil
+	if resolution, resolveErr := resolver.Resolve(ref); resolveErr == nil && !resolution.Local {
+		resolved, err := ResolveReference(resolution.Path)
+		if err != nil {
+			return ResolvedAdversary{}, err
 		}
+		resolved.StoreBacked = true
+		resolved.StorePath = resolution.Path
+		resolved.ExecutionPath = resolution.Path
+		if resolved.RuntimeName == "node" {
+			resolved.Image = "adversary-local-typescript"
+			resolved.Command = typeScriptHostCommand(resolution.Path, resolved.RuntimeName, resolved.Command)
+		}
+		return resolved, nil
+	} else if errors.Is(resolveErr, repository.ErrAmbiguous) || errors.Is(resolveErr, ErrMigrationRequired) {
+		return ResolvedAdversary{}, resolveErr
+	} else if !errors.Is(resolveErr, ErrNotFound) {
+		return ResolvedAdversary{}, resolveErr
 	}
-
 	return ResolvedAdversary{
 		Name: ref,
 	}, nil
