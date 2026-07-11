@@ -25,7 +25,7 @@ are the maintained contract after merge.
 | CLI-017 | PRs #17 and #18; `docs/cli-output-contract.md`, help goldens, DTO tests |
 | CLI-018 | PR #19; `docs/platform-runtime-support.md`, native CI matrix |
 | CLI-019 | PR #6 plus streaming additive/migration/cleanup PRs; production pack, repository import/payload/repair, OCI upload, and OCI download/materialization use bounded repeatable sources with explicit leases/cleanup; the cleanup PR removes the legacy byte-slice compatibility APIs |
-| CLI-020 | PR #6; sealed publication and cross-process locking tests |
+| CLI-020 | PR #6 and pack-preflight PR; sealed publication plus a non-mutating `artifact pack --check`, deterministic file inventories, path-only secret-risk warnings, and traversal close-error tests. Rollback: remove the additive `--check` flag and inventory fields; repository/artifact formats are unchanged. |
 | CLI-021 | PRs #1, #8, #9, #11, #12, and #15 through #19; versioned protocol, resolver, build, lifecycle, output, and platform contracts |
 | CLI-022 | Release-hardening PR; pinned workflows, deterministic archive test, SBOM and attestation policy in `docs/release.md` |
 | CLI-023 | PRs #2, #19, and release/docs PR; README, trust/platform/config/output/license/compatibility decisions |

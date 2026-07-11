@@ -23,9 +23,13 @@ type outputEnvelope[T any] struct {
 }
 
 func writeJSON[T any](w io.Writer, command string, data T) error {
+	return writeJSONVersion(w, outputSchemaVersion, command, data)
+}
+
+func writeJSONVersion[T any](w io.Writer, version int, command string, data T) error {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	return enc.Encode(outputEnvelope[T]{SchemaVersion: outputSchemaVersion, Command: command, Data: data})
+	return enc.Encode(outputEnvelope[T]{SchemaVersion: version, Command: command, Data: data})
 }
 
 func validateFormat(format string, legacyJSON bool) (string, error) {
@@ -139,6 +143,18 @@ type listDTO struct {
 	Artifacts []artifactDTO `json:"artifacts"`
 }
 type packDTO struct {
+	Name               string           `json:"name"`
+	Version            string           `json:"version"`
+	Runtime            string           `json:"runtime"`
+	RuntimeRequirement string           `json:"runtimeRequirement,omitempty"`
+	Digest             string           `json:"digest"`
+	CanonicalReference string           `json:"canonicalReference"`
+	SizeBytes          int64            `json:"sizeBytes"`
+	References         []string         `json:"references"`
+	Files              []packFileDTO    `json:"files"`
+	Warnings           []packWarningDTO `json:"warnings"`
+}
+type legacyPackV1DTO struct {
 	Name               string   `json:"name"`
 	Version            string   `json:"version"`
 	Runtime            string   `json:"runtime"`
@@ -147,6 +163,24 @@ type packDTO struct {
 	CanonicalReference string   `json:"canonicalReference"`
 	SizeBytes          int64    `json:"sizeBytes"`
 	References         []string `json:"references"`
+}
+type packFileDTO struct {
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"sizeBytes"`
+	SHA256    string `json:"sha256"`
+	Mode      string `json:"mode"`
+}
+type packWarningDTO struct {
+	Path    string `json:"path"`
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+type packCheckDTO struct {
+	Name     string           `json:"name"`
+	Version  string           `json:"version"`
+	Runtime  string           `json:"runtime"`
+	Files    []packFileDTO    `json:"files"`
+	Warnings []packWarningDTO `json:"warnings"`
 }
 type pushDTO struct {
 	CanonicalReference string `json:"canonicalReference"`

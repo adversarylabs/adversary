@@ -1,0 +1,7 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://adversarylabs.dev/schemas/cli-pack-output-v2.schema.json",
+  "type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],
+  "properties":{"schemaVersion":{"const":2},"command":{"const":"pack"},"data":{"type":"object","additionalProperties":false,"required":["name","version","runtime","digest","canonicalReference","sizeBytes","references","files","warnings"],"properties":{"name":{"type":"string"},"version":{"type":"string"},"runtime":{"type":"string"},"runtimeRequirement":{"type":"string"},"digest":{"type":"string"},"canonicalReference":{"type":"string"},"sizeBytes":{"type":"integer"},"references":{"type":"array","items":{"type":"string"}},"files":{"type":"array","items":{"$ref":"#/$defs/file"}},"warnings":{"type":"array","items":{"$ref":"#/$defs/warning"}}}}},
+  "$defs":{"file":{"type":"object","additionalProperties":false,"required":["path","sizeBytes","sha256","mode"],"properties":{"path":{"type":"string"},"sizeBytes":{"type":"integer"},"sha256":{"type":"string"},"mode":{"type":"string"}}},"warning":{"type":"object","additionalProperties":false,"required":["path","kind","message"],"properties":{"path":{"type":"string"},"kind":{"const":"secret-risk"},"message":{"type":"string"}}}}
+}
