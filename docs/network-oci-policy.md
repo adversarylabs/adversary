@@ -33,9 +33,11 @@ maintained Distribution reference parser.
 Intentional compatibility limits: multi-platform indexes are rejected because
 Adversary artifacts are runtime packages rather than platform container images,
 and silently selecting a platform could change signed content. Referrers
-pagination is not followed in this release because the attached manifest has a
-deterministic fallback tag; accepting arbitrary cross-origin `Link` targets
-would expand the credential boundary. Uploads remain monolithic because
+pagination is not followed in this release. A response carrying `Link` is not
+partially consumed: the client uses the deterministic digest-derived fallback
+tag instead. Accepting arbitrary `Link` targets would expand the credential
+boundary. Missing or unsupported Referrers endpoints and empty results use the
+same fallback. Uploads remain monolithic because
 restartable chunk state needs durable transaction semantics; the 256 MiB layer
 limit bounds the current request. These choices fail closed and retain the
 fallback-tag interoperability path.

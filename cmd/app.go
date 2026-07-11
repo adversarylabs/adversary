@@ -112,7 +112,11 @@ type processAPIFactory struct {
 func (f processAPIFactory) BindingIdentity() string { return f.store.Path }
 
 func (f processAPIFactory) New(base string) application.APIClient {
-	return classifiedAPIClient{inner: adversarylabs.Client{BaseURL: strings.TrimRight(base, "/"), HTTP: f.http, Store: f.store}}
+	client := adversarylabs.NewClientWithBaseURL(f.store, base)
+	if f.http != nil { // explicit test/integration injection only
+		client.HTTP = f.http
+	}
+	return classifiedAPIClient{inner: client}
 }
 
 type classifiedAPIClient struct{ inner application.APIClient }
@@ -246,7 +250,7 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	}
 	docker := oci.DockerCredentialStore{}
 	authStore := processAuthStore{store}
-	apiFactory := processAPIFactory{store: store, http: http.DefaultClient}
+	apiFactory := processAPIFactory{store: store}
 	registryFactory := processRegistryFactory{store: authStore, docker: docker, host: host, namespace: namespace, debug: debug, identity: store.Path}
 	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Env: dependencies.Environment{LookupFunc: os.LookupEnv}, Config: processConfig{}, Paths: processPaths{data: resolver.Repository.Root, config: configDir}, HTTP: dependencies.HTTPClient{DoFunc: http.DefaultClient.Do}, Credentials: docker, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{resolver: resolver}, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(u) }}, TTY: processTTY{}})
 }

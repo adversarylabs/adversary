@@ -93,7 +93,7 @@ command history.
 
 Text is the default. `--format json` emits exactly one versioned JSON document
 to stdout; progress, diagnostics, and deprecation notices go to stderr. Exit 0
-means success, 1 means findings met the configured threshold, 2 means invalid
+means success, 1 means the review reported any finding, 2 means invalid
 usage or configuration, 3 means adversary/protocol/execution failure, 4 means
 network or authentication failure, and 130 means interruption. Child exit and
 signal behavior are defined in the

@@ -320,11 +320,16 @@ func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Ref
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 		return r.getAdversaryManifestFallback(ctx, ref, imageDigest)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, registryError(resp)
+	}
+	// Do not traverse registry-provided pagination links. The deterministic
+	// digest-derived fallback avoids accepting another authority or ordering.
+	if strings.TrimSpace(resp.Header.Get("Link")) != "" {
+		return r.getAdversaryManifestFallback(ctx, ref, imageDigest)
 	}
 	data, err := readLimited(resp.Body, DefaultIngestionLimits.ManifestBytes, "referrers response")
 	if err != nil {
