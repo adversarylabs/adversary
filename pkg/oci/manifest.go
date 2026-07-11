@@ -26,6 +26,7 @@ type Manifest struct {
 
 type PulledArtifact struct {
 	Reference         Reference
+	RawManifest       []byte
 	Manifest          Manifest
 	ManifestDigest    string
 	AdversaryManifest []byte

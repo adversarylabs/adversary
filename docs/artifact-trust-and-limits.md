@@ -38,6 +38,12 @@ after publication (the credential-storage decision uses the same same-user
 authority boundary). Platforms that cannot rename a sealed directory safely
 fail closed instead of making the stage writable.
 
+Repository roots are opened with rooted, no-follow operations and a configured
+root that is itself a symlink is rejected. The root pathname is expected to
+remain stable for each operation. Defending against a hostile same-UID process
+that swaps that configured ancestor is outside the cooperative CLI boundary,
+just like post-install permission changes by that same principal.
+
 Cache name and reference aliases have exact-byte interprocess locks and atomic
 record replacement, so readers observe one complete record. Concurrent writers
 use last-writer-wins semantics per alias. Compare-and-swap or conflict prompts
