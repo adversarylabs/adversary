@@ -6,14 +6,10 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "baseUrl": ".",
     "rootDir": "src",
     "outDir": "dist",
     "declaration": true,
-    "typeRoots": ["node_modules/@types"],
-    "paths": {
-      "@adversary/sdk": ["./vendor/adversary-sdk/dist/index.d.ts"]
-    }
+    "typeRoots": ["node_modules/@types"]
   },
   "include": ["src/**/*.ts"]
 }

@@ -2,12 +2,55 @@ package initproject
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 )
+
+func TestCreateCleansOwnedStageAfterInjectedRenderAndWriteFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		inject func()
+	}{
+		{"render", func() {
+			renderTemplate = func([]byte, map[string]string) ([]byte, error) { return nil, errors.New("injected render failure") }
+		}},
+		{"write", func() {
+			writeTemplateFile = func(string, []byte, os.FileMode) error { return errors.New("injected write failure") }
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := t.TempDir()
+			sentinel := filepath.Join(parent, "user-data")
+			if err := os.WriteFile(sentinel, []byte("preserve"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			originalRender, originalWrite := renderTemplate, writeTemplateFile
+			t.Cleanup(func() { renderTemplate, writeTemplateFile = originalRender, originalWrite })
+			tc.inject()
+			dst := filepath.Join(parent, "failed-project")
+			if _, err := Create(Options{Destination: dst}); err == nil {
+				t.Fatal("Create succeeded")
+			}
+			if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+				t.Fatalf("destination exists: %v", err)
+			}
+			stages, err := filepath.Glob(filepath.Join(parent, ".adversary-init-*"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(stages) != 0 {
+				t.Fatalf("owned stages remain: %v", stages)
+			}
+			if data, err := os.ReadFile(sentinel); err != nil || string(data) != "preserve" {
+				t.Fatalf("user data changed: %q, %v", data, err)
+			}
+		})
+	}
+}
 
 func TestCreateClaimsDestinationExactlyOnce(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "race-project")
@@ -144,5 +187,8 @@ func TestRenderSuccessUsesLocationAndShellQuotes(t *testing.T) {
 	RenderSuccess(&out, Result{Location: location, SDK: "TypeScript"}, "wrong")
 	if !strings.Contains(out.String(), location) || !strings.Contains(out.String(), `cd '/tmp/a path/it'"'"'s-here'`) {
 		t.Fatalf("output not safely rendered:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "npm ci") || strings.Contains(out.String(), "npm install") {
+		t.Fatalf("output does not use lockfile install:\n%s", out.String())
 	}
 }

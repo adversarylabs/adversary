@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,20 +43,84 @@ func TestParseValid(t *testing.T) {
 
 func TestParseRejectsUnsafeAndInvalidInput(t *testing.T) {
 	tests := map[string]string{
-		"unknown field": valid + "unknown: true\n",
-		"duplicate":     strings.Replace(valid, "name: adversarylabs/example", "name: adversarylabs/example\nname: other/example", 1),
-		"alias":         strings.Replace(valid, "command: [dist/index.js]", "command: &cmd [dist/index.js]", 1),
-		"name":          strings.Replace(valid, "adversarylabs/example", "Adversary Labs/example", 1),
-		"version":       strings.Replace(valid, "1.2.3", "latest", 1),
-		"runtime":       strings.Replace(valid, "name: node", "name: shell", 1),
-		"command":       strings.Replace(valid, "command: [dist/index.js]", "command: []", 1),
-		"findings":      strings.Replace(valid, "adversary.review.v1", "sarif", 1),
-		"env":           strings.Replace(valid, "env: [CI]", "env: [BAD-NAME]", 1),
-		"path":          strings.Replace(valid, `read: ["."]`, `read: [""]`, 1),
-		"glob":          strings.Replace(valid, `files_changed: ["**/*.go"]`, `files_changed: [""]`, 1),
-		"documents":     valid + "---\n" + valid,
+		"unknown field":      valid + "unknown: true\n",
+		"duplicate":          strings.Replace(valid, "name: adversarylabs/example", "name: adversarylabs/example\nname: other/example", 1),
+		"alias":              strings.Replace(valid, "command: [dist/index.js]", "command: &cmd [dist/index.js]", 1),
+		"name":               strings.Replace(valid, "adversarylabs/example", "Adversary Labs/example", 1),
+		"version":            strings.Replace(valid, "1.2.3", "latest", 1),
+		"runtime":            strings.Replace(valid, "name: node", "name: shell", 1),
+		"command":            strings.Replace(valid, "command: [dist/index.js]", "command: []", 1),
+		"findings":           strings.Replace(valid, "adversary.review.v1", "sarif", 1),
+		"env":                strings.Replace(valid, "env: [CI]", "env: [BAD-NAME]", 1),
+		"path":               strings.Replace(valid, `read: ["."]`, `read: [""]`, 1),
+		"absolute path":      strings.Replace(valid, `read: ["."]`, `read: ["/etc"]`, 1),
+		"escaping path":      strings.Replace(valid, `read: ["."]`, `read: ["../secret"]`, 1),
+		"duplicate path":     strings.Replace(valid, `write: [.adversary/results]`, `write: ["."]`, 1),
+		"runtime constraint": strings.Replace(valid, `version: "22"`, `version: "latest"`, 1),
+		"glob":               strings.Replace(valid, `files_changed: ["**/*.go"]`, `files_changed: [""]`, 1),
+		"documents":          valid + "---\n" + valid,
 	}
 	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("Parse succeeded")
+			}
+		})
+	}
+}
+
+func TestValidateProjectChecksDeclaredRuntimeConsistency(t *testing.T) {
+	dir := t.TempDir()
+	m, err := Parse([]byte(valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ValidateProject(dir); err == nil || !strings.Contains(err.Error(), "package.json") {
+		t.Fatalf("error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ValidateProject(dir); err != nil {
+		t.Fatal(err)
+	}
+	m.Runtime.Command[0] = "bin/tool"
+	if err := m.ValidateProject(dir); err == nil || !strings.Contains(err.Error(), "JavaScript") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNodeEntrypointMustRemainWithinProjectWithoutRequiringBuildOutput(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse([]byte(valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// dist/index.js deliberately does not exist: validation is lexical and must
+	// support a source checkout before its build step.
+	if err := m.ValidateProject(dir); err != nil {
+		t.Fatalf("not-yet-built entrypoint rejected: %v", err)
+	}
+	for _, entrypoint := range []string{"../evil.js", "/tmp/evil.js", `..\evil.js`, `C:\evil.js`, "C:/evil.js", "dist/../evil.js"} {
+		t.Run(entrypoint, func(t *testing.T) {
+			input := strings.Replace(valid, "command: [dist/index.js]", fmt.Sprintf("command: [%q]", entrypoint), 1)
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("Parse succeeded")
+			}
+		})
+	}
+}
+
+func TestMalformedYAMLPolicyCorpus(t *testing.T) {
+	for name, input := range map[string]string{
+		"multiline scalar command": strings.Replace(valid, "command: [dist/index.js]", "command: [|\n      dist/index.js]", 1),
+		"unicode confusable key":   strings.Replace(valid, "runtime:", "runtіme:", 1),
+		"alias use":                strings.Replace(valid, "command: [dist/index.js]", "command: &command [dist/index.js]\n  image: *command", 1),
+		"nested duplicate":         strings.Replace(valid, "manual: true", "manual: true\n  manual: false", 1),
+	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(input)); err == nil {
 				t.Fatal("Parse succeeded")
@@ -167,6 +232,10 @@ func TestPublishedDraft2020SchemaMatchesCanonicalFixtures(t *testing.T) {
 		"unsupported runtime": {strings.Replace(valid, "name: node", "name: shell", 1), false},
 		"empty command":       {strings.Replace(valid, "command: [dist/index.js]", "command: []", 1), false},
 		"whitespace path":     {strings.Replace(valid, `read: ["."]`, `read: [" ."]`, 1), false},
+		"absolute path":       {strings.Replace(valid, `read: ["."]`, `read: ["/etc"]`, 1), false},
+		"traversal path":      {strings.Replace(valid, `read: ["."]`, `read: ["a/../secret"]`, 1), false},
+		"backslash path":      {strings.Replace(valid, `read: ["."]`, `read: ["a\\\\secret"]`, 1), false},
+		"drive path":          {strings.Replace(valid, `read: ["."]`, `read: ["C:/secret"]`, 1), false},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -181,6 +250,21 @@ func TestPublishedDraft2020SchemaMatchesCanonicalFixtures(t *testing.T) {
 			}
 			if !tc.valid && (schemaErr == nil || parseErr == nil) {
 				t.Fatalf("invalid input accepted: schema=%v parser=%v", schemaErr, parseErr)
+			}
+		})
+	}
+}
+
+func TestParserOnlySemanticRules(t *testing.T) {
+	// These rules intentionally exceed JSON Schema's structural/syntactic
+	// layer and are normative in Parse/Validate.
+	for name, input := range map[string]string{
+		"cross-array conflict":   strings.Replace(valid, `write: [.adversary/results]`, `write: ["."]`, 1),
+		"full semver constraint": strings.Replace(valid, `version: "22"`, `version: "definitely-not-semver"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("Parse succeeded")
 			}
 		})
 	}

@@ -23,6 +23,10 @@ var supportedSDKs = map[string]string{
 }
 
 var publishProject = publishNoReplace
+var writeTemplateFile = os.WriteFile
+var renderTemplate = func(data []byte, values map[string]string) ([]byte, error) {
+	return []byte(applyPlaceholders(string(data), values)), nil
+}
 
 type Options struct {
 	Destination string
@@ -101,12 +105,15 @@ func Create(opts Options) (Result, error) {
 		if err != nil {
 			return err
 		}
-		data = []byte(applyPlaceholders(string(data), values))
+		data, err = renderTemplate(data, values)
+		if err != nil {
+			return fmt.Errorf("render template %s: %w", path, err)
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, data, writableFileMode(info.Mode()))
+		return writeTemplateFile(target, data, writableFileMode(info.Mode()))
 	})
 	if err != nil {
 		return Result{}, err
@@ -159,7 +166,7 @@ func RenderSuccess(w io.Writer, result Result, _ string) {
 	fmt.Fprintln(w, "Next steps")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  cd %s\n", shellQuote(result.Location))
-	fmt.Fprintln(w, "  npm install")
+	fmt.Fprintln(w, "  npm ci")
 	fmt.Fprintln(w, "  npm run build")
 	fmt.Fprintln(w, "  adversary run . --repo /path/to/repository")
 }

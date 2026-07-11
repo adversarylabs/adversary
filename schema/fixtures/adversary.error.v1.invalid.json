@@ -1,0 +1,7 @@
+[
+  {"name":"whitespace message","envelope":{"protocolVersion":1,"error":{"code":"invalid_manifest","message":" \t\n","retryable":false,"details":{}}}},
+  {"name":"bad code","envelope":{"protocolVersion":1,"error":{"code":"BAD-CODE","message":"invalid","retryable":false,"details":{}}}},
+  {"name":"newer version","envelope":{"protocolVersion":2,"error":{"code":"invalid_manifest","message":"invalid","retryable":false,"details":{}}}},
+  {"name":"unknown field","envelope":{"protocolVersion":1,"error":{"code":"invalid_manifest","message":"invalid","retryable":false,"details":{},"extra":true}}},
+  {"name":"details array","envelope":{"protocolVersion":1,"error":{"code":"invalid_manifest","message":"invalid","retryable":false,"details":[]}}}
+]

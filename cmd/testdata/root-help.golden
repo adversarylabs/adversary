@@ -18,6 +18,7 @@ Available Commands:
   run         Run an Adversary against a local source repository
   search      Search Adversary Labs adversaries
   store       Inspect and maintain the artifact repository
+  validate    Validate an adversary project with the canonical v1 manifest parser
   version     Print the adversary version
   whoami      Show the current Adversary Labs login
 

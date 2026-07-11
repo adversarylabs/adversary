@@ -1,0 +1,9 @@
+{
+  "protocolVersion": 1,
+  "error": {
+    "code": "invalid_manifest",
+    "message": "runtime.version is not a valid constraint",
+    "retryable": false,
+    "details": {"field": "runtime.version"}
+  }
+}

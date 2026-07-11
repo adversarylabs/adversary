@@ -8,9 +8,35 @@ import {
   Adversary,
   Finding,
   Severity,
+  encodeErrorEnvelope,
   parseInput,
+  validateErrorEnvelope,
   validateReviewEnvelope,
 } from "../dist/index.js";
+
+test("shared error fixture has deterministic encoding and rejects newer versions", async () => {
+  const fixture = new URL(
+    "../../../../../schema/fixtures/adversary.error.v1.valid.json",
+    import.meta.url,
+  );
+  const envelope = JSON.parse(await readFile(fixture, "utf8"));
+  assert.doesNotThrow(() => validateErrorEnvelope(envelope));
+  assert.equal(
+    encodeErrorEnvelope(envelope),
+    '{"error":{"code":"invalid_manifest","details":{"field":"runtime.version"},"message":"runtime.version is not a valid constraint","retryable":false},"protocolVersion":1}\n',
+  );
+  assert.throws(() => validateErrorEnvelope({ ...envelope, protocolVersion: 2 }), /Unsupported/);
+});
+
+test("shared invalid error fixtures are rejected", async () => {
+  const fixture = new URL(
+    "../../../../../schema/fixtures/adversary.error.v1.invalid.json",
+    import.meta.url,
+  );
+  for (const entry of JSON.parse(await readFile(fixture, "utf8"))) {
+    assert.throws(() => validateErrorEnvelope(entry.envelope), undefined, entry.name);
+  }
+});
 
 test("shared review fixture satisfies SDK semantics", async () => {
   const fixture = new URL(
@@ -20,6 +46,19 @@ test("shared review fixture satisfies SDK semantics", async () => {
   const envelope = JSON.parse(await readFile(fixture, "utf8"));
   assert.doesNotThrow(() => validateReviewEnvelope(envelope));
   assert.equal(envelope.result.suppressedFindings.length, 1);
+});
+
+test("review validation and encoding preserve shared producer order", async () => {
+  const fixture = new URL(
+    "../../../../../schema/fixtures/adversary.review.v1.order.json",
+    import.meta.url,
+  );
+  const expected = (await readFile(fixture, "utf8")).trim();
+  const envelope = JSON.parse(expected);
+  validateReviewEnvelope(envelope);
+  assert.equal(JSON.stringify(envelope), expected);
+  assert.deepEqual(envelope.result.findings.map(({ id }) => id), ["z", "a"]);
+  assert.deepEqual(envelope.result.suppressedFindings.map(({ id }) => id), ["y", "b"]);
 });
 
 test("shared adversarial review fixtures are rejected", async () => {

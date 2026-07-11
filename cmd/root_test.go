@@ -42,6 +42,7 @@ func TestInitCommandGeneratesTypeScriptProject(t *testing.T) {
 	for _, rel := range []string{
 		"adversary.yaml",
 		"package.json",
+		"package-lock.json",
 		"tsconfig.json",
 		"README.md",
 		"AGENTS.md",
@@ -92,7 +93,7 @@ func TestInitCommandGeneratesTypeScriptProject(t *testing.T) {
 		"✓ Generated project",
 		"SDK",
 		"TypeScript",
-		"npm install",
+		"npm ci",
 		"npm run build",
 	} {
 		if !strings.Contains(output, want) {

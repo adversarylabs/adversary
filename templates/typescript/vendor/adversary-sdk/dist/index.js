@@ -5,6 +5,7 @@ export const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
 export const DEFAULT_REPO_PATH = "/workspace";
 export const INPUT_SCHEMA_VERSION = "adversary.input.v1";
 export const REVIEW_SCHEMA_VERSION = "adversary.review.v1";
+export const ERROR_PROTOCOL_VERSION = 1;
 const verboseValues = new Set(["1", "true", "TRUE", "yes", "YES"]);
 export const Severity = {
     Info: "info",
@@ -115,7 +116,7 @@ export class Adversary {
             schema_version: this.schemaVersion,
             adversary: this.name,
             summary,
-            findings: sortFindings(findings.filter((finding) => finding.suppressed !== true)).map(stripSuppressed),
+            findings: findings.filter((finding) => finding.suppressed !== true).map(stripSuppressed),
         };
         if (options.write !== false) {
             await writeOutput(createAdversaryRunEnvelope(output, repoPath, suppressedFindings), options.outputPath);
@@ -296,7 +297,7 @@ function createAdversaryRunEnvelope(output, repoPath, suppressedFindings) {
 }
 function normalizeReviewResult(output, repoPath, suppressedFindings = []) {
     const summary = output.summary ?? {};
-    const normalizedSuppressed = sortFindings(suppressedFindings).map((finding) => normalizeReviewFinding(stripSuppressed(finding)));
+    const normalizedSuppressed = suppressedFindings.map((finding) => normalizeReviewFinding(stripSuppressed(finding)));
     const includeSuppressed = verboseValues.has(process.env.ADVERSARY_INCLUDE_SUPPRESSED ?? "");
     return omitUndefined({
         adversary: normalizeAdversary(output.adversary),
@@ -478,6 +479,28 @@ export function validateReviewEnvelope(value) {
             seen.add(finding.id);
         }
     }
+}
+
+export function validateErrorEnvelope(value) {
+    validateObject(value, ["protocolVersion", "error"], ["protocolVersion", "error"], "envelope");
+    if (value.protocolVersion !== ERROR_PROTOCOL_VERSION) {
+        throw new Error(`Unsupported adversary error protocolVersion ${value.protocolVersion}.`);
+    }
+    validateObject(value.error, ["code", "message", "retryable", "details"], ["code", "message", "retryable", "details"], "error");
+    if (typeof value.error.code !== "string" || !/^[a-z][a-z0-9_]*$/.test(value.error.code)) throw new Error("error.code is invalid.");
+    requireString(value.error.message, "error.message");
+    if (typeof value.error.retryable !== "boolean") throw new Error("error.retryable must be a boolean.");
+    if (!isRecord(value.error.details)) throw new Error("error.details must be an object.");
+}
+
+export function encodeErrorEnvelope(value) {
+    validateErrorEnvelope(value);
+    return `${JSON.stringify(canonicalValue(value))}\n`;
+}
+function canonicalValue(value) {
+    if (Array.isArray(value)) return value.map(canonicalValue);
+    if (!isRecord(value)) return value;
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])]));
 }
 function validateReviewFinding(finding, field) {
     validateObject(finding, ["id", "ruleId", "groupKey", "title", "category", "severity", "confidence", "summary", "whyItMatters", "impact", "evidence", "recommendation", "remediation", "tags", "metadata"], ["id", "title", "category", "severity", "confidence", "summary", "evidence"], field);
