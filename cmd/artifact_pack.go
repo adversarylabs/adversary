@@ -3,6 +3,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io"
+
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
@@ -14,6 +16,7 @@ type packOptions struct {
 	name    string
 	format  string
 	json    bool
+	check   bool
 }
 
 func newPackCommand(app *application.App) *cobra.Command {
@@ -32,6 +35,20 @@ func newPackCommand(app *application.App) *cobra.Command {
 			}
 			if opts.json {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
+			}
+			if opts.check {
+				checked, err := pack.Check(pack.Options{Dir: args[0], NameOverride: opts.name, Builder: opts.builder})
+				if err != nil {
+					return err
+				}
+				files, warnings := packOutputDetails(checked.Files, checked.Warnings)
+				if format == "json" {
+					return writeJSON(cmd.OutOrStdout(), "pack-check", packCheckDTO{Name: checked.Name, Version: checked.Version, Runtime: checked.Runtime, Files: files, Warnings: warnings})
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "Package check passed (no build or repository changes).")
+				fmt.Fprintf(cmd.OutOrStdout(), "Name: %s\nVersion: %s\nRuntime: %s\nFiles:\n", checked.Name, checked.Version, checked.Runtime)
+				writePackDetails(cmd.OutOrStdout(), files, warnings)
+				return nil
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "Packing adversary...")
 			artifact, err := pack.Create(cmd.Context(), pack.Options{Dir: args[0], NameOverride: opts.name, Build: true, Builder: opts.builder, Stdout: cmd.ErrOrStderr(), Stderr: cmd.ErrOrStderr()})
@@ -53,7 +70,11 @@ func newPackCommand(app *application.App) *cobra.Command {
 				if artifact.RuntimeName != "" {
 					requirement = artifact.RuntimeName + "@" + artifact.RuntimeVersion
 				}
-				return writeJSON(cmd.OutOrStdout(), "pack", packDTO{artifact.ManifestName, artifact.Version, artifact.Runtime, requirement, unified.Digest, canonical, artifact.Size, []string{canonical, latest}})
+				files, warnings := packOutputDetails(artifact.Files, pack.WarningsForFiles(artifact.Files))
+				if opts.json {
+					return writeJSON(cmd.OutOrStdout(), "pack", legacyPackV1DTO{Name: artifact.ManifestName, Version: artifact.Version, Runtime: artifact.Runtime, RuntimeRequirement: requirement, Digest: unified.Digest, CanonicalReference: canonical, SizeBytes: artifact.Size, References: []string{canonical, latest}})
+				}
+				return writeJSONVersion(cmd.OutOrStdout(), 2, "pack", packDTO{Name: artifact.ManifestName, Version: artifact.Version, Runtime: artifact.Runtime, RuntimeRequirement: requirement, Digest: unified.Digest, CanonicalReference: canonical, SizeBytes: artifact.Size, References: []string{canonical, latest}, Files: files, Warnings: warnings})
 			}
 			fmt.Fprintln(cmd.OutOrStdout())
 			fmt.Fprintf(cmd.OutOrStdout(), "Name: %s\n", artifact.ManifestName)
@@ -65,6 +86,9 @@ func newPackCommand(app *application.App) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "Digest: %s\n", unified.Digest)
 			fmt.Fprintf(cmd.OutOrStdout(), "Canonical reference: %s\nUnified digest: %s\n", canonical, unified.Digest)
 			fmt.Fprintf(cmd.OutOrStdout(), "Size: %s\n", humanSize(artifact.Size))
+			files, warnings := packOutputDetails(artifact.Files, pack.WarningsForFiles(artifact.Files))
+			fmt.Fprintln(cmd.OutOrStdout(), "Files:")
+			writePackDetails(cmd.OutOrStdout(), files, warnings)
 			fmt.Fprintln(cmd.OutOrStdout())
 			fmt.Fprintln(cmd.OutOrStdout(), "Stored locally as:")
 			fmt.Fprintln(cmd.OutOrStdout())
@@ -77,5 +101,26 @@ func newPackCommand(app *application.App) *cobra.Command {
 	cmd.Flags().StringVar(&opts.name, "name", "", "override the local artifact name")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "deprecated alias for --format json")
+	cmd.Flags().BoolVar(&opts.check, "check", false, "validate and inventory without building or storing")
 	return cmd
+}
+
+func packOutputDetails(filesIn []pack.File, warningsIn []pack.Warning) ([]packFileDTO, []packWarningDTO) {
+	files := make([]packFileDTO, 0, len(filesIn))
+	warnings := make([]packWarningDTO, 0, len(warningsIn))
+	for _, f := range filesIn {
+		files = append(files, packFileDTO{f.Path, f.Size, f.SHA256, fmt.Sprintf("%#o", f.Mode)})
+	}
+	for _, w := range warningsIn {
+		warnings = append(warnings, packWarningDTO{w.Path, w.Kind, w.Message})
+	}
+	return files, warnings
+}
+func writePackDetails(w io.Writer, files []packFileDTO, warnings []packWarningDTO) {
+	for _, f := range files {
+		fmt.Fprintf(w, "  %s  %d bytes  %s  mode %s\n", f.Path, f.SizeBytes, f.SHA256, f.Mode)
+	}
+	for _, warning := range warnings {
+		fmt.Fprintf(w, "WARNING [%s] %s: %s\n", warning.Kind, warning.Path, warning.Message)
+	}
 }

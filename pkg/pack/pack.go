@@ -90,6 +90,127 @@ type File struct {
 	Mode   int64  `json:"mode,omitempty"`
 }
 
+// Preflight is the deterministic, non-mutating result of checking a package.
+// Warnings are based on paths only; file contents are never inspected for secrets.
+type Preflight struct {
+	Name     string    `json:"name"`
+	Version  string    `json:"version"`
+	Runtime  string    `json:"runtime"`
+	Files    []File    `json:"files"`
+	Warnings []Warning `json:"warnings"`
+}
+
+type Warning struct {
+	Path    string `json:"path"`
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+
+// Check validates and inventories a package without running its build, creating
+// an artifact, or writing to the repository.
+func Check(opts Options) (result Preflight, err error) {
+	if err := validateBuilder(opts.Builder); err != nil {
+		return result, err
+	}
+	dir, root, err := openValidatedProject(opts.Dir)
+	if err != nil {
+		return result, err
+	}
+	defer func() { err = errors.Join(err, root.Close()) }()
+	before, err := root.Lstat(manifest.FileName)
+	if err != nil {
+		return result, err
+	}
+	data, err := root.ReadFile(manifest.FileName)
+	if err != nil {
+		return result, err
+	}
+	after, err := root.Lstat(manifest.FileName)
+	if err != nil || !os.SameFile(before, after) {
+		return result, errors.Join(err, fmt.Errorf("manifest changed while reading"))
+	}
+	m, err := manifest.Parse(data)
+	if err != nil {
+		return result, err
+	}
+	name := manifest.ShortName(m.Name)
+	if strings.TrimSpace(opts.NameOverride) != "" {
+		name, err = normalizeNameOverride(opts.NameOverride)
+		if err != nil {
+			return result, err
+		}
+	}
+	files, err := collectAndBuildLayerTo(root, dir, io.Discard)
+	if err != nil {
+		return result, err
+	}
+	if entrypoint, required, err := checkedPackageEntrypoint(m); err != nil {
+		return result, err
+	} else if required {
+		found := false
+		for _, file := range files {
+			if file.Path == entrypoint {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return result, fmt.Errorf("runtime entrypoint %q is missing from packed files; build output is not ready", entrypoint)
+		}
+	}
+	version := m.Version
+	if version == "" {
+		version = oci.DefaultTag
+	}
+	result = Preflight{Name: name, Version: version, Runtime: detectRuntime(dir, m), Files: files}
+	result.Warnings = WarningsForFiles(files)
+	return result, nil
+}
+
+func checkedPackageEntrypoint(m manifest.Manifest) (string, bool, error) {
+	command := m.Runtime.Command[0]
+	// Image commands are resolved inside the declared image, not against host
+	// package files. Named node commands always identify package build output.
+	if m.Runtime.Image != "" {
+		return "", false, nil
+	}
+	required := runtimeName(m) == "node" || strings.ContainsAny(command, `/\\`)
+	if !required { // A bare process command is intentionally resolved via PATH at run time.
+		return "", false, nil
+	}
+	if filepath.IsAbs(command) || filepath.VolumeName(command) != "" || strings.HasPrefix(command, "/") || strings.HasPrefix(command, `\`) || strings.Contains(command, ":") {
+		return "", false, fmt.Errorf("runtime entrypoint %q must be package-relative", command)
+	}
+	if strings.Contains(command, `\`) {
+		return "", false, fmt.Errorf("runtime entrypoint %q must use portable forward-slash separators", command)
+	}
+	entrypoint := filepath.ToSlash(filepath.Clean(command))
+	if entrypoint == "." || entrypoint == ".." || strings.HasPrefix(entrypoint, "../") {
+		return "", false, fmt.Errorf("runtime entrypoint %q escapes the package", command)
+	}
+	return entrypoint, true, nil
+}
+
+func WarningsForFiles(files []File) []Warning {
+	var warnings []Warning
+	for _, file := range files {
+		if secretRisk(file.Path) {
+			warnings = append(warnings, Warning{Path: file.Path, Kind: "secret-risk", Message: "path resembles a credential or private-key file; review before packing"})
+		}
+	}
+	return warnings
+}
+
+func secretRisk(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	switch base {
+	case ".env", ".npmrc", ".pypirc", ".netrc", "id_rsa", "id_ed25519", "credentials.json", "service-account.json", "application_default_credentials.json", "kubeconfig", "azureprofile.json", "accesstokens.json":
+		return true
+	}
+	clean := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+	return strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") || strings.HasSuffix(base, ".p12") || strings.HasSuffix(base, ".pfx") || strings.HasSuffix(clean, "/.aws/credentials") || clean == ".aws/credentials" || strings.HasSuffix(clean, "/.kube/config") || clean == ".kube/config"
+}
+
 func Create(ctx context.Context, opts Options) (Artifact, error) {
 	if err := validateBuilder(opts.Builder); err != nil {
 		return Artifact{}, err
@@ -270,6 +391,14 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 var beforePackOpen func(string)
 var beforeManifestRead func()
 
+type packFile interface {
+	io.Reader
+	io.Closer
+	Stat() (os.FileInfo, error)
+}
+
+var openPackFile = func(root *os.Root, name string) (packFile, error) { return root.Open(name) }
+
 func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, error) {
 	ignore := loadIgnore(dir)
 	files := make([]File, 0)
@@ -310,32 +439,26 @@ func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, e
 		if beforePackOpen != nil {
 			beforePackOpen(rel)
 		}
-		f, err := root.Open(rel)
+		f, err := openPackFile(root, rel)
 		if err != nil {
 			return err
 		}
 		after, err := f.Stat()
 		if err != nil {
-			f.Close()
-			return err
+			return errors.Join(err, f.Close())
 		}
 		if !after.Mode().IsRegular() || !os.SameFile(before, after) {
-			f.Close()
-			return fmt.Errorf("package file changed while opening: %s", rel)
+			return errors.Join(fmt.Errorf("package file changed while opening: %s", rel), f.Close())
 		}
 		h := sha256.New()
 		header := &tar.Header{Name: rel, Mode: int64(0644 | after.Mode().Perm()&0111), Size: after.Size(), ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatPAX}
 		if err := tw.WriteHeader(header); err != nil {
-			f.Close()
-			return err
+			return errors.Join(err, f.Close())
 		}
 		n, copyErr := io.CopyBuffer(io.MultiWriter(tw, h), f, make([]byte, 32<<10))
 		closeErr := f.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
+		if err := errors.Join(copyErr, closeErr); err != nil {
+			return err
 		}
 		if n != after.Size() {
 			return fmt.Errorf("package file changed while reading: %s", rel)
@@ -344,16 +467,12 @@ func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, e
 		return nil
 	})
 	if err != nil {
-		tw.Close()
-		gz.Close()
+		return nil, errors.Join(err, tw.Close(), gz.Close())
+	}
+	if err := errors.Join(tw.Close(), gz.Close()); err != nil {
 		return nil, err
 	}
-	if err := tw.Close(); err != nil {
-		return nil, err
-	}
-	if err := gz.Close(); err != nil {
-		return nil, err
-	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
 }
 

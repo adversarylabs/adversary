@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,8 +165,8 @@ func TestPublishedCLIOutputFixturesMatchSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fixtures) != 8 {
-		t.Fatalf("got %d CLI fixtures, want 8", len(fixtures))
+	if len(fixtures) != 9 {
+		t.Fatalf("got %d CLI fixtures, want 9", len(fixtures))
 	}
 	for _, path := range fixtures {
 		t.Run(filepath.Base(path), func(t *testing.T) {
@@ -180,6 +182,39 @@ func TestPublishedCLIOutputFixturesMatchSchema(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestPublishedPackV2FixtureMatchesSchema(t *testing.T) {
+	root := filepath.Join("..", "docs")
+	schemaBytes, err := os.ReadFile(filepath.Join(root, "schemas", "cli-pack-output-v2.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schemaDocument any
+	if err := json.Unmarshal(schemaBytes, &schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	const schemaURL = "https://adversarylabs.dev/schemas/cli-pack-output-v2.schema.json"
+	if err := compiler.AddResource(schemaURL, schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(schemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "cli-pack-v2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value any
+	if err := json.Unmarshal(fixture, &value); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(value); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -239,5 +274,134 @@ func TestInvalidPackBuilderHasNoProgressOrResolverWork(t *testing.T) {
 	}
 	if out.Len() != 0 || errOut.Len() != 0 {
 		t.Fatalf("stdout=%q stderr=%q", out.String(), errOut.String())
+	}
+}
+
+func TestPackCheckJSONIsStableNonMutatingAndWarningsSucceed(t *testing.T) {
+	project := t.TempDir()
+	writeProject(t, project)
+	if err := os.WriteFile(filepath.Join(project, "credentials.json"), []byte("TOKEN=not-read"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "environment.ts"), []byte("safe"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "build-was-invoked")
+	packageJSON := fmt.Sprintf(`{"type":"module","scripts":{"build":"touch %s"}}`, marker)
+	if err := os.WriteFile(filepath.Join(project, "package.json"), []byte(packageJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	repoRoot := t.TempDir()
+	var firstOut, firstErr bytes.Buffer
+	app := lifecycleTestApp(t, repository.Repository{Root: repoRoot}, &firstOut, &firstErr)
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"pack", "--check", "--format", "json", project})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if firstErr.Len() != 0 {
+		t.Fatalf("stderr=%q", firstErr.String())
+	}
+	if !strings.Contains(firstOut.String(), `"command":"pack-check"`) || !strings.Contains(firstOut.String(), `"path":"credentials.json"`) || strings.Contains(firstOut.String(), `"path":"environment.ts","kind"`) {
+		t.Fatalf("output=%s", firstOut.String())
+	}
+	entries, err := os.ReadDir(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("check mutated repository: %v", entries)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("check invoked build: %v", err)
+	}
+	var secondOut, secondErr bytes.Buffer
+	app2 := lifecycleTestApp(t, repository.Repository{Root: repoRoot}, &secondOut, &secondErr)
+	cmd2 := NewRootCommandWithApp(app2)
+	cmd2.SetArgs([]string{"pack", "--check", "--format", "json", project})
+	if err := cmd2.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if firstOut.String() != secondOut.String() {
+		t.Fatalf("unstable output:\n%s\n%s", firstOut.String(), secondOut.String())
+	}
+}
+
+func TestPackOutputIncludesInventoryAndWarnings(t *testing.T) {
+	project := t.TempDir()
+	writeProject(t, project)
+	if err := os.WriteFile(filepath.Join(project, "credentials.json"), []byte("review-me"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	cmd := NewRootCommandWithApp(lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut))
+	cmd.SetArgs([]string{"pack", project})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Files:\n") || !strings.Contains(out.String(), "credentials.json") || !strings.Contains(out.String(), "WARNING [secret-risk]") {
+		t.Fatalf("stdout=%q", out.String())
+	}
+}
+
+func TestPackDeprecatedJSONPreservesV1WhileFormatJSONUsesV2(t *testing.T) {
+	project := t.TempDir()
+	writeProject(t, project)
+	if err := os.WriteFile(filepath.Join(project, "private.key"), []byte("review-me"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (map[string]any, string) {
+		var out, errOut bytes.Buffer
+		cmd := NewRootCommandWithApp(lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut))
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		var envelope map[string]any
+		if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		return envelope, errOut.String()
+	}
+	legacy, legacyErr := run("pack", "--json", project)
+	if legacy["schemaVersion"] != float64(1) || !strings.Contains(legacyErr, "deprecated") {
+		t.Fatalf("legacy=%v stderr=%q", legacy, legacyErr)
+	}
+	legacyData := legacy["data"].(map[string]any)
+	if _, exists := legacyData["files"]; exists {
+		t.Fatalf("legacy v1 gained files: %v", legacyData)
+	}
+	modern, modernErr := run("pack", "--format", "json", project)
+	if modern["schemaVersion"] != float64(2) || modernErr != "Packing adversary...\n" {
+		t.Fatalf("modern=%v stderr=%q", modern, modernErr)
+	}
+	modernData := modern["data"].(map[string]any)
+	if _, exists := modernData["files"]; !exists {
+		t.Fatalf("modern v2 lacks files: %v", modernData)
+	}
+	if warnings, ok := modernData["warnings"].([]any); !ok || len(warnings) != 1 {
+		t.Fatalf("warnings=%v", modernData["warnings"])
+	}
+}
+
+func TestPackCheckRejectsMissingBuildOutputWithoutRepositoryMutation(t *testing.T) {
+	project := t.TempDir()
+	writeProject(t, project)
+	if err := os.Remove(filepath.Join(project, "dist", "index.js")); err != nil {
+		t.Fatal(err)
+	}
+	repoRoot := t.TempDir()
+	var out, errOut bytes.Buffer
+	cmd := NewRootCommandWithApp(lifecycleTestApp(t, repository.Repository{Root: repoRoot}, &out, &errOut))
+	cmd.SetArgs([]string{"pack", "--check", project})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "build output is not ready") {
+		t.Fatalf("err=%v", err)
+	}
+	entries, err := os.ReadDir(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 || out.Len() != 0 || errOut.Len() != 0 {
+		t.Fatalf("entries=%v stdout=%q stderr=%q", entries, out.String(), errOut.String())
 	}
 }

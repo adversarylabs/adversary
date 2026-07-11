@@ -10,7 +10,25 @@ go to stderr. `--format text` is the default. Invalid formats and conflicting
 legacy/new flags are rejected before command work begins.
 
 The deprecated `--json` flags remain temporarily available and preserve their
-legacy shapes where one existed. They conflict with an explicit `--format`.
+legacy shapes where one existed. In particular, `pack --json` remains the
+schema-version 1 pack DTO without inventory fields. `pack --format json` emits
+schema version 2, whose strict DTO adds the deterministic file inventory and
+path-only secret-risk warnings. `pack --check --format json` is the separate
+schema-version 1 `pack-check` discriminator. Legacy flags conflict with an explicit `--format`.
+
+Pack preflight resolves entrypoints without executing them. Named Node runtimes
+and named process commands containing a path separator must use a contained,
+package-relative command whose first element exists in the packed inventory.
+A bare named-process command such as `python3` is deliberately deferred to
+runtime `PATH` resolution. Image commands are resolved inside their declared
+image, so preflight does not look for those paths on the host or in the package.
+
+Secret-risk warnings inspect paths only, never file contents. The conservative
+heuristic recognizes common dotfiles (`.npmrc`, `.pypirc`, `.netrc`, `.env`),
+private-key extensions, SSH key names, kubeconfig paths, and common AWS, GCP,
+and Azure credential basenames. It is advisory: warnings alone exit zero, and
+operators must still review the complete inventory. Example/template suffixes
+and merely similar words are intentionally not classified.
 The deprecated `--debug` alias enables `--verbose` and warns on stderr.
 
 `inspect --format json` describes a resolved stored artifact. Inspecting a
