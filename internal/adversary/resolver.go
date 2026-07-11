@@ -5,22 +5,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
-	legacycache "github.com/adversarylabs/adversary/pkg/adversary"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
-	legacy "github.com/adversarylabs/adversary/pkg/store"
 )
 
 type Resolver struct {
 	Repository repository.Repository
-	Legacy     legacy.Store
 }
 
 var ErrNotFound = errors.New("adversary reference not found")
-var ErrMigrationRequired = errors.New("legacy cache artifact requires exact registry pull for migration")
 
 type Resolution struct {
 	Record             repository.Record
@@ -31,15 +28,36 @@ type Resolution struct {
 }
 
 func DefaultResolver() (Resolver, error) {
-	s, err := legacy.Default()
+	dataRoot, err := resolverDataRoot()
 	if err != nil {
 		return Resolver{}, err
 	}
-	root := filepath.Join(s.Root, "repository-v1")
+	root := filepath.Join(dataRoot, "repository-v1")
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return Resolver{}, err
 	}
-	return Resolver{Repository: repository.Repository{Root: root}, Legacy: s}, nil
+	return Resolver{Repository: repository.Repository{Root: root}}, nil
+}
+
+func resolverDataRoot() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("ADVERSARY_DATA_DIR")); override != "" {
+		return override, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "Adversary"), nil
+	case "linux":
+		if xdg := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); xdg != "" {
+			return filepath.Join(xdg, "adversary"), nil
+		}
+		return filepath.Join(home, ".local", "share", "adversary"), nil
+	default:
+		return filepath.Join(home, ".adversary"), nil
+	}
 }
 
 func (r Resolver) Resolve(value string) (Resolution, error) {
@@ -113,46 +131,7 @@ func (r Resolver) resolveOrMigrate(value string) (Resolution, error) {
 	} else if hasExact {
 		return Resolution{}, err
 	}
-	record, legacyErr := r.Legacy.Inspect(value)
-	if legacyErr != nil {
-		if cache, cacheErr := legacycache.DefaultCache(); cacheErr == nil {
-			if strings.HasPrefix(value, "sha256:") {
-				if _, ok := cache.ResolveDigest(value); ok {
-					return Resolution{}, ErrMigrationRequired
-				}
-			} else if _, ok := cache.Resolve(value); ok {
-				return Resolution{}, ErrMigrationRequired
-			}
-		}
-		return Resolution{}, fmt.Errorf("%w: %s", ErrNotFound, value)
-	}
-	manifest, blobs, legacyErr := r.Legacy.OCIPayload(record)
-	if legacyErr != nil {
-		return Resolution{}, legacyErr
-	}
-	yaml, legacyErr := r.Legacy.AdversaryManifest(record)
-	if legacyErr != nil {
-		return Resolution{}, legacyErr
-	}
-	var config, layer []byte
-	for _, b := range blobs {
-		switch b.Descriptor.Digest {
-		case record.ConfigDigest:
-			config = b.Data
-		case record.LayerDigest:
-			layer = b.Data
-		}
-	}
-	ref := record.Name + ":" + record.Version
-	imported, legacyErr := r.Repository.Import(repository.Import{Reference: ref, Name: record.ManifestName, Version: record.Version, Manifest: manifest, Config: config, Layer: layer, AdversaryManifest: yaml, ManifestDigest: record.Digest, ConfigDigest: record.ConfigDigest, LayerDigest: record.LayerDigest, AdversaryManifestDigest: record.AdversaryManifestDigest})
-	if legacyErr != nil {
-		return Resolution{}, fmt.Errorf("migrate legacy artifact: %w", legacyErr)
-	}
-	path, legacyErr := r.Repository.Materialize(imported)
-	if legacyErr != nil {
-		return Resolution{}, legacyErr
-	}
-	return Resolution{Record: imported, CanonicalReference: ref, Digest: imported.Digest, Path: path}, nil
+	return Resolution{}, fmt.Errorf("%w: %s", ErrNotFound, value)
 }
 func isFullyQualified(v string) bool {
 	if len(v) >= 3 && ((v[0] >= 'A' && v[0] <= 'Z') || (v[0] >= 'a' && v[0] <= 'z')) && v[1] == ':' && (v[2] == '\\' || v[2] == '/') {

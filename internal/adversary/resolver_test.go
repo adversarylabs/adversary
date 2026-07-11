@@ -2,12 +2,13 @@ package adversary
 
 import (
 	"context"
-	"github.com/adversarylabs/adversary/pkg/pack"
-	"github.com/adversarylabs/adversary/pkg/repository"
-	legacy "github.com/adversarylabs/adversary/pkg/store"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
 func resolverArtifact(t *testing.T, root, name, content string) pack.Artifact {
@@ -25,7 +26,7 @@ func TestResolverPrecedenceAndAmbiguity(t *testing.T) {
 	root := t.TempDir()
 	repoRoot := filepath.Join(root, "repo")
 	_ = os.MkdirAll(repoRoot, 0700)
-	r := Resolver{Repository: repository.Repository{Root: repoRoot}, Legacy: legacy.Store{Root: filepath.Join(root, "legacy")}}
+	r := Resolver{Repository: repository.Repository{Root: repoRoot}}
 	a := resolverArtifact(t, t.TempDir(), "one.example/team/tool", "one")
 	b := resolverArtifact(t, t.TempDir(), "two.example/other/tool", "two")
 	ra, err := r.Repository.ImportPacked(a, "one.example/team/tool:1.0.0")
@@ -52,6 +53,36 @@ func TestResolverPrecedenceAndAmbiguity(t *testing.T) {
 		t.Fatalf("path=%s", got.Path)
 	}
 	makeResolverWritable(repoRoot)
+}
+
+func TestResolverDoesNotReadLegacyStores(t *testing.T) {
+	dataRoot := t.TempDir()
+	t.Setenv("ADVERSARY_DATA_DIR", dataRoot)
+	legacyPath := filepath.Join(dataRoot, "refs", "legacy-marker")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("must remain untouched"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := DefaultResolver()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve("legacy-marker:1.0.0"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Resolve() error = %v, want ErrNotFound", err)
+	}
+	got, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "must remain untouched" {
+		t.Fatalf("legacy marker changed: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dataRoot, "artifacts")); !os.IsNotExist(err) {
+		t.Fatalf("legacy artifacts directory unexpectedly created: %v", err)
+	}
 }
 func makeResolverWritable(root string) {
 	_ = filepath.Walk(root, func(p string, i os.FileInfo, e error) error {

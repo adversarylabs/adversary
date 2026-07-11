@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"io"
 	"net"
 	"net/http"
@@ -19,9 +18,10 @@ import (
 	"sync"
 	"testing"
 
+	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/store"
+	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
 func TestInitCommandGeneratesTypeScriptProject(t *testing.T) {
@@ -269,7 +269,7 @@ func TestPackListAndInspectCommands(t *testing.T) {
 	if err := listCmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	var records []store.Record
+	var records []repository.Record
 	if err := json.Unmarshal(listJSONStdout.Bytes(), &records); err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestPackListAndInspectCommands(t *testing.T) {
 	if err := inspectJSONCmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	var record store.Record
+	var record repository.Record
 	if err := json.Unmarshal(inspectJSONStdout.Bytes(), &record); err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestDefaultAdversaryLabsPushRefUsesStoredNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ref, err := defaultAdversaryLabsPushRef(context.Background(), "dockerfile-reviewer:0.1.0", store.Record{
+	ref, err := defaultAdversaryLabsPushRef(context.Background(), "dockerfile-reviewer:0.1.0", pushRecord{
 		Name:    "dockerfile-reviewer",
 		Version: "0.1.0",
 	}, "", "default")
@@ -362,7 +362,7 @@ func TestDefaultPushRefUsesLibraryForRegistryHostOverrideWithoutLogin(t *testing
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ADVERSARY_REGISTRY_HOST", "localhost:8787")
 
-	ref, err := defaultAdversaryLabsPushRef(context.Background(), "dockerfile-reviewer:0.1.0", store.Record{
+	ref, err := defaultAdversaryLabsPushRef(context.Background(), "dockerfile-reviewer:0.1.0", pushRecord{
 		Name:    "dockerfile-reviewer",
 		Version: "0.1.0",
 	}, "", "default")
@@ -708,7 +708,7 @@ func TestPackRejectsOversizedAdversaryManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.WriteString("# " + strings.Repeat("x", store.MaxAdversaryManifestSize) + "\n")
+	_, err = f.WriteString("# " + strings.Repeat("x", 1<<20) + "\n")
 	if closeErr := f.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}

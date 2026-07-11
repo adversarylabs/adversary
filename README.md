@@ -174,7 +174,9 @@ acme/security-reviewer  -> registry.adversarylabs.ai/acme/security-reviewer
 ghcr.io/acme/reviewer   -> ghcr.io/acme/reviewer
 ```
 
-Pulled artifacts are cached under `~/.adversary/cache/` by digest and registered locally so `adversary run security-reviewer --repo .` can resolve a pulled adversary.
+Pulled artifacts are verified into the unified content-addressed repository and
+registered locally so `adversary run security-reviewer --repo .` can resolve a
+pulled adversary.
 
 ## Login, Logout, And Search
 

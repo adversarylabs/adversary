@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/adversarylabs/adversary/pkg/pack"
-	"github.com/adversarylabs/adversary/pkg/store"
 )
 
 func TestLoadManifest(t *testing.T) {
@@ -124,7 +123,7 @@ func TestResolveReferenceUnknownRemoteRefDoesNotBecomeExecutableImage(t *testing
 	}
 }
 
-func TestResolveReferenceLocalStoreByNameTagAndDigest(t *testing.T) {
+func TestResolveReferenceUnifiedRepositoryByNameTagAndDigest(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Cleanup(func() { makeManifestTestTreeWritable(dataDir) })
 	t.Setenv("ADVERSARY_DATA_DIR", dataDir)
@@ -145,13 +144,16 @@ permissions:
 	if err != nil {
 		t.Fatal(err)
 	}
-	localStore := store.Store{Root: dataDir}
-	record, err := localStore.Put(artifact)
+	resolver, err := DefaultResolver()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := resolver.ImportPacked(artifact, "local/dockerfile-adversary:0.1.0")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, ref := range []string{"dockerfile-adversary:0.1.0", record.Digest} {
+	for _, ref := range []string{"local/dockerfile-adversary:0.1.0", record.Digest} {
 		resolved, err := ResolveReference(ref)
 		if err != nil {
 			t.Fatalf("resolve %q: %v", ref, err)
