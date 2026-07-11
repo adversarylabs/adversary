@@ -1,6 +1,7 @@
 package oci
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,7 +13,7 @@ func TestBearerTokenResponseIsBounded(t *testing.T) {
 		_, _ = w.Write([]byte(strings.Repeat(" ", 1<<20) + `{"token":"secret"}`))
 	}))
 	defer s.Close()
-	if _, err := readBearerToken(s.Client(), bearerChallenge{Realm: s.URL}, "", Credentials{}, false); err == nil {
+	if _, err := readBearerToken(context.Background(), s.Client(), bearerChallenge{Realm: s.URL}, "", Credentials{}, false); err == nil {
 		t.Fatal("accepted oversized whitespace token response")
 	}
 }

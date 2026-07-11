@@ -1,14 +1,17 @@
 package oci
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type Credentials struct {
@@ -28,7 +31,12 @@ func (DockerCredentialStore) Credentials(registry string) (Credentials, bool) {
 	if err != nil {
 		return Credentials{}, false
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".docker", "config.json"))
+	configFile, err := os.Open(filepath.Join(home, ".docker", "config.json"))
+	if err != nil {
+		return Credentials{}, false
+	}
+	defer configFile.Close()
+	data, err := readLimited(configFile, 1<<20, "Docker config")
 	if err != nil {
 		return Credentials{}, false
 	}
@@ -38,6 +46,8 @@ func (DockerCredentialStore) Credentials(registry string) (Credentials, bool) {
 			Username string `json:"username"`
 			Password string `json:"password"`
 		} `json:"auths"`
+		CredentialHelpers map[string]string `json:"credHelpers"`
+		CredentialsStore  string            `json:"credsStore"`
 	}
 	if err := json.Unmarshal(data, &config); err != nil {
 		return Credentials{}, false
@@ -61,7 +71,49 @@ func (DockerCredentialStore) Credentials(registry string) (Credentials, bool) {
 			}
 		}
 	}
+	for _, key := range dockerAuthKeys(registry) {
+		helper := config.CredentialHelpers[key]
+		if helper == "" {
+			helper = config.CredentialsStore
+		}
+		if helper != "" {
+			if creds, ok := credentialsFromHelper(helper, key); ok {
+				return creds, true
+			}
+		}
+	}
 	return Credentials{}, false
+}
+
+func credentialsFromHelper(helper, server string) (Credentials, bool) {
+	if strings.ContainsAny(helper, `/\\`) || strings.TrimSpace(helper) != helper || helper == "" {
+		return Credentials{}, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker-credential-"+helper, "get")
+	cmd.Stdin = strings.NewReader(server + "\n")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil || cmd.Start() != nil {
+		return Credentials{}, false
+	}
+	out, readErr := readLimited(stdout, 1<<20, "credential helper output")
+	if readErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return Credentials{}, false
+	}
+	if err := cmd.Wait(); err != nil {
+		return Credentials{}, false
+	}
+	var result struct{ Username, Secret string }
+	if json.Unmarshal(out, &result) != nil || result.Secret == "" {
+		return Credentials{}, false
+	}
+	if result.Username == "<token>" {
+		return Credentials{Token: result.Secret}, true
+	}
+	return Credentials{Username: result.Username, Password: result.Secret}, true
 }
 
 func dockerAuthKeys(registry string) []string {
@@ -79,11 +131,12 @@ type bearerChallenge struct {
 }
 
 func parseBearerChallenge(header string) (bearerChallenge, bool) {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(strings.TrimSpace(header), prefix) {
+	header = strings.TrimSpace(header)
+	space := strings.IndexByte(header, ' ')
+	if space < 0 || !strings.EqualFold(header[:space], "bearer") {
 		return bearerChallenge{}, false
 	}
-	params := parseAuthParams(strings.TrimSpace(header)[len(prefix):])
+	params := parseAuthParams(strings.TrimSpace(header[space+1:]))
 	realm := params["realm"]
 	if realm == "" {
 		return bearerChallenge{}, false
@@ -93,13 +146,41 @@ func parseBearerChallenge(header string) (bearerChallenge, bool) {
 
 func parseAuthParams(s string) map[string]string {
 	out := map[string]string{}
-	for _, part := range strings.Split(s, ",") {
+	for len(strings.TrimSpace(s)) > 0 {
+		s = strings.TrimSpace(s)
+		comma, quoted, escaped := -1, false, false
+		for i, ch := range s {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' && quoted {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				quoted = !quoted
+				continue
+			}
+			if ch == ',' && !quoted {
+				comma = i
+				break
+			}
+		}
+		part := s
+		if comma >= 0 {
+			part, s = s[:comma], s[comma+1:]
+		} else {
+			s = ""
+		}
 		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
 		if !ok {
 			continue
 		}
 		value = strings.TrimSpace(value)
-		value = strings.Trim(value, `"`)
+		if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+			value = strings.ReplaceAll(strings.ReplaceAll(value[1:len(value)-1], `\"`, `"`), `\\`, `\`)
+		}
 		out[strings.ToLower(strings.TrimSpace(key))] = value
 	}
 	return out
@@ -109,6 +190,9 @@ func tokenRequestURL(challenge bearerChallenge, scope string) (string, error) {
 	u, err := url.Parse(challenge.Realm)
 	if err != nil {
 		return "", err
+	}
+	if u.Host == "" || u.User != nil || u.Fragment != "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Host))) {
+		return "", fmt.Errorf("bearer authentication realm must be HTTPS (or explicit loopback HTTP)")
 	}
 	q := u.Query()
 	if challenge.Service != "" {
@@ -124,12 +208,12 @@ func tokenRequestURL(challenge bearerChallenge, scope string) (string, error) {
 	return u.String(), nil
 }
 
-func readBearerToken(client *http.Client, challenge bearerChallenge, scope string, creds Credentials, hasCreds bool) (string, error) {
+func readBearerToken(ctx context.Context, client *http.Client, challenge bearerChallenge, scope string, creds Credentials, hasCreds bool) (string, error) {
 	tokenURL, err := tokenRequestURL(challenge, scope)
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequest(http.MethodGet, tokenURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -143,11 +227,13 @@ func readBearerToken(client *http.Client, challenge bearerChallenge, scope strin
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := readLimited(resp.Body, 64<<10, "token error response")
-		text := strings.TrimSpace(string(data))
+		text := sanitizeErrorText(string(data))
 		if text == "" {
 			text = resp.Status
 		}
-		return "", fmt.Errorf("token request failed: %s: %s: %s", resp.Status, tokenURL, text)
+		u := req.URL
+		endpoint := u.Scheme + "://" + u.Host + u.EscapedPath()
+		return "", fmt.Errorf("token request failed: %s: %s: %s", resp.Status, endpoint, text)
 	}
 	var body struct {
 		Token       string `json:"token"`

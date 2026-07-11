@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -90,11 +93,11 @@ type Subscription struct {
 }
 
 func NewClient(store ConfigStore) Client {
-	return Client{BaseURL: ResolveAPIURL(""), HTTP: http.DefaultClient, Store: store}
+	return Client{BaseURL: ResolveAPIURL(""), HTTP: newHTTPClient(), Store: store}
 }
 
 func NewClientWithBaseURL(store ConfigStore, baseURL string) Client {
-	return Client{BaseURL: ResolveAPIURL(baseURL), HTTP: http.DefaultClient, Store: store}
+	return Client{BaseURL: ResolveAPIURL(baseURL), HTTP: newHTTPClient(), Store: store}
 }
 
 func ResolveAPIURL(override string) string {
@@ -128,6 +131,9 @@ func (c Client) LoginWithPassword(ctx context.Context, opts PasswordLoginOptions
 }
 
 func (c Client) BrowserLoginURL(opts BrowserLoginOptions) (string, error) {
+	if _, err := validateBaseURL(c.BaseURL); err != nil {
+		return "", err
+	}
 	appBase := appBaseURL(c.BaseURL)
 	u, err := url.Parse(appBase + "/login")
 	if err != nil {
@@ -188,6 +194,9 @@ func (c Client) Revoke(ctx context.Context, token string) error {
 }
 
 func (c Client) Search(ctx context.Context, query string, token string) ([]SearchResult, error) {
+	if _, err := validateBaseURL(c.BaseURL); err != nil {
+		return nil, err
+	}
 	u, err := url.Parse(c.BaseURL + "/v1/search")
 	if err != nil {
 		return nil, err
@@ -216,13 +225,16 @@ func (c Client) Search(ctx context.Context, query string, token string) ([]Searc
 	var body struct {
 		Results []SearchResult `json:"results"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := decodeLimited(resp.Body, &body); err != nil {
 		return nil, err
 	}
 	return body.Results, nil
 }
 
 func (c Client) Whoami(ctx context.Context, token string) (WhoamiResponse, error) {
+	if _, err := validateBaseURL(c.BaseURL); err != nil {
+		return WhoamiResponse{}, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/auth/whoami", nil)
 	if err != nil {
 		return WhoamiResponse{}, err
@@ -242,13 +254,16 @@ func (c Client) Whoami(ctx context.Context, token string) (WhoamiResponse, error
 		return WhoamiResponse{}, fmt.Errorf("whoami failed: %s", resp.Status)
 	}
 	var out WhoamiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := decodeLimited(resp.Body, &out); err != nil {
 		return WhoamiResponse{}, err
 	}
 	return out, nil
 }
 
 func (c Client) postJSON(ctx context.Context, path string, payload any, token string, out any) error {
+	if _, err := validateBaseURL(c.BaseURL); err != nil {
+		return err
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -272,14 +287,92 @@ func (c Client) postJSON(ctx context.Context, path string, payload any, token st
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return decodeLimited(resp.Body, out)
 }
 
 func (c Client) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return http.DefaultClient
+	return newHTTPClient()
+}
+
+func validateBaseURL(value string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" {
+		return nil, fmt.Errorf("invalid API URL")
+	}
+	host := u.Hostname()
+	loopback := strings.EqualFold(host, "localhost") || net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
+	if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
+		return nil, fmt.Errorf("API URL must use HTTPS (or loopback HTTP)")
+	}
+	return u, nil
+}
+
+func newHTTPClient() *http.Client {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: dialer.DialContext, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 30 * time.Second, ExpectContinueTimeout: time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 32, MaxIdleConnsPerHost: 8}
+	return &http.Client{Transport: apiRetryTransport{base: transport}, Timeout: 2 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		if len(via) > 0 {
+			previous := via[len(via)-1].URL
+			if previous.Scheme == "https" && req.URL.Scheme != "https" {
+				return fmt.Errorf("refusing HTTPS downgrade redirect")
+			}
+			if !strings.EqualFold(previous.Scheme, req.URL.Scheme) || !strings.EqualFold(previous.Host, req.URL.Host) {
+				req.Header.Del("Authorization")
+				req.Header.Del("Cookie")
+			}
+		}
+		return nil
+	}}
+}
+
+type apiRetryTransport struct{ base http.RoundTripper }
+
+func (t apiRetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+		return t.base.RoundTrip(req)
+	}
+	for attempt := 0; ; attempt++ {
+		resp, err := t.base.RoundTrip(req)
+		if err != nil {
+			return nil, err
+		}
+		transient := resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504
+		if !transient || attempt == 2 {
+			return resp, nil
+		}
+		resp.Body.Close()
+		delay := time.Duration(1<<uint(attempt)) * 100 * time.Millisecond
+		if seconds, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && seconds >= 0 {
+			delay = time.Duration(seconds) * time.Second
+			if delay > 10*time.Second {
+				delay = 10 * time.Second
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-req.Context().Done():
+			timer.Stop()
+			return nil, req.Context().Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func decodeLimited(body io.Reader, out any) error {
+	data, err := io.ReadAll(io.LimitReader(body, (1<<20)+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > 1<<20 {
+		return fmt.Errorf("API response exceeds 1 MiB limit")
+	}
+	return json.Unmarshal(data, out)
 }
 
 func PollInterval(login DeviceLogin) time.Duration {

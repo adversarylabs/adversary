@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -1066,6 +1067,9 @@ func newOCIRegistry(apiURL, profile string) (*oci.HTTPRegistry, error) {
 	}
 	registry.BearerRealm = registryAuthRealm(apiURL)
 	registry.BearerService = adversarylabs.ResolveRegistryHost()
+	if realm, parseErr := url.Parse(registry.BearerRealm); parseErr == nil && realm.Host != "" {
+		registry.TokenAuthorities[registry.BearerService] = oci.TokenAuthority{Origin: realm.Scheme + "://" + realm.Host, Service: registry.BearerService}
+	}
 	store, err := adversarylabs.DefaultConfigStore()
 	if err != nil {
 		return nil, err

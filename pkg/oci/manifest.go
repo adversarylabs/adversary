@@ -8,6 +8,7 @@ import (
 
 const (
 	ImageManifestMediaType       = "application/vnd.oci.image.manifest.v1+json"
+	DockerImageManifestMediaType = "application/vnd.docker.distribution.manifest.v2+json"
 	OCIArtifactManifestMediaType = "application/vnd.oci.artifact.manifest.v1+json"
 	AdversaryManifestMediaType   = "application/vnd.adversarylabs.manifest.v1+yaml"
 	EmptyConfigMediaType         = "application/vnd.adversarylabs.adversary.config.v1+json"
