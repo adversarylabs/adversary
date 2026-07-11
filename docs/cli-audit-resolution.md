@@ -24,7 +24,7 @@ are the maintained contract after merge.
 | CLI-016 | PR #3 and contracts-closure PR; atomic init, deterministic TypeScript lockfile/`npm ci`, and injected render/write cleanup tests |
 | CLI-017 | PRs #17 and #18; `docs/cli-output-contract.md`, help goldens, DTO tests |
 | CLI-018 | PR #19; `docs/platform-runtime-support.md`, native CI matrix |
-| CLI-019 | PR #6; decompression/size/checksum limit tests |
+| CLI-019 | PR #6 plus streaming additive/migration/cleanup PRs; bounded ingestion and a durable repeatable blob-source foundation for streamed pack, repository, and OCI transfer |
 | CLI-020 | PR #6; sealed publication and cross-process locking tests |
 | CLI-021 | PRs #1, #8, #9, #11, #12, and #15 through #19; versioned protocol, resolver, build, lifecycle, output, and platform contracts |
 | CLI-022 | Release-hardening PR; pinned workflows, deterministic archive test, SBOM and attestation policy in `docs/release.md` |
