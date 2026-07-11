@@ -25,9 +25,22 @@ retry/reopen lifetime without blocking unrelated repository operations.
 Callers close all readers and then close the lease; an active-reader error keeps
 the record-specific lock held for retry. Construction failures release the lock.
 
-The migration PR will stream pack output into owned temporary sources, import
-sources into the repository with atomic verified writes, and teach OCI upload
-and download paths to consume and produce sources. A final cleanup PR will
-remove the legacy whole-blob fields after all callers migrate. Rolling back this
-additive PR removes only the new types, adapters, tests, and this document;
-stored artifacts and existing APIs are unchanged.
+The migration phase streams production pack output into owned temporary
+sources, imports sources into the repository with atomic verified writes, and
+uses source-based OCI upload and download paths. Upload authentication retries
+reopen a source at byte zero. Downloads verify size and digest while writing an
+owned temporary file and remove every partial or accumulated file on failure.
+Command paths hold repository payload leases through publication and close
+download/pack ownership after import. Bounded manifest, config, and adversary
+YAML metadata remain in memory; package layers do not.
+
+The allocation regression writes 64 MiB of deterministic pseudo-random
+(incompressible) input before measurement, forces a collection, and requires
+the complete streaming pack operation to allocate no more than 8 MiB according
+to `runtime.MemStats.TotalAlloc`. The companion benchmark reports allocations
+for the same deterministic workload. Source readers are additionally tested to
+consume at most their declared size plus the one-byte EOF probe.
+
+A final cleanup PR will remove the legacy whole-blob fields and compatibility
+methods. Rolling back the migration restores the legacy command adapters;
+stored repository records and content paths remain format-compatible.

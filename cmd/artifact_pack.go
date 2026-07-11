@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/oci"
@@ -33,14 +34,14 @@ func newPackCommand(app *application.App) *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "Packing adversary...")
-			artifact, err := pack.Create(cmd.Context(), pack.Options{Dir: args[0], NameOverride: opts.name, Build: true, Builder: opts.builder, Stdout: cmd.ErrOrStderr(), Stderr: cmd.ErrOrStderr()})
+			artifact, err := pack.Create(cmd.Context(), pack.Options{Dir: args[0], NameOverride: opts.name, Build: true, Builder: opts.builder, Stdout: cmd.ErrOrStderr(), Stderr: cmd.ErrOrStderr(), Streaming: true})
 			if err != nil {
 				return err
 			}
 			resolver := app.Dependencies().Resolver
 			canonical := artifact.Name + ":" + artifact.Version
-			unified, err := resolver.ImportPacked(artifact, canonical)
-			if err != nil {
+			unified, importErr := resolver.ImportPacked(artifact, canonical)
+			if err := errors.Join(importErr, artifact.Close()); err != nil {
 				return err
 			}
 			latest := artifact.Name + ":" + oci.DefaultTag

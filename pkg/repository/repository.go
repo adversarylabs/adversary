@@ -19,6 +19,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/archiveutil"
 	"github.com/adversarylabs/adversary/internal/publock"
 	"github.com/adversarylabs/adversary/internal/rootreplace"
+	"github.com/adversarylabs/adversary/pkg/blobsource"
 	canonical "github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
@@ -55,6 +56,13 @@ const maxIndexBytes int64 = 4 << 20
 var importStepHook func(string) error
 
 func (r Repository) ImportPacked(a pack.Artifact, reference string) (Record, error) {
+	if a.LayerSource != nil {
+		blobs, err := a.Sources()
+		if err != nil {
+			return Record{}, err
+		}
+		return r.ImportSources(SourceImport{Reference: reference, Name: a.ManifestName, Version: a.Version, Manifest: blobsource.Bytes(a.Manifest), Blobs: blobs, AdversaryManifest: blobsource.Bytes(a.AdversaryManifest)})
+	}
 	return r.Import(Import{Reference: reference, Name: a.ManifestName, Version: a.Version, Manifest: a.Manifest, Config: a.Config, Layer: a.Layer, AdversaryManifest: a.AdversaryManifest, ManifestDigest: a.ManifestDigest, ConfigDigest: a.ConfigDigest, LayerDigest: a.LayerDigest, AdversaryManifestDigest: a.AdversaryManifestDigest})
 }
 func (r Repository) ImportPulled(a oci.PulledArtifact) (Record, error) {
@@ -75,19 +83,27 @@ func (r Repository) ImportPulled(a oci.PulledArtifact) (Record, error) {
 }
 
 func (r Repository) Import(in Import) (Record, error) {
+	return r.importData(in, false, false)
+}
+
+func (r Repository) importData(in Import, prewritten, lifecycleHeld bool) (Record, error) {
 	if err := r.init(); err != nil {
 		return Record{}, err
 	}
-	lifecycleLock, err := publock.Acquire(r.Root, "repo-lifecycle")
-	if err != nil {
-		return Record{}, err
+	var err error
+	var lifecycleLock *publock.Lock
+	if !lifecycleHeld {
+		lifecycleLock, err = publock.Acquire(r.Root, "repo-lifecycle")
+		if err != nil {
+			return Record{}, err
+		}
+		defer lifecycleLock.Close()
 	}
-	defer lifecycleLock.Close()
 	for label, v := range map[string]struct {
 		data   []byte
 		digest string
 	}{"manifest": {in.Manifest, in.ManifestDigest}, "config": {in.Config, in.ConfigDigest}, "layer": {in.Layer, in.LayerDigest}, "adversary manifest": {in.AdversaryManifest, in.AdversaryManifestDigest}} {
-		if (len(v.data) > 0 && (v.digest == "" || oci.Digest(v.data) != v.digest)) || (len(v.data) == 0 && v.digest != "") {
+		if (len(v.data) > 0 && (v.digest == "" || oci.Digest(v.data) != v.digest)) || (!prewritten && len(v.data) == 0 && v.digest != "") {
 			return Record{}, fmt.Errorf("%s digest mismatch", label)
 		}
 	}

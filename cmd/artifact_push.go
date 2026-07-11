@@ -2,13 +2,31 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/spf13/cobra"
 	"io"
 	"os"
 )
+
+func readSmallSource(src blobsource.Source, limit int64) ([]byte, error) {
+	if src == nil {
+		return nil, nil
+	}
+	if src.Size() > limit {
+		return nil, fmt.Errorf("metadata exceeds %d byte limit", limit)
+	}
+	r, err := src.Open()
+	if err != nil {
+		return nil, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(r, limit+1))
+	return data, errors.Join(readErr, r.Close())
+}
 
 func newPushCommand(app *application.App, apiURL, profile *string) *cobra.Command {
 	var format string
@@ -39,7 +57,7 @@ func newPushCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 	return cmd
 }
 
-func pushUnified(ctx context.Context, app *application.App, resolver application.Resolver, stdout, stderr io.Writer, args []string, apiURL, profile, format string) (bool, error) {
+func pushUnified(ctx context.Context, app *application.App, resolver application.Resolver, stdout, stderr io.Writer, args []string, apiURL, profile, format string) (_ bool, retErr error) {
 	hasExact, _ := resolver.HasExact(args[0])
 	resolution, err := resolver.Lookup(ctx, args[0])
 	if err != nil {
@@ -51,7 +69,22 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 	if resolution.Local {
 		return true, fmt.Errorf("artifact %q is not present in the unified repository", args[0])
 	}
-	manifest, blobs, yaml, err := resolver.Payload(resolution.Record)
+	streamResolver, ok := resolver.(interface {
+		PayloadSources(repository.Record) (*repository.PayloadLease, error)
+	})
+	if !ok {
+		return true, fmt.Errorf("resolver does not support streaming payloads")
+	}
+	lease, err := streamResolver.PayloadSources(resolution.Record)
+	if err != nil {
+		return true, err
+	}
+	defer func() { retErr = errors.Join(retErr, lease.Close()) }()
+	manifest, err := readSmallSource(lease.Manifest, 4<<20)
+	if err != nil {
+		return true, err
+	}
+	yaml, err := readSmallSource(lease.AdversaryManifest, 1<<20)
 	if err != nil {
 		return true, err
 	}
@@ -76,7 +109,13 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 		registry.SetPlainHTTP(true)
 	}
 	fmt.Fprintf(stderr, "Pushing %s (%s) to %s\n", resolution.CanonicalReference, resolution.Digest, ref.Locator())
-	digest, err := registry.Push(ctx, ref, manifest, blobs)
+	streamRegistry, ok := registry.(interface {
+		PushSources(context.Context, oci.Reference, []byte, []oci.SourceBlob) (string, error)
+	})
+	if !ok {
+		return true, fmt.Errorf("registry does not support streaming uploads")
+	}
+	digest, err := streamRegistry.PushSources(ctx, ref, manifest, lease.Blobs)
 	if err != nil {
 		return true, err
 	}
