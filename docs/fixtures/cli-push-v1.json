@@ -1,0 +1,1 @@
+{"schemaVersion":1,"command":"push","data":{"canonicalReference":"registry.example/example:1.0.0","digest":"sha256:00","manifestDigest":"sha256:01"}}
