@@ -3,17 +3,17 @@ package adversary
 import (
 	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
-	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
 type Resolver struct {
 	Repository repository.Repository
+	Files      RuntimeFiles
 }
 
 var ErrNotFound = errors.New("adversary reference not found")
@@ -26,25 +26,10 @@ type Resolution struct {
 	Local              bool
 }
 
-func DefaultResolver() (Resolver, error) {
-	dataRoot, err := resolverDataRoot()
-	if err != nil {
-		return Resolver{}, err
-	}
-	root := filepath.Join(dataRoot, "repository-v1")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		return Resolver{}, err
-	}
-	return Resolver{Repository: repository.Repository{Root: root}}, nil
-}
-
-func resolverDataRoot() (string, error) {
-	return internalpaths.DataDir()
-}
-
 func (r Resolver) Resolve(value string) (Resolution, error) {
-	if info, err := os.Stat(filepath.Join(value, "adversary.yaml")); err == nil && !info.IsDir() {
-		path, err := filepath.Abs(value)
+	files := r.runtimeFiles()
+	if info, err := files.Stat(filepath.Join(value, "adversary.yaml")); err == nil && !info.IsDir() {
+		path, err := files.Abs(value)
 		return Resolution{Path: path, Local: true, CanonicalReference: path}, err
 	}
 	if strings.HasPrefix(value, "sha256:") {
@@ -59,8 +44,9 @@ func (r Resolver) Resolve(value string) (Resolution, error) {
 	return r.resolveOrMigrate(value)
 }
 func (r Resolver) Lookup(value string) (Resolution, error) {
-	if info, err := os.Stat(filepath.Join(value, "adversary.yaml")); err == nil && !info.IsDir() {
-		path, err := filepath.Abs(value)
+	files := r.runtimeFiles()
+	if info, err := files.Stat(filepath.Join(value, "adversary.yaml")); err == nil && !info.IsDir() {
+		path, err := files.Abs(value)
 		return Resolution{Path: path, Local: true, CanonicalReference: path}, err
 	}
 	rec, err := r.Repository.Resolve(value)
@@ -69,7 +55,7 @@ func (r Resolver) Lookup(value string) (Resolution, error) {
 		if exactErr != nil {
 			return Resolution{}, exactErr
 		}
-		if hasExact || !os.IsNotExist(err) {
+		if hasExact || !errors.Is(err, fs.ErrNotExist) {
 			return Resolution{}, err
 		}
 		return r.resolveOrMigrate(value)
@@ -92,7 +78,7 @@ func (r Resolver) resolveRepository(value string) (Resolution, error) {
 	canonical := value
 	if ref, refErr := r.Repository.CanonicalReference(rec.Digest); refErr == nil {
 		canonical = ref
-	} else if !os.IsNotExist(refErr) {
+	} else if !errors.Is(refErr, fs.ErrNotExist) {
 		return Resolution{}, refErr
 	}
 	return Resolution{Record: rec, CanonicalReference: canonical, Digest: rec.Digest, Path: path}, nil
@@ -105,7 +91,7 @@ func (r Resolver) resolveOrMigrate(value string) (Resolution, error) {
 	if errors.Is(err, repository.ErrAmbiguous) {
 		return Resolution{}, err
 	}
-	if !os.IsNotExist(err) {
+	if !errors.Is(err, fs.ErrNotExist) {
 		return Resolution{}, err
 	}
 	if hasExact, exactErr := r.Repository.HasExact(value); exactErr != nil {
@@ -114,6 +100,13 @@ func (r Resolver) resolveOrMigrate(value string) (Resolution, error) {
 		return Resolution{}, err
 	}
 	return Resolution{}, fmt.Errorf("%w: %s", ErrNotFound, value)
+}
+
+func (r Resolver) runtimeFiles() RuntimeFiles {
+	if r.Files != nil {
+		return r.Files
+	}
+	return OSRuntimeFiles{}
 }
 func isFullyQualified(v string) bool {
 	if len(v) >= 3 && ((v[0] >= 'A' && v[0] <= 'Z') || (v[0] >= 'a' && v[0] <= 'z')) && v[1] == ':' && (v[2] == '\\' || v[2] == '/') {

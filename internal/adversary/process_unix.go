@@ -9,15 +9,15 @@ import (
 	"syscall"
 )
 
-func platformShell() ([]string, error) {
-	path, err := exec.LookPath("sh")
+func PlatformShell(lookPath func(string) (string, error)) ([]string, error) {
+	path, err := lookPath("sh")
 	if err != nil {
 		return nil, fmt.Errorf("host shell is unavailable: %w", err)
 	}
 	return []string{path}, nil
 }
 
-func validateExecutable(path string) error {
+func ValidateExecutable(path, _ string) error {
 	info, err := executableFileInfo(path)
 	if err != nil {
 		return err
@@ -30,21 +30,28 @@ func validateExecutable(path string) error {
 
 func configureProcess(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
 
-func supervisedProcessGroup(cmd *exec.Cmd) int {
-	if cmd.Process == nil || cmd.Process.Pid <= 1 || cmd.Process.Pid == syscall.Getpgrp() || cmd.Process.Pid == os.Getpid() {
+func supervisedProcessGroup(process RunningProcess) int {
+	pid := process.PID()
+	if pid <= 1 || pid == syscall.Getpgrp() || pid == os.Getpid() {
 		return 0
 	}
-	return cmd.Process.Pid
+	return pid
 }
 
-func requestProcessTermination(_ *exec.Cmd, group int) {
+func requestProcessTermination(process RunningProcess, group int) {
 	if group > 1 {
 		_ = syscall.Kill(-group, syscall.SIGTERM)
+		return
 	}
+	_ = process.Kill()
 }
 
-func killProcessTree(_ *exec.Cmd, group int) {
+func killProcessTree(process RunningProcess, group int) {
 	if group > 1 {
 		_ = syscall.Kill(-group, syscall.SIGKILL)
+		return
 	}
+	_ = process.Kill()
 }
+
+func processGroupNeedsGrace(group int) bool { return group > 1 }

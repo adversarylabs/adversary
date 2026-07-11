@@ -16,8 +16,10 @@ does not expose a flag that cannot yet be wired consistently.
 On Unix, every host adversary starts in a new process group. Cancellation sends
 TERM to the group, allows 750 milliseconds for graceful shutdown, then sends
 KILL to the group and waits for the direct child. Temporary input and output are
-removed only after that wait completes. Cleanup failures are non-fatal and are
-reported with `--verbose`; `--keep-temp` is the explicit preservation mechanism.
+removed only after that wait completes. Reaping a cooperative direct child does
+not shorten the group grace: detached group members still receive the full 750
+milliseconds before KILL. Cleanup failures are non-fatal and are reported with
+`--verbose`; `--keep-temp` is the explicit preservation mechanism.
 
 Windows does not yet use a Job Object. Cancellation kills and waits for the
 direct child, and Windows adversaries must not detach descendants. This is an

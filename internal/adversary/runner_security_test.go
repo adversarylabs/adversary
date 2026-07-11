@@ -108,7 +108,8 @@ func TestExplicitPathClassificationRejectsArtifactStorage(t *testing.T) {
 			if explicit {
 				t.Fatalf("artifact storage path %q classified as explicit local source", project)
 			}
-			err = Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}.Run(context.Background(), RunOptions{AdversaryRef: project, RepoPath: t.TempDir()})
+			home, _ := os.UserHomeDir()
+			err = Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, HomeDir: home, DataRoot: data}.Run(context.Background(), RunOptions{AdversaryRef: project, RepoPath: t.TempDir()})
 			if err == nil || !strings.Contains(err.Error(), "--allow-unsafe-host-execution") {
 				t.Fatalf("direct artifact path error = %v", err)
 			}
@@ -281,7 +282,11 @@ func TestRunJSONKeepTempIsOneDocumentAndPathIsStderr(t *testing.T) {
 
 func TestHostChildStdoutIsRoutedToStderr(t *testing.T) {
 	project := writeRunnerProject(t, "")
-	script := filepath.Join(project, "run.sh")
+	canonicalProject, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(canonicalProject, "run.sh")
 	writeFile(t, script, "#!/bin/sh\nprintf 'child log\\n'\nprintf '%s' '"+string(minimalEnvelope())+"' > \"$ADVERSARY_OUTPUT\"\n")
 	if err := os.Chmod(script, 0755); err != nil {
 		t.Fatal(err)
@@ -289,7 +294,7 @@ func TestHostChildStdoutIsRoutedToStderr(t *testing.T) {
 	writeFile(t, filepath.Join(project, "adversary.yaml"), "name: local/test\nruntime:\n  name: process\n  version: \"1\"\n  command:\n    - "+script+"\n")
 
 	var stdout, stderr bytes.Buffer
-	err := Runner{Stdout: &stdout, Stderr: &stderr}.Run(context.Background(), RunOptions{AdversaryRef: project, RepoPath: t.TempDir(), Format: "json"})
+	err = Runner{Stdout: &stdout, Stderr: &stderr, Executor: systemHostExecutorForTest(nil, &stderr, &stderr)}.Run(context.Background(), RunOptions{AdversaryRef: project, RepoPath: t.TempDir(), Format: "json"})
 	if err != nil {
 		t.Fatal(err)
 	}

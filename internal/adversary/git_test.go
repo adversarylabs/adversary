@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -57,7 +58,7 @@ func TestCommandGitDifferChangedFiles(t *testing.T) {
 	runGit(t, repo, "add", ".")
 	runGit(t, repo, "commit", "-m", "change")
 
-	got, err := CommandGitDiffer{}.ChangedFiles(context.Background(), repo, "base", "HEAD")
+	got, err := systemGitDiffer(t).ChangedFiles(context.Background(), repo, "base", "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,10 +68,10 @@ func TestCommandGitDifferChangedFiles(t *testing.T) {
 }
 
 func TestGitDiffNameOnlyCommandConstruction(t *testing.T) {
-	cmd := gitDiffNameStatusCommand(context.Background(), "main", "HEAD")
-	want := []string{"git", "diff", "--name-status", "-z", "--find-renames", "--find-copies", "--find-copies-harder", "main", "HEAD", "--"}
-	if !reflect.DeepEqual(cmd.Args, want) {
-		t.Fatalf("Args = %#v, want %#v", cmd.Args, want)
+	got := gitDiffNameStatusArgs("main", "HEAD")
+	want := []string{"diff", "--name-status", "-z", "--find-renames", "--find-copies", "--find-copies-harder", "main", "HEAD", "--"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Args = %#v, want %#v", got, want)
 	}
 }
 
@@ -90,7 +91,7 @@ func TestCommandGitDifferModelsRenameAndDelete(t *testing.T) {
 	runGit(t, repo, "mv", "rename me", "renamed\nfile")
 	runGit(t, repo, "rm", "delete me")
 	runGit(t, repo, "commit", "-m", "change")
-	got, err := (CommandGitDiffer{}).Changes(context.Background(), repo, "base", "HEAD")
+	got, err := systemGitDiffer(t).Changes(context.Background(), repo, "base", "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +124,7 @@ func TestCommandGitDifferFindsCopyFromUnchangedTrackedSource(t *testing.T) {
 	}
 	runGit(t, repo, "add", ".")
 	runGit(t, repo, "commit", "-m", "copy")
-	got, err := (CommandGitDiffer{}).Changes(context.Background(), repo, "base", "HEAD")
+	got, err := systemGitDiffer(t).Changes(context.Background(), repo, "base", "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,14 +135,47 @@ func TestCommandGitDifferFindsCopyFromUnchangedTrackedSource(t *testing.T) {
 }
 
 func TestCommandGitDifferErrorsAreActionable(t *testing.T) {
-	_, err := (CommandGitDiffer{}).Changes(context.Background(), t.TempDir(), "main", "HEAD")
+	differ := systemGitDiffer(t)
+	_, err := differ.Changes(context.Background(), t.TempDir(), "main", "HEAD")
 	if err == nil || !strings.Contains(err.Error(), "not a Git work tree") {
 		t.Fatalf("error = %v", err)
 	}
-	_, err = (CommandGitDiffer{}).Changes(context.Background(), ".", "--output=x", "HEAD")
+	_, err = differ.Changes(context.Background(), ".", "--output=x", "HEAD")
 	if err == nil || !strings.Contains(err.Error(), "command options") {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+func TestCommandGitDifferUsesCanonicalCapturedProcessState(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "git")
+	capturedPath, livePath := t.TempDir(), t.TempDir()
+	environment := NewProcessEnvironment([]string{"PATH=" + capturedPath, "GIT_CONFIG_NOSYSTEM=1"}, false)
+	t.Setenv("PATH", livePath)
+	output := &recordingOutputRunner{}
+	differ := CommandGitDiffer{Executable: executable, Environment: environment, Output: output}
+	if _, _, err := differ.run(context.Background(), t.TempDir(), "status", "--porcelain"); err != nil {
+		t.Fatal(err)
+	}
+	if output.options.Path != executable {
+		t.Fatalf("Git executable = %q", output.options.Path)
+	}
+	joined := strings.Join(output.options.Env, "\n")
+	if !strings.Contains(joined, "GIT_CONFIG_NOSYSTEM=1") || !strings.Contains(joined, "PATH="+capturedPath) || strings.Contains(joined, livePath) {
+		t.Fatalf("Git environment = %#v", output.options.Env)
+	}
+}
+
+func systemGitDiffer(t *testing.T) CommandGitDiffer {
+	t.Helper()
+	path, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return CommandGitDiffer{Executable: path, Environment: NewProcessEnvironment(os.Environ(), runtime.GOOS == "windows"), Output: ExecProcessOutputRunner{}}
 }
 
 func TestRunConfigHostExecutionSpec(t *testing.T) {
