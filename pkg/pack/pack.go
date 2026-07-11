@@ -23,6 +23,7 @@ import (
 
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/internal/publock"
+	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
@@ -34,6 +35,8 @@ type Options struct {
 	Builder      string
 	Stdout       io.Writer
 	Stderr       io.Writer
+	// Streaming writes the compressed layer to an owned temporary source.
+	Streaming bool
 }
 
 type BuildOptions struct {
@@ -74,6 +77,14 @@ type Artifact struct {
 	Size                    int64
 	Files                   []File
 	OCIManifest             oci.Manifest
+	LayerSource             blobsource.SourceCloser
+}
+
+func (a *Artifact) Close() error {
+	if a == nil || a.LayerSource == nil {
+		return nil
+	}
+	return a.LayerSource.Close()
 }
 
 type File struct {
@@ -124,7 +135,60 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 			return Artifact{}, err
 		}
 	}
-	files, layer, err := collectAndBuildLayer(root, dir)
+	var files []File
+	var layer []byte
+	var layerSource blobsource.SourceCloser
+	var layerSize int64
+	var layerDigest string
+	ownershipTransferred := false
+	defer func() {
+		if layerSource != nil && !ownershipTransferred {
+			_ = layerSource.Close()
+		}
+	}()
+	if opts.Streaming {
+		tmp, createErr := os.CreateTemp("", "adversary-pack-*.tar.gz")
+		if createErr != nil {
+			return Artifact{}, createErr
+		}
+		name := tmp.Name()
+		keep := false
+		defer func() {
+			if !keep {
+				_ = tmp.Close()
+				_ = os.Remove(name)
+			}
+		}()
+		hash := sha256.New()
+		files, err = collectAndBuildLayerTo(root, dir, io.MultiWriter(tmp, hash))
+		if err == nil {
+			err = tmp.Sync()
+		}
+		if closeErr := tmp.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return Artifact{}, err
+		}
+		info, statErr := os.Stat(name)
+		if statErr != nil {
+			return Artifact{}, statErr
+		}
+		layerSize = info.Size()
+		layerDigest = "sha256:" + hex.EncodeToString(hash.Sum(nil))
+		src, sourceErr := blobsource.File(name, layerDigest)
+		if sourceErr != nil {
+			return Artifact{}, sourceErr
+		}
+		layerSource = blobsource.Owned(src, func() error { return os.Remove(name) })
+		keep = true
+	} else {
+		files, layer, err = collectAndBuildLayer(root, dir)
+		if err == nil {
+			layerSize = int64(len(layer))
+			layerDigest = oci.Digest(layer)
+		}
+	}
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -168,8 +232,8 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 	}
 	layerDescriptor := oci.Descriptor{
 		MediaType: oci.PackageLayerMediaType,
-		Digest:    oci.Digest(layer),
-		Size:      int64(len(layer)),
+		Digest:    layerDigest,
+		Size:      layerSize,
 		Annotations: map[string]string{
 			"org.opencontainers.image.title": "adversary-layer",
 		},
@@ -189,7 +253,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 	if err != nil {
 		return Artifact{}, err
 	}
-	return Artifact{
+	artifact := Artifact{
 		Name:                    name,
 		ManifestName:            m.Name,
 		Version:                 version,
@@ -205,23 +269,31 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		ManifestDigest:          manifestDigest,
 		AdversaryManifestDigest: oci.Digest(adversaryManifest),
 		ConfigDigest:            oci.Digest(config),
-		LayerDigest:             oci.Digest(layer),
-		Size:                    int64(len(config) + len(layer) + len(manifestData)),
+		LayerDigest:             layerDigest,
+		Size:                    int64(len(config)+len(manifestData)) + layerSize,
 		Files:                   files,
 		OCIManifest:             ociManifest,
-	}, nil
+		LayerSource:             layerSource,
+	}
+	ownershipTransferred = true
+	return artifact, nil
 }
 
 var beforePackOpen func(string)
 var beforeManifestRead func()
 
 func collectAndBuildLayer(root *os.Root, dir string) ([]File, []byte, error) {
+	var buf bytes.Buffer
+	files, err := collectAndBuildLayerTo(root, dir, &buf)
+	return files, buf.Bytes(), err
+}
+
+func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, error) {
 	ignore := loadIgnore(dir)
 	files := make([]File, 0)
-	var buf bytes.Buffer
-	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	gz, err := gzip.NewWriterLevel(dst, gzip.BestCompression)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	gz.Name = ""
 	gz.ModTime = time.Unix(0, 0).UTC()
@@ -292,15 +364,15 @@ func collectAndBuildLayer(root *os.Root, dir string) ([]File, []byte, error) {
 	if err != nil {
 		tw.Close()
 		gz.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	if err := tw.Close(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := gz.Close(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return files, buf.Bytes(), nil
+	return files, nil
 }
 
 func normalizeNameOverride(name string) (string, error) {

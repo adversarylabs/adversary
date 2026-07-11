@@ -19,7 +19,11 @@ func (a Artifact) Sources() ([]oci.SourceBlob, error) {
 	if err != nil {
 		return nil, err
 	}
-	layer, err := oci.NewSourceBlob(a.OCIManifest.Layers[0], blobsource.Bytes(a.Layer))
+	layerSource := blobsource.Source(blobsource.Bytes(a.Layer))
+	if a.LayerSource != nil {
+		layerSource = a.LayerSource
+	}
+	layer, err := oci.NewSourceBlob(a.OCIManifest.Layers[0], layerSource)
 	if err != nil {
 		return nil, err
 	}
