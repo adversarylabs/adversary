@@ -78,6 +78,11 @@ func (r Repository) Import(in Import) (Record, error) {
 	if err := r.init(); err != nil {
 		return Record{}, err
 	}
+	lifecycleLock, err := publock.Acquire(r.Root, "repo-lifecycle")
+	if err != nil {
+		return Record{}, err
+	}
+	defer lifecycleLock.Close()
 	for label, v := range map[string]struct {
 		data   []byte
 		digest string
@@ -159,7 +164,7 @@ func (r Repository) Import(in Import) (Record, error) {
 		}
 	}
 	if ref != "" {
-		if err := r.UpdateRef(ref, "", rec.Digest); err != nil {
+		if err := r.updateRef(ref, "", rec.Digest); err != nil {
 			return Record{}, err
 		}
 	}
@@ -209,6 +214,17 @@ func deriveRecord(manifestData, configData, layer, adversary []byte, adversaryDi
 }
 
 func (r Repository) UpdateRef(reference, oldDigest, newDigest string) error {
+	if err := r.init(); err != nil {
+		return err
+	}
+	lifecycleLock, err := publock.Acquire(r.Root, "repo-lifecycle")
+	if err != nil {
+		return err
+	}
+	defer lifecycleLock.Close()
+	return r.updateRef(reference, oldDigest, newDigest)
+}
+func (r Repository) updateRef(reference, oldDigest, newDigest string) error {
 	ref, err := canonicalRef(reference)
 	if err != nil {
 		return err
@@ -249,6 +265,14 @@ func (r Repository) UpdateRef(reference, oldDigest, newDigest string) error {
 	return r.atomic(path, data)
 }
 func (r Repository) DeleteRef(reference, oldDigest string) error {
+	if err := r.init(); err != nil {
+		return err
+	}
+	lifecycleLock, err := publock.Acquire(r.Root, "repo-lifecycle")
+	if err != nil {
+		return err
+	}
+	defer lifecycleLock.Close()
 	ref, err := canonicalRef(reference)
 	if err != nil || ref == "" {
 		return fmt.Errorf("canonical reference required")
@@ -437,6 +461,19 @@ func (r Repository) Repair(rec Record, sources map[string][]byte) error {
 	return nil
 }
 func (r Repository) Materialize(rec Record) (string, error) {
+	if err := r.init(); err != nil {
+		return "", err
+	}
+	lifecycleLock, err := publock.Acquire(r.Root, "repo-lifecycle")
+	if err != nil {
+		return "", err
+	}
+	defer lifecycleLock.Close()
+	digestLock, err := publock.Acquire(r.Root, "repo-digest\x00"+rec.Digest)
+	if err != nil {
+		return "", err
+	}
+	defer digestLock.Close()
 	canonical, err := r.record(rec.Digest)
 	if err != nil {
 		return "", err
@@ -447,6 +484,63 @@ func (r Repository) Materialize(rec Record) (string, error) {
 		return "", err
 	}
 	defer lock.Close()
+	return r.materializeLocked(rec)
+}
+
+type MaterializationLease struct {
+	Path string
+	lock *publock.Lock
+}
+
+func (l *MaterializationLease) Close() error {
+	if l == nil || l.lock == nil {
+		return nil
+	}
+	err := l.lock.Close()
+	l.lock = nil
+	return err
+}
+func (r Repository) LeaseMaterialized(rec Record) (*MaterializationLease, error) {
+	if err := r.init(); err != nil {
+		return nil, err
+	}
+	lifecycle, err := publock.Acquire(r.Root, "repo-lifecycle")
+	if err != nil {
+		return nil, err
+	}
+	defer lifecycle.Close()
+	digest, err := publock.Acquire(r.Root, "repo-digest\x00"+rec.Digest)
+	if err != nil {
+		return nil, err
+	}
+	defer digest.Close()
+	canonical, err := r.record(rec.Digest)
+	if err != nil {
+		return nil, err
+	}
+	lock, err := publock.Acquire(r.Root, "repo-materialize\x00"+rec.Digest)
+	if err != nil {
+		return nil, err
+	}
+	path, err := r.materializeLocked(canonical)
+	if err != nil {
+		lock.Close()
+		return nil, err
+	}
+	return &MaterializationLease{Path: path, lock: lock}, nil
+}
+
+// WithMaterialized callbacks are pure runtime consumers and must not re-enter
+// Repository methods while the cross-process materialization lease is held.
+func (r Repository) WithMaterialized(rec Record, fn func(string) error) error {
+	lease, err := r.LeaseMaterialized(rec)
+	if err != nil {
+		return err
+	}
+	defer lease.Close()
+	return fn(lease.Path)
+}
+func (r Repository) materializeLocked(rec Record) (string, error) {
 	if v := r.Verify(rec); len(v.Missing)+len(v.Corrupt) > 0 {
 		return "", fmt.Errorf("artifact content failed verification")
 	}
@@ -797,19 +891,73 @@ func (r Repository) Enumerate(after string, limit int) ([]Record, error) {
 	return out, nil
 }
 func (r Repository) SaveCheckpoint(name string, c Checkpoint) error {
-	if strings.TrimSpace(name) == "" {
-		return fmt.Errorf("checkpoint name required")
+	if err := validateCheckpoint(name, c); err != nil {
+		return err
+	}
+	lock, err := publock.Acquire(r.Root, "repo-checkpoint\x00"+name)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if current, loadErr := r.LoadCheckpoint(name); loadErr == nil {
+		if c.Imported < current.Imported || c.LastDigest < current.LastDigest {
+			return fmt.Errorf("checkpoint regression: %w", ErrCAS)
+		}
+	} else if !os.IsNotExist(loadErr) {
+		return loadErr
 	}
 	data, _ := json.Marshal(c)
 	return r.atomic("checkpoints/"+key(name)+".json", data)
 }
+func (r Repository) UpdateCheckpoint(name string, old, next Checkpoint) error {
+	if err := validateCheckpoint(name, next); err != nil {
+		return err
+	}
+	lock, err := publock.Acquire(r.Root, "repo-checkpoint\x00"+name)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	current, err := r.LoadCheckpoint(name)
+	if err != nil {
+		return err
+	}
+	if current != old {
+		return ErrCAS
+	}
+	if next.Imported < old.Imported || next.LastDigest < old.LastDigest {
+		return fmt.Errorf("checkpoint regression: %w", ErrCAS)
+	}
+	data, _ := json.Marshal(next)
+	return r.atomic("checkpoints/"+key(name)+".json", data)
+}
+func validateCheckpoint(name string, c Checkpoint) error {
+	if strings.TrimSpace(name) == "" || len(name) > 256 {
+		return fmt.Errorf("checkpoint name required")
+	}
+	if c.Imported < 0 {
+		return fmt.Errorf("checkpoint imported count cannot be negative")
+	}
+	if c.LastDigest != "" {
+		if _, err := oci.ParseDigest(c.LastDigest); err != nil {
+			return fmt.Errorf("invalid checkpoint digest: %w", err)
+		}
+	}
+	return nil
+}
 func (r Repository) LoadCheckpoint(name string) (Checkpoint, error) {
+	if strings.TrimSpace(name) == "" || len(name) > 256 {
+		return Checkpoint{}, fmt.Errorf("checkpoint name required")
+	}
 	data, err := r.read("checkpoints/" + key(name) + ".json")
 	if err != nil {
 		return Checkpoint{}, err
 	}
 	var c Checkpoint
 	err = json.Unmarshal(data, &c)
+	if err == nil {
+		err = validateCheckpoint(name, c)
+	}
 	return c, err
 }
 func (r Repository) Reconcile(after string, limit int) (map[string]VerifyResult, error) {
