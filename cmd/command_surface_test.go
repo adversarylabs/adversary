@@ -30,6 +30,22 @@ func TestVersionHelpGolden(t *testing.T) {
 	}
 }
 
+func TestRootHelpGolden(t *testing.T) {
+	var out bytes.Buffer
+	root := NewRootCommand(&out, &bytes.Buffer{})
+	root.SetArgs([]string{"--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("testdata/root-help.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != string(want) {
+		t.Fatalf("root help changed\n--- want\n%s--- got\n%s", want, out.String())
+	}
+}
+
 func TestListIsCanonicalAndLSIsAlias(t *testing.T) {
 	root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 	list, _, err := root.Find([]string{"list"})

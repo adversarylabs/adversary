@@ -27,14 +27,23 @@ pages are not checked in: Cobra help is the canonical source and release
 packaging may generate man pages from the pinned binary in a future additive
 change.
 
-CLI-017 is not complete in this behavior migration. Replacing captured writer
-arguments with `cmd.OutOrStdout()`, `cmd.ErrOrStderr()`, and `cmd.InOrStdin()` is
-explicitly assigned to the subsequent structural cleanup PR, together with
-splitting `cmd/root.go`. That PR must preserve this output contract.
+CLI-017 is complete. `cmd/root.go` is a thin process/composition edge, while
+each command or closely related command domain has its own source file.
+Handlers resolve standard input, output, and error streams from the executing
+Cobra command with `cmd.InOrStdin()`, `cmd.OutOrStdout()`, and
+`cmd.ErrOrStderr()`. A subcommand may therefore override any stream without
+being bypassed by writers captured when the command tree was constructed.
+Source-invariant tests keep process-global streams at the process edge, reject
+captured constructor streams, and bound the size and responsibilities of the
+composition root. Root and version help are checked as golden fixtures.
 
 ## Rollback
 
-The migration can be rolled back by removing `--format`, the output DTOs, and
-completion command while retaining legacy text and `--json` behavior. The
+The structural cleanup can be rolled back independently by reverting its
+commit: it intentionally changes no command names, flags, DTOs, or runtime
+behavior. Do not roll back to constructor-captured streams selectively, since
+that would make subcommand-local redirection unreliable. The earlier output
+migration can still be rolled back by removing `--format`, the output DTOs,
+and completion command while retaining legacy text and `--json` behavior. The
 output envelope version must never be silently reused for an incompatible
 shape; a future incompatible change increments `schemaVersion`.

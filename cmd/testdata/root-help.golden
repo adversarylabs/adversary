@@ -1,0 +1,30 @@
+Run source-code adversaries against a local repository
+
+Usage:
+  adversary [flags]
+  adversary [command]
+
+Available Commands:
+  completion  Generate shell completion code
+  help        Help about any command
+  init        Create a new adversary project
+  inspect     Inspect a locally stored adversary or local runtime configuration
+  list        List locally stored adversaries
+  login       Authenticate with Adversary Labs
+  logout      Log out of Adversary Labs
+  pack        Package the current adversary into the local content-addressable store
+  pull        Pull and install an adversary from an OCI registry
+  push        Push a locally packed adversary to an OCI registry
+  run         Run an Adversary against a local source repository
+  search      Search Adversary Labs adversaries
+  store       Inspect and maintain the artifact repository
+  version     Print the adversary version
+  whoami      Show the current Adversary Labs login
+
+Flags:
+      --api-url string   Adversary Labs API endpoint (or ADVERSARY_API_URL) (default "https://adversarylabs.ai/api")
+  -h, --help             help for adversary
+      --profile string   credential profile (default "default")
+  -v, --version          version for adversary
+
+Use "adversary [command] --help" for more information about a command.
