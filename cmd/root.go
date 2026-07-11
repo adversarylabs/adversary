@@ -13,8 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -22,6 +20,7 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/dependencies"
 	"github.com/adversarylabs/adversary/internal/initproject"
 	"github.com/adversarylabs/adversary/internal/version"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
@@ -29,7 +28,6 @@ import (
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 func Execute() error {
@@ -99,14 +97,14 @@ func newRootCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 	cmd.AddCommand(newRunCommand(app, stdout, stderr))
 	cmd.AddCommand(newInspectCommand(app, stdout, stderr))
 	cmd.AddCommand(newInitCommand(stdout, stderr))
-	cmd.AddCommand(newPackCommand(stdout, stderr))
-	cmd.AddCommand(newLSCommand(stdout, "ls"))
-	cmd.AddCommand(newLSCommand(stdout, "list"))
+	cmd.AddCommand(newPackCommand(app, stdout, stderr))
+	cmd.AddCommand(newLSCommand(app, stdout, "ls"))
+	cmd.AddCommand(newLSCommand(app, stdout, "list"))
 	cmd.AddCommand(newVersionCommand(stdout))
-	cmd.AddCommand(newLoginCommand(stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newLoginCommand(app, stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newLogoutCommand(stdout, stderr, &apiURL, &profile))
-	cmd.AddCommand(newPushCommand(stdout, stderr, &apiURL, &profile))
-	cmd.AddCommand(newPullCommand(stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newPushCommand(app, stdout, stderr, &apiURL, &profile))
+	cmd.AddCommand(newPullCommand(app, stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newSearchCommand(stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newWhoamiCommand(stdout, stderr, &apiURL, &profile))
 	if app != nil {
@@ -327,7 +325,19 @@ func newInspectCommand(app *application.App, stdout, stderr io.Writer) *cobra.Co
 	return cmd
 }
 
-func newPackCommand(stdout, stderr io.Writer) *cobra.Command {
+func commandResolver(app *application.App) (internaladversary.Resolver, error) {
+	if app != nil {
+		if provider, ok := app.Dependencies().Resolver.(interface {
+			InternalResolver() internaladversary.Resolver
+		}); ok {
+			return provider.InternalResolver(), nil
+		}
+		return internaladversary.Resolver{}, &application.Error{Operation: "command resolver", Kind: "invalid-dependency", Err: fmt.Errorf("bound resolver required")}
+	}
+	return internaladversary.DefaultResolver()
+}
+
+func newPackCommand(app *application.App, stdout, stderr io.Writer) *cobra.Command {
 	opts := &packOptions{builder: "local"}
 	cmd := &cobra.Command{
 		Use:   "pack <path>",
@@ -339,7 +349,7 @@ func newPackCommand(stdout, stderr io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			resolver, err := internaladversary.DefaultResolver()
+			resolver, err := commandResolver(app)
 			if err != nil {
 				return err
 			}
@@ -375,14 +385,14 @@ func newPackCommand(stdout, stderr io.Writer) *cobra.Command {
 	return cmd
 }
 
-func newLSCommand(stdout io.Writer, use string) *cobra.Command {
+func newLSCommand(app *application.App, stdout io.Writer, use string) *cobra.Command {
 	opts := &listOptions{}
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: "List locally stored adversaries",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resolver, err := internaladversary.DefaultResolver()
+			resolver, err := commandResolver(app)
 			if err != nil {
 				return err
 			}
@@ -521,7 +531,7 @@ func newStoreCommand(app *application.App) *cobra.Command {
 	return root
 }
 
-func newLoginCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
+func newLoginCommand(app *application.App, stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	opts := &loginOptions{}
 	cmd := &cobra.Command{
 		Use:   "login",
@@ -533,6 +543,17 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.C
   printf '%s\n' "$ADVERSARY_PASSWORD" | adversary login --email-address marc@example.com --password-stdin`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			stdin := io.Reader(os.Stdin)
+			clock := newSystemClock()
+			browser := application.Browser(dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(u) }})
+			tty := application.TTY(processTTY{})
+			if app != nil {
+				deps := app.Dependencies()
+				stdin = deps.Stdin
+				clock = deps.Clock
+				browser = deps.Browser
+				tty = deps.TTY
+			}
 			store, err := adversarylabs.DefaultConfigStore()
 			if err != nil {
 				return err
@@ -548,10 +569,14 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.C
 				}
 				var password string
 				if opts.passwordStdin {
-					password, err = readPasswordLine(os.Stdin)
+					password, err = readPasswordLine(stdin)
 				} else {
-					var err error
-					password, err = promptPassword(stderr)
+					secret, secretErr := tty.ReadSecret(cmd.Context(), stdin, stderr)
+					err = secretErr
+					password = string(secret)
+					for i := range secret {
+						secret[i] = 0
+					}
 					if err != nil {
 						return err
 					}
@@ -566,12 +591,12 @@ func newLoginCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.C
 					return err
 				}
 			} else if opts.ci || opts.device {
-				token, err = loginWithDevice(cmd.Context(), stdout, client, opts)
+				token, err = loginWithDevice(cmd.Context(), clock, stdout, client, opts)
 				if err != nil {
 					return err
 				}
 			} else {
-				token, err = loginWithBrowser(cmd.Context(), stdout, client, opts)
+				token, err = loginWithBrowser(cmd.Context(), browser, stdout, client, opts)
 				if err != nil {
 					return err
 				}
@@ -646,7 +671,7 @@ func newLogoutCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.
 	return cmd
 }
 
-func newPushCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
+func newPushCommand(app *application.App, stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "push <local-ref> [remote-ref]",
 		Short: "Push a locally packed adversary to an OCI registry",
@@ -656,17 +681,17 @@ func newPushCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Co
   adversary push ghcr.io/acme/security-reviewer:0.1.0`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := pushUnified(cmd.Context(), stdout, stderr, args, valueOf(apiURL), valueOf(profile))
+			resolver, resolveErr := commandResolver(app)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			_, err := pushUnified(cmd.Context(), resolver, stdout, stderr, args, valueOf(apiURL), valueOf(profile))
 			return err
 		},
 	}
 }
 
-func pushUnified(ctx context.Context, stdout, stderr io.Writer, args []string, apiURL, profile string) (bool, error) {
-	resolver, err := internaladversary.DefaultResolver()
-	if err != nil {
-		return true, err
-	}
+func pushUnified(ctx context.Context, resolver internaladversary.Resolver, stdout, stderr io.Writer, args []string, apiURL, profile string) (bool, error) {
 	hasExact, _ := resolver.Repository.HasExact(args[0])
 	resolution, err := resolver.Lookup(args[0])
 	if err != nil {
@@ -718,7 +743,7 @@ func pushUnified(ctx context.Context, stdout, stderr io.Writer, args []string, a
 	return true, nil
 }
 
-func newPullCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
+func newPullCommand(app *application.App, stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "pull <reference>",
 		Short: "Pull and install an adversary from an OCI registry",
@@ -728,6 +753,10 @@ func newPullCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Co
   adversary pull localhost:5000/security-reviewer`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			resolver, resolverErr := commandResolver(app)
+			if resolverErr != nil {
+				return resolverErr
+			}
 			ref, err := oci.ParseReference(args[0])
 			if err != nil {
 				return err
@@ -745,7 +774,6 @@ func newPullCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Co
 			if err != nil {
 				return err
 			}
-			resolver, resolverErr := internaladversary.DefaultResolver()
 			if resolverErr == nil {
 				if existing, resolveErr := resolver.Repository.Resolve(digest); resolveErr == nil {
 					if err := registerExactRef(resolver.Repository, ref.Locator(), existing.Digest); err != nil {
@@ -949,11 +977,11 @@ func valueOf(value *string) string {
 	return *value
 }
 
-func waitForLogin(ctx context.Context, client adversarylabs.Client, login adversarylabs.DeviceLogin) (adversarylabs.TokenResponse, error) {
+func waitForLogin(ctx context.Context, clock application.Clock, client adversarylabs.Client, login adversarylabs.DeviceLogin) (adversarylabs.TokenResponse, error) {
 	interval := adversarylabs.PollInterval(login)
-	expiresAt := time.Now().Add(time.Duration(login.ExpiresIn) * time.Second)
+	expiresAt := clock.Now().Add(time.Duration(login.ExpiresIn) * time.Second)
 	if login.ExpiresIn <= 0 {
-		expiresAt = time.Now().Add(10 * time.Minute)
+		expiresAt = clock.Now().Add(10 * time.Minute)
 	}
 	pollCtx, cancel := context.WithDeadline(ctx, expiresAt)
 	defer cancel()
@@ -974,7 +1002,7 @@ func waitForLogin(ctx context.Context, client adversarylabs.Client, login advers
 			}
 			return adversarylabs.TokenResponse{}, fmt.Errorf("login expired before authentication completed")
 		}
-		timer := time.NewTimer(interval)
+		timer := clock.NewTimer(interval)
 		select {
 		case <-pollCtx.Done():
 			timer.Stop()
@@ -982,12 +1010,12 @@ func waitForLogin(ctx context.Context, client adversarylabs.Client, login advers
 				return adversarylabs.TokenResponse{}, ctx.Err()
 			}
 			return adversarylabs.TokenResponse{}, fmt.Errorf("login expired before authentication completed")
-		case <-timer.C:
+		case <-timer.C():
 		}
 	}
 }
 
-func loginWithDevice(ctx context.Context, stdout io.Writer, client adversarylabs.Client, opts *loginOptions) (adversarylabs.TokenResponse, error) {
+func loginWithDevice(ctx context.Context, clock application.Clock, stdout io.Writer, client adversarylabs.Client, opts *loginOptions) (adversarylabs.TokenResponse, error) {
 	login, err := client.BeginLogin(ctx, adversarylabs.LoginOptions{Name: opts.name, CI: opts.ci})
 	if err != nil {
 		return adversarylabs.TokenResponse{}, err
@@ -1000,10 +1028,10 @@ func loginWithDevice(ctx context.Context, stdout io.Writer, client adversarylabs
 		return adversarylabs.TokenResponse{}, fmt.Errorf("device login response was missing verification instructions")
 	}
 	fmt.Fprintf(stdout, "Open %s\n\nEnter code: %s\n\nWaiting for authentication...\n", verificationURL, login.UserCode)
-	return waitForLogin(ctx, client, login)
+	return waitForLogin(ctx, clock, client, login)
 }
 
-func loginWithBrowser(ctx context.Context, stdout io.Writer, client adversarylabs.Client, opts *loginOptions) (adversarylabs.TokenResponse, error) {
+func loginWithBrowser(ctx context.Context, browser application.Browser, stdout io.Writer, client adversarylabs.Client, opts *loginOptions) (adversarylabs.TokenResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	state, err := randomURLToken(32)
@@ -1060,7 +1088,7 @@ func loginWithBrowser(ctx context.Context, stdout io.Writer, client adversarylab
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, loginURL)
 	fmt.Fprintln(stdout)
-	if err := openBrowser(loginURL); err != nil {
+	if err := browser.Open(ctx, loginURL); err != nil {
 		fmt.Fprintf(stdout, "Could not open browser automatically: %v\n", err)
 		fmt.Fprintln(stdout, "Open the URL above to continue.")
 		fmt.Fprintln(stdout)
@@ -1151,40 +1179,6 @@ func readPasswordLine(r io.Reader) (string, error) {
 		return "", fmt.Errorf("password from standard input is empty")
 	}
 	return password, nil
-}
-
-func promptPassword(stderr io.Writer) (string, error) {
-	fmt.Fprint(stderr, "Password: ")
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		password, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Fprintln(stderr)
-		return string(password), err
-	}
-	if runtime.GOOS == "windows" {
-		return "", fmt.Errorf("no interactive terminal; use --password-stdin")
-	}
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return "", fmt.Errorf("no interactive terminal; use --password-stdin")
-	}
-	defer tty.Close()
-	password, err := term.ReadPassword(int(tty.Fd()))
-	fmt.Fprintln(stderr)
-	if err != nil {
-		return "", err
-	}
-	return string(password), nil
-}
-
-func openBrowser(url string) error {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("open", url).Start()
-	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
-	default:
-		return exec.Command("xdg-open", url).Start()
-	}
 }
 
 type scopedCredentialStore struct{ registry, token string }

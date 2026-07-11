@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"time"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
@@ -19,6 +20,9 @@ import (
 type processTimer struct{ *time.Timer }
 
 func (t processTimer) C() <-chan time.Time { return t.Timer.C }
+func newSystemClock() application.Clock {
+	return dependencies.Clock{NowFunc: time.Now, TimerFunc: func(d time.Duration) application.Timer { return processTimer{time.NewTimer(d)} }}
+}
 
 type processConfig struct{}
 
@@ -62,11 +66,16 @@ func (processTTY) Interactive(r io.Reader) bool {
 	return ok && term.IsTerminal(int(f.Fd()))
 }
 func (processTTY) ReadSecret(ctx context.Context, r io.Reader, w io.Writer) ([]byte, error) {
+	_ = ctx
+	fmt.Fprint(w, "Password: ")
 	f, ok := r.(*os.File)
-	if !ok {
-		return nil, fmt.Errorf("secret input is not a terminal")
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		fmt.Fprintln(w)
+		return nil, fmt.Errorf("interactive password input requires a terminal; use --password-stdin")
 	}
-	return term.ReadPassword(int(f.Fd()))
+	secret, err := term.ReadPassword(int(f.Fd()))
+	fmt.Fprintln(w)
+	return secret, err
 }
 
 func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App, error) {
@@ -75,5 +84,16 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 		return nil, err
 	}
 	registry := oci.NewHTTPRegistry()
-	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: dependencies.Clock{NowFunc: time.Now, TimerFunc: func(d time.Duration) application.Timer { return processTimer{time.NewTimer(d)} }}, Env: dependencies.Environment{LookupFunc: os.LookupEnv}, Config: processConfig{}, Paths: processPaths{data: resolver.Repository.Root}, HTTP: dependencies.HTTPClient{DoFunc: http.DefaultClient.Do}, Credentials: oci.DockerCredentialStore{}, Registry: registry, Repository: resolver.Repository, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{}, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(u) }}, TTY: processTTY{}})
+	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Env: dependencies.Environment{LookupFunc: os.LookupEnv}, Config: processConfig{}, Paths: processPaths{data: resolver.Repository.Root}, HTTP: dependencies.HTTPClient{DoFunc: http.DefaultClient.Do}, Credentials: oci.DockerCredentialStore{}, Registry: registry, Repository: resolver.Repository, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{}, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(u) }}, TTY: processTTY{}})
+}
+
+func openBrowser(url string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", url).Start()
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	default:
+		return exec.Command("xdg-open", url).Start()
+	}
 }
