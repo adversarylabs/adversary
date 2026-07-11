@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
+	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
@@ -402,6 +403,53 @@ func TestAppBoundArtifactCommandsIgnoreConflictingDefaultRepository(t *testing.T
 	}
 }
 
+func TestInjectedPushPullNeedNoProcessEnvironment(t *testing.T) {
+	remote := newTestOCIRegistry()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local listener unavailable: %v", err)
+	}
+	server := httptest.NewUnstartedServer(remote)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+	host := strings.TrimPrefix(server.URL, "http://")
+
+	sourceRepo := repository.Repository{Root: t.TempDir()}
+	project := t.TempDir()
+	writeProject(t, project)
+	var out, errOut bytes.Buffer
+	app := lifecycleTestApp(t, sourceRepo, &out, &errOut)
+	packCmd := NewRootCommandWithApp(app)
+	packCmd.SetArgs([]string{"pack", project})
+	if err := packCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	digest := extractDigest(t, out.String())
+	out.Reset()
+	push := NewRootCommandWithApp(app)
+	push.SetArgs([]string{"push", digest, host + "/acme/reviewer:v1"})
+	if err := push.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	destinationRepo := repository.Repository{Root: t.TempDir()}
+	var pullOut, pullErr bytes.Buffer
+	pullApp := lifecycleTestApp(t, destinationRepo, &pullOut, &pullErr)
+	pull := NewRootCommandWithApp(pullApp)
+	pull.SetArgs([]string{"pull", host + "/acme/reviewer:v1"})
+	if err := pull.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := destinationRepo.Resolve(host + "/acme/reviewer:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Digest != digest {
+		t.Fatalf("installed digest=%s want=%s", installed.Digest, digest)
+	}
+}
+
 func TestPackNameOverride(t *testing.T) {
 	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
 	project := t.TempDir()
@@ -442,7 +490,7 @@ func TestDefaultAdversaryLabsPushRefUsesStoredNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ref, err := defaultAdversaryLabsPushRef(context.Background(), "dockerfile-reviewer:0.1.0", pushRecord{
+	ref, err := defaultAdversaryLabsPushRef(context.Background(), application.Dependencies{Auth: configStore, API: processAPIFactory{store: configStore, http: http.DefaultClient}, RegistryHost: "localhost:5000"}, "dockerfile-reviewer:0.1.0", pushRecord{
 		Name:    "dockerfile-reviewer",
 		Version: "0.1.0",
 	}, "", "default")
@@ -459,7 +507,8 @@ func TestDefaultPushRefUsesLibraryForRegistryHostOverrideWithoutLogin(t *testing
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ADVERSARY_REGISTRY_HOST", "localhost:8787")
 
-	ref, err := defaultAdversaryLabsPushRef(context.Background(), "dockerfile-reviewer:0.1.0", pushRecord{
+	store := adversarylabs.ConfigStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	ref, err := defaultAdversaryLabsPushRef(context.Background(), application.Dependencies{Auth: store, API: processAPIFactory{store: store, http: http.DefaultClient}, RegistryHost: "localhost:8787"}, "dockerfile-reviewer:0.1.0", pushRecord{
 		Name:    "dockerfile-reviewer",
 		Version: "0.1.0",
 	}, "", "default")
@@ -503,7 +552,7 @@ func TestPushErrorWithNamespaceHintForRegistryDenied(t *testing.T) {
 		Tag:        "0.1.0",
 	}
 	err := pushErrorWithNamespaceHint(
-		fmt.Errorf(`token request failed: 403 Forbidden: http://localhost:3000/auth/registry?scope=repository%%3Alibrary%%2Fdockerfile-adversary%%3Apull&service=localhost%%3A8787: {"errors":[{"code":"DENIED","message":"Requested registry access is not authorized."}]}`),
+		&oci.RegistryError{Operation: "token", Registry: ref.Registry, Repository: ref.Repository, StatusCode: http.StatusForbidden, Status: "403 Forbidden", Codes: []oci.RegistryErrorCode{{Code: "DENIED", Message: "Requested registry access is not authorized."}}},
 		"dockerfile-adversary:0.1.0",
 		ref,
 	)
@@ -513,7 +562,7 @@ func TestPushErrorWithNamespaceHintForRegistryDenied(t *testing.T) {
 		`remote namespace "library" may not match your Adversary Labs team slug`,
 		"adversary push dockerfile-adversary:0.1.0 localhost:8787/<slug>/dockerfile-adversary:0.1.0",
 		"ADVERSARY_REGISTRY_NAMESPACE=<slug>",
-		"Original error: token request failed: 403 Forbidden",
+		"Original error: OCI token localhost:8787/library/dockerfile-adversary failed: 403 Forbidden",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("error %q missing %q", text, want)
@@ -1148,15 +1197,15 @@ func TestScopedAuthNeverCrossesServiceOrProfile(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ api, profile, token string }{{"https://one.example/api", "default", "one"}, {"https://two.example/api", "work", "two"}} {
-		auth, ok, err := scopedAuth(store, tc.api, tc.profile)
+		auth, ok, err := scopedAuth(store, tc.api, tc.profile, adversarylabs.DefaultRegistry)
 		if err != nil || !ok || auth.Token != tc.token {
 			t.Fatalf("%s/%s = %#v,%v,%v", tc.api, tc.profile, auth, ok, err)
 		}
 	}
-	if _, ok, err := scopedAuth(store, "https://one.example/api", "work"); err != nil || ok {
+	if _, ok, err := scopedAuth(store, "https://one.example/api", "work", adversarylabs.DefaultRegistry); err != nil || ok {
 		t.Fatalf("cross-profile credential: ok=%v err=%v", ok, err)
 	}
-	if _, ok, err := scopedAuth(store, "https://three.example/api", "default"); err != nil || ok {
+	if _, ok, err := scopedAuth(store, "https://three.example/api", "default", adversarylabs.DefaultRegistry); err != nil || ok {
 		t.Fatalf("cross-service credential: ok=%v err=%v", ok, err)
 	}
 }
@@ -1256,10 +1305,13 @@ func TestWaitForLoginCancelsBlockedPollAtExpiryWithoutExtraPoll(t *testing.T) {
 
 func TestNewOCIRegistryAlwaysIncludesDockerFallback(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	registry, err := newOCIRegistry("https://service.example/api", "missing")
+	store, _ := adversarylabs.DefaultConfigStore()
+	factory := processRegistryFactory{store: store, docker: oci.DockerCredentialStore{}, host: adversarylabs.DefaultRegistry}
+	created, err := factory.New("https://service.example/api", "missing")
 	if err != nil {
 		t.Fatal(err)
 	}
+	registry := created.(processOCIRegistry).HTTPRegistry
 	chain, ok := registry.Credentials.(oci.ChainCredentialStore)
 	if !ok || len(chain) != 1 {
 		t.Fatalf("credentials = %#v", registry.Credentials)
@@ -1267,14 +1319,14 @@ func TestNewOCIRegistryAlwaysIncludesDockerFallback(t *testing.T) {
 	if _, ok := chain[0].(oci.DockerCredentialStore); !ok {
 		t.Fatalf("fallback = %T", chain[0])
 	}
-	store, _ := adversarylabs.DefaultConfigStore()
 	if err := store.SetAuth(adversarylabs.AuthKey("https://service.example/api", "work"), adversarylabs.Auth{Token: "token", RegistryHost: adversarylabs.ResolveRegistryHost()}); err != nil {
 		t.Fatal(err)
 	}
-	registry, err = newOCIRegistry("https://service.example/api", "work")
+	created, err = factory.New("https://service.example/api", "work")
 	if err != nil {
 		t.Fatal(err)
 	}
+	registry = created.(processOCIRegistry).HTTPRegistry
 	chain, ok = registry.Credentials.(oci.ChainCredentialStore)
 	if !ok || len(chain) != 2 {
 		t.Fatalf("scoped credentials = %#v", registry.Credentials)

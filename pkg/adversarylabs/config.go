@@ -2,6 +2,7 @@ package adversarylabs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/adversarylabs/adversary/pkg/oci"
 )
+
+var ErrAuthCAS = errors.New("credential compare-and-swap conflict")
 
 const (
 	DefaultRegistry = oci.DefaultRegistry
@@ -215,6 +218,20 @@ func (s ConfigStore) RemoveAuth(key string) (Auth, bool, error) {
 		return nil
 	})
 	return auth, ok, err
+}
+
+// RemoveAuthCAS removes key only when the persisted credential still exactly
+// matches expected. This prevents a completed logout revocation from deleting
+// a credential concurrently replaced by login or refresh.
+func (s ConfigStore) RemoveAuthCAS(key string, expected Auth) error {
+	return s.locked(func(c *Config) error {
+		current, ok := c.Auths[key]
+		if !ok || current != expected {
+			return fmt.Errorf("%w: %s", ErrAuthCAS, key)
+		}
+		delete(c.Auths, key)
+		return nil
+	})
 }
 
 func (s ConfigStore) AuthE(key string) (Auth, bool, error) {

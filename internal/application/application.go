@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
@@ -38,12 +40,38 @@ type HTTPClient interface {
 type Credentials interface {
 	Credentials(string) (oci.Credentials, bool)
 }
-type Registry interface {
+
+// AuthStore is the scoped credential persistence required by CLI handlers.
+type AuthStore interface {
+	ExactAuthE(string) (adversarylabs.Auth, bool, error)
+	SetAuth(string, adversarylabs.Auth) error
+	RemoveAuthCAS(string, adversarylabs.Auth) error
+}
+
+// APIClient contains exactly the Adversary Labs operations used by the CLI.
+type APIClient interface {
+	BeginLogin(context.Context, adversarylabs.LoginOptions) (adversarylabs.DeviceLogin, error)
+	LoginWithPassword(context.Context, adversarylabs.PasswordLoginOptions) (adversarylabs.TokenResponse, error)
+	BrowserLoginURL(adversarylabs.BrowserLoginOptions) (string, error)
+	ExchangeCode(context.Context, string, string, string) (adversarylabs.TokenResponse, error)
+	PollToken(context.Context, string) (adversarylabs.TokenResponse, error)
+	Revoke(context.Context, string) error
+	Search(context.Context, string, string) ([]adversarylabs.SearchResult, error)
+	Whoami(context.Context, string) (adversarylabs.WhoamiResponse, error)
+}
+type APIFactory interface{ New(string) APIClient }
+type OCIRegistry interface {
 	Push(context.Context, oci.Reference, []byte, []oci.Blob) (string, error)
+	PushAdversaryManifestReferrer(context.Context, oci.Reference, string, []byte) (string, string, error)
 	Pull(context.Context, oci.Reference) (oci.PulledArtifact, error)
 	Resolve(context.Context, oci.Reference) (string, error)
+	SetPlainHTTP(bool)
+}
+type RegistryFactory interface {
+	New(string, string) (OCIRegistry, error)
 }
 type Repository interface {
+	BindingIdentity() string
 	Resolve(string) (repository.Record, error)
 	PlanGC() (repository.GCPlan, error)
 	ApplyGC(repository.GCPlan, bool) (repository.GCReport, error)
@@ -54,20 +82,32 @@ type Repository interface {
 	LeaseMaterialized(repository.Record) (*repository.MaterializationLease, error)
 }
 type Resolution struct {
-	Reference, Digest, Path string
-	Local                   bool
+	CanonicalReference, Digest, Path string
+	Local                            bool
+	Record                           repository.Record
 }
 type Resolver interface {
+	BindingIdentity() string
 	Resolve(context.Context, string) (Resolution, error)
+	Lookup(context.Context, string) (Resolution, error)
+	ResolveRecord(string) (repository.Record, error)
+	HasExact(string) (bool, error)
+	Entries(int) ([]repository.Entry, error)
+	Payload(repository.Record) ([]byte, []oci.Blob, []byte, error)
+	ImportPacked(pack.Artifact, string) (repository.Record, error)
+	ImportPulled(oci.PulledArtifact) (repository.Record, error)
+	UpdateRef(string, string, string) error
 }
 type Runtime interface {
-	Run(context.Context, []string, RunOptions) error
+	BindingIdentity() string
+	Run(context.Context, AdversaryRunOptions) error
+	Inspect(context.Context, AdversaryRunOptions) error
 }
-type RunOptions struct {
-	Dir            string
-	Env            []string
-	Stdin          io.Reader
-	Stdout, Stderr io.Writer
+type AdversaryRunOptions struct {
+	AdversaryRef, RepoPath, BaseRef, HeadRef, Builder, Format string
+	Force, KeepTemp, NoNetwork, Verbose, IncludeSuppressed    bool
+	Shell, AllFiles, AllowUnsafeHostExecution                 bool
+	Stdout, Stderr                                            io.Writer
 }
 type Browser interface {
 	Open(context.Context, string) error
@@ -86,7 +126,12 @@ type Dependencies struct {
 	Paths          Paths
 	HTTP           HTTPClient
 	Credentials    Credentials
-	Registry       Registry
+	Auth           AuthStore
+	API            APIFactory
+	Registries     RegistryFactory
+	DefaultAPIURL  string
+	RegistryHost   string
+	RegistryNS     string
 	Repository     Repository
 	Resolver       Resolver
 	Runtime        Runtime
@@ -96,6 +141,7 @@ type Dependencies struct {
 
 type App struct{ deps Dependencies }
 type Validatable interface{ Validate() error }
+type BindingIdentity interface{ BindingIdentity() string }
 
 func New(deps Dependencies) (*App, error) {
 	missing := []string{}
@@ -126,8 +172,20 @@ func New(deps Dependencies) (*App, error) {
 	if deps.Credentials == nil {
 		missing = append(missing, "credentials")
 	}
-	if deps.Registry == nil {
-		missing = append(missing, "registry")
+	if deps.Auth == nil {
+		missing = append(missing, "auth store")
+	}
+	if deps.API == nil {
+		missing = append(missing, "api factory")
+	}
+	if deps.Registries == nil {
+		missing = append(missing, "registry factory")
+	}
+	if deps.DefaultAPIURL == "" {
+		missing = append(missing, "default api url")
+	}
+	if deps.RegistryHost == "" {
+		missing = append(missing, "registry host")
 	}
 	if deps.Repository == nil {
 		missing = append(missing, "repository")
@@ -147,11 +205,49 @@ func New(deps Dependencies) (*App, error) {
 	if len(missing) > 0 {
 		return nil, &Error{Operation: "construct", Kind: "missing-dependency", Err: fmt.Errorf("missing %v", missing)}
 	}
-	for _, dep := range []any{deps.Clock, deps.Env, deps.HTTP, deps.Browser} {
-		if validatable, ok := dep.(Validatable); ok {
-			if err := validatable.Validate(); err != nil {
-				return nil, &Error{Operation: "construct", Kind: "invalid-dependency", Err: err}
-			}
+	authBinding, authOK := deps.Auth.(BindingIdentity)
+	apiBinding, apiOK := deps.API.(BindingIdentity)
+	registryBinding, registryOK := deps.Registries.(BindingIdentity)
+	if !authOK || !apiOK || !registryOK {
+		return nil, &Error{Operation: "construct", Kind: "invalid-dependency", Resource: "auth/api/registry", Err: fmt.Errorf("dependency binding identity unavailable")}
+	}
+	identities := []string{authBinding.BindingIdentity(), apiBinding.BindingIdentity(), registryBinding.BindingIdentity()}
+	for _, identity := range identities {
+		if identity == "" || identity != identities[0] {
+			return nil, &Error{Operation: "construct", Kind: "invalid-dependency", Resource: "auth/api/registry", Err: fmt.Errorf("dependency binding identity mismatch")}
+		}
+	}
+	repositoryIdentity := deps.Repository.BindingIdentity()
+	resolverIdentity := deps.Resolver.BindingIdentity()
+	runtimeIdentity := deps.Runtime.BindingIdentity()
+	if repositoryIdentity == "" || resolverIdentity == "" || runtimeIdentity == "" || repositoryIdentity != resolverIdentity || repositoryIdentity != runtimeIdentity {
+		return nil, &Error{Operation: "construct", Kind: "invalid-dependency", Resource: "repository/resolver/runtime", Err: fmt.Errorf("dependency binding identity mismatch")}
+	}
+	validators := []Validatable{}
+	if v, ok := deps.Clock.(Validatable); ok {
+		validators = append(validators, v)
+	}
+	if v, ok := deps.Env.(Validatable); ok {
+		validators = append(validators, v)
+	}
+	if v, ok := deps.HTTP.(Validatable); ok {
+		validators = append(validators, v)
+	}
+	if v, ok := deps.Browser.(Validatable); ok {
+		validators = append(validators, v)
+	}
+	if v, ok := deps.Auth.(Validatable); ok {
+		validators = append(validators, v)
+	}
+	if v, ok := deps.API.(Validatable); ok {
+		validators = append(validators, v)
+	}
+	if v, ok := deps.Registries.(Validatable); ok {
+		validators = append(validators, v)
+	}
+	for _, validatable := range validators {
+		if err := validatable.Validate(); err != nil {
+			return nil, &Error{Operation: "construct", Kind: "invalid-dependency", Err: err}
 		}
 	}
 	return &App{deps: deps}, nil
