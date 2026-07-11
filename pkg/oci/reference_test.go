@@ -107,3 +107,10 @@ func TestParseReferenceUsesRegistryHostOverride(t *testing.T) {
 		t.Fatalf("Locator = %q", got)
 	}
 }
+
+func TestRegistryHostOverrideRejectsScheme(t *testing.T) {
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "http://localhost:5000")
+	if _, err := ParseReference("security-reviewer"); err == nil {
+		t.Fatal("registry host scheme was silently accepted")
+	}
+}

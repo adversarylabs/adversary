@@ -29,7 +29,12 @@ type HTTPRegistry struct {
 	Debug         io.Writer
 	BearerRealm   string
 	BearerService string
+	// TokenAuthorities binds a registry to the only cross-origin bearer realm
+	// and service allowed to receive its stored credentials.
+	TokenAuthorities map[string]TokenAuthority
 }
+
+type TokenAuthority struct{ Origin, Service string }
 
 type IngestionLimits struct {
 	ManifestBytes       int64
@@ -41,12 +46,17 @@ var DefaultIngestionLimits = IngestionLimits{ManifestBytes: 4 << 20, ConfigBytes
 
 func NewHTTPRegistry() *HTTPRegistry {
 	return &HTTPRegistry{
-		Client:      http.DefaultClient,
+		Client:      NewHTTPClient(),
 		Credentials: DockerCredentialStore{},
+		TokenAuthorities: map[string]TokenAuthority{
+			"registry-1.docker.io": {Origin: "https://auth.docker.io", Service: "registry.docker.io"},
+		},
 	}
 }
 
 func (r *HTTPRegistry) Push(ctx context.Context, ref Reference, manifest []byte, blobs []Blob) (string, error) {
+	ctx, cancel := withOperationDeadline(ctx)
+	defer cancel()
 	for _, blob := range blobs {
 		if err := VerifyDigest(blob.Data, blob.Descriptor.Digest); err != nil {
 			return "", err
@@ -59,6 +69,8 @@ func (r *HTTPRegistry) Push(ctx context.Context, ref Reference, manifest []byte,
 }
 
 func (r *HTTPRegistry) PushAdversaryManifestReferrer(ctx context.Context, imageRef Reference, imageDigest string, yaml []byte) (string, string, error) {
+	ctx, cancel := withOperationDeadline(ctx)
+	defer cancel()
 	yamlBlob := Blob{
 		Descriptor: Descriptor{
 			MediaType: AdversaryManifestMediaType,
@@ -102,12 +114,16 @@ func (r *HTTPRegistry) pushManifest(ctx context.Context, ref Reference, manifest
 		return "", registryError(resp)
 	}
 	if got := resp.Header.Get("Docker-Content-Digest"); got != "" {
-		digest = got
+		if got != digest {
+			return "", fmt.Errorf("registry manifest digest %s does not match uploaded content %s", got, digest)
+		}
 	}
 	return digest, nil
 }
 
 func (r *HTTPRegistry) Pull(ctx context.Context, ref Reference) (PulledArtifact, error) {
+	ctx, cancel := withOperationDeadline(ctx)
+	defer cancel()
 	manifestData, manifestDigest, err := r.getManifest(ctx, ref)
 	if err != nil {
 		return PulledArtifact{}, err
@@ -116,22 +132,25 @@ func (r *HTTPRegistry) Pull(ctx context.Context, ref Reference) (PulledArtifact,
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		return PulledArtifact{}, err
 	}
-	if manifest.MediaType != "" && manifest.MediaType != ImageManifestMediaType {
+	if manifest.MediaType != "" && manifest.MediaType != ImageManifestMediaType && manifest.MediaType != DockerImageManifestMediaType {
 		return PulledArtifact{}, fmt.Errorf("unsupported manifest media type %s", manifest.MediaType)
 	}
 	if err := validatePulledManifest(manifest); err != nil {
 		return PulledArtifact{}, err
 	}
+	pinned := ref
+	pinned.Tag = ""
+	pinned.Digest = manifestDigest
 	blobs := map[string][]byte{}
 	descriptors := append([]Descriptor{manifest.Config}, manifest.Layers...)
 	for _, descriptor := range descriptors {
-		data, err := r.getBlob(ctx, ref, descriptor)
+		data, err := r.getBlob(ctx, pinned, descriptor)
 		if err != nil {
 			return PulledArtifact{}, err
 		}
 		blobs[descriptor.Digest] = data
 	}
-	adversaryManifest, err := r.getAdversaryManifestReferrer(ctx, ref, manifestDigest)
+	adversaryManifest, err := r.getAdversaryManifestReferrer(ctx, pinned, manifestDigest)
 	if err != nil {
 		return PulledArtifact{}, err
 	}
@@ -149,6 +168,8 @@ func validatePulledManifest(manifest Manifest) error {
 }
 
 func (r *HTTPRegistry) Resolve(ctx context.Context, ref Reference) (string, error) {
+	ctx, cancel := withOperationDeadline(ctx)
+	defer cancel()
 	_, digest, err := r.getManifest(ctx, ref)
 	return digest, err
 }
@@ -188,7 +209,10 @@ func (r *HTTPRegistry) pushBlob(ctx context.Context, ref Reference, blob Blob) e
 	if location == "" {
 		return fmt.Errorf("registry did not return upload location")
 	}
-	uploadURL := absoluteURL(r.scheme(), ref.Registry, location)
+	uploadURL, err := validatedLocation(r.scheme(), ref.Registry, location)
+	if err != nil {
+		return err
+	}
 	separator := "?"
 	if strings.Contains(uploadURL, "?") {
 		separator = "&"
@@ -220,7 +244,7 @@ func (r *HTTPRegistry) getManifest(ctx context.Context, ref Reference) ([]byte, 
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Accept", ImageManifestMediaType)
+	req.Header.Set("Accept", ImageManifestMediaType+", "+DockerImageManifestMediaType)
 	resp, err := r.do(req, ref, "repository:"+ref.Repository+":pull")
 	if err != nil {
 		return nil, "", err
@@ -297,7 +321,7 @@ func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Ref
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
+		return r.getAdversaryManifestFallback(ctx, ref, imageDigest)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, registryError(resp)
@@ -322,12 +346,55 @@ func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Ref
 		if err := json.Unmarshal(data, &artifact); err != nil {
 			return nil, err
 		}
-		if artifact.MediaType != OCIArtifactManifestMediaType || artifact.ArtifactType != AdversaryManifestMediaType || artifact.Subject.MediaType != ImageManifestMediaType || artifact.Subject.Digest != imageDigest || len(artifact.Blobs) != 1 || artifact.Blobs[0].MediaType != AdversaryManifestMediaType {
+		if artifact.MediaType != OCIArtifactManifestMediaType || artifact.ArtifactType != AdversaryManifestMediaType || !isImageManifestMediaType(artifact.Subject.MediaType) || artifact.Subject.Digest != imageDigest || len(artifact.Blobs) != 1 || artifact.Blobs[0].MediaType != AdversaryManifestMediaType {
 			continue
 		}
 		return r.getBlob(ctx, ref, artifact.Blobs[0])
 	}
-	return nil, nil
+	return r.getAdversaryManifestFallback(ctx, ref, imageDigest)
+}
+
+func (r *HTTPRegistry) getAdversaryManifestFallback(ctx context.Context, ref Reference, imageDigest string) ([]byte, error) {
+	tag, err := AdversaryManifestArtifactTag(imageDigest)
+	if err != nil {
+		return nil, err
+	}
+	req, err := r.newRequest(ctx, http.MethodGet, ref, "/manifests/"+tag, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", OCIArtifactManifestMediaType)
+	resp, err := r.do(req, ref, "repository:"+ref.Repository+":pull")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, registryError(resp)
+	}
+	data, err := readLimited(resp.Body, DefaultIngestionLimits.ManifestBytes, "artifact manifest")
+	if err != nil {
+		return nil, err
+	}
+	actual := Digest(data)
+	if header := resp.Header.Get("Docker-Content-Digest"); header != "" && header != actual {
+		return nil, fmt.Errorf("artifact manifest digest header %s does not match content %s", header, actual)
+	}
+	var artifact ArtifactManifest
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return nil, err
+	}
+	if artifact.MediaType != OCIArtifactManifestMediaType || artifact.ArtifactType != AdversaryManifestMediaType || artifact.Subject.Digest != imageDigest || !isImageManifestMediaType(artifact.Subject.MediaType) || len(artifact.Blobs) != 1 || artifact.Blobs[0].MediaType != AdversaryManifestMediaType {
+		return nil, fmt.Errorf("invalid adversary manifest fallback artifact")
+	}
+	return r.getBlob(ctx, ref, artifact.Blobs[0])
+}
+
+func isImageManifestMediaType(value string) bool {
+	return value == ImageManifestMediaType || value == DockerImageManifestMediaType
 }
 
 func (r *HTTPRegistry) getBlob(ctx context.Context, ref Reference, descriptor Descriptor) ([]byte, error) {
@@ -379,6 +446,9 @@ func readLimited(r io.Reader, limit int64, label string) ([]byte, error) {
 }
 
 func (r *HTTPRegistry) newRequest(ctx context.Context, method string, ref Reference, suffix string, body io.Reader) (*http.Request, error) {
+	if r.PlainHTTP && !isLoopbackHost(ref.Registry) {
+		return nil, fmt.Errorf("plain HTTP registry is restricted to loopback hosts")
+	}
 	u := fmt.Sprintf("%s://%s/v2/%s%s", r.scheme(), ref.Registry, ref.Repository, suffix)
 	return http.NewRequestWithContext(ctx, method, u, body)
 }
@@ -386,7 +456,7 @@ func (r *HTTPRegistry) newRequest(ctx context.Context, method string, ref Refere
 func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http.Response, error) {
 	client := r.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = NewHTTPClient()
 	}
 	var creds Credentials
 	var hasCreds bool
@@ -420,7 +490,14 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	}
 	r.debugf("oci auth: %s %s challenge realm=%s service=%s scope=%s requested_scope=%s", req.Method, req.URL.Path, challenge.Realm, challenge.Service, challenge.Scope, scope)
 	_ = resp.Body.Close()
-	token, err := readBearerToken(client, challenge, scope, creds, hasCreds)
+	if !validRepositoryScope(ref, scope) {
+		return nil, fmt.Errorf("refusing bearer scope outside challenged repository")
+	}
+	sendCreds := hasCreds && r.trustedTokenAuthority(ref, challenge)
+	if hasCreds && !sendCreds {
+		r.debugf("oci auth: requesting anonymous token from untrusted cross-origin realm")
+	}
+	token, err := readBearerToken(req.Context(), client, challenge, scope, creds, sendCreds)
 	if err != nil {
 		return nil, err
 	}
@@ -435,6 +512,40 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	retry.Header.Set("Authorization", "Bearer "+token)
 	r.debugf("oci auth: retrying %s %s authorization_header=%t", retry.Method, retry.URL.Path, retry.Header.Get("Authorization") != "")
 	return client.Do(retry)
+}
+
+func validRepositoryScope(ref Reference, scope string) bool {
+	prefix := "repository:" + ref.Repository + ":"
+	if !strings.HasPrefix(scope, prefix) {
+		return false
+	}
+	actions := strings.Split(strings.TrimPrefix(scope, prefix), ",")
+	if len(actions) == 0 {
+		return false
+	}
+	for _, action := range actions {
+		if action != "pull" && action != "push" {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *HTTPRegistry) trustedTokenAuthority(ref Reference, challenge bearerChallenge) bool {
+	u, err := url.Parse(challenge.Realm)
+	if err != nil {
+		return false
+	}
+	registryService := challenge.Service == "" || challenge.Service == ref.Registry
+	if sameOrigin(r.scheme(), ref.Registry, u.Scheme, u.Host) && registryService {
+		return true
+	}
+	authority, ok := r.TokenAuthorities[ref.Registry]
+	if !ok || authority.Service == "" || challenge.Service != authority.Service {
+		return false
+	}
+	origin := u.Scheme + "://" + u.Host
+	return strings.EqualFold(strings.TrimRight(authority.Origin, "/"), origin)
 }
 
 func (r *HTTPRegistry) rootBearerChallenge(ctx context.Context, client *http.Client, ref Reference) (bearerChallenge, bool, error) {
@@ -483,21 +594,72 @@ func (r *HTTPRegistry) scheme() string {
 	return "https"
 }
 
-func absoluteURL(scheme, registry, location string) string {
-	if strings.HasPrefix(location, "http://") || strings.HasPrefix(location, "https://") {
-		return location
+func validatedLocation(scheme, registry, location string) (string, error) {
+	base, _ := url.Parse(scheme + "://" + registry + "/")
+	u, err := url.Parse(strings.TrimSpace(location))
+	if err != nil || u.User != nil || u.Fragment != "" {
+		return "", fmt.Errorf("registry returned invalid upload location")
 	}
-	if strings.HasPrefix(location, "/") {
-		return scheme + "://" + registry + location
+	u = base.ResolveReference(u)
+	if u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Host)) {
+		return "", fmt.Errorf("registry returned insecure upload location")
 	}
-	return scheme + "://" + registry + "/" + location
+	if !sameOrigin(scheme, registry, u.Scheme, u.Host) {
+		return "", fmt.Errorf("registry returned cross-origin upload location")
+	}
+	return u.String(), nil
 }
 
 func registryError(resp *http.Response) error {
 	data, _ := readLimited(resp.Body, 64<<10, "registry error response")
-	text := strings.TrimSpace(string(data))
+	text := sanitizeErrorText(string(data))
+	var envelope struct {
+		Errors []struct {
+			Code, Message string
+			Detail        json.RawMessage
+		} `json:"errors"`
+	}
+	var codes []RegistryErrorCode
+	if json.Unmarshal(data, &envelope) == nil {
+		parts := make([]string, 0, len(envelope.Errors))
+		for _, item := range envelope.Errors {
+			code := sanitizeErrorText(item.Code)
+			message := sanitizeErrorText(item.Message)
+			detail := sanitizeErrorText(string(item.Detail))
+			codes = append(codes, RegistryErrorCode{Code: code, Message: message, Detail: detail})
+			parts = append(parts, strings.TrimSpace(code+": "+message))
+		}
+		if len(parts) > 0 {
+			text = strings.Join(parts, "; ")
+		}
+	}
 	if text == "" {
 		text = resp.Status
 	}
-	return fmt.Errorf("registry request failed: %s: %s", resp.Status, text)
+	registry, repository, operation := "", "", "request"
+	if resp.Request != nil && resp.Request.URL != nil {
+		registry, operation = resp.Request.URL.Host, strings.ToLower(resp.Request.Method)
+		parts := strings.Split(strings.TrimPrefix(resp.Request.URL.Path, "/v2/"), "/")
+		for i, part := range parts {
+			if part == "manifests" || part == "blobs" || part == "referrers" {
+				repository = strings.Join(parts[:i], "/")
+				break
+			}
+		}
+	}
+	return &RegistryError{Operation: operation, Registry: registry, Repository: repository, StatusCode: resp.StatusCode, Status: resp.Status, Detail: text, Codes: codes}
+}
+
+func sanitizeErrorText(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f {
+			return r
+		}
+		return ' '
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) > 1024 {
+		value = value[:1024] + "…"
+	}
+	return value
 }

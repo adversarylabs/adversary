@@ -2,11 +2,74 @@ package oci
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestDockerCredentialHelper(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	home, bin := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := os.MkdirAll(filepath.Join(home, ".docker"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".docker", "config.json"), []byte(`{"credHelpers":{"registry.example":"fixture"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	helper := filepath.Join(bin, "docker-credential-fixture")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\nread server\n[ \"$server\" = registry.example ] || exit 1\nprintf '{\"Username\":\"user\",\"Secret\":\"secret\"}'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := (DockerCredentialStore{}).Credentials("registry.example")
+	if !ok || got.Username != "user" || got.Password != "secret" {
+		t.Fatalf("got %#v, %v", got, ok)
+	}
+}
+
+func TestDockerCredentialInputsAreBounded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".docker"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	oversized := append([]byte(`{"auths":{"registry.example":{"auth":"dXNlcjpwYXNz"}}}`), bytes.Repeat([]byte(" "), (1<<20)+1)...)
+	if err := os.WriteFile(filepath.Join(home, ".docker", "config.json"), oversized, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := (DockerCredentialStore{}).Credentials("registry.example"); ok {
+		t.Fatal("accepted oversized Docker config")
+	}
+}
+
+func TestCredentialHelperOutputIsBounded(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	home, bin := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := os.MkdirAll(filepath.Join(home, ".docker"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".docker", "config.json"), []byte(`{"credsStore":"overflow"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "docker-credential-overflow"), []byte("#!/bin/sh\nyes x\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := (DockerCredentialStore{}).Credentials("registry.example"); ok {
+		t.Fatal("accepted oversized helper output")
+	}
+}
 
 func TestApplyAuthHeaderBearerToken(t *testing.T) {
 	req, err := http.NewRequest(http.MethodGet, "https://registry.example/v2/", nil)
@@ -41,9 +104,9 @@ func TestReadBearerTokenErrorIncludesTokenURL(t *testing.T) {
 			Request:    req,
 		}, nil
 	})}
-	realm := "http://registry.example/v1/registry/token"
+	realm := "https://registry.example/v1/registry/token"
 
-	_, err := readBearerToken(client, bearerChallenge{
+	_, err := readBearerToken(context.Background(), client, bearerChallenge{
 		Realm:   realm,
 		Service: "adversary-registry",
 	}, "repository:library/dockerfile-adversary:push,pull", Credentials{}, false)
@@ -54,13 +117,14 @@ func TestReadBearerTokenErrorIncludesTokenURL(t *testing.T) {
 	for _, want := range []string{
 		"token request failed: 404 Not Found",
 		realm,
-		"scope=repository%3Alibrary%2Fdockerfile-adversary%3Apush%2Cpull",
-		"service=adversary-registry",
 		"missing token route",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("error %q missing %q", text, want)
 		}
+	}
+	if strings.Contains(text, "scope=") || strings.Contains(text, "service=") {
+		t.Fatalf("token query leaked: %s", text)
 	}
 }
 
@@ -112,9 +176,10 @@ func TestHTTPRegistryDoesNotSendStoredBearerTokenToRegistry(t *testing.T) {
 	})}
 	var debug bytes.Buffer
 	registry := &HTTPRegistry{
-		Client:      client,
-		Credentials: staticCredentialStore{registry: "registry.example", creds: Credentials{Token: "adv_cli_token"}},
-		Debug:       &debug,
+		Client:           client,
+		Credentials:      staticCredentialStore{registry: "registry.example", creds: Credentials{Token: "adv_cli_token"}},
+		Debug:            &debug,
+		TokenAuthorities: map[string]TokenAuthority{"registry.example": {Origin: "https://auth.example", Service: "registry.example"}},
 	}
 	ref := Reference{Registry: "registry.example", Repository: "marc/dockerfile-adversary", Tag: "latest"}
 	req, err := registry.newRequest(t.Context(), http.MethodGet, ref, "/manifests/latest", nil)
@@ -145,6 +210,47 @@ func TestHTTPRegistryDoesNotSendStoredBearerTokenToRegistry(t *testing.T) {
 		if strings.Contains(debugText, secret) {
 			t.Fatalf("debug output leaked token %q: %s", secret, debugText)
 		}
+	}
+}
+
+func TestUntrustedChallengeRealmReceivesNoStoredCredentials(t *testing.T) {
+	var tokenAuthorization string
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Host {
+		case "registry.example":
+			if req.Header.Get("Authorization") == "Bearer anonymous-jwt" {
+				return &http.Response{StatusCode: 200, Status: "200 OK", Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}, Request: req}, nil
+			}
+			return &http.Response{StatusCode: 401, Status: "401 Unauthorized", Body: io.NopCloser(strings.NewReader("auth")), Header: http.Header{"Www-Authenticate": {`Bearer realm="https://evil.example/token",service="registry.example"`}}, Request: req}, nil
+		case "evil.example":
+			tokenAuthorization = req.Header.Get("Authorization")
+			return &http.Response{StatusCode: 200, Status: "200 OK", Body: io.NopCloser(strings.NewReader(`{"token":"anonymous-jwt"}`)), Header: http.Header{}, Request: req}, nil
+		default:
+			t.Fatalf("unexpected host %s", req.URL.Host)
+			return nil, nil
+		}
+	})}
+	r := &HTTPRegistry{Client: client, Credentials: staticCredentialStore{registry: "registry.example", creds: Credentials{Username: "user", Password: "secret"}}}
+	ref := Reference{Registry: "registry.example", Repository: "team/tool", Tag: "latest"}
+	req, _ := r.newRequest(t.Context(), http.MethodGet, ref, "/manifests/latest", nil)
+	resp, err := r.do(req, ref, "repository:team/tool:pull")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if tokenAuthorization != "" {
+		t.Fatalf("stored credentials leaked to realm: %q", tokenAuthorization)
+	}
+}
+
+func TestDockerHubTokenAuthority(t *testing.T) {
+	r := NewHTTPRegistry()
+	ref := Reference{Registry: "registry-1.docker.io", Repository: "library/alpine", Tag: "latest"}
+	if !r.trustedTokenAuthority(ref, bearerChallenge{Realm: "https://auth.docker.io/token", Service: "registry.docker.io"}) {
+		t.Fatal("Docker Hub authority not trusted")
+	}
+	if r.trustedTokenAuthority(ref, bearerChallenge{Realm: "https://evil.example/token", Service: "registry.docker.io"}) {
+		t.Fatal("wrong Docker Hub origin trusted")
 	}
 }
 
@@ -213,9 +319,10 @@ func TestHTTPRegistryUsesRootChallengeWhenRepository401HasNoChallenge(t *testing
 	})}
 	var debug bytes.Buffer
 	registry := &HTTPRegistry{
-		Client:      client,
-		Credentials: staticCredentialStore{registry: "registry.example", creds: Credentials{Token: "adv_cli_token"}},
-		Debug:       &debug,
+		Client:           client,
+		Credentials:      staticCredentialStore{registry: "registry.example", creds: Credentials{Token: "adv_cli_token"}},
+		Debug:            &debug,
+		TokenAuthorities: map[string]TokenAuthority{"registry.example": {Origin: "https://auth.example", Service: "registry.example"}},
 	}
 	ref := Reference{Registry: "registry.example", Repository: "marc/dockerfile-adversary", Tag: "latest"}
 	req, err := registry.newRequest(t.Context(), http.MethodPost, ref, "/blobs/uploads/", nil)

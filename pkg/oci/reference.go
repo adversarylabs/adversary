@@ -67,8 +67,6 @@ func ParseReference(input string) (Reference, error) {
 
 func DefaultRegistryHost() string {
 	if value := strings.TrimSpace(os.Getenv("ADVERSARY_REGISTRY_HOST")); value != "" {
-		value = strings.TrimPrefix(value, "https://")
-		value = strings.TrimPrefix(value, "http://")
 		return strings.TrimRight(value, "/")
 	}
 	return DefaultRegistry

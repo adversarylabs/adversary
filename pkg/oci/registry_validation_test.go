@@ -20,6 +20,13 @@ func TestValidatePulledManifestRejectsNonPackageLayouts(t *testing.T) {
 	}
 }
 
+func TestDockerSchema2MediaTypeIsAcceptedForAdversaryLayout(t *testing.T) {
+	m := Manifest{SchemaVersion: 2, MediaType: DockerImageManifestMediaType, ArtifactType: ArtifactMediaType, Config: Descriptor{MediaType: EmptyConfigMediaType}, Layers: []Descriptor{{MediaType: PackageLayerMediaType}}}
+	if err := validatePulledManifest(m); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReadLimited(t *testing.T) {
 	if _, err := readLimited(&endlessByteReader{}, 32, "test"); err == nil {
 		t.Fatal("oversized response accepted")
