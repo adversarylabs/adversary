@@ -3,8 +3,11 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,15 +16,106 @@ import (
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/dependencies"
+	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
 type injectedResolver struct{}
+type exactSecretTTY struct{ secret []byte }
+
+func (exactSecretTTY) Interactive(io.Reader) bool { return true }
+func (t exactSecretTTY) ReadSecret(context.Context, io.Reader, io.Writer) ([]byte, error) {
+	return append([]byte(nil), t.secret...), nil
+}
+
+type fakeTimer struct {
+	ch      chan time.Time
+	stopped *bool
+}
+
+func (t fakeTimer) C() <-chan time.Time { return t.ch }
+func (t fakeTimer) Stop() bool          { *t.stopped = true; return true }
+
+type fakeClock struct {
+	stopped *bool
+	now     time.Time
+}
+
+func (c fakeClock) Now() time.Time { return c.now }
+func (c fakeClock) NewTimer(time.Duration) application.Timer {
+	return fakeTimer{ch: make(chan time.Time), stopped: c.stopped}
+}
 
 func (injectedResolver) Resolve(context.Context, string) (application.Resolution, error) {
 	return application.Resolution{}, errors.New("unused")
+}
+
+func TestLoginInjectedTTYPreservesWhitespace(t *testing.T) {
+	var got string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Password string `json:"password"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		got = body.Password
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"ok"}`))
+	}))
+	defer s.Close()
+	t.Setenv("HOME", t.TempDir())
+	repo := repository.Repository{Root: t.TempDir()}
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repo, &out, &errOut).Dependencies()
+	base.TTY = exactSecretTTY{secret: []byte("  pass word\t\n")}
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"--api-url", s.URL, "login", "--email-address", "a@example.test"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got != "  pass word\t\n" {
+		t.Fatalf("password=%q", got)
+	}
+}
+
+func TestInjectedClockStopsTimerOnDeviceCancellation(t *testing.T) {
+	stopped := false
+	client := adversarylabs.Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: cmdRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return jsonHTTPResponse(http.StatusBadGateway, `{}`), nil
+	})}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := waitForLogin(ctx, fakeClock{stopped: &stopped, now: time.Now()}, client, adversarylabs.DeviceLogin{DeviceCode: "d", ExpiresIn: 60, Interval: 1})
+		done <- err
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+	if !stopped {
+		t.Fatal("timer not stopped")
+	}
+}
+
+func TestInjectedBrowserIsCalled(t *testing.T) {
+	called := false
+	ctx, cancel := context.WithCancel(context.Background())
+	browser := dependencies.Browser{OpenFunc: func(context.Context, string) error { called = true; cancel(); return nil }}
+	client := adversarylabs.Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: cmdRoundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unexpected request") })}}
+	_, err := loginWithBrowser(ctx, browser, &bytes.Buffer{}, client, &loginOptions{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+	if !called {
+		t.Fatal("browser was not called")
+	}
 }
 
 func TestProcessAppResolverRepositoryBindingAccepted(t *testing.T) {

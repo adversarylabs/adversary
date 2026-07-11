@@ -21,6 +21,7 @@ import (
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
@@ -302,6 +303,102 @@ func TestPackListAndInspectCommands(t *testing.T) {
 	}
 	if record.Digest != digest {
 		t.Fatalf("inspect json digest = %q, want %q", record.Digest, digest)
+	}
+}
+
+func TestAppBoundArtifactCommandsIgnoreConflictingDefaultRepository(t *testing.T) {
+	registry := newTestOCIRegistry()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local listener unavailable: %v", err)
+	}
+	server := httptest.NewUnstartedServer(registry)
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
+	defaultData := t.TempDir()
+	t.Cleanup(func() { makeTestTreeWritable(defaultData) })
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ADVERSARY_DATA_DIR", defaultData)
+	defaultResolver, err := internaladversary.DefaultResolver()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictProject := t.TempDir()
+	writeProject(t, conflictProject)
+	if err := os.WriteFile(filepath.Join(conflictProject, "dist", "index.js"), []byte("console.log('default repository payload')\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	conflict, err := pack.Create(context.Background(), pack.Options{Dir: conflictProject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultRecord, err := defaultResolver.ImportPacked(conflict, "security-reviewer:1.4.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appRoot := t.TempDir()
+	t.Cleanup(func() { makeTestTreeWritable(appRoot) })
+	appRepo := repository.Repository{Root: appRoot}
+	project := t.TempDir()
+	writeProject(t, project)
+	var appOut, appErr bytes.Buffer
+	app := lifecycleTestApp(t, appRepo, &appOut, &appErr)
+	packCmd := NewRootCommandWithApp(app)
+	packCmd.SetArgs([]string{"pack", project})
+	if err := packCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	appDigest := extractDigest(t, appOut.String())
+	if appDigest == defaultRecord.Digest {
+		t.Fatal("test setup produced identical App and default artifacts")
+	}
+	if got, err := appRepo.Resolve("security-reviewer:1.4.2"); err != nil || got.Digest != appDigest {
+		t.Fatalf("pack did not write App repository: record=%#v err=%v", got, err)
+	}
+	if got, err := defaultResolver.Repository.Resolve("security-reviewer:1.4.2"); err != nil || got.Digest != defaultRecord.Digest {
+		t.Fatalf("pack changed default repository: record=%#v err=%v", got, err)
+	}
+
+	appOut.Reset()
+	listCmd := NewRootCommandWithApp(app)
+	listCmd.SetArgs([]string{"list", "--json"})
+	if err := listCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(appOut.String(), appDigest) || strings.Contains(appOut.String(), defaultRecord.Digest) {
+		t.Fatalf("list did not exclusively report App repository: %s", appOut.String())
+	}
+
+	host := strings.TrimPrefix(server.URL, "http://")
+	appOut.Reset()
+	pushCmd := NewRootCommandWithApp(app)
+	pushCmd.SetArgs([]string{"push", "security-reviewer:1.4.2", host + "/acme/security-reviewer:v1"})
+	if err := pushCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	pushedDigest := oci.Digest(registry.manifest(t, "acme/security-reviewer/v1"))
+	if pushedDigest != appDigest {
+		t.Fatalf("push selected digest %s, want App digest %s (default %s)", pushedDigest, appDigest, defaultRecord.Digest)
+	}
+
+	pullRoot := t.TempDir()
+	t.Cleanup(func() { makeTestTreeWritable(pullRoot) })
+	pullRepo := repository.Repository{Root: pullRoot}
+	var pullOut, pullErr bytes.Buffer
+	pullApp := lifecycleTestApp(t, pullRepo, &pullOut, &pullErr)
+	pullCmd := NewRootCommandWithApp(pullApp)
+	pullCmd.SetArgs([]string{"pull", host + "/acme/security-reviewer:v1"})
+	if err := pullCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := pullRepo.Resolve(host + "/acme/security-reviewer:v1"); err != nil || got.Digest != appDigest {
+		t.Fatalf("pull did not register App repository: record=%#v err=%v", got, err)
+	}
+	if _, err := defaultResolver.Repository.Resolve(appDigest); !os.IsNotExist(err) {
+		t.Fatalf("pull imported into default repository: err=%v", err)
 	}
 }
 
@@ -1072,7 +1169,7 @@ func TestLoginWithDeviceRendersInstructionsAndToken(t *testing.T) {
 		return jsonHTTPResponse(http.StatusOK, `{"token":"token"}`), nil
 	})}}
 	var out bytes.Buffer
-	token, err := loginWithDevice(context.Background(), &out, client, &loginOptions{ci: true})
+	token, err := loginWithDevice(context.Background(), newSystemClock(), &out, client, &loginOptions{ci: true})
 	if err != nil || token.Token != "token" {
 		t.Fatalf("token=%#v err=%v", token, err)
 	}
@@ -1118,7 +1215,7 @@ func TestWaitForLoginCancellation(t *testing.T) {
 	client := adversarylabs.Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: cmdRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return jsonHTTPResponse(http.StatusBadGateway, `{}`), nil
 	})}}
-	_, err := waitForLogin(ctx, client, adversarylabs.DeviceLogin{DeviceCode: "device", ExpiresIn: 60, Interval: 1})
+	_, err := waitForLogin(ctx, newSystemClock(), client, adversarylabs.DeviceLogin{DeviceCode: "device", ExpiresIn: 60, Interval: 1})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
 	}
@@ -1128,7 +1225,7 @@ func TestWaitForLoginExpiry(t *testing.T) {
 	client := adversarylabs.Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: cmdRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return jsonHTTPResponse(http.StatusBadGateway, `{}`), nil
 	})}}
-	_, err := waitForLogin(context.Background(), client, adversarylabs.DeviceLogin{DeviceCode: "device", ExpiresIn: 1, Interval: 1})
+	_, err := waitForLogin(context.Background(), newSystemClock(), client, adversarylabs.DeviceLogin{DeviceCode: "device", ExpiresIn: 1, Interval: 1})
 	if err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("error = %v", err)
 	}
@@ -1143,7 +1240,7 @@ func TestWaitForLoginCancelsBlockedPollAtExpiryWithoutExtraPoll(t *testing.T) {
 		close(canceled)
 		return nil, req.Context().Err()
 	})}}
-	_, err := waitForLogin(context.Background(), client, adversarylabs.DeviceLogin{DeviceCode: "device", ExpiresIn: 1, Interval: 1})
+	_, err := waitForLogin(context.Background(), newSystemClock(), client, adversarylabs.DeviceLogin{DeviceCode: "device", ExpiresIn: 1, Interval: 1})
 	if err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("error = %v", err)
 	}
