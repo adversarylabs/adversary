@@ -23,10 +23,11 @@ func TestPullUsesVerifiedAdversaryManifestFallback(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry, ref, wantYAML, requests := fallbackRegistry(t, tc.status, tc.referrers, tc.linkHeader, false)
-			pulled, err := registry.Pull(t.Context(), ref)
+			pulled, err := registry.PullSources(t.Context(), ref)
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer pulled.Close()
 			if string(pulled.AdversaryManifest) != string(wantYAML) {
 				t.Fatalf("adversary manifest = %q, want %q", pulled.AdversaryManifest, wantYAML)
 			}
@@ -42,7 +43,7 @@ func TestPullUsesVerifiedAdversaryManifestFallback(t *testing.T) {
 
 func TestPullRejectsMalformedFallbackArtifact(t *testing.T) {
 	registry, ref, _, _ := fallbackRegistry(t, http.StatusNotFound, ReferrersResponse{}, "", true)
-	if _, err := registry.Pull(t.Context(), ref); err == nil || !strings.Contains(err.Error(), "invalid adversary manifest fallback artifact") {
+	if _, err := registry.PullSources(t.Context(), ref); err == nil || !strings.Contains(err.Error(), "invalid adversary manifest fallback artifact") {
 		t.Fatalf("Pull error = %v, want malformed fallback rejection", err)
 	}
 }

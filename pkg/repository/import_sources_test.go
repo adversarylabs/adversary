@@ -32,14 +32,11 @@ func TestImportPackedStreamsOwnedLayerIntoRepository(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "payload.bin"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := pack.Create(context.Background(), pack.Options{Dir: dir, Streaming: true})
+	a, err := pack.Create(context.Background(), pack.Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if len(a.Layer) != 0 {
-		t.Fatal("pack retained whole layer")
-	}
 	root := filepath.Join(t.TempDir(), "repo")
 	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
@@ -274,7 +271,7 @@ func sourceFixture(t *testing.T) (pack.Artifact, SourceImport) {
 	if err := os.WriteFile(filepath.Join(dir, "index.js"), []byte("console.log('x')"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := pack.Create(context.Background(), pack.Options{Dir: dir, Streaming: true})
+	a, err := pack.Create(context.Background(), pack.Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}

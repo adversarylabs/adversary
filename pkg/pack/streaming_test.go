@@ -35,12 +35,9 @@ func BenchmarkCreateStreamingLargeLayer(b *testing.B) {
 	b.SetBytes(64 << 20)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		a, err := Create(context.Background(), Options{Dir: dir, Streaming: true})
+		a, err := Create(context.Background(), Options{Dir: dir})
 		if err != nil {
 			b.Fatal(err)
-		}
-		if len(a.Layer) != 0 {
-			b.Fatal("streaming benchmark materialized the layer")
 		}
 		if err := a.Close(); err != nil {
 			b.Fatal(err)
@@ -71,12 +68,9 @@ func TestCreateStreamingAllocationStaysBoundedForIncompressibleLayer(t *testing.
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	a, err := Create(context.Background(), Options{Dir: dir, Streaming: true})
+	a, err := Create(context.Background(), Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(a.Layer) != 0 {
-		t.Fatal("streaming create retained whole layer")
 	}
 	if err := a.Close(); err != nil {
 		t.Fatal(err)
@@ -95,12 +89,12 @@ func TestCreateStreamingUsesOwnedRepeatableLayer(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "index.js"), make([]byte, 8<<20), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := Create(context.Background(), Options{Dir: dir, Streaming: true})
+	a, err := Create(context.Background(), Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(a.Layer) != 0 || a.LayerSource == nil {
-		t.Fatalf("streaming layer materialized: bytes=%d source=%v", len(a.Layer), a.LayerSource)
+	if a.LayerSource == nil {
+		t.Fatal("streaming layer source is nil")
 	}
 	if err := blobsource.Verify(a.LayerSource); err != nil {
 		t.Fatal(err)

@@ -3,12 +3,13 @@ package oci
 import (
 	"io"
 	"testing"
+
+	"github.com/adversarylabs/adversary/pkg/blobsource"
 )
 
 func TestBlobSourceAdapterIsRepeatable(t *testing.T) {
 	data := []byte("content")
-	blob := Blob{Descriptor: Descriptor{Digest: Digest(data), Size: int64(len(data))}, Data: data}
-	stream, err := blob.Source()
+	stream, err := NewSourceBlob(Descriptor{Digest: Digest(data), Size: int64(len(data))}, blobsource.Bytes(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,8 +28,7 @@ func TestBlobSourceAdapterIsRepeatable(t *testing.T) {
 
 func TestBlobSourceRejectsDescriptorConflict(t *testing.T) {
 	data := []byte("content")
-	blob := Blob{Descriptor: Descriptor{Digest: Digest(data), Size: 99}, Data: data}
-	if _, err := blob.Source(); err == nil {
+	if _, err := NewSourceBlob(Descriptor{Digest: Digest(data), Size: 99}, blobsource.Bytes(data)); err == nil {
 		t.Fatal("expected descriptor conflict")
 	}
 }

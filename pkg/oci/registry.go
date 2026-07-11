@@ -9,16 +9,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/adversarylabs/adversary/pkg/blobsource"
 )
 
-type Blob struct {
-	Descriptor Descriptor
-	Data       []byte
-}
-
 type Registry interface {
-	Push(ctx context.Context, ref Reference, manifest []byte, blobs []Blob) (string, error)
-	Pull(ctx context.Context, ref Reference) (PulledArtifact, error)
+	PushSources(ctx context.Context, ref Reference, manifest []byte, blobs []SourceBlob) (string, error)
+	PullSources(ctx context.Context, ref Reference) (*PulledSources, error)
 	Resolve(ctx context.Context, ref Reference) (string, error)
 }
 
@@ -54,32 +51,19 @@ func NewHTTPRegistry() *HTTPRegistry {
 	}
 }
 
-func (r *HTTPRegistry) Push(ctx context.Context, ref Reference, manifest []byte, blobs []Blob) (string, error) {
-	ctx, cancel := withOperationDeadline(ctx)
-	defer cancel()
-	for _, blob := range blobs {
-		if err := VerifyDigest(blob.Data, blob.Descriptor.Digest); err != nil {
-			return "", err
-		}
-		if err := r.pushBlob(ctx, ref, blob); err != nil {
-			return "", err
-		}
-	}
-	return r.pushManifest(ctx, ref, ref.ManifestReference(), ImageManifestMediaType, manifest)
-}
-
 func (r *HTTPRegistry) PushAdversaryManifestReferrer(ctx context.Context, imageRef Reference, imageDigest string, yaml []byte) (string, string, error) {
 	ctx, cancel := withOperationDeadline(ctx)
 	defer cancel()
-	yamlBlob := Blob{
-		Descriptor: Descriptor{
-			MediaType: AdversaryManifestMediaType,
-			Digest:    Digest(yaml),
-			Size:      int64(len(yaml)),
-		},
-		Data: yaml,
+	yamlDescriptor := Descriptor{
+		MediaType: AdversaryManifestMediaType,
+		Digest:    Digest(yaml),
+		Size:      int64(len(yaml)),
 	}
-	if err := r.pushBlob(ctx, imageRef, yamlBlob); err != nil {
+	yamlBlob, err := NewSourceBlob(yamlDescriptor, blobsource.Bytes(yaml))
+	if err != nil {
+		return "", "", err
+	}
+	if err := r.pushSourceBlob(ctx, imageRef, yamlBlob); err != nil {
 		return "", "", err
 	}
 	artifactManifest, _, _, err := NewAdversaryManifestArtifact(imageDigest, yaml)
@@ -121,42 +105,6 @@ func (r *HTTPRegistry) pushManifest(ctx context.Context, ref Reference, manifest
 	return digest, nil
 }
 
-func (r *HTTPRegistry) Pull(ctx context.Context, ref Reference) (PulledArtifact, error) {
-	ctx, cancel := withOperationDeadline(ctx)
-	defer cancel()
-	manifestData, manifestDigest, err := r.getManifest(ctx, ref)
-	if err != nil {
-		return PulledArtifact{}, err
-	}
-	var manifest Manifest
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return PulledArtifact{}, err
-	}
-	if manifest.MediaType != "" && manifest.MediaType != ImageManifestMediaType && manifest.MediaType != DockerImageManifestMediaType {
-		return PulledArtifact{}, fmt.Errorf("unsupported manifest media type %s", manifest.MediaType)
-	}
-	if err := validatePulledManifest(manifest); err != nil {
-		return PulledArtifact{}, err
-	}
-	pinned := ref
-	pinned.Tag = ""
-	pinned.Digest = manifestDigest
-	blobs := map[string][]byte{}
-	descriptors := append([]Descriptor{manifest.Config}, manifest.Layers...)
-	for _, descriptor := range descriptors {
-		data, err := r.getBlob(ctx, pinned, descriptor)
-		if err != nil {
-			return PulledArtifact{}, err
-		}
-		blobs[descriptor.Digest] = data
-	}
-	adversaryManifest, err := r.getAdversaryManifestReferrer(ctx, pinned, manifestDigest)
-	if err != nil {
-		return PulledArtifact{}, err
-	}
-	return PulledArtifact{Reference: ref, RawManifest: append([]byte(nil), manifestData...), Manifest: manifest, ManifestDigest: manifestDigest, AdversaryManifest: adversaryManifest, Blobs: blobs}, nil
-}
-
 func validatePulledManifest(manifest Manifest) error {
 	if manifest.SchemaVersion != 2 || manifest.ArtifactType != ArtifactMediaType {
 		return fmt.Errorf("manifest is not an adversary artifact")
@@ -172,71 +120,6 @@ func (r *HTTPRegistry) Resolve(ctx context.Context, ref Reference) (string, erro
 	defer cancel()
 	_, digest, err := r.getManifest(ctx, ref)
 	return digest, err
-}
-
-func (r *HTTPRegistry) pushBlob(ctx context.Context, ref Reference, blob Blob) error {
-	head, err := r.newRequest(ctx, http.MethodHead, ref, "/blobs/"+blob.Descriptor.Digest, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := r.do(head, ref, "repository:"+ref.Repository+":pull")
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode == http.StatusOK {
-		_ = resp.Body.Close()
-		return nil
-	}
-	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusUnauthorized {
-		defer resp.Body.Close()
-		return registryError(resp)
-	}
-	_ = resp.Body.Close()
-
-	start, err := r.newRequest(ctx, http.MethodPost, ref, "/blobs/uploads/", nil)
-	if err != nil {
-		return err
-	}
-	resp, err = r.do(start, ref, "repository:"+ref.Repository+":push,pull")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return registryError(resp)
-	}
-	location := resp.Header.Get("Location")
-	if location == "" {
-		return fmt.Errorf("registry did not return upload location")
-	}
-	uploadURL, err := validatedLocation(r.scheme(), ref.Registry, location)
-	if err != nil {
-		return err
-	}
-	separator := "?"
-	if strings.Contains(uploadURL, "?") {
-		separator = "&"
-	}
-	uploadURL += separator + "digest=" + blob.Descriptor.Digest
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, uploadURL, bytes.NewReader(blob.Data))
-	if err != nil {
-		return err
-	}
-	contentType := blob.Descriptor.MediaType
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(blob.Data)))
-	resp, err = r.do(req, ref, "repository:"+ref.Repository+":push,pull")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return registryError(resp)
-	}
-	return nil
 }
 
 func (r *HTTPRegistry) getManifest(ctx context.Context, ref Reference) ([]byte, string, error) {
@@ -403,14 +286,10 @@ func isImageManifestMediaType(value string) bool {
 }
 
 func (r *HTTPRegistry) getBlob(ctx context.Context, ref Reference, descriptor Descriptor) ([]byte, error) {
-	limit := DefaultIngestionLimits.CompressedBlobBytes
-	switch descriptor.MediaType {
-	case EmptyConfigMediaType, AdversaryManifestMediaType:
-		limit = DefaultIngestionLimits.ConfigBytes
-	case PackageLayerMediaType:
-	default:
+	if descriptor.MediaType != AdversaryManifestMediaType {
 		return nil, fmt.Errorf("unsupported blob media type %q", descriptor.MediaType)
 	}
+	limit := DefaultIngestionLimits.ConfigBytes
 	if descriptor.Size < 0 || descriptor.Size > limit {
 		return nil, fmt.Errorf("blob %s exceeds %d byte limit", descriptor.Digest, limit)
 	}

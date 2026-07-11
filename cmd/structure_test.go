@@ -72,6 +72,20 @@ func TestCommandConstructorsDoNotCaptureStreams(t *testing.T) {
 	}
 }
 
+func TestArtifactCommandsHaveNoByteLayerCompatibilityFallback(t *testing.T) {
+	for _, path := range []string{"artifact_pack.go", "artifact_pull.go", "artifact_push.go", "app.go"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{"does not support streaming", "oci.Blob", "PulledArtifact", ".Payload("} {
+			if bytes.Contains(data, []byte(forbidden)) {
+				t.Errorf("%s retains compatibility path %q", path, forbidden)
+			}
+		}
+	}
+}
+
 func TestSubcommandStreamOverridesAreHonored(t *testing.T) {
 	var appOut, appErr bytes.Buffer
 	app := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &appOut, &appErr)
