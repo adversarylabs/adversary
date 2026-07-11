@@ -27,6 +27,7 @@ import (
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/adversarylabs/adversary/pkg/store"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -212,11 +213,24 @@ func newInspectCommand(stdout, stderr io.Writer) *cobra.Command {
   adversary inspect sha256:abc123`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			localStore, err := store.Default()
-			if err == nil {
-				if record, err := localStore.Inspect(args[0]); err == nil {
-					return renderStoreInspect(stdout, record, inspectOpts.json)
+			resolver, err := internaladversary.DefaultResolver()
+			if err != nil {
+				return err
+			}
+			resolution, lookupErr := resolver.Lookup(args[0])
+			if lookupErr == nil && !resolution.Local {
+				if inspectOpts.json {
+					return json.NewEncoder(stdout).Encode(struct {
+						CanonicalReference string `json:"canonicalReference"`
+						Digest             string `json:"digest"`
+						Record             any    `json:"record"`
+					}{resolution.CanonicalReference, resolution.Digest, resolution.Record})
 				}
+				fmt.Fprintf(stdout, "Canonical reference: %s\nDigest: %s\nName: %s\nVersion: %s\n", resolution.CanonicalReference, resolution.Digest, resolution.Record.Name, resolution.Record.Version)
+				return nil
+			}
+			if lookupErr != nil && !errors.Is(lookupErr, internaladversary.ErrNotFound) {
+				return lookupErr
 			}
 			if inspectOpts.json {
 				return fmt.Errorf("--json is only supported for locally stored adversaries")
@@ -252,28 +266,34 @@ func newPackCommand(stdout, stderr io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			localStore, err := store.Default()
+			resolver, err := internaladversary.DefaultResolver()
 			if err != nil {
 				return err
 			}
-			record, err := localStore.Put(artifact)
+			canonical := artifact.Name + ":" + artifact.Version
+			unified, err := resolver.ImportPacked(artifact, canonical)
 			if err != nil {
+				return err
+			}
+			latest := artifact.Name + ":" + oci.DefaultTag
+			if err := registerExactRef(resolver.Repository, latest, unified.Digest); err != nil {
 				return err
 			}
 			fmt.Fprintln(stdout)
-			fmt.Fprintf(stdout, "Name: %s\n", record.Name)
-			fmt.Fprintf(stdout, "Version: %s\n", record.Version)
-			fmt.Fprintf(stdout, "Runtime: %s\n", record.Runtime)
-			if record.RuntimeName != "" {
-				fmt.Fprintf(stdout, "Runtime Requirement: %s@%s\n", record.RuntimeName, record.RuntimeVersion)
+			fmt.Fprintf(stdout, "Name: %s\n", artifact.ManifestName)
+			fmt.Fprintf(stdout, "Version: %s\n", artifact.Version)
+			fmt.Fprintf(stdout, "Runtime: %s\n", artifact.Runtime)
+			if artifact.RuntimeName != "" {
+				fmt.Fprintf(stdout, "Runtime Requirement: %s@%s\n", artifact.RuntimeName, artifact.RuntimeVersion)
 			}
-			fmt.Fprintf(stdout, "Digest: %s\n", record.Digest)
-			fmt.Fprintf(stdout, "Size: %s\n", humanSize(record.Size))
+			fmt.Fprintf(stdout, "Digest: %s\n", unified.Digest)
+			fmt.Fprintf(stdout, "Canonical reference: %s\nUnified digest: %s\n", canonical, unified.Digest)
+			fmt.Fprintf(stdout, "Size: %s\n", humanSize(artifact.Size))
 			fmt.Fprintln(stdout)
 			fmt.Fprintln(stdout, "Stored locally as:")
 			fmt.Fprintln(stdout)
-			fmt.Fprintf(stdout, "%s:%s\n", record.Name, record.Version)
-			fmt.Fprintf(stdout, "%s:latest\n", record.Name)
+			fmt.Fprintln(stdout, canonical)
+			fmt.Fprintln(stdout, latest)
 			return nil
 		},
 	}
@@ -289,27 +309,25 @@ func newLSCommand(stdout io.Writer, use string) *cobra.Command {
 		Short: "List locally stored adversaries",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			localStore, err := store.Default()
+			resolver, err := internaladversary.DefaultResolver()
 			if err != nil {
 				return err
 			}
-			records, err := localStore.List()
+			entries, err := resolver.Repository.Entries(10000)
 			if err != nil {
 				return err
 			}
 			if opts.json {
-				encoder := json.NewEncoder(stdout)
-				encoder.SetIndent("", "  ")
-				return encoder.Encode(records)
+				return json.NewEncoder(stdout).Encode(entries)
 			}
-			if len(records) == 0 {
+			if len(entries) == 0 {
 				fmt.Fprintln(stdout, "No local adversaries found.")
 				return nil
 			}
 			w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tVERSION\tDIGEST\tSIZE\tCREATED")
-			for _, record := range records {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", record.Name, record.Version, shortDigest(record.Digest), humanSize(record.Size), relativeTime(record.Created))
+			fmt.Fprintln(w, "NAME\tVERSION\tCANONICAL REFERENCE\tDIGEST")
+			for _, entry := range entries {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", entry.Record.Name, entry.Record.Version, entry.CanonicalReference, shortDigest(entry.Digest))
 			}
 			return w.Flush()
 		},
@@ -492,6 +510,9 @@ func newPushCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Co
   adversary push ghcr.io/acme/security-reviewer:0.1.0`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if handled, err := pushUnified(cmd.Context(), stdout, stderr, args, valueOf(apiURL), valueOf(profile)); handled {
+				return err
+			}
 			localRef := args[0]
 			remoteRef := ""
 			if len(args) == 2 {
@@ -562,6 +583,62 @@ func newPushCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Co
 	}
 }
 
+func pushUnified(ctx context.Context, stdout, stderr io.Writer, args []string, apiURL, profile string) (bool, error) {
+	resolver, err := internaladversary.DefaultResolver()
+	if err != nil {
+		return false, nil
+	}
+	hasExact, _ := resolver.Repository.HasExact(args[0])
+	resolution, err := resolver.Lookup(args[0])
+	if err != nil {
+		if os.IsNotExist(err) && !hasExact {
+			return false, nil
+		}
+		return true, err
+	}
+	if resolution.Local {
+		return false, nil
+	}
+	manifest, blobs, yaml, err := resolver.Repository.Payload(resolution.Record)
+	if err != nil {
+		return true, err
+	}
+	remote := args[0]
+	if len(args) == 2 {
+		remote = args[1]
+	} else if !hasExplicitRegistry(args[0]) {
+		remote, err = defaultAdversaryLabsPushRef(ctx, args[0], store.Record{Name: resolution.Record.Name, ManifestName: resolution.Record.Name, Version: resolution.Record.Version, Digest: resolution.Record.Digest}, apiURL, profile)
+		if err != nil {
+			return true, err
+		}
+	}
+	ref, err := oci.ParseReference(remote)
+	if err != nil {
+		return true, err
+	}
+	registry, err := newOCIRegistry(apiURL, profile)
+	if err != nil {
+		return true, err
+	}
+	if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
+		registry.PlainHTTP = true
+	}
+	fmt.Fprintf(stderr, "Pushing %s (%s) to %s\n", resolution.CanonicalReference, resolution.Digest, ref.Locator())
+	digest, err := registry.Push(ctx, ref, manifest, blobs)
+	if err != nil {
+		return true, err
+	}
+	artifactDigest, _, err := registry.PushAdversaryManifestReferrer(ctx, ref, digest, yaml)
+	if err != nil {
+		return true, err
+	}
+	if err := registerExactRef(resolver.Repository, ref.Locator(), digest); err != nil {
+		return true, err
+	}
+	fmt.Fprintf(stdout, "Canonical reference: %s\nImage digest\n\n%s\nDigest: %s\nPublished adversary manifest referrer\n\n%s\n", ref.Locator(), digest, digest, artifactDigest)
+	return true, nil
+}
+
 func newPullCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "pull <reference>",
@@ -585,31 +662,51 @@ func newPullCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Co
 			}
 			fmt.Fprintln(stderr, "Pulling manifest...")
 			fmt.Fprintln(stderr)
-			cache, err := adversarypkg.DefaultCache()
-			if err != nil {
-				return err
-			}
 			digest, err := registry.Resolve(cmd.Context(), ref)
 			if err != nil {
 				return err
 			}
-			if record, ok := cache.ResolveDigest(digest); ok {
-				printInstallRecord(stdout, record)
-				return nil
+			resolver, resolverErr := internaladversary.DefaultResolver()
+			if resolverErr == nil {
+				if existing, resolveErr := resolver.Repository.Resolve(digest); resolveErr == nil {
+					if err := registerExactRef(resolver.Repository, ref.Locator(), existing.Digest); err != nil {
+						return err
+					}
+					fmt.Fprintf(stdout, "Installed: %s\nVersion: %s\nCanonical reference: %s\nDigest: %s\n", existing.Name, existing.Version, ref.Locator(), existing.Digest)
+					return nil
+				} else if !os.IsNotExist(resolveErr) {
+					return resolveErr
+				}
 			}
 			fmt.Fprintln(stderr, "Downloading layers...")
 			artifact, err := registry.Pull(cmd.Context(), ref)
 			if err != nil {
 				return err
 			}
-			record, err := cache.Install(artifact)
+			if resolverErr != nil {
+				return resolverErr
+			}
+			unified, err := resolver.ImportPulled(artifact)
 			if err != nil {
 				return err
 			}
-			printInstallRecord(stdout, record)
+			fmt.Fprintf(stdout, "Installed: %s\nVersion: %s\nCanonical reference: %s\nDigest: %s\n", unified.Name, unified.Version, ref.Locator(), unified.Digest)
 			return nil
 		},
 	}
+}
+func registerExactRef(repo repository.Repository, ref, digest string) error {
+	current, err := repo.Resolve(ref)
+	if err == nil {
+		if current.Digest == digest {
+			return nil
+		}
+		return fmt.Errorf("%w: %s currently points to %s", repository.ErrCAS, ref, current.Digest)
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	return repo.UpdateRef(ref, "", digest)
 }
 
 func newSearchCommand(stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {

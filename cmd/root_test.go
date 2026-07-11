@@ -3,14 +3,17 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -318,11 +321,11 @@ func TestPackNameOverride(t *testing.T) {
 		t.Fatalf("pack output missing overridden ref:\n%s", packStdout.String())
 	}
 
-	localStore, err := store.Default()
+	resolver, err := internaladversary.DefaultResolver()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := localStore.Inspect("ghcr.io/acme/security-reviewer:1.4.2"); err != nil {
+	if _, err := resolver.Repository.Resolve("ghcr.io/acme/security-reviewer:1.4.2"); err != nil {
 		t.Fatalf("overridden ref not inspectable: %v", err)
 	}
 }
@@ -434,6 +437,14 @@ func TestPushErrorWithNamespaceHintLeavesOtherErrorsAlone(t *testing.T) {
 }
 
 func TestPushPullAgainstLocalOCIRegistry(t *testing.T) {
+	nodePath, nodeErr := exec.LookPath("node")
+	if nodeErr != nil {
+		t.Skip("Node 22 is required for the pulled-artifact E2E")
+	}
+	versionOut, versionErr := exec.Command(nodePath, "--version").Output()
+	if versionErr != nil || !strings.HasPrefix(strings.TrimSpace(string(versionOut)), "v22.") {
+		t.Skipf("Node 22 is required for the pulled-artifact E2E; found %q", strings.TrimSpace(string(versionOut)))
+	}
 	registry := newTestOCIRegistry()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -451,6 +462,13 @@ func TestPushPullAgainstLocalOCIRegistry(t *testing.T) {
 
 	project := t.TempDir()
 	writeProject(t, project)
+	copyTestTree(t, filepath.Join("..", "templates", "typescript", "vendor", "adversary-sdk"), filepath.Join(project, "vendor", "adversary-sdk"))
+	if err := os.WriteFile(filepath.Join(project, "dist", "index.js"), []byte(`import { parseInput, writeOutput } from "@adversary/sdk";
+await parseInput();
+await writeOutput({protocolVersion:1,result:{adversary:{name:"local/security-reviewer"},target:{},positives:[],observations:[{key:"sdk-stage",summary:"SDK parse/write executed."}],findings:[],suppressed:{observations:0,findings:0}}});
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
 	t.Chdir(project)
 
 	var packStdout bytes.Buffer
@@ -541,6 +559,11 @@ runtime:
 	}
 
 	pullDir := t.TempDir()
+	freshHome := t.TempDir()
+	freshData := t.TempDir()
+	t.Cleanup(func() { makeTestTreeWritable(freshData) })
+	t.Setenv("HOME", freshHome)
+	t.Setenv("ADVERSARY_DATA_DIR", freshData)
 	t.Chdir(pullDir)
 	var pullStdout bytes.Buffer
 	var pullStderr bytes.Buffer
@@ -554,11 +577,70 @@ runtime:
 			t.Fatalf("pull output missing %q:\n%s", want, pullStdout.String())
 		}
 	}
-
-	cacheIndex := filepath.Join(home, ".adversary", "cache", "index")
-	if _, err := os.Stat(cacheIndex); err != nil {
-		t.Fatalf("expected cache index: %v", err)
+	nodeStageRan := false
+	{
+		for _, args := range [][]string{{"init"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "Test"}} {
+			c := exec.Command("git", args...)
+			c.Dir = pullDir
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v %s", args, err, out)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(pullDir, "README.md"), []byte("target\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{"add", "."}, {"commit", "-m", "initial"}} {
+			c := exec.Command("git", args...)
+			c.Dir = pullDir
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v %s", args, err, out)
+			}
+		}
+		var runOut, runErr bytes.Buffer
+		run := NewRootCommand(&runOut, &runErr)
+		run.SetArgs([]string{"run", imageDigest, "--repo", pullDir, "--all-files", "--allow-unsafe-host-execution", "--format", "json"})
+		if err := run.Execute(); err != nil {
+			t.Fatalf("run pulled digest: %v stderr=%s", err, runErr.String())
+		}
+		if !strings.Contains(runOut.String(), `"protocolVersion": 1`) {
+			t.Fatalf("run output=%s", runOut.String())
+		}
+		if !strings.Contains(runOut.String(), "SDK parse/write executed.") {
+			t.Fatalf("Node SDK stage did not run: %s", runOut.String())
+		}
+		nodeStageRan = true
 	}
+	if !nodeStageRan {
+		t.Fatal("Node SDK stage was bypassed")
+	}
+	var inspectOut, inspectErr bytes.Buffer
+	inspect := NewRootCommand(&inspectOut, &inspectErr)
+	inspect.SetArgs([]string{"inspect", imageDigest, "--json"})
+	if err := inspect.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(inspectOut.String(), imageDigest) || !strings.Contains(inspectOut.String(), host+"/acme/security-reviewer:v1") {
+		t.Fatalf("inspect output=%s", inspectOut.String())
+	}
+	var listOut bytes.Buffer
+	list := NewRootCommand(&listOut, &bytes.Buffer{})
+	list.SetArgs([]string{"ls", "--json"})
+	if err := list.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listOut.String(), imageDigest) {
+		t.Fatalf("list output=%s", listOut.String())
+	}
+	var repushOut, repushErr bytes.Buffer
+	repush := NewRootCommand(&repushOut, &repushErr)
+	repush.SetArgs([]string{"push", imageDigest, host + "/acme/security-reviewer:v2"})
+	if err := repush.Execute(); err != nil {
+		t.Fatalf("repush: %v stderr=%s", err, repushErr.String())
+	}
+	if got := oci.Digest(registry.manifest(t, "acme/security-reviewer/v2")); got != imageDigest {
+		t.Fatalf("repush digest=%s want=%s", got, imageDigest)
+	}
+
 }
 
 func makeTestTreeWritable(root string) {
@@ -588,15 +670,16 @@ func TestPushMissingAdversaryManifestFailsBeforeImageUpload(t *testing.T) {
 	if err := packCmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	localStore, err := store.Default()
+	resolver, err := internaladversary.DefaultResolver()
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := localStore.Inspect("security-reviewer:1.4.2")
+	record, err := resolver.Repository.Resolve("security-reviewer:1.4.2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(record.AdversaryManifestPath); err != nil {
+	digestKey := fmt.Sprintf("v1-%x", sha256.Sum256([]byte(record.AdversaryManifestDigest)))
+	if err := os.Remove(filepath.Join(resolver.Repository.RootPath(), "adversary-manifests", digestKey)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -609,7 +692,7 @@ func TestPushMissingAdversaryManifestFailsBeforeImageUpload(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing adversary.yaml error")
 	}
-	if !strings.Contains(err.Error(), "adversary.yaml is required for publishing") {
+	if !strings.Contains(err.Error(), "no such file") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if registry.manifestCount() != 0 {
@@ -835,9 +918,12 @@ runtime:
   command:
     - dist/index.js
 `,
-		"README.md":     "# Security Reviewer\n",
-		"LICENSE":       "MIT\n",
-		"dist/index.js": "console.log('ok')\n",
+		"README.md":    "# Security Reviewer\n",
+		"LICENSE":      "MIT\n",
+		"package.json": `{"type":"module"}`,
+		"dist/index.js": `import { writeFileSync } from "node:fs";
+writeFileSync(process.env.ADVERSARY_OUTPUT, JSON.stringify({protocolVersion:1,result:{adversary:{name:"local/security-reviewer"},target:{},positives:[],observations:[],findings:[],suppressed:{observations:0,findings:0}}}));
+`,
 	}
 	for rel, content := range files {
 		path := filepath.Join(dir, rel)
@@ -847,6 +933,30 @@ runtime:
 		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+func copyTestTree(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

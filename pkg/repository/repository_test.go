@@ -400,3 +400,74 @@ func TestRepositoryRootMustBeProvisioned(t *testing.T) {
 		t.Fatal("repository created an unprovisioned root")
 	}
 }
+
+func TestPrepareDerivedSDKCopiesExactBytes(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := root.MkdirAll("vendor/adversary-sdk/dist", 0755); err != nil {
+		t.Fatal(err)
+	}
+	pkg := []byte(`{"name":"@adversary/sdk","version":"0.1.0","type":"module","main":"./dist/index.js"}`)
+	source := []byte("export const marker = 'exact';\n")
+	if err := root.WriteFile("vendor/adversary-sdk/package.json", pkg, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.WriteFile("vendor/adversary-sdk/dist/index.js", source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareDerivedSDK(root); err != nil {
+		t.Fatal(err)
+	}
+	derived, err := root.ReadFile("node_modules/@adversary/sdk/dist/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(source, derived) {
+		t.Fatal("derived SDK bytes differ from verified source")
+	}
+	derivedPackage, err := root.ReadFile("node_modules/@adversary/sdk/package.json")
+	if err != nil || !bytes.Equal(pkg, derivedPackage) {
+		t.Fatalf("derived package mismatch err=%v", err)
+	}
+	sourceAfter, _ := root.ReadFile("vendor/adversary-sdk/dist/index.js")
+	if !bytes.Equal(source, sourceAfter) {
+		t.Fatal("source SDK changed")
+	}
+	sourceInfo, _ := root.Stat("vendor/adversary-sdk/dist/index.js")
+	derivedInfo, _ := root.Stat("node_modules/@adversary/sdk/dist/index.js")
+	packageInfo, _ := root.Stat("node_modules/@adversary/sdk/package.json")
+	if sourceInfo.Mode().Perm() != 0755 || derivedInfo.Mode().Perm() != 0555 || packageInfo.Mode().Perm() != 0444 {
+		t.Fatalf("modes source=%o derived=%o package=%o", sourceInfo.Mode().Perm(), derivedInfo.Mode().Perm(), packageInfo.Mode().Perm())
+	}
+}
+func TestPrepareDerivedSDKRejectsMalformedPackage(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	_ = root.MkdirAll("vendor/adversary-sdk", 0755)
+	_ = root.WriteFile("vendor/adversary-sdk/package.json", []byte(`{"name":"attacker/sdk"}`), 0644)
+	if err := prepareDerivedSDK(root); err == nil {
+		t.Fatal("malformed SDK accepted")
+	}
+}
+func TestPrepareDerivedSDKPropagatesStatErrors(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dir, "vendor")); err != nil {
+		t.Skip(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := prepareDerivedSDK(root); err == nil {
+		t.Fatal("SDK stat error treated as missing")
+	}
+}
