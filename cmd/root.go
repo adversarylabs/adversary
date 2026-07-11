@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -26,6 +27,7 @@ import (
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/adversarylabs/adversary/pkg/review"
 	"github.com/spf13/cobra"
 )
 
@@ -65,6 +67,8 @@ func newRootCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 			return cmd.Help()
 		},
 	}
+	cmd.Version = fmt.Sprintf("%s (commit %s, built %s, %s, review protocol %d)", version.Version, version.Commit, version.BuildDate, runtime.Version(), review.ProtocolVersion)
+	cmd.SetVersionTemplate("adversary {{.Version}}\n")
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	cmd.PersistentFlags().StringVar(&apiURL, "api-url", deps.DefaultAPIURL, "Adversary Labs API endpoint (or ADVERSARY_API_URL)")
@@ -74,9 +78,8 @@ func newRootCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 	cmd.AddCommand(newInspectCommand(app, stdout, stderr))
 	cmd.AddCommand(newInitCommand(stdout, stderr))
 	cmd.AddCommand(newPackCommand(app, stdout, stderr))
-	cmd.AddCommand(newLSCommand(app, stdout, "ls"))
-	cmd.AddCommand(newLSCommand(app, stdout, "list"))
-	cmd.AddCommand(newVersionCommand(stdout))
+	cmd.AddCommand(newListCommand(app, stdout, stderr))
+	cmd.AddCommand(newVersionCommand(stdout, stderr))
 	cmd.AddCommand(newLoginCommand(app, stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newLogoutCommand(app, stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newPushCommand(app, stdout, stderr, &apiURL, &profile))
@@ -84,6 +87,7 @@ func newRootCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 	cmd.AddCommand(newSearchCommand(app, stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newWhoamiCommand(app, stdout, stderr, &apiURL, &profile))
 	cmd.AddCommand(newStoreCommand(app))
+	cmd.AddCommand(newCompletionCommand(cmd, stdout))
 	classifyCommandErrors(cmd)
 	return cmd
 }
@@ -171,16 +175,20 @@ type logoutOptions struct {
 }
 
 type inspectOptions struct {
-	json bool
+	json   bool
+	format string
 }
 
 type listOptions struct {
-	json bool
+	json   bool
+	format string
 }
 
 type packOptions struct {
 	builder string
 	name    string
+	format  string
+	json    bool
 }
 
 func newRunCommand(app *application.App, stdout, stderr io.Writer) *cobra.Command {
@@ -197,19 +205,23 @@ func newRunCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comman
   adversary run ./smoke-tests/comment-sentence-adversary --repo . --shell`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if opts.format != "text" && opts.format != "json" {
-				return fmt.Errorf("--format must be text or json")
+			format, err := commandFormat(cmd, opts.format, opts.json)
+			if err != nil {
+				return err
 			}
-			if opts.json {
-				opts.format = "json"
+			if opts.debug && cmd.Flags().Changed("verbose") {
+				return fmt.Errorf("--debug and --verbose cannot be combined")
 			}
-			if opts.debug {
-				opts.verbose = true
+			if (opts.base == "") != (opts.head == "") {
+				return fmt.Errorf("--base and --head must be provided together")
+			}
+			if opts.builder != "local" && opts.builder != "docker" {
+				return fmt.Errorf("--builder must be local or docker")
 			}
 			if opts.shell && opts.noNetwork {
 				return fmt.Errorf("--shell cannot be combined with --no-network because the host shell cannot enforce network isolation")
 			}
-			if opts.shell && (opts.json || opts.format == "json") {
+			if opts.shell && format == "json" {
 				return fmt.Errorf("--shell cannot be combined with JSON output")
 			}
 			if opts.build && opts.noBuild {
@@ -218,8 +230,16 @@ func newRunCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comman
 			if opts.runTimeout < 0 || opts.buildTimeout < 0 {
 				return fmt.Errorf("timeouts cannot be negative")
 			}
+			opts.format = format
+			if opts.json {
+				fmt.Fprintln(stderr, "Warning: --json is deprecated; use --format json.")
+			}
+			if opts.debug {
+				fmt.Fprintln(stderr, "Warning: --debug is deprecated; use --verbose.")
+				opts.verbose = true
+			}
 
-			err := app.Dependencies().Runtime.Run(cmd.Context(), application.AdversaryRunOptions{
+			err = app.Dependencies().Runtime.Run(cmd.Context(), application.AdversaryRunOptions{
 				AdversaryRef:             args[0],
 				RepoPath:                 opts.repo,
 				BaseRef:                  opts.base,
@@ -285,15 +305,22 @@ func newInspectCommand(app *application.App, stdout, stderr io.Writer) *cobra.Co
   adversary inspect sha256:abc123`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			format, err := commandFormat(cmd, inspectOpts.format, inspectOpts.json)
+			if err != nil {
+				return err
+			}
+			if inspectOpts.json {
+				fmt.Fprintln(stderr, "Warning: --json is deprecated; use --format json.")
+			}
 			deps := app.Dependencies()
 			resolution, lookupErr := deps.Resolver.Lookup(cmd.Context(), args[0])
 			if lookupErr == nil && !resolution.Local {
-				if inspectOpts.json {
-					return json.NewEncoder(stdout).Encode(struct {
-						CanonicalReference string            `json:"canonicalReference"`
-						Digest             string            `json:"digest"`
-						Record             repository.Record `json:"record"`
-					}{resolution.CanonicalReference, resolution.Digest, resolution.Record})
+				if format == "json" {
+					if inspectOpts.json {
+						return json.NewEncoder(stdout).Encode(legacyArtifact(resolution.CanonicalReference, resolution.Digest, resolution.Record))
+					}
+					r := resolution.Record
+					return writeJSON(stdout, "inspect", storedArtifactDTO(resolution.CanonicalReference, resolution.Digest, r.Name, r.Version, r.ManifestDigest, r.ConfigDigest, r.LayerDigest, r.AdversaryManifestDigest))
 				}
 				fmt.Fprintf(stdout, "Canonical reference: %s\nDigest: %s\nName: %s\nVersion: %s\n", resolution.CanonicalReference, resolution.Digest, resolution.Record.Name, resolution.Record.Version)
 				return nil
@@ -301,8 +328,11 @@ func newInspectCommand(app *application.App, stdout, stderr io.Writer) *cobra.Co
 			if lookupErr != nil && !errors.Is(lookupErr, internaladversary.ErrNotFound) {
 				return lookupErr
 			}
-			if inspectOpts.json {
-				return fmt.Errorf("--json is only supported for locally stored adversaries")
+			if format == "json" {
+				if inspectOpts.json {
+					return fmt.Errorf("--json is only supported for locally stored adversaries")
+				}
+				return fmt.Errorf("JSON inspect describes stored artifacts; local execution-plan inspection supports --format text only")
 			}
 			return deps.Runtime.Inspect(cmd.Context(), application.AdversaryRunOptions{
 				AdversaryRef: args[0],
@@ -317,6 +347,7 @@ func newInspectCommand(app *application.App, stdout, stderr io.Writer) *cobra.Co
 	cmd.Flags().StringVar(&opts.repo, "repo", ".", "path to the local source repository")
 	cmd.Flags().BoolVar(&opts.noNetwork, "no-network", false, "disable network access when supported by the runtime")
 	cmd.Flags().BoolVar(&inspectOpts.json, "json", false, "print local store metadata as JSON")
+	cmd.Flags().StringVar(&inspectOpts.format, "format", "text", "output format: text or json")
 
 	return cmd
 }
@@ -328,6 +359,16 @@ func newPackCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 		Short: "Package the current adversary into the local content-addressable store",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			format, err := commandFormat(cmd, opts.format, opts.json)
+			if err != nil {
+				return err
+			}
+			if opts.builder != "local" && opts.builder != "docker" {
+				return fmt.Errorf("--builder must be local or docker")
+			}
+			if opts.json {
+				fmt.Fprintln(stderr, "Warning: --json is deprecated; use --format json.")
+			}
 			fmt.Fprintln(stderr, "Packing adversary...")
 			artifact, err := pack.Create(cmd.Context(), pack.Options{Dir: args[0], NameOverride: opts.name, Build: true, Builder: opts.builder, Stdout: stderr, Stderr: stderr})
 			if err != nil {
@@ -342,6 +383,13 @@ func newPackCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 			latest := artifact.Name + ":" + oci.DefaultTag
 			if err := registerExactRef(resolver, latest, unified.Digest); err != nil {
 				return err
+			}
+			if format == "json" {
+				requirement := ""
+				if artifact.RuntimeName != "" {
+					requirement = artifact.RuntimeName + "@" + artifact.RuntimeVersion
+				}
+				return writeJSON(stdout, "pack", packDTO{artifact.ManifestName, artifact.Version, artifact.Runtime, requirement, unified.Digest, canonical, artifact.Size, []string{canonical, latest}})
 			}
 			fmt.Fprintln(stdout)
 			fmt.Fprintf(stdout, "Name: %s\n", artifact.ManifestName)
@@ -363,22 +411,44 @@ func newPackCommand(app *application.App, stdout, stderr io.Writer) *cobra.Comma
 	}
 	cmd.Flags().StringVar(&opts.builder, "builder", "local", "build mechanism: local or docker")
 	cmd.Flags().StringVar(&opts.name, "name", "", "override the local artifact name")
+	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "deprecated alias for --format json")
 	return cmd
 }
 
-func newLSCommand(app *application.App, stdout io.Writer, use string) *cobra.Command {
+func newListCommand(app *application.App, stdout, stderr io.Writer) *cobra.Command {
 	opts := &listOptions{}
 	cmd := &cobra.Command{
-		Use:   use,
-		Short: "List locally stored adversaries",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List locally stored adversaries",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			entries, err := app.Dependencies().Resolver.Entries(10000)
+			format, err := commandFormat(cmd, opts.format, opts.json)
 			if err != nil {
 				return err
 			}
 			if opts.json {
-				return json.NewEncoder(stdout).Encode(entries)
+				fmt.Fprintln(stderr, "Warning: --json is deprecated; use --format json.")
+			}
+			entries, err := app.Dependencies().Resolver.Entries(10000)
+			if err != nil {
+				return err
+			}
+			if format == "json" {
+				if opts.json {
+					items := make([]legacyArtifactV0DTO, 0, len(entries))
+					for _, e := range entries {
+						items = append(items, legacyArtifact(e.CanonicalReference, e.Digest, e.Record))
+					}
+					return json.NewEncoder(stdout).Encode(items)
+				}
+				items := make([]artifactDTO, 0, len(entries))
+				for _, e := range entries {
+					r := e.Record
+					items = append(items, storedArtifactDTO(e.CanonicalReference, e.Digest, r.Name, r.Version, r.ManifestDigest, r.ConfigDigest, r.LayerDigest, r.AdversaryManifestDigest))
+				}
+				return writeJSON(stdout, "list", listDTO{Artifacts: items})
 			}
 			if len(entries) == 0 {
 				fmt.Fprintln(stdout, "No local adversaries found.")
@@ -393,6 +463,7 @@ func newLSCommand(app *application.App, stdout io.Writer, use string) *cobra.Com
 		},
 	}
 	cmd.Flags().BoolVar(&opts.json, "json", false, "print local adversaries as JSON")
+	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
 	return cmd
 }
 
@@ -423,16 +494,49 @@ func newInitCommand(stdout, stderr io.Writer) *cobra.Command {
 	return cmd
 }
 
-func newVersionCommand(stdout io.Writer) *cobra.Command {
-	return &cobra.Command{
+func newVersionCommand(stdout, stderr io.Writer) *cobra.Command {
+	var format string
+	var legacyJSON bool
+	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print the adversary version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintf(stdout, "adversary %s\n", version.Version)
+			resolved, err := commandFormat(cmd, format, legacyJSON)
+			if err != nil {
+				return err
+			}
+			if legacyJSON {
+				fmt.Fprintln(stderr, "Warning: --json is deprecated; use --format json.")
+			}
+			v := currentVersion()
+			if resolved == "json" {
+				return writeJSON(stdout, "version", v)
+			}
+			fmt.Fprintf(stdout, "adversary %s\n", v.Version)
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	cmd.Flags().BoolVar(&legacyJSON, "json", false, "deprecated alias for --format json")
+	return cmd
+}
+
+func newCompletionCommand(root *cobra.Command, stdout io.Writer) *cobra.Command {
+	return &cobra.Command{Use: "completion [bash|zsh|fish|powershell]", Short: "Generate shell completion code", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		switch args[0] {
+		case "bash":
+			return root.GenBashCompletion(stdout)
+		case "zsh":
+			return root.GenZshCompletion(stdout)
+		case "fish":
+			return root.GenFishCompletion(stdout, true)
+		case "powershell":
+			return root.GenPowerShellCompletion(stdout)
+		default:
+			return fmt.Errorf("unsupported shell %q (want bash, zsh, fish, or powershell)", args[0])
+		}
+	}}
 }
 
 func newStoreCommand(app *application.App) *cobra.Command {
@@ -636,7 +740,9 @@ func newLogoutCommand(app *application.App, stdout, stderr io.Writer, apiURL, pr
 }
 
 func newPushCommand(app *application.App, stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
-	return &cobra.Command{
+	var format string
+	var legacyJSON bool
+	cmd := &cobra.Command{
 		Use:   "push <local-ref> [remote-ref]",
 		Short: "Push a locally packed adversary to an OCI registry",
 		Example: `  adversary push dockerfile-reviewer:0.1.0
@@ -645,14 +751,24 @@ func newPushCommand(app *application.App, stdout, stderr io.Writer, apiURL, prof
   adversary push ghcr.io/acme/security-reviewer:0.1.0`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			resolved, err := commandFormat(cmd, format, legacyJSON)
+			if err != nil {
+				return err
+			}
+			if legacyJSON {
+				fmt.Fprintln(stderr, "Warning: --json is deprecated; use --format json.")
+			}
 			resolver := app.Dependencies().Resolver
-			_, err := pushUnified(cmd.Context(), app, resolver, stdout, stderr, args, valueOf(apiURL), valueOf(profile))
+			_, err = pushUnified(cmd.Context(), app, resolver, stdout, stderr, args, valueOf(apiURL), valueOf(profile), resolved)
 			return err
 		},
 	}
+	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	cmd.Flags().BoolVar(&legacyJSON, "json", false, "deprecated alias for --format json")
+	return cmd
 }
 
-func pushUnified(ctx context.Context, app *application.App, resolver application.Resolver, stdout, stderr io.Writer, args []string, apiURL, profile string) (bool, error) {
+func pushUnified(ctx context.Context, app *application.App, resolver application.Resolver, stdout, stderr io.Writer, args []string, apiURL, profile, format string) (bool, error) {
 	hasExact, _ := resolver.HasExact(args[0])
 	resolution, err := resolver.Lookup(ctx, args[0])
 	if err != nil {
@@ -700,12 +816,17 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 	if err := registerExactRef(resolver, ref.Locator(), digest); err != nil {
 		return true, err
 	}
+	if format == "json" {
+		return true, writeJSON(stdout, "push", pushDTO{ref.Locator(), digest, artifactDigest})
+	}
 	fmt.Fprintf(stdout, "Canonical reference: %s\nImage digest\n\n%s\nDigest: %s\nPublished adversary manifest referrer\n\n%s\n", ref.Locator(), digest, digest, artifactDigest)
 	return true, nil
 }
 
 func newPullCommand(app *application.App, stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
-	return &cobra.Command{
+	var format string
+	var legacyJSON bool
+	cmd := &cobra.Command{
 		Use:   "pull <reference>",
 		Short: "Pull and install an adversary from an OCI registry",
 		Example: `  adversary pull security-reviewer
@@ -714,6 +835,13 @@ func newPullCommand(app *application.App, stdout, stderr io.Writer, apiURL, prof
   adversary pull localhost:5000/security-reviewer`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			resolved, err := commandFormat(cmd, format, legacyJSON)
+			if err != nil {
+				return err
+			}
+			if legacyJSON {
+				fmt.Fprintln(stderr, "Warning: --json is deprecated; use --format json.")
+			}
 			resolver := app.Dependencies().Resolver
 			ref, err := oci.ParseReference(args[0])
 			if err != nil {
@@ -736,6 +864,9 @@ func newPullCommand(app *application.App, stdout, stderr io.Writer, apiURL, prof
 				if err := registerExactRef(resolver, ref.Locator(), existing.Digest); err != nil {
 					return err
 				}
+				if resolved == "json" {
+					return writeJSON(stdout, "pull", pullDTO{existing.Name, existing.Version, ref.Locator(), existing.Digest})
+				}
 				fmt.Fprintf(stdout, "Installed: %s\nVersion: %s\nCanonical reference: %s\nDigest: %s\n", existing.Name, existing.Version, ref.Locator(), existing.Digest)
 				return nil
 			} else if !os.IsNotExist(resolveErr) {
@@ -750,10 +881,16 @@ func newPullCommand(app *application.App, stdout, stderr io.Writer, apiURL, prof
 			if err != nil {
 				return err
 			}
+			if resolved == "json" {
+				return writeJSON(stdout, "pull", pullDTO{unified.Name, unified.Version, ref.Locator(), unified.Digest})
+			}
 			fmt.Fprintf(stdout, "Installed: %s\nVersion: %s\nCanonical reference: %s\nDigest: %s\n", unified.Name, unified.Version, ref.Locator(), unified.Digest)
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	cmd.Flags().BoolVar(&legacyJSON, "json", false, "deprecated alias for --format json")
+	return cmd
 }
 func registerExactRef(resolver application.Resolver, ref, digest string) error {
 	current, err := resolver.ResolveRecord(ref)
@@ -770,13 +907,22 @@ func registerExactRef(resolver application.Resolver, ref, digest string) error {
 }
 
 func newSearchCommand(app *application.App, stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
-	return &cobra.Command{
+	var format string
+	var legacyJSON bool
+	cmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search Adversary Labs adversaries",
 		Example: `  adversary search dockerfile
   adversary search security-reviewer`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			resolved, err := commandFormat(cmd, format, legacyJSON)
+			if err != nil {
+				return err
+			}
+			if legacyJSON {
+				fmt.Fprintln(stderr, "Warning: --json is deprecated; use --format json.")
+			}
 			deps := app.Dependencies()
 			store := deps.Auth
 			var token string
@@ -792,38 +938,51 @@ func newSearchCommand(app *application.App, stdout, stderr io.Writer, apiURL, pr
 			if err != nil {
 				return err
 			}
+			if resolved == "json" {
+				items := make([]searchResultDTO, 0, len(results))
+				for _, r := range results {
+					items = append(items, searchResultDTO{r.Name, r.Version, r.Description, r.Reference})
+				}
+				return writeJSON(stdout, "search", searchDTO{Results: items})
+			}
 			if len(results) == 0 {
 				fmt.Fprintln(stdout, "No adversaries found.")
 				return nil
 			}
+			w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NAME\tVERSION\tDESCRIPTION")
 			for _, result := range results {
 				name := result.Name
 				if result.Reference != "" {
 					name = result.Reference
 				}
-				if result.Version != "" {
-					fmt.Fprintf(stdout, "%s\t%s", name, result.Version)
-				} else {
-					fmt.Fprint(stdout, name)
-				}
-				if result.Description != "" {
-					fmt.Fprintf(stdout, "\t%s", result.Description)
-				}
-				fmt.Fprintln(stdout)
+				fmt.Fprintf(w, "%s\t%s\t%s\n", sanitizeCell(name), sanitizeCell(result.Version), sanitizeCell(result.Description))
 			}
-			return nil
+			return w.Flush()
 		},
 	}
+	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	cmd.Flags().BoolVar(&legacyJSON, "json", false, "deprecated alias for --format json")
+	return cmd
 }
 
 func newWhoamiCommand(app *application.App, stdout, stderr io.Writer, apiURL, profile *string) *cobra.Command {
-	return &cobra.Command{
+	var format string
+	var legacyJSON bool
+	cmd := &cobra.Command{
 		Use:   "whoami",
 		Short: "Show the current Adversary Labs login",
 		Example: `  adversary whoami
   adversary whoami --api-url http://localhost:3000/api`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			resolved, err := commandFormat(cmd, format, legacyJSON)
+			if err != nil {
+				return err
+			}
+			if legacyJSON {
+				fmt.Fprintln(stderr, "Warning: --json is deprecated; use --format json.")
+			}
 			deps := app.Dependencies()
 			store := deps.Auth
 			auth, ok, err := scopedAuth(store, valueOf(apiURL), valueOf(profile), deps.RegistryHost)
@@ -831,6 +990,9 @@ func newWhoamiCommand(app *application.App, stdout, stderr io.Writer, apiURL, pr
 				return err
 			}
 			if !ok {
+				if resolved == "json" {
+					return writeJSON(stdout, "whoami", whoamiDTO{Authenticated: false})
+				}
 				fmt.Fprintln(stdout, "Not logged in.")
 				fmt.Fprintln(stdout)
 				fmt.Fprintln(stdout, "Run `adversary login` to authenticate with Adversary Labs.")
@@ -841,10 +1003,29 @@ func newWhoamiCommand(app *application.App, stdout, stderr io.Writer, apiURL, pr
 			if err != nil {
 				return err
 			}
+			if resolved == "json" {
+				return writeJSON(stdout, "whoami", whoamiData(account))
+			}
 			printWhoami(stdout, account)
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
+	cmd.Flags().BoolVar(&legacyJSON, "json", false, "deprecated alias for --format json")
+	return cmd
+}
+
+func whoamiData(account adversarylabs.WhoamiResponse) whoamiDTO {
+	name := account.Name
+	email := account.EmailAddress
+	if email == "" {
+		email = account.Email
+	}
+	subscription := account.Subscription.Name
+	if subscription == "" {
+		subscription = account.Subscription.Plan
+	}
+	return whoamiDTO{true, name, email, subscription, account.Subscription.Status}
 }
 
 func printWhoami(stdout io.Writer, account adversarylabs.WhoamiResponse) {

@@ -1,0 +1,13 @@
+Print the adversary version
+
+Usage:
+  adversary version [flags]
+
+Flags:
+      --format string   output format: text or json (default "text")
+  -h, --help            help for version
+      --json            deprecated alias for --format json
+
+Global Flags:
+      --api-url string   Adversary Labs API endpoint (or ADVERSARY_API_URL) (default "https://adversarylabs.ai/api")
+      --profile string   credential profile (default "default")

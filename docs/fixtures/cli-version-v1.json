@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "command": "version",
+  "data": {
+    "version": "1.0.0",
+    "commit": "0123456789abcdef",
+    "buildDate": "2026-07-11T00:00:00Z",
+    "goVersion": "go1.26.5",
+    "reviewProtocolVersion": 1
+  }
+}

@@ -111,7 +111,7 @@ func TestInjectedAuthSearchAndWhoamiNeedNoProcessEnvironment(t *testing.T) {
 	if err := search.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "acme/reviewer\t1.2.3") {
+	if !strings.Contains(out.String(), "NAME") || !strings.Contains(out.String(), "acme/reviewer") || !strings.Contains(out.String(), "1.2.3") {
 		t.Fatalf("search output=%q", out.String())
 	}
 	out.Reset()

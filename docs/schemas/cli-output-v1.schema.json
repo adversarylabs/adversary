@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adversarylabs.dev/schemas/cli-output-v1.schema.json",
+  "title": "Adversary CLI output envelope v1",
+  "oneOf": [
+    { "$ref": "#/$defs/list" }, { "$ref": "#/$defs/inspect" },
+    { "$ref": "#/$defs/search" }, { "$ref": "#/$defs/whoami" },
+    { "$ref": "#/$defs/pack" }, { "$ref": "#/$defs/pull" },
+    { "$ref": "#/$defs/push" }, { "$ref": "#/$defs/version" }
+  ],
+  "$defs": {
+    "baseProperties": {
+      "schemaVersion": { "const": 1 },
+      "command": { "type": "string" }
+    },
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["canonicalReference", "digest", "name", "version", "origin", "trust", "manifest", "files"],
+      "properties": {
+        "canonicalReference": {"type":"string"}, "digest":{"type":"string"}, "name":{"type":"string"}, "version":{"type":"string"},
+        "origin": {"type":"object","additionalProperties":false,"required":["kind","canonicalSource"],"properties":{"kind":{"type":"string"},"canonicalSource":{"type":"string"}}},
+        "trust": {"type":"object","additionalProperties":false,"required":["status","decision"],"properties":{"status":{"type":"string"},"decision":{"type":"string"}}},
+        "manifest": {"type":"object","additionalProperties":false,"required":["validation","manifestDigest","configDigest","layerDigest","adversaryManifestDigest"],"properties":{"validation":{"type":"string"},"manifestDigest":{"type":"string"},"configDigest":{"type":"string"},"layerDigest":{"type":"string"},"adversaryManifestDigest":{"type":"string"}}},
+        "files": {"type":"object","additionalProperties":false,"required":["status","reason","entries"],"properties":{"status":{"type":"string"},"reason":{"type":"string"},"entries":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","digest","sizeBytes","mode"],"properties":{"path":{"type":"string"},"digest":{"type":"string"},"sizeBytes":{"type":"integer"},"mode":{"type":"string"}}}}}}
+      }
+    },
+    "list": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"list"},"data":{"type":"object","additionalProperties":false,"required":["artifacts"],"properties":{"artifacts":{"type":"array","items":{"$ref":"#/$defs/artifact"}}}}}},
+    "inspect": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"inspect"},"data":{"$ref":"#/$defs/artifact"}}},
+    "search": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"search"},"data":{"type":"object","additionalProperties":false,"required":["results"],"properties":{"results":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"},"version":{"type":"string"},"description":{"type":"string"},"reference":{"type":"string"}}}}}}}},
+    "whoami": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"whoami"},"data":{"type":"object","additionalProperties":false,"required":["authenticated"],"properties":{"authenticated":{"type":"boolean"},"name":{"type":"string"},"email":{"type":"string"},"subscription":{"type":"string"},"status":{"type":"string"}}}}},
+    "pack": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"pack"},"data":{"type":"object","additionalProperties":false,"required":["name","version","runtime","digest","canonicalReference","sizeBytes","references"],"properties":{"name":{"type":"string"},"version":{"type":"string"},"runtime":{"type":"string"},"runtimeRequirement":{"type":"string"},"digest":{"type":"string"},"canonicalReference":{"type":"string"},"sizeBytes":{"type":"integer"},"references":{"type":"array","items":{"type":"string"}}}}}},
+    "pull": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"pull"},"data":{"type":"object","additionalProperties":false,"required":["name","version","canonicalReference","digest"],"properties":{"name":{"type":"string"},"version":{"type":"string"},"canonicalReference":{"type":"string"},"digest":{"type":"string"}}}}},
+    "push": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"push"},"data":{"type":"object","additionalProperties":false,"required":["canonicalReference","digest","manifestDigest"],"properties":{"canonicalReference":{"type":"string"},"digest":{"type":"string"},"manifestDigest":{"type":"string"}}}}},
+    "version": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"version"},"data":{"type":"object","additionalProperties":false,"required":["version","commit","buildDate","goVersion","reviewProtocolVersion"],"properties":{"version":{"type":"string"},"commit":{"type":"string"},"buildDate":{"type":"string"},"goVersion":{"type":"string"},"reviewProtocolVersion":{"type":"integer"}}}}}
+  }
+}

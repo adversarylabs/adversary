@@ -1,0 +1,1 @@
+{"schemaVersion":1,"command":"pack","data":{"name":"example","version":"1.0.0","runtime":"node","runtimeRequirement":"node@22","digest":"sha256:00","canonicalReference":"example:1.0.0","sizeBytes":42,"references":["example:1.0.0"]}}
