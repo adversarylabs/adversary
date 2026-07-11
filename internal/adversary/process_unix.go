@@ -3,10 +3,30 @@
 package adversary
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
 )
+
+func platformShell() ([]string, error) {
+	path, err := exec.LookPath("sh")
+	if err != nil {
+		return nil, fmt.Errorf("host shell is unavailable: %w", err)
+	}
+	return []string{path}, nil
+}
+
+func validateExecutable(path string) error {
+	info, err := executableFileInfo(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0111 == 0 {
+		return fmt.Errorf("not executable")
+	}
+	return nil
+}
 
 func configureProcess(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
 

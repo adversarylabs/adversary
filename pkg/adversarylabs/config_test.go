@@ -74,6 +74,31 @@ func TestConfigStoreHardeningAndServiceFallback(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigStoreReadsLegacyCredentials(t *testing.T) {
+	home, config := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", config)
+	legacy := ConfigStore{Path: filepath.Join(home, ".adversary", "config.json")}
+	if err := legacy.Save(Config{Auths: map[string]Auth{"auth": {Token: "secret"}}}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := DefaultConfigStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantConfig, _ := os.UserConfigDir()
+	if store.Path != filepath.Join(wantConfig, "adversary", "config.json") {
+		t.Fatalf("path = %q", store.Path)
+	}
+	got, err := store.Load()
+	if err != nil || got.Auths["auth"].Token != "secret" {
+		t.Fatalf("legacy config = %#v, %v", got, err)
+	}
+	if store.LegacyPath != legacy.Path {
+		t.Fatalf("legacy path = %q", store.LegacyPath)
+	}
+}
+
 func TestConfigStoreSurfacesCorruptionAndMalformedExpiry(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	store := ConfigStore{Path: path}

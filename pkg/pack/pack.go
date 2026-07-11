@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/internal/publock"
 	"github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
@@ -505,11 +506,11 @@ func ensureBuildStateRoot(override string) (string, error) {
 func buildStatePath(override string) (string, error) {
 	root := override
 	if root == "" {
-		cache, err := os.UserCacheDir()
+		cache, err := internalpaths.CacheDir()
 		if err != nil {
 			return "", err
 		}
-		root = filepath.Join(cache, "adversary", "build-state")
+		root = filepath.Join(cache, "build-state")
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {

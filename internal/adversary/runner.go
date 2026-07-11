@@ -209,7 +209,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		cancelBuild()
 		buildDuration = time.Since(buildStarted)
 	}
-	if resolved.LocalDir && !resolved.StoreBacked {
+	if r.Executor == nil && resolved.LocalDir && !resolved.StoreBacked {
 		if err := validateLocalCommandFiles(resolved.Command); err != nil {
 			if !opts.Build {
 				return fmt.Errorf("local build output is unavailable or stale; rerun with --build: %w", err)
@@ -218,7 +218,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		}
 	}
 
-	runDir, err := mkdirTemp("", "adversary-run-*")
+	runDir, err := mkdirTemp(os.TempDir(), "adversary-run-*")
 	if err != nil {
 		return err
 	}
@@ -454,7 +454,7 @@ func (r Runner) Inspect(opts RunOptions) error {
 		return err
 	}
 
-	config := NewRunConfig(resolved, repoPath, "/tmp/adversary-run", opts)
+	config := NewRunConfig(resolved, repoPath, filepath.Join(os.TempDir(), "adversary-run"), opts)
 	PrintInspect(stdout, opts.AdversaryRef, config)
 	return nil
 }
@@ -578,7 +578,11 @@ func PrintInspect(w io.Writer, ref string, config RunConfig) {
 	fmt.Fprintln(w)
 	command := resolved.Command
 	if config.Options.Shell {
-		command = []string{"/bin/sh"}
+		if shell, err := platformShell(); err == nil {
+			command = shell
+		} else {
+			command = []string{"<host shell unavailable>"}
+		}
 	}
 	if len(command) == 0 {
 		fmt.Fprintln(w, "  none")

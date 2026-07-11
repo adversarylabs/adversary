@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	semver "github.com/Masterminds/semver/v3"
 )
 
 type ContainerExecutor interface {
@@ -41,6 +44,14 @@ type ContainerResult struct {
 	Kind     string
 }
 
+// UnsupportedFeatureError lets callers distinguish an unavailable platform
+// guarantee from an execution failure.
+type UnsupportedFeatureError struct{ Platform, Feature string }
+
+func (e *UnsupportedFeatureError) Error() string {
+	return fmt.Sprintf("host execution cannot enforce %s on %s", e.Feature, e.Platform)
+}
+
 // ChildExitError preserves the child status while retaining the cancellation or
 // operating-system cause for process-edge exit classification.
 type ChildExitError struct {
@@ -54,12 +65,19 @@ func (e *ChildExitError) Error() string {
 func (e *ChildExitError) Unwrap() error { return e.Err }
 
 func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
+	if spec.RuntimeName == "" && spec.Image != "" && !strings.HasPrefix(spec.Image, "host:") {
+		return ContainerResult{ExitCode: -1, Kind: "Process"}, &UnsupportedFeatureError{Platform: runtime.GOOS, Feature: "container image runtime execution"}
+	}
 	if spec.NetworkDisabled {
-		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution cannot enforce disabled network access")
+		return ContainerResult{ExitCode: -1, Kind: "Process"}, &UnsupportedFeatureError{Platform: runtime.GOOS, Feature: "disabled network access"}
 	}
 	command := spec.Command
 	if spec.Shell {
-		command = []string{"/bin/sh"}
+		var err error
+		command, err = platformShell()
+		if err != nil {
+			return ContainerResult{ExitCode: -1, Kind: "Process"}, err
+		}
 	}
 	if len(command) == 0 {
 		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution command is empty")
@@ -115,15 +133,25 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 }
 
 func findNode(version string) (string, error) {
-	version = normalizeNodeVersion(version)
+	constraint, err := nodeConstraint(version)
+	if err != nil {
+		return "", fmt.Errorf("invalid Node.js runtime requirement %q: %w", version, err)
+	}
 	if override := strings.TrimSpace(os.Getenv("ADVERSARY_NODE_PATH")); override != "" {
+		override, err = filepath.Abs(override)
+		if err != nil {
+			return "", fmt.Errorf("resolve ADVERSARY_NODE_PATH: %w", err)
+		}
+		if err := validateExecutable(override); err != nil {
+			return "", fmt.Errorf("ADVERSARY_NODE_PATH %q: %w", override, err)
+		}
+		if err := nodeSatisfies(override, constraint); err != nil {
+			return "", fmt.Errorf("ADVERSARY_NODE_PATH %q: %w", override, err)
+		}
 		return override, nil
 	}
-	if path, ok := managedNodePath(version); ok {
-		return path, nil
-	}
 	if path, err := exec.LookPath("node"); err == nil {
-		if version == "" || nodeMatchesVersion(path, version) {
+		if validateExecutable(path) == nil && nodeSatisfies(path, constraint) == nil {
 			return path, nil
 		}
 	}
@@ -138,71 +166,58 @@ func findNode(version string) (string, error) {
 		filepath.Join(home, ".asdf", "shims", "node"),
 	)
 	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			if version == "" || nodeMatchesVersion(candidate, version) {
-				return candidate, nil
-			}
+		if validateExecutable(candidate) == nil && nodeSatisfies(candidate, constraint) == nil {
+			return candidate, nil
 		}
 	}
 	if version != "" {
-		return "", fmt.Errorf("host execution failed: Node.js %s was not found; install a managed runtime or set ADVERSARY_NODE_PATH", version)
+		return "", fmt.Errorf("host execution failed: no user-managed Node.js executable satisfies %q; install Node.js or set ADVERSARY_NODE_PATH", version)
 	}
-	return "", fmt.Errorf("host execution failed: Node.js was not found; install a managed runtime or set ADVERSARY_NODE_PATH")
+	return "", fmt.Errorf("host execution failed: Node.js was not found; install Node.js or set ADVERSARY_NODE_PATH")
 }
 
-func managedNodePath(version string) (string, bool) {
-	if version == "" {
-		return "", false
-	}
-	root, err := adversaryDataDir()
+func nodeSatisfies(path string, constraint *semver.Constraints) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "--version").Output()
 	if err != nil {
-		return "", false
-	}
-	path := filepath.Join(root, "runtimes", "node", version, runtime.GOOS+"-"+runtime.GOARCH, "bin", "node")
-	if info, err := os.Stat(path); err == nil && !info.IsDir() {
-		return path, true
-	}
-	return "", false
-}
-
-func adversaryDataDir() (string, error) {
-	if override := strings.TrimSpace(os.Getenv("ADVERSARY_DATA_DIR")); override != "" {
-		return override, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(home, "Library", "Application Support", "Adversary"), nil
-	case "linux":
-		if xdg := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); xdg != "" {
-			return filepath.Join(xdg, "adversary"), nil
+		if ctx.Err() != nil {
+			return fmt.Errorf("query Node.js version: %w", ctx.Err())
 		}
-		return filepath.Join(home, ".local", "share", "adversary"), nil
-	default:
-		return filepath.Join(home, ".adversary"), nil
+		return fmt.Errorf("query Node.js version: %w", err)
 	}
-}
-
-func nodeMatchesVersion(path, version string) bool {
-	out, err := exec.Command(path, "--version").Output()
+	got, err := semver.NewVersion(strings.TrimSpace(string(out)))
 	if err != nil {
-		return false
+		return fmt.Errorf("parse Node.js version output %q: %w", strings.TrimSpace(string(out)), err)
 	}
-	got := strings.TrimSpace(strings.TrimPrefix(string(out), "v"))
-	if got == version || strings.HasPrefix(got, version+".") {
-		return true
+	if constraint != nil && !constraint.Check(got) {
+		return fmt.Errorf("Node.js %s does not satisfy runtime requirement %s", got, constraint)
 	}
-	return false
+	return nil
 }
 
-func normalizeNodeVersion(version string) string {
-	version = strings.TrimSpace(version)
-	version = strings.TrimPrefix(version, "node@")
-	version = strings.TrimPrefix(version, "v")
-	return version
+func nodeConstraint(requirement string) (*semver.Constraints, error) {
+	v := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(requirement), "node@"), "v")
+	if v == "" {
+		return nil, nil
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) <= 2 && strings.IndexAny(v, "<>=~^*xX ,|") < 0 {
+		if len(parts) == 1 {
+			n, err := strconv.ParseUint(parts[0], 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			v = ">=" + v + ".0.0, <" + fmt.Sprint(n+1) + ".0.0"
+		} else {
+			n, err := strconv.ParseUint(parts[1], 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			v = ">=" + v + ".0, <" + parts[0] + "." + fmt.Sprint(n+1) + ".0"
+		}
+	}
+	return semver.NewConstraint(v)
 }
 
 func sortedEnvKeys(env map[string]string) []string {

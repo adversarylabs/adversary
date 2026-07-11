@@ -24,7 +24,7 @@ runtime:
     - dist/index.js
 ```
 
-`adversary run` uses that requirement to resolve the right Node runtime. It checks `ADVERSARY_NODE_PATH` for local overrides, then the CLI-managed runtime store, then a matching system `node`.
+`adversary run` uses that requirement to resolve a user-managed Node runtime. It validates `ADVERSARY_NODE_PATH` first, then searches for a matching system or user-installed `node`; the CLI does not install or update runtimes. See [the platform support contract](docs/platform-runtime-support.md).
 
 ## Usage
 
@@ -55,7 +55,7 @@ When `--base` and `--head` are provided, the CLI includes changed files from `gi
 ./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo .
 ```
 
-The repository includes a deliberately small smoke-test adversary used to verify the local CLI loop. Full authoring examples live with the SDK. `adversary run` executes local directories and installed adversary artifacts through the CLI-managed runtime; it does not build or run Docker images.
+The repository includes a deliberately small smoke-test adversary used to verify the local CLI loop. Full authoring examples live with the SDK. `adversary run` executes local directories and installed adversary artifacts through a compatible user-managed runtime; it does not build or run Docker images.
 
 ## Debugging
 
@@ -89,7 +89,7 @@ adversary pack . --builder docker
 adversary pack . --name ghcr.io/acme/security-reviewer
 ```
 
-`pack` reads `adversary.yaml`, validates the manifest, records the runtime requirement, detects the artifact runtime, runs the TypeScript build when needed, creates deterministic OCI-style artifact content, writes content by digest, and updates local refs. It does not create or tag a Docker image. Packed adversaries are run through the Adversary CLI, which materializes the artifact and executes it with the appropriate CLI-managed runtime. Use `--builder docker` to run the TypeScript build inside Docker/BuildKit; this supports remote builders that honor `docker build --output`, such as CI builders configured through `DOCKER_HOST`.
+`pack` reads `adversary.yaml`, validates the manifest, records the declared runtime requirement, runs the TypeScript build when needed, creates deterministic OCI-style artifact content, writes content by digest, and updates local refs. It does not create or tag a Docker image. Packed adversaries are run through the Adversary CLI, which materializes the artifact and executes it with a compatible user-managed runtime. Use `--builder docker` to run the TypeScript build inside Docker/BuildKit; this supports remote builders that honor `docker build --output`, such as CI builders configured through `DOCKER_HOST`.
 
 Use `--name` to override the local artifact name without changing `adversary.yaml`. This is useful when you want the local ref to match the remote OCI repository.
 

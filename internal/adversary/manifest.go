@@ -42,10 +42,14 @@ func resolveReference(ref string, resolver *Resolver) (ResolvedAdversary, error)
 		if err != nil {
 			return ResolvedAdversary{}, err
 		}
+		image := manifest.Runtime.Image
+		if manifest.Runtime.Name != "" {
+			image = "host:" + manifest.Runtime.Name
+		}
 		resolved := ResolvedAdversary{
 			Name:           manifest.Name,
-			Image:          "adversary-local-typescript",
-			RuntimeName:    normalizeRuntimeName(manifest.Runtime.Name, manifest.Runtime.Command),
+			Image:          image,
+			RuntimeName:    strings.TrimSpace(manifest.Runtime.Name),
 			RuntimeVersion: manifest.Runtime.Version,
 			Command:        manifest.Runtime.Command,
 			Manifest:       &manifest,
@@ -54,8 +58,7 @@ func resolveReference(ref string, resolver *Resolver) (ResolvedAdversary, error)
 			BuildContext:   buildContext,
 			ExecutionPath:  buildContext,
 		}
-		if isTypeScriptAdversary(buildContext) {
-			resolved.RuntimeName = "node"
+		if resolved.RuntimeName == "node" {
 			resolved.Command = typeScriptHostCommand(buildContext, resolved.RuntimeName, manifest.Runtime.Command)
 		}
 		return resolved, nil
@@ -77,7 +80,7 @@ func resolveReference(ref string, resolver *Resolver) (ResolvedAdversary, error)
 		resolved.StorePath = resolution.Path
 		resolved.ExecutionPath = resolution.Path
 		if resolved.RuntimeName == "node" {
-			resolved.Image = "adversary-local-typescript"
+			resolved.Image = "host:node"
 			resolved.Command = typeScriptHostCommand(resolution.Path, resolved.RuntimeName, resolved.Command)
 		}
 		return resolved, nil
@@ -91,16 +94,6 @@ func resolveReference(ref string, resolver *Resolver) (ResolvedAdversary, error)
 	}, nil
 }
 
-func isTypeScriptAdversary(path string) bool {
-	if info, err := os.Stat(filepath.Join(path, "package.json")); err == nil && !info.IsDir() {
-		return true
-	}
-	if info, err := os.Stat(filepath.Join(path, "dist", "index.js")); err == nil && !info.IsDir() {
-		return true
-	}
-	return false
-}
-
 func typeScriptHostCommand(path, runtimeName string, command []string) []string {
 	hostCommand := append([]string(nil), command...)
 	for i, part := range hostCommand {
@@ -112,20 +105,6 @@ func typeScriptHostCommand(path, runtimeName string, command []string) []string 
 		hostCommand = append([]string{"node"}, hostCommand...)
 	}
 	return hostCommand
-}
-
-func normalizeRuntimeName(name string, command []string) string {
-	name = strings.TrimSpace(name)
-	if name != "" {
-		if name == "typescript" {
-			return "node"
-		}
-		return name
-	}
-	if len(command) > 0 && command[0] == "node" {
-		return "node"
-	}
-	return ""
 }
 
 type ResolvedAdversary struct {
