@@ -1,7 +1,8 @@
 class __FORMULA_CLASS__ < Formula
-  desc "Run containerized source-code adversaries against a local repository"
+  desc "Run source-code adversaries against a local repository"
   homepage "https://github.com/adversarylabs/adversary"
   version "__VERSION__"
+  # No license stanza: upstream has not selected a license. See LICENSE.
 
   on_macos do
     on_intel do
@@ -32,6 +33,6 @@ class __FORMULA_CLASS__ < Formula
   end
 
   test do
-    assert_match "Run containerized source-code adversaries", shell_output("#{bin}/__INSTALLED_BINARY__ --help")
+    assert_match version.to_s, shell_output("#{bin}/__INSTALLED_BINARY__ version")
   end
 end

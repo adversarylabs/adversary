@@ -2,51 +2,123 @@ name: release
 
 on:
   push:
-    tags:
-      - "20*.*.*"
-  release:
-    types:
-      - published
+    tags: ["20*.*.*"]
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  homebrew:
+  build-and-test:
     runs-on: ubuntu-24.04
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-
+          persist-credentials: false
+      - name: Verify immutable tag checkout
+        run: scripts/verify-release-ref.sh
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-
-      - name: Install release tools
-        shell: bash
+      - name: Test and vet
         run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ca-certificates curl git gnupg
-          sudo mkdir -p -m 755 /etc/apt/keyrings
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-            | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
-          sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-            | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gh
+          go test ./...
+          go vet ./...
+          scripts/test-release-contract.sh
+      - name: Build deterministic release bundle
+        env:
+          BUILD_ONLY: "1"
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: scripts/publish-homebrew.sh
+      - name: Upload release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ github.ref_name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Test
-        run: go test ./...
-
-      - name: Publish GitHub Release artifacts and Homebrew formula
-        shell: bash
+  attest:
+    needs: build-and-test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      GITHUB_REF_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Check out release metadata
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable clean tag checkout
+        run: scripts/verify-release-ref.sh
+      - name: Download verified build bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-${{ github.ref_name }}
+          path: dist
+      - name: Verify release bundle
+        env:
+          PUBLISH_ONLY: "1"
+          VERIFY_ONLY: "1"
+        run: scripts/publish-homebrew.sh
+      - name: Recheck tracked checkout before publication
+        run: |
+          git diff --quiet --ignore-submodules --
+          git diff --cached --quiet --ignore-submodules --
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.spdx.json
+            dist/*.rb
+            dist/checksums.txt
+            dist/release-manifest.json
+  publish:
+    needs: attest
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    env:
+      GITHUB_REF_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Check out release metadata
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable clean tag checkout
+        run: scripts/verify-release-ref.sh
+      - name: Download attested release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-${{ github.ref_name }}
+          path: dist
+      - name: Verify clean publication workspace and exact bundle
+        env:
+          PUBLISH_ONLY: "1"
+          VERIFY_ONLY: "1"
+        run: |
+          git diff --exit-code --ignore-submodules --
+          git diff --cached --exit-code --ignore-submodules --
+          git ls-files --others --exclude-standard | LC_ALL=C sort > /tmp/untracked-files
+          test ! -s /tmp/untracked-files
+          scripts/publish-homebrew.sh
+      - name: Publish GitHub release and verified Homebrew formula
+        env:
+          PUBLISH_ONLY: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: scripts/publish-homebrew.sh

@@ -32,6 +32,11 @@
             go
             pkgs.gnumake
             pkgs.git
+            pkgs.nodejs_22
+            pkgs.actionlint
+            pkgs.shellcheck
+            pkgs.gnutar
+            pkgs.gzip
           ];
 
           shellHook = ''
@@ -44,9 +49,20 @@
 
         packages.default = buildGoModule {
           pname = "adversary";
-          version = "0.1.0";
+          version = "dev";
           src = self;
-          vendorHash = null;
+          # The TypeScript template has a directory named vendor; use the Go
+          # module fetcher explicitly instead of mistaking it for `go mod vendor`.
+          proxyVendor = true;
+          vendorHash = "sha256-6Z4aU/q9rMCU2nSiGp+XIRTWtEtSW1U+7A9KmYHrCvo=";
+          subPackages = [ "." ];
+          preCheck = ''
+            export HOME="$TMPDIR/home"
+            mkdir -p "$HOME"
+          '';
+          ldflags = [
+            "-X github.com/adversarylabs/adversary/internal/version.Version=dev"
+          ];
         };
       });
 }
