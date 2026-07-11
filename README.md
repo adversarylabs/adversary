@@ -1,221 +1,123 @@
 # Adversary
 
-Adversary runs source-code adversaries against a local repository.
+Adversary is a CLI for packaging, distributing, and running source-code review
+adversaries. Host execution runs code with your user account's authority; read
+the [trust model](docs/trust-model.md) before running code you did not write.
 
-## Create an Adversary
+## Install
+
+Supported release binaries target macOS and Linux on amd64 and arm64. Windows
+is source-build and CI supported but does not yet have a packaged release.
 
 ```sh
-./bin/adversary init my-adversary --sdk typescript
-cd my-adversary
-npm install
-npm run build
+brew install adversarylabs/tap/adversary
+# Or build the current checkout with stamped metadata:
+make build VERSION=dev
+```
+
+Release archives, checksums, SPDX SBOMs, and GitHub build attestations are on
+the corresponding GitHub Release. Verify checksums before installation and
+verify the attestation with GitHub CLI as described in [the release guide](docs/release.md).
+Because the project has not selected a license, source publication grants no
+reuse rights; see [the license decision](docs/license-decision.md).
+
+`go install github.com/adversarylabs/adversary@<commit-or-tag>` is supported for
+source installation, but the Go tool does not apply release `-ldflags`, so the
+binary reports version `dev`; its Go VCS build information remains inspectable
+with `go version -m`. Prefer release archives when a stamped version is needed.
+
+## Quick start
+
+Node.js 22 is required for the generated TypeScript adversary. Node is managed
+by the user, not downloaded by this CLI.
+
+```sh
+adversary init my-adversary --sdk typescript
+cd my-adversary && npm install && npm test && npm run build
 adversary run . --repo /path/to/repository
 ```
 
-Only the TypeScript SDK is supported by `init` today. The generated project includes a working manifest, starter rule, fixtures, and tests.
-
-Generated TypeScript adversaries declare their runtime requirement in `adversary.yaml`:
-
-```yaml
-runtime:
-  name: node
-  version: "22"
-  command:
-    - dist/index.js
-```
-
-`adversary run` uses that requirement to resolve a user-managed Node runtime. It validates `ADVERSARY_NODE_PATH` first, then searches for a matching system or user-installed `node`; the CLI does not install or update runtimes. See [the platform support contract](docs/platform-runtime-support.md).
-
-## Usage
+Only TypeScript project generation is currently supported. Useful commands:
 
 ```sh
-./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo .
-./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --verbose
-./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --format json
-./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --base main --head HEAD
-./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --base main --head HEAD --all-files
-./bin/adversary inspect ./smoke-tests/comment-sentence-adversary --repo .
-./bin/adversary pack .
-./bin/adversary ls
-./bin/adversary inspect security-reviewer
-./bin/adversary login
-./bin/adversary whoami
-./bin/adversary search dockerfile
-./bin/adversary push ghcr.io/acme/security-reviewer
-./bin/adversary pull ghcr.io/acme/security-reviewer
+adversary run . --repo . --format json
+adversary inspect . --repo .
+adversary pack . --name ghcr.io/acme/reviewer
+adversary push ghcr.io/acme/reviewer:0.1.0
+adversary pull ghcr.io/acme/reviewer:0.1.0
+adversary list --format json
+adversary completion bash
 ```
 
-An adversary reference can be either a local directory containing `adversary.yaml` or a locally installed adversary artifact.
+Run `adversary help <command>` for the canonical command and flag reference.
 
-When `--base` and `--head` are provided, the CLI includes changed files from `git diff --name-only <base>...<head>` in `input.json`. Use `--all-files` to keep that diff context but request a full repository scan and bypass `triggers.files_changed` skipping.
+## Safety and trust
 
-## Smoke Test Adversary
+Local Node and process adversaries are not sandboxed. Installed or pulled code
+requires `--allow-unsafe-host-execution`; that acknowledgment is not isolation.
+The child can access the repository, credentials, network, processes, and any
+other resources available to your account. Restrictions the host runner cannot
+enforce fail closed. OCI digests provide integrity and identity, not publisher
+authenticity. Registry credentials and trusted CA/proxy configuration are part
+of the user's environment trust boundary. See [artifact limits](docs/artifact-trust-and-limits.md)
+and [network policy](docs/network-oci-policy.md).
 
-```sh
-./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo .
-```
+## Configuration and precedence
 
-The repository includes a deliberately small smoke-test adversary used to verify the local CLI loop. Full authoring examples live with the SDK. `adversary run` executes local directories and installed adversary artifacts through a compatible user-managed runtime; it does not build or run Docker images.
+Command flags take precedence over environment variables, which take
+precedence over the selected profile in the OS config file, followed by built-in
+defaults. Manifest runtime and permission declarations apply to the adversary
+and are not general CLI configuration.
 
-## Debugging
+| Concern | Flag | Environment | Default/config |
+| --- | --- | --- | --- |
+| SaaS endpoint | `--api-url` | `ADVERSARY_API_URL` | `https://adversarylabs.ai/api` |
+| profile | `--profile` | — | `default` profile in OS config dir |
+| registry | explicit OCI reference | `ADVERSARY_REGISTRY_HOST`, `ADVERSARY_REGISTRY_NAMESPACE` | Adversary Labs registry |
+| artifact data | — | `ADVERSARY_DATA_DIR` | OS data directory |
+| Node runtime | manifest requirement | `ADVERSARY_NODE_PATH`, then `PATH` | user runtime locations |
+| OCI diagnostics | `--verbose` | `ADVERSARY_OCI_DEBUG` (internal transport toggle) | disabled; secrets redacted |
+| review suppression | command behavior | `ADVERSARY_INCLUDE_SUPPRESSED` (injected into adversary) | suppressed details omitted |
+| adversary protocol paths | — | `ADVERSARY_INPUT`, `ADVERSARY_OUTPUT`, `ADVERSARY_REPO` (injected) | per-run temporary paths |
+| adversary diagnostics | `--verbose` | `ADVERSARY_VERBOSE` (injected) | disabled |
+| password login | `--password-stdin` | `ADVERSARY_PASSWORD` only in shell examples | secure prompt; variable is not read directly by the CLI |
 
-Use `--verbose` to print the manifest, runtime, command, environment, repository contents, process exit code, and execution timing:
+`ADVERSARY_BUILD_HELPER` is a test seam, not a supported user setting. Standard
+`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and platform CA trust are
+honored by Go networking. Registry credentials come from Docker credential
+configuration or the selected Adversary profile as documented in
+[network policy](docs/network-oci-policy.md). Never put passwords in URLs or
+command history.
 
-```sh
-./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --verbose
-```
+## Output and exits
 
-Use `inspect` to validate the runtime configuration without executing the adversary:
+Text is the default. `--format json` emits exactly one versioned JSON document
+to stdout; progress, diagnostics, and deprecation notices go to stderr. Exit 0
+means success, 1 means findings met the configured threshold, 2 means invalid
+usage or configuration, 3 means adversary/protocol/execution failure, 4 means
+network or authentication failure, and 130 means interruption. Child exit and
+signal behavior are defined in the
+[process contract](docs/process-lifecycle-and-exit-contract.md). Stable DTO and
+deprecation rules are in the [output contract](docs/cli-output-contract.md).
 
-```sh
-./bin/adversary inspect ./smoke-tests/comment-sentence-adversary --repo .
-```
+## Artifact storage and resolution
 
-Use `--shell` to launch an interactive shell in the adversary working directory instead of running the adversary command:
+Local paths resolve directly. Named and digest references resolve through the
+unified content-addressed repository; pulls verify descriptor sizes and
+digests before atomic publication. Default data locations are
+`~/Library/Application Support/Adversary` on macOS,
+`$XDG_DATA_HOME/adversary` (or `~/.local/share/adversary`) on Linux, and
+`%LOCALAPPDATA%\Adversary` on Windows. Directories and mutable indexes are
+owner-only; published content is read-only. `ADVERSARY_DATA_DIR` overrides the
+data root. See [resolver migration](docs/resolver-migration.md).
 
-```sh
-./bin/adversary run ./smoke-tests/comment-sentence-adversary --repo . --shell
-```
+## Support and compatibility
 
-Adversary stdout and stderr stream directly to the terminal.
+The tested OS/runtime matrix is in [platform support](docs/platform-runtime-support.md).
+Public JSON schemas and manifest fields follow additive compatibility within a
+major schema version. A deprecated CLI flag remains for at least two minor or
+60 days (whichever is longer) and warns on stderr before removal. Security
+exceptions can shorten that window and are called out in the changelog.
+Release, rollback, and provenance policy is in [docs/release.md](docs/release.md).
 
-## Local Packaging
-
-Package the current adversary into the local content-addressable store:
-
-```sh
-adversary pack .
-adversary pack . --builder docker
-adversary pack . --name ghcr.io/acme/security-reviewer
-```
-
-`pack` reads `adversary.yaml`, validates the manifest, records the declared runtime requirement, runs the TypeScript build when needed, creates deterministic OCI-style artifact content, writes content by digest, and updates local refs. It does not create or tag a Docker image. Packed adversaries are run through the Adversary CLI, which materializes the artifact and executes it with a compatible user-managed runtime. Use `--builder docker` to run the TypeScript build inside Docker/BuildKit; this supports remote builders that honor `docker build --output`, such as CI builders configured through `DOCKER_HOST`.
-
-Use `--name` to override the local artifact name without changing `adversary.yaml`. This is useful when you want the local ref to match the remote OCI repository.
-
-```text
-refs/security-reviewer/0.1.0
-refs/security-reviewer/latest
-```
-
-Local store locations:
-
-```text
-macOS: ~/Library/Application Support/Adversary/
-Linux: ~/.local/share/adversary/
-Fallback: ~/.adversary/
-```
-
-The store layout is content-addressable:
-
-```text
-store/blobs/sha256/...
-store/manifests/sha256/...
-refs/<name>/<tag>
-```
-
-List local adversaries:
-
-```sh
-adversary ls
-adversary list
-adversary ls --json
-```
-
-Inspect local artifacts by name, tag, or digest:
-
-```sh
-adversary inspect security-reviewer
-adversary inspect security-reviewer:0.1.0
-adversary inspect sha256:abc123
-adversary inspect security-reviewer --json
-```
-
-Packaging applies safe default ignores for `node_modules/`, `.git/`, `.env`, `.env.*`, `.DS_Store`, `coverage/`, `tmp/`, `.cache/`, and `Dockerfile`. Add `.adversaryignore` for project-specific exclusions.
-
-## Registry Distribution
-
-Adversaries can be packaged as OCI artifacts and pushed to any OCI-compatible registry:
-
-```sh
-adversary pack .
-adversary push security-reviewer:0.1.0
-adversary push security-reviewer:0.1.0 ghcr.io/acme/security-reviewer:0.1.0
-adversary push sha256:abc123 ghcr.io/acme/security-reviewer:0.1.0
-adversary pack . --name ghcr.io/acme/security-reviewer
-adversary push ghcr.io/acme/security-reviewer:0.1.0
-```
-
-`push` uploads an existing local artifact. With two arguments, the first is the local ref and the second is the remote OCI ref. With one registry-qualified argument, the local ref is also the remote ref, usually by packing with `--name`. With one unqualified argument, you must be logged in; the CLI pushes to `registry.adversarylabs.ai/<team>/<name>:<version>`.
-
-For local development, set `ADVERSARY_REGISTRY_HOST` to override the default registry host:
-
-```sh
-export ADVERSARY_REGISTRY_HOST=localhost:5000
-adversary push security-reviewer:0.1.0
-```
-
-That resolves to `localhost:5000/library/security-reviewer:0.1.0` when no namespace is available. Set `ADVERSARY_REGISTRY_NAMESPACE` to test a team namespace locally.
-
-Pull works the same way:
-
-```sh
-adversary pull security-reviewer
-adversary pull adversarylabs/security-reviewer
-adversary pull ghcr.io/acme/security-reviewer
-adversary pull registry.company.com/team/security-reviewer
-```
-
-References without a registry default to Adversary Labs:
-
-```text
-security-reviewer       -> registry.adversarylabs.ai/library/security-reviewer
-acme/security-reviewer  -> registry.adversarylabs.ai/acme/security-reviewer
-ghcr.io/acme/reviewer   -> ghcr.io/acme/reviewer
-```
-
-Pulled artifacts are verified into the unified content-addressed repository and
-registered locally so `adversary run security-reviewer --repo .` can resolve a
-pulled adversary.
-
-## Login, Logout, And Search
-
-`adversary login` authenticates with Adversary Labs and stores the returned token in `~/.adversary/config.json`:
-
-```sh
-adversary login
-adversary login --name "Marc's MacBook Pro"
-adversary login --ci
-adversary login --device
-adversary login --email-address marc@example.com
-printf '%s\n' "$ADVERSARY_PASSWORD" | adversary login --email-address marc@example.com --password-stdin
-adversary login --api-url http://localhost:3000/api
-```
-
-Without `--email-address`, login opens a browser and waits for the Adversary Labs app to redirect back to a temporary localhost callback. Use `--device` for headless environments; `--ci` also uses the device flow. With `--email-address`, the CLI securely prompts unless `--password-stdin` is supplied. `--profile` selects an isolated credential profile and defaults to `default`.
-The stored token is used for Adversary Labs registry access, private artifacts, search, and future SaaS API calls. Tokens are never printed by the CLI.
-The default SaaS endpoint is `https://adversarylabs.ai/api`. For local development, set `ADVERSARY_API_URL` or pass `--api-url`.
-
-```sh
-adversary search security
-adversary whoami
-adversary logout
-adversary logout --local-only
-```
-
-`push` and `pull` remain generic OCI operations. Adversary Labs-specific behavior is limited to default reference resolution, login/logout, and search.
-
-## TypeScript Logging
-
-TypeScript adversaries can use the SDK logging helper:
-
-```ts
-import { log } from "@adversary/sdk";
-
-log.debug("Scanning repository")
-log.info("Scanning src/index.ts")
-log.warn("Skipping binary file")
-log.error("Unable to parse source file")
-```
-
-Warnings and errors are always printed. Debug and info logs print when the CLI is run with `--verbose`.
+Security reports: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -1,133 +1,102 @@
-# Release Publishing
+# Release policy and operations
 
-Adversary releases are published by a Depot workflow in `.depot/workflows/release.yml`.
-The workflow uses the Depot secret `HOMEBREW_TAP_TOKEN`; it does not use GitHub
-Actions secrets.
+Adversary uses immutable CalVer tags (`YYYY.M.D`, optionally `-beta.N`). GitHub
+Releases are the authoritative changelog and artifact location. Never move a
+published tag; publish a correcting release. Stable CLI/schema deprecations
+remain supported for at least two minor releases or 60 days, whichever is
+longer, unless a documented security issue requires earlier removal.
 
-## Required Depot Secret
+## Supply-chain contract
 
-Create a Depot secret named `HOMEBREW_TAP_TOKEN`.
+The Depot workflow has one trigger: a CalVer tag push. It pins every
+third-party action to a full commit SHA. Its
+read-only build job runs tests/vet, produces byte-reproducible archives, an SPDX
+2.3 dependency graph validated by the pinned official SPDX Go toolkit, and
+checksums. A second secret-free job receives only short-lived GitHub
+OIDC/attestation permissions. A fresh third job in the protected `release`
+environment rechecks the tag, clean tracked state, exact untracked bundle, and
+all bundle digests before its final step alone receives `contents: write` and
+the tap token. Tag-scoped concurrency prevents two publishers for one release.
 
-The workflow uses the runtime GitHub token to create or update the GitHub
-Release in `github.com/adversarylabs/adversary`. `HOMEBREW_TAP_TOKEN` is only
-used for the tap repository.
+Archives have stable ordering, uid/gid 0, normalized modes and mtimes, and gzip
+headers without timestamps. Each contains the binary, README, LICENSE status,
+release guide, and trust model. Every cross-built binary is inspected for its
+stamped version metadata; the native Linux binary executes `adversary version`.
+`release-manifest.json` binds the version and peeled tag commit to each artifact
+digest; the checksum set covers that manifest. GitHub's keyless
+build-provenance attestation covers archives, formula, SBOM, checksums, and
+manifest. Verify:
 
-The tap token must be able to:
-
-- clone, commit to, and push `github.com/adversarylabs/homebrew-tap`
-
-For a fine-grained GitHub PAT, grant repository access to
-`adversarylabs/homebrew-tap` with contents read/write permissions for
-`Formula/adversary.rb`.
-
-## Creating a Release
-
-Use a CalVer tag:
-
-```bash
-git tag 2026.7.8
-git push origin 2026.7.8
+```sh
+sha256sum --check checksums.txt
+gh attestation verify adversary_2026.7.11_linux_amd64.tar.gz \
+  --repo adversarylabs/adversary
 ```
 
-The release workflow accepts CalVer tags like `2026.7.8`. The tag push starts
-the Depot workflow. If the GitHub Release does not already exist, the workflow
-creates it. If a GitHub Release for the tag is published first, the
-release-published event starts the same workflow and uploads the artifacts to
-that existing release.
+Standalone keyless signatures are not emitted. GitHub attestations already bind
+the artifact digest to this repository/workflow through OIDC without a project
+key-distribution problem. Adding a second signing system before publishing a
+pinned verifier and trust-root policy would create ambiguous trust semantics.
+This is the CLI-022 signing decision; revisit if distribution outside GitHub
+requires portable signatures. Digests and attestations do not make adversary
+code safe to execute; see the trust model.
 
-Prerelease tags use a suffix:
+## Create a release
 
-```bash
-git tag 2026.7.8-beta.1
-git push origin 2026.7.8-beta.1
+1. Ensure `main` CI passes and release notes cover additions, fixes, security,
+   deprecations, migrations, rollback, and known limitations. Run
+   `go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...`; record the tool
+   version and disposition of each reachable finding in the release.
+2. Create and push an annotated CalVer tag from reviewed `main`:
+
+   ```sh
+   git tag -a 2026.7.11 -m 'Release 2026.7.11'
+   git push origin 2026.7.11
+   ```
+
+3. Approve the protected `release` environment after checking the tag commit.
+   Repository administrators must create that environment, restrict deployment
+   to release tags, and configure required reviewers; workflow YAML cannot
+   enforce those external repository settings.
+4. Verify checksums, attestation, archive contents, binary `version`, and the
+   rendered Homebrew formula. Confirm the tap commit references the same URLs
+   and hashes.
+
+Prereleases use `2026.7.11-beta.1`, update `adversary-beta.rb`, and install
+`adversary-beta` so stable and beta can coexist.
+
+## Credentials and least privilege
+
+`HOMEBREW_TAP_TOKEN` is a Depot secret available only to the publish job. Use a
+fine-grained token scoped solely to `adversarylabs/homebrew-tap` contents
+read/write. The script copies the exact checksummed formula from the release
+bundle into the tap and verifies its digest; it never rerenders after
+attestation. It uses `GIT_ASKPASS`, so secrets never appear in clone URLs, and
+an EXIT trap removes temporary credentials and checkouts. Rotate the token
+by replacing the secret, testing the next release, then revoking the old token.
+The runtime GitHub token is repository-scoped and not used for the tap.
+
+## Local verification
+
+GNU tar is required for deterministic archives (`nix develop` supplies it).
+On macOS install it as `gtar`; the script feature-detects GNU tar and fails
+before building rather than silently using incompatible BSD tar:
+
+```sh
+BUILD_ONLY=1 scripts/publish-homebrew.sh 2026.7.11
+scripts/test-release-contract.sh
 ```
 
-Stable releases update `Formula/adversary.rb` and install the `adversary`
-command. Prereleases update `Formula/adversary-beta.rb` and install the command
-as `adversary-beta`, so users can keep stable and beta installations side by
-side. Prerelease tags also create GitHub Releases marked as prereleases.
+`DIST_DIR` is restricted to top-level `dist` or `.release-dist/<safe-name>`;
+real-path and symlink checks run before deletion. Set `SKIP_PUBLISH=1` for the
+same local build plus rendered formula. `PUBLISH_ONLY=1` is reserved for the
+workflow and publishes an already transferred, checksummed bundle.
 
-Do not manually edit the Homebrew tap for normal releases.
+## Recovery and rollback
 
-## What the Workflow Does
-
-The workflow:
-
-1. checks out the source repository
-2. installs the GitHub CLI
-3. runs `go test ./...`
-4. runs `scripts/publish-homebrew.sh`
-
-The publishing script builds these archives:
-
-```text
-adversary_${VERSION}_darwin_amd64.tar.gz
-adversary_${VERSION}_darwin_arm64.tar.gz
-adversary_${VERSION}_linux_amd64.tar.gz
-adversary_${VERSION}_linux_arm64.tar.gz
-```
-
-It writes `dist/checksums.txt`, verifies that every expected archive has a
-SHA256 line, uploads the archives and checksum file to the GitHub Release, then
-renders `Formula/adversary.rb` from `Formula/adversary.rb.tmpl`.
-
-To verify the build, checksum, and template-rendering path locally without
-publishing:
-
-```bash
-SKIP_PUBLISH=1 scripts/publish-homebrew.sh 2026.7.8
-```
-
-The rendered formula uses Homebrew platform blocks for macOS Intel, macOS Apple
-Silicon, Linux x86_64, and Linux ARM64. It installs the archive's `adversary`
-binary with:
-
-```ruby
-bin.install "adversary"
-```
-
-Finally, the script clones `github.com/adversarylabs/homebrew-tap`, commits the
-updated formula, and pushes it back to the tap. Any upload, missing checksum,
-commit, or push failure fails the workflow.
-
-## Rotating the PAT
-
-1. Create a new fine-grained GitHub PAT with access to:
-   - `adversarylabs/homebrew-tap`
-2. Grant contents read/write permissions for the tap repository.
-3. Replace the Depot secret `HOMEBREW_TAP_TOKEN` with the new token.
-4. Re-run the latest failed release workflow, or push the next release tag.
-5. Revoke the old PAT after the new token has successfully published a release.
-
-## Recovering From a Failed Publish
-
-The script is safe to re-run for the same tag.
-
-- If archive upload failed, re-run the Depot workflow. Existing release assets
-  are overwritten with `gh release upload --clobber`.
-- If the tap push failed, re-run the workflow. The script regenerates the same
-  formula and pushes it again.
-- If the tap repository changed concurrently, pull or inspect the tap, resolve
-  the conflict there if needed, then re-run the release workflow.
-- If a bad formula was pushed, fix the release inputs or template in this
-  repository, then re-run the workflow for the same tag.
-
-After a successful release, users can install with:
-
-```bash
-brew tap adversarylabs/tap
-brew install adversary
-```
-
-or:
-
-```bash
-brew install adversarylabs/tap/adversary
-```
-
-After a successful prerelease, users can install the beta formula with:
-
-```bash
-brew install adversarylabs/tap/adversary-beta
-adversary-beta --help
-```
+The workflow never force-pushes. Failed artifact upload can be retried; assets
+are replaced only for the same immutable tag. A concurrent tap change must be
+reviewed and reconciled, not overwritten. If artifacts are incorrect, mark the
+release affected, publish a new tag, and update the formula to the new hashes.
+Do not move the tag or silently replace trusted bytes. If only the formula is
+bad, revert its tap commit and publish a corrected repository release.
