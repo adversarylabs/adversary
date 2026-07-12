@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,8 +41,8 @@ func TestValidateCommandJSONFailureIsVersionedAndActionable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "adversary.yaml"), []byte("name: BAD\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
-	command := NewRootCommand(&out, &out)
+	var out, errOut bytes.Buffer
+	command := NewRootCommand(&out, &errOut)
 	command.SetArgs([]string{"validate", dir, "--format", "json"})
 	if err := command.Execute(); err == nil {
 		t.Fatal("validate succeeded")
@@ -50,5 +51,11 @@ func TestValidateCommandJSONFailureIsVersionedAndActionable(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output missing %s: %s", want, out.String())
 		}
+	}
+	if !json.Valid(out.Bytes()) {
+		t.Fatalf("stdout is not a pure JSON document: %q", out.String())
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("command polluted stderr before its caller handled the nonzero result: %q", errOut.String())
 	}
 }

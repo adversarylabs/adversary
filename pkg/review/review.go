@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 const ProtocolVersion = 1
@@ -292,10 +293,10 @@ func validateMetadata(field string, metadata json.RawMessage) error {
 func RenderTerminal(w io.Writer, result ReviewResult) error {
 	var lines []string
 	if result.Adversary.Name != "" {
-		lines = append(lines, "Adversary: "+result.Adversary.Name)
+		lines = append(lines, "Adversary: "+sanitizeTerminalInline(result.Adversary.Name))
 	}
 	if result.Target.Repository != "" {
-		lines = append(lines, "Repository: "+result.Target.Repository)
+		lines = append(lines, "Repository: "+sanitizeTerminalInline(result.Target.Repository))
 	}
 	if len(lines) > 0 {
 		lines = append(lines, "")
@@ -304,7 +305,7 @@ func RenderTerminal(w io.Writer, result ReviewResult) error {
 	if result.Assessment != nil {
 		lines = append(lines, "Overall assessment", "")
 		if result.Assessment.Risk != "" {
-			lines = append(lines, "Risk: "+capitalize(result.Assessment.Risk), "")
+			lines = append(lines, "Risk: "+capitalize(sanitizeTerminalInline(result.Assessment.Risk)), "")
 		}
 		if result.Assessment.Summary != "" {
 			appendParagraphs(&lines, result.Assessment.Summary)
@@ -314,7 +315,7 @@ func RenderTerminal(w io.Writer, result ReviewResult) error {
 	if len(result.Positives) > 0 {
 		lines = append(lines, "Positive signals", "")
 		for _, note := range result.Positives {
-			lines = append(lines, "- "+note.Summary)
+			lines = append(lines, "- "+sanitizeTerminalInline(note.Summary))
 		}
 		lines = append(lines, "")
 	}
@@ -322,7 +323,7 @@ func RenderTerminal(w io.Writer, result ReviewResult) error {
 	if len(result.Observations) > 0 {
 		lines = append(lines, "Observations", "")
 		for _, note := range result.Observations {
-			lines = append(lines, "- "+note.Summary)
+			lines = append(lines, "- "+sanitizeTerminalInline(note.Summary))
 		}
 		lines = append(lines, "")
 	}
@@ -337,43 +338,64 @@ func RenderTerminal(w io.Writer, result ReviewResult) error {
 		lines = append(lines, fmt.Sprintf("Files scanned: %d", *result.Target.FilesScanned))
 	}
 	lines = append(lines, fmt.Sprintf("Findings: %d", len(result.Findings)), "")
+	if result.Suppressed.Observations > 0 {
+		lines = append(lines, fmt.Sprintf("Suppressed observations: %d", result.Suppressed.Observations))
+	}
+	if result.Suppressed.Findings > 0 {
+		lines = append(lines, fmt.Sprintf("Suppressed findings: %d", result.Suppressed.Findings))
+	}
+	if result.Suppressed.Observations > 0 || result.Suppressed.Findings > 0 {
+		lines = append(lines, "")
+	}
 
 	for _, finding := range result.Findings {
-		lines = append(lines, fmt.Sprintf("[%s] %s", finding.Severity, finding.Title))
-		if location := firstEvidenceLocation(finding.Evidence); location != "" {
-			lines = append(lines, location)
-		}
-		lines = append(lines, "")
-		if finding.Category != "" {
-			lines = append(lines, "Category: "+finding.Category)
-		}
-		if finding.Confidence != "" {
-			lines = append(lines, "Confidence: "+finding.Confidence)
-		}
-		if finding.Category != "" || finding.Confidence != "" {
-			lines = append(lines, "")
-		}
-		appendSection(&lines, "Summary", finding.Summary)
-		appendSection(&lines, "Why it matters", finding.WhyItMatters)
-		appendSection(&lines, "Impact", finding.Impact)
-		if len(finding.Evidence) > 0 {
-			lines = append(lines, "Evidence", "")
-			for _, evidence := range finding.Evidence {
-				lines = append(lines, "- "+formatEvidence(evidence))
-				if evidence.Snippet != "" {
-					lines = append(lines, "  "+evidence.Snippet)
-				}
-			}
-			lines = append(lines, "")
-		}
-		appendSection(&lines, "Recommendation", finding.Recommendation)
-		if finding.Remediation != nil {
-			appendSection(&lines, "Estimated remediation", finding.Remediation.Estimate)
-		}
+		appendTerminalFinding(&lines, finding, "")
+	}
+
+	for _, finding := range result.SuppressedFindings {
+		appendTerminalFinding(&lines, finding, "suppressed; reason unavailable")
 	}
 
 	_, err := fmt.Fprintln(w, strings.TrimRight(strings.Join(lines, "\n"), "\n"))
 	return err
+}
+
+func appendTerminalFinding(lines *[]string, finding Finding, qualifier string) {
+	label := finding.Severity
+	if qualifier != "" {
+		label += "; " + qualifier
+	}
+	*lines = append(*lines, fmt.Sprintf("[%s] %s", sanitizeTerminalInline(label), sanitizeTerminalInline(finding.Title)))
+	if location := firstEvidenceLocation(finding.Evidence); location != "" {
+		*lines = append(*lines, location)
+	}
+	*lines = append(*lines, "")
+	if finding.Category != "" {
+		*lines = append(*lines, "Category: "+sanitizeTerminalInline(finding.Category))
+	}
+	if finding.Confidence != "" {
+		*lines = append(*lines, "Confidence: "+sanitizeTerminalInline(finding.Confidence))
+	}
+	if finding.Category != "" || finding.Confidence != "" {
+		*lines = append(*lines, "")
+	}
+	appendSection(lines, "Summary", finding.Summary)
+	appendSection(lines, "Why it matters", finding.WhyItMatters)
+	appendSection(lines, "Impact", finding.Impact)
+	if len(finding.Evidence) > 0 {
+		*lines = append(*lines, "Evidence", "")
+		for _, evidence := range finding.Evidence {
+			*lines = append(*lines, "- "+formatEvidence(evidence))
+			if evidence.Snippet != "" {
+				*lines = append(*lines, "  "+sanitizeTerminalInline(evidence.Snippet))
+			}
+		}
+		*lines = append(*lines, "")
+	}
+	appendSection(lines, "Recommendation", finding.Recommendation)
+	if finding.Remediation != nil {
+		appendSection(lines, "Estimated remediation", finding.Remediation.Estimate)
+	}
 }
 
 func appendSection(lines *[]string, heading, body string) {
@@ -385,6 +407,7 @@ func appendSection(lines *[]string, heading, body string) {
 }
 
 func appendParagraphs(lines *[]string, body string) {
+	body = sanitizeTerminalBody(body)
 	for _, paragraph := range strings.Split(body, "\n\n") {
 		if strings.TrimSpace(paragraph) != "" {
 			*lines = append(*lines, paragraph, "")
@@ -404,16 +427,16 @@ func firstEvidenceLocation(evidence []Evidence) string {
 func formatEvidence(evidence Evidence) string {
 	location := formatEvidenceLocation(evidence)
 	if location != "" && evidence.Message != "" {
-		return location + " - " + evidence.Message
+		return location + " - " + sanitizeTerminalInline(evidence.Message)
 	}
 	if location != "" {
 		return location
 	}
 	if evidence.Message != "" {
-		return evidence.Message
+		return sanitizeTerminalInline(evidence.Message)
 	}
 	if evidence.Snippet != "" {
-		return evidence.Snippet
+		return sanitizeTerminalInline(evidence.Snippet)
 	}
 	return "Evidence"
 }
@@ -423,19 +446,45 @@ func formatEvidenceLocation(evidence Evidence) string {
 		return ""
 	}
 	if evidence.Line != nil && evidence.EndLine != nil {
-		return fmt.Sprintf("%s:%d-%d", evidence.File, *evidence.Line, *evidence.EndLine)
+		return fmt.Sprintf("%s:%d-%d", sanitizeTerminalInline(evidence.File), *evidence.Line, *evidence.EndLine)
 	}
 	if evidence.Line != nil {
-		return fmt.Sprintf("%s:%d", evidence.File, *evidence.Line)
+		return fmt.Sprintf("%s:%d", sanitizeTerminalInline(evidence.File), *evidence.Line)
 	}
-	return evidence.File
+	return sanitizeTerminalInline(evidence.File)
+}
+
+func sanitizeTerminalInline(value string) string { return sanitizeTerminal(value, false) }
+
+func sanitizeTerminalBody(value string) string { return sanitizeTerminal(value, true) }
+
+// sanitizeTerminal removes terminal control sequences at the final human-output
+// boundary. JSON output deliberately retains the validated protocol strings.
+// Body fields may retain LF for the renderer's explicit paragraph formatting;
+// inline fields may not create additional terminal lines.
+func sanitizeTerminal(value string, allowLF bool) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' && allowLF {
+			return r
+		}
+		if r == '\r' || r == '\n' || unicode.IsControl(r) || isTerminalDirectionControl(r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
+			return ' '
+		}
+		return r
+	}, value)
+}
+
+func isTerminalDirectionControl(r rune) bool {
+	return r == '\u061c' || r == '\u200e' || r == '\u200f' ||
+		(r >= '\u202a' && r <= '\u202e') || (r >= '\u2066' && r <= '\u2069')
 }
 
 func capitalize(value string) string {
 	if value == "" {
 		return ""
 	}
-	return strings.ToUpper(value[:1]) + value[1:]
+	runes := []rune(value)
+	return strings.ToUpper(string(runes[0])) + string(runes[1:])
 }
 
 func EncodeEnvelope(result ReviewResult) []byte {

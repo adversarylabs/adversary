@@ -6,7 +6,7 @@
     { "$ref": "#/$defs/list" }, { "$ref": "#/$defs/inspect" },
     { "$ref": "#/$defs/search" }, { "$ref": "#/$defs/whoami" },
     { "$ref": "#/$defs/pack" }, { "$ref": "#/$defs/pack-check" }, { "$ref": "#/$defs/pull" },
-    { "$ref": "#/$defs/push" }, { "$ref": "#/$defs/version" }
+    { "$ref": "#/$defs/push" }, { "$ref": "#/$defs/validate" }, { "$ref": "#/$defs/version" }
   ],
   "$defs": {
     "baseProperties": {
@@ -34,6 +34,8 @@
     "pack-check": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"pack-check"},"data":{"type":"object","additionalProperties":false,"required":["name","version","runtime","files","warnings"],"properties":{"name":{"type":"string"},"version":{"type":"string"},"runtime":{"type":"string"},"files":{"type":"array","items":{"$ref":"#/$defs/packFile"}},"warnings":{"type":"array","items":{"$ref":"#/$defs/packWarning"}}}}}},
     "pull": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"pull"},"data":{"type":"object","additionalProperties":false,"required":["name","version","canonicalReference","digest"],"properties":{"name":{"type":"string"},"version":{"type":"string"},"canonicalReference":{"type":"string"},"digest":{"type":"string"}}}}},
     "push": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"push"},"data":{"type":"object","additionalProperties":false,"required":["canonicalReference","digest","manifestDigest"],"properties":{"canonicalReference":{"type":"string"},"digest":{"type":"string"},"manifestDigest":{"type":"string"}}}}},
+    "validateIssue": {"type":"object","additionalProperties":false,"required":["code","path","message"],"properties":{"code":{"enum":["invalid_path","unresolved_reference","unreadable_path","invalid_manifest","invalid_project"]},"path":{"type":"string","minLength":1},"message":{"type":"string","pattern":"\\S"}}},
+    "validate": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"validate"},"data":{"type":"object","additionalProperties":false,"required":["path","manifestVersion","name","runtime","status","errors"],"properties":{"path":{"type":"string","minLength":1},"manifestVersion":{"const":"adversary.manifest.v1"},"name":{"type":"string"},"runtime":{"type":"string"},"status":{"enum":["valid","invalid"]},"errors":{"type":"array","items":{"$ref":"#/$defs/validateIssue"}}},"allOf":[{"if":{"properties":{"status":{"const":"valid"}}},"then":{"properties":{"name":{"type":"string","pattern":"\\S"},"runtime":{"type":"string","pattern":"\\S"},"errors":{"maxItems":0}}}},{"if":{"properties":{"status":{"const":"invalid"}}},"then":{"properties":{"errors":{"minItems":1}}}}]}}},
     "version": {"type":"object","additionalProperties":false,"required":["schemaVersion","command","data"],"properties":{"schemaVersion":{"const":1},"command":{"const":"version"},"data":{"type":"object","additionalProperties":false,"required":["version","commit","buildDate","goVersion","reviewProtocolVersion"],"properties":{"version":{"type":"string"},"commit":{"type":"string"},"buildDate":{"type":"string"},"goVersion":{"type":"string"},"reviewProtocolVersion":{"type":"integer"}}}}}
   }
 }
