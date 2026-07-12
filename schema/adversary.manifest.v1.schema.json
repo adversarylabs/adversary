@@ -6,7 +6,10 @@
     "The canonical Go manifest parser validates runtime.version with Masterminds semver constraints.",
     "The canonical Go manifest parser rejects duplicate or conflicting paths across filesystem read/write arrays.",
     "The canonical Go manifest parser requires Node entry points to be portable relative paths contained by the project root without requiring build output to exist.",
-    "The canonical Go manifest parser validates declared runtime/project consistency."
+    "The canonical Go manifest parser validates declared runtime/project consistency.",
+    "The canonical Go manifest parser validates runtime.image registry ports as 1 through 65535 and IPv6 registry literals with net.ParseIP.",
+    "The canonical Go manifest parser limits the normalized runtime.image repository path, excluding registry, tag, and digest but including an injected library/ namespace for single-component familiar names, to 255 ASCII bytes to match distribution/reference.",
+    "The canonical Go manifest parser stores runtime.image in distribution/reference canonical form using fixed Docker Hub familiar-name normalization and an explicit latest tag when no tag or digest was supplied; ambient registry configuration is never used."
   ],
   "type": "object",
   "additionalProperties": false,
@@ -48,17 +51,24 @@
       "required": [
         "command"
       ],
-      "anyOf": [
+      "oneOf": [
         {
           "required": [
             "image"
-          ]
+          ],
+          "not": {
+            "anyOf": [
+              { "required": ["name"] },
+              { "required": ["version"] }
+            ]
+          }
         },
         {
           "required": [
             "name",
             "version"
-          ]
+          ],
+          "not": { "required": ["image"] }
         }
       ],
       "properties": {
@@ -70,7 +80,7 @@
         },
         "image": {
           "type": "string",
-          "pattern": "^[^\\x00\\s]+$"
+          "pattern": "^(?:(?:localhost|\\[[0-9A-Fa-f:]+\\]|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*)(?::[0-9]{1,5})?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@(?:sha256:[a-f0-9]{64}|sha384:[a-f0-9]{96}|sha512:[a-f0-9]{128}))?$"
         },
         "version": {
           "type": "string",

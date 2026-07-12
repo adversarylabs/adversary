@@ -23,6 +23,20 @@ rules that JSON Schema cannot robustly express—full Masterminds version
 constraints, cross-array read/write conflicts, and project/runtime consistency—
 are listed in `x-adversary-semanticRules` and covered by parser-only corpora.
 Schema/parser parity tests are limited to rules expressible in both layers.
+Every runtime declares exactly one execution identity: either a supported named
+runtime with a version constraint, or an OCI image without `name` or `version`.
+Image references use deterministic distribution-reference syntax. The canonical
+parser converts familiar references such as `node:22` to
+`docker.io/library/node:22`, and adds `:latest` to untagged references without a
+digest. This fixed Docker Hub normalization never reads ambient registry
+configuration, so the stored manifest value is stable before later resolution.
+Commands for image runtimes are paths/arguments inside the image and therefore
+do not require corresponding files in the host project.
+The schema checks the portable image-reference structure. Numeric port range,
+IPv6 address semantics, and the normalized distribution repository-path
+255-byte limit require extracted-field checks and are normative parser-only
+semantic rules recorded in the schema annotation. That length excludes registry,
+tag, and digest, but includes Docker Hub's injected `library/` namespace.
 
 The fixtures in `fixtures/` are shared compatibility examples. The Go review
 decoder and vendored TypeScript SDK both exercise the review fixture. Schema

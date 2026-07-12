@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	distref "github.com/distribution/reference"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"go.yaml.in/yaml/v3"
 )
@@ -160,13 +161,165 @@ func TestRuntimeImageStillValidatesOptionalFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, replacement := range map[string]string{
-		"name":        "  image: example.invalid/adversary:1\n  name: shell",
+		"name":        "  image: example.invalid/adversary:1\n  name: process",
 		"version":     "  image: example.invalid/adversary:1\n  version: \" 22\"",
 		"empty image": "  image: \"\"",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(strings.Replace(base, "  image: example.invalid/adversary:1", replacement, 1))); err == nil {
 				t.Fatal("Parse succeeded")
+			}
+		})
+	}
+}
+
+func TestRuntimeExecutionIdentityAndImageReference(t *testing.T) {
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "evil.invalid")
+	imageManifest := func(image string) string {
+		return strings.Replace(valid, "  name: node\n  version: \"22\"\n  command: [dist/index.js]", fmt.Sprintf("  image: %q\n  command: [/usr/local/bin/review]", image), 1)
+	}
+	digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	for _, tc := range []struct{ input, canonical string }{
+		{"node:22", "docker.io/library/node:22"},
+		{"team/reviewer", "docker.io/team/reviewer:latest"},
+		{"ghcr.io/adversarylabs/reviewer:v1.2.3", "ghcr.io/adversarylabs/reviewer:v1.2.3"},
+		{"registry.example:5000/team/reviewer:release-1", "registry.example:5000/team/reviewer:release-1"},
+		{"[2001:db8::1]:5000/team/reviewer:v1", "[2001:db8::1]:5000/team/reviewer:v1"},
+		{"[2001:DB8::A]:5000/team/reviewer:v1", "[2001:DB8::A]:5000/team/reviewer:v1"},
+		{"team/reviewer@" + digest, "docker.io/team/reviewer@" + digest},
+		{"team/reviewer:v1@" + digest, "docker.io/team/reviewer:v1@" + digest},
+		{"team/reviewer@sha384:" + strings.Repeat("a", 96), "docker.io/team/reviewer@sha384:" + strings.Repeat("a", 96)},
+		{"team/reviewer@sha512:" + strings.Repeat("b", 128), "docker.io/team/reviewer@sha512:" + strings.Repeat("b", 128)},
+	} {
+		t.Run("valid/"+tc.input, func(t *testing.T) {
+			m, err := Parse([]byte(imageManifest(tc.input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.Runtime.Image != tc.canonical {
+				t.Fatalf("canonical runtime.image=%q want %q", m.Runtime.Image, tc.canonical)
+			}
+			if _, err := distref.Parse(m.Runtime.Image); err != nil {
+				t.Fatalf("canonical image rejected by distribution/reference: %v", err)
+			}
+			// Image commands are image-internal; neither the command nor a host
+			// package descriptor needs to exist in the project checkout.
+			if err := m.ValidateProject(t.TempDir()); err != nil {
+				t.Fatalf("ValidateProject: %v", err)
+			}
+		})
+	}
+
+	for name, image := range map[string]string{
+		"whitespace":        "node:2 2",
+		"scheme":            "https://registry.example/team/reviewer:1",
+		"credentials":       "user:password@registry.example/team/reviewer:1",
+		"uppercase repo":    "registry.example/Team/reviewer:1",
+		"empty component":   "registry.example/team//reviewer:1",
+		"malformed tag":     "team/reviewer:-latest",
+		"short digest":      "team/reviewer@sha256:abcd",
+		"missing algorithm": "team/reviewer@0123456789abcdef0123456789abcdef",
+		"invalid IPv6":      "[2001:::1]/team/reviewer:v1",
+		"invalid port":      "registry.example:99999/team/reviewer:v1",
+	} {
+		t.Run("invalid/"+name, func(t *testing.T) {
+			if _, err := Parse([]byte(imageManifest(image))); err == nil {
+				t.Fatalf("Parse accepted runtime.image %q", image)
+			}
+		})
+	}
+
+	t.Run("both", func(t *testing.T) {
+		input := strings.Replace(valid, "  name: node", "  name: node\n  image: node:22", 1)
+		if _, err := Parse([]byte(input)); err == nil {
+			t.Fatal("Parse accepted both runtime identities")
+		}
+	})
+	t.Run("neither", func(t *testing.T) {
+		input := strings.Replace(valid, "  name: node\n  version: \"22\"", "", 1)
+		if _, err := Parse([]byte(input)); err == nil {
+			t.Fatal("Parse accepted no runtime identity")
+		}
+	})
+}
+
+func TestRuntimeImageSchemaParserAndDownstreamBoundaries(t *testing.T) {
+	schemaData, err := os.ReadFile(filepath.Join("..", "..", "schema", "adversary.manifest.v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schemaDocument any
+	if err := json.Unmarshal(schemaData, &schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	const schemaURL = "https://adversary.dev/schemas/adversary.manifest.v1.schema.json"
+	if err := compiler.AddResource(schemaURL, schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := compiler.Compile(schemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imageManifest := func(image string) string {
+		return strings.Replace(valid, "  name: node\n  version: \"22\"\n  command: [dist/index.js]", fmt.Sprintf("  image: %q\n  command: [/bin/review]", image), 1)
+	}
+	path247 := strings.Repeat("a", 247) // "library/" + 247 is the normalized 255-byte path.
+	path255 := strings.Repeat("a", 255)
+	for name, tc := range map[string]struct {
+		image                               string
+		schemaValid, parserValid, distValid bool
+	}{
+		"port lower bound":           {"registry.example:1/team/reviewer:v1", true, true, true},
+		"port upper bound":           {"registry.example:65535/team/reviewer:v1", true, true, true},
+		"zero padded zero port":      {"registry.example:00000/team/reviewer:v1", true, false, true},
+		"port above upper bound":     {"registry.example:99999/team/reviewer:v1", true, false, true},
+		"empty DNS label":            {"a..b/team/reviewer:v1", false, false, false},
+		"malformed IPv6 literal":     {"[::::]/team/reviewer:v1", true, false, true},
+		"empty IPv6 port":            {"[::1]:/team/reviewer:v1", false, false, false},
+		"uppercase IPv6 hex":         {"[2001:DB8::A]:5000/team/reviewer:v1", true, true, true},
+		"familiar normalized 255":    {path247 + ":v1", true, true, true},
+		"familiar normalized 256":    {path247 + "a:v1", true, false, false},
+		"explicit repository 256":    {"registry.example/" + path255 + "a:v1", true, false, false},
+		"registry excluded from max": {"registry.example/" + path255 + ":v1", true, true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			input := imageManifest(tc.image)
+			var document any
+			if err := yaml.Unmarshal([]byte(input), &document); err != nil {
+				t.Fatal(err)
+			}
+			if got := compiled.Validate(document) == nil; got != tc.schemaValid {
+				t.Errorf("schema valid=%v want %v", got, tc.schemaValid)
+			}
+			if _, err := Parse([]byte(input)); (err == nil) != tc.parserValid {
+				t.Errorf("parser valid=%v want %v: %v", err == nil, tc.parserValid, err)
+			}
+			if _, err := distref.ParseNormalizedNamed(tc.image); (err == nil) != tc.distValid {
+				t.Errorf("distribution/reference valid=%v want %v: %v", err == nil, tc.distValid, err)
+			}
+		})
+	}
+}
+
+func TestRuntimeImageDirectValidateUsesNormalizedRepositoryBoundary(t *testing.T) {
+	base := Manifest{Name: "adversarylabs/example", Runtime: Runtime{Command: []string{"/bin/review"}}}
+	for name, tc := range map[string]struct {
+		image string
+		valid bool
+	}{
+		"familiar normalized 255":  {strings.Repeat("a", 247) + ":v1", true},
+		"familiar normalized 256":  {strings.Repeat("a", 248) + ":v1", false},
+		"qualified repository 255": {"registry.example/" + strings.Repeat("a", 255) + ":v1", true},
+		"qualified repository 256": {"registry.example/" + strings.Repeat("a", 256) + ":v1", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := base
+			m.Runtime.Image = tc.image
+			if err := m.Validate(); (err == nil) != tc.valid {
+				t.Fatalf("Validate valid=%v want %v: %v", err == nil, tc.valid, err)
 			}
 		})
 	}
@@ -226,16 +379,27 @@ func TestPublishedDraft2020SchemaMatchesCanonicalFixtures(t *testing.T) {
 		input string
 		valid bool
 	}{
-		"valid":               {valid, true},
-		"unknown":             {valid + "unknown: true\n", false},
-		"bad semver":          {strings.Replace(valid, "1.2.3", "1.2.3-01", 1), false},
-		"unsupported runtime": {strings.Replace(valid, "name: node", "name: shell", 1), false},
-		"empty command":       {strings.Replace(valid, "command: [dist/index.js]", "command: []", 1), false},
-		"whitespace path":     {strings.Replace(valid, `read: ["."]`, `read: [" ."]`, 1), false},
-		"absolute path":       {strings.Replace(valid, `read: ["."]`, `read: ["/etc"]`, 1), false},
-		"traversal path":      {strings.Replace(valid, `read: ["."]`, `read: ["a/../secret"]`, 1), false},
-		"backslash path":      {strings.Replace(valid, `read: ["."]`, `read: ["a\\\\secret"]`, 1), false},
-		"drive path":          {strings.Replace(valid, `read: ["."]`, `read: ["C:/secret"]`, 1), false},
+		"valid":                {valid, true},
+		"unknown":              {valid + "unknown: true\n", false},
+		"bad semver":           {strings.Replace(valid, "1.2.3", "1.2.3-01", 1), false},
+		"unsupported runtime":  {strings.Replace(valid, "name: node", "name: shell", 1), false},
+		"empty command":        {strings.Replace(valid, "command: [dist/index.js]", "command: []", 1), false},
+		"whitespace path":      {strings.Replace(valid, `read: ["."]`, `read: [" ."]`, 1), false},
+		"absolute path":        {strings.Replace(valid, `read: ["."]`, `read: ["/etc"]`, 1), false},
+		"traversal path":       {strings.Replace(valid, `read: ["."]`, `read: ["a/../secret"]`, 1), false},
+		"backslash path":       {strings.Replace(valid, `read: ["."]`, `read: ["a\\\\secret"]`, 1), false},
+		"drive path":           {strings.Replace(valid, `read: ["."]`, `read: ["C:/secret"]`, 1), false},
+		"runtime both":         {strings.Replace(valid, "  name: node", "  name: node\n  image: node:22", 1), false},
+		"runtime neither":      {strings.Replace(valid, "  name: node\n  version: \"22\"", "", 1), false},
+		"image familiar":       {strings.Replace(valid, "  name: node\n  version: \"22\"\n  command: [dist/index.js]", "  image: node:22\n  command: [/bin/review]", 1), true},
+		"image qualified":      {strings.Replace(valid, "  name: node\n  version: \"22\"\n  command: [dist/index.js]", "  image: ghcr.io/adversarylabs/reviewer:v1\n  command: [/bin/review]", 1), true},
+		"image IPv6 registry":  {strings.Replace(valid, "  name: node\n  version: \"22\"\n  command: [dist/index.js]", "  image: '[2001:db8::1]:5000/adversarylabs/reviewer:v1'\n  command: [/bin/review]", 1), true},
+		"image digest":         {strings.Replace(valid, "  name: node\n  version: \"22\"\n  command: [dist/index.js]", "  image: adversarylabs/reviewer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  command: [/bin/review]", 1), true},
+		"image uppercase repo": {strings.Replace(valid, "  name: node\n  version: \"22\"", "  image: ghcr.io/Team/reviewer:v1", 1), false},
+		"image scheme":         {strings.Replace(valid, "  name: node\n  version: \"22\"", "  image: https://registry.example/reviewer:v1", 1), false},
+		"image credentials":    {strings.Replace(valid, "  name: node\n  version: \"22\"", "  image: user:password@registry.example/reviewer:v1", 1), false},
+		"image malformed tag":  {strings.Replace(valid, "  name: node\n  version: \"22\"", "  image: adversarylabs/reviewer:-latest", 1), false},
+		"image short digest":   {strings.Replace(valid, "  name: node\n  version: \"22\"", "  image: adversarylabs/reviewer@sha256:abcd", 1), false},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

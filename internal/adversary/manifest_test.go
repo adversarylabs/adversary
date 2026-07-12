@@ -63,6 +63,25 @@ findings:
 	}
 }
 
+func TestRuntimeExecutionImageNeverChoosesBetweenAmbiguousIdentities(t *testing.T) {
+	for name, runtime := range map[string]Runtime{
+		"both":    {Name: "node", Image: "node:22"},
+		"neither": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := runtimeExecutionImage(runtime); err == nil {
+				t.Fatal("runtimeExecutionImage accepted ambiguous identity")
+			}
+		})
+	}
+	if got, err := runtimeExecutionImage(Runtime{Name: "node"}); err != nil || got != "host:node" {
+		t.Fatalf("named runtime image=%q err=%v", got, err)
+	}
+	if got, err := runtimeExecutionImage(Runtime{Image: "node:22"}); err != nil || got != "node:22" {
+		t.Fatalf("OCI runtime image=%q err=%v", got, err)
+	}
+}
+
 func TestResolveReferenceLocalDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "adversary.yaml"), []byte(`name: local/adversary
