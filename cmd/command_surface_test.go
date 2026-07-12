@@ -165,8 +165,8 @@ func TestPublishedCLIOutputFixturesMatchSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fixtures) != 9 {
-		t.Fatalf("got %d CLI fixtures, want 9", len(fixtures))
+	if len(fixtures) != 11 {
+		t.Fatalf("got %d CLI fixtures, want 11", len(fixtures))
 	}
 	for _, path := range fixtures {
 		t.Run(filepath.Base(path), func(t *testing.T) {
@@ -180,6 +180,24 @@ func TestPublishedCLIOutputFixturesMatchSchema(t *testing.T) {
 			}
 			if err := schema.Validate(value); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+
+	invalidValidateDocuments := map[string]string{
+		"unknown property":               `{"schemaVersion":1,"command":"validate","data":{"path":"x","manifestVersion":"adversary.manifest.v1","name":"n","runtime":"node","status":"valid","errors":[],"extra":true}}`,
+		"valid response with error":      `{"schemaVersion":1,"command":"validate","data":{"path":"x","manifestVersion":"adversary.manifest.v1","name":"n","runtime":"node","status":"valid","errors":[{"code":"invalid_manifest","path":"x","message":"bad"}]}}`,
+		"invalid response without error": `{"schemaVersion":1,"command":"validate","data":{"path":"x","manifestVersion":"adversary.manifest.v1","name":"","runtime":"","status":"invalid","errors":[]}}`,
+		"blank error message":            `{"schemaVersion":1,"command":"validate","data":{"path":"x","manifestVersion":"adversary.manifest.v1","name":"","runtime":"","status":"invalid","errors":[{"code":"invalid_manifest","path":"x","message":"   "}]}}`,
+	}
+	for name, document := range invalidValidateDocuments {
+		t.Run("reject validate "+name, func(t *testing.T) {
+			var value any
+			if err := json.Unmarshal([]byte(document), &value); err != nil {
+				t.Fatal(err)
+			}
+			if err := schema.Validate(value); err == nil {
+				t.Fatal("schema accepted invalid validate envelope")
 			}
 		})
 	}

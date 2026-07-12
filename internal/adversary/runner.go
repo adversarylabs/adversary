@@ -316,6 +316,12 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	if err != nil {
 		return &ProtocolError{Err: err}
 	}
+	// Suppressed details are an explicit caller-controlled disclosure. A runtime
+	// cannot opt the caller into receiving them merely by writing the optional
+	// protocol field; aggregate counts remain available in either mode.
+	if !opts.IncludeSuppressed {
+		envelope.Result.SuppressedFindings = nil
+	}
 
 	if opts.Format == "json" {
 		encoder := json.NewEncoder(stdout)

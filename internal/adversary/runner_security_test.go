@@ -44,6 +44,57 @@ func minimalEnvelope() []byte {
 	return []byte(`{"protocolVersion":1,"result":{"adversary":{"name":"local/test"},"target":{},"positives":[],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0}}}`)
 }
 
+func suppressedEnvelope() []byte {
+	return []byte(`{"protocolVersion":1,"result":{"adversary":{"name":"local/test"},"target":{},"positives":[],"observations":[],"findings":[],"suppressed":{"observations":2,"findings":1},"suppressedFindings":[{"id":"hidden","title":"HIDDEN-DETAIL-\u001b[2J","category":"test","severity":"low","confidence":"high","summary":"hidden summary","evidence":[]}]}}`)
+}
+
+func TestRunEnforcesSuppressedDetailDisclosureForTextAndJSON(t *testing.T) {
+	for _, format := range []string{"text", "json"} {
+		for _, include := range []bool{false, true} {
+			name := format + "/excluded"
+			if include {
+				name = format + "/included"
+			}
+			t.Run(name, func(t *testing.T) {
+				project := writeRunnerProject(t, "")
+				var stdout bytes.Buffer
+				err := Runner{Stdout: &stdout, Stderr: &bytes.Buffer{}, Executor: outputExecutor{output: suppressedEnvelope()}}.Run(context.Background(), RunOptions{
+					AdversaryRef: project, RepoPath: t.TempDir(), Format: format, IncludeSuppressed: include,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if format == "text" {
+					got := stdout.String()
+					if !strings.Contains(got, "Suppressed observations: 2") || !strings.Contains(got, "Suppressed findings: 1") {
+						t.Fatalf("aggregate counts missing: %q", got)
+					}
+					if strings.Contains(got, "\x1b") {
+						t.Fatalf("terminal control leaked: %q", got)
+					}
+					if strings.Contains(got, "HIDDEN-DETAIL") != include {
+						t.Fatalf("detail inclusion = %t, want %t: %q", strings.Contains(got, "HIDDEN-DETAIL"), include, got)
+					}
+					return
+				}
+				var envelope review.RunEnvelope
+				if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+					t.Fatalf("JSON output: %v: %q", err, stdout.String())
+				}
+				if envelope.Result.Suppressed.Findings != 1 || envelope.Result.Suppressed.Observations != 2 {
+					t.Fatalf("aggregate counts = %+v", envelope.Result.Suppressed)
+				}
+				if (len(envelope.Result.SuppressedFindings) == 1) != include {
+					t.Fatalf("suppressed details = %#v; include=%t", envelope.Result.SuppressedFindings, include)
+				}
+				if include && !strings.Contains(envelope.Result.SuppressedFindings[0].Title, "\x1b[2J") {
+					t.Fatalf("JSON protocol data was unexpectedly terminal-sanitized: %#v", envelope.Result.SuppressedFindings[0])
+				}
+			})
+		}
+	}
+}
+
 func writeRunnerProject(t *testing.T, permissions string) string {
 	t.Helper()
 	dir := t.TempDir()

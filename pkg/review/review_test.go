@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 func TestDecodeRunEnvelope(t *testing.T) {
@@ -127,6 +128,160 @@ func TestRenderTerminalReviewResult(t *testing.T) {
 	for _, notWant := range []string{`"image"`, "lockfilePresent", "Evidence:"} {
 		if strings.Contains(got, notWant) {
 			t.Fatalf("terminal output contains raw/legacy text %q in:\n%s", notWant, got)
+		}
+	}
+}
+
+func TestRenderTerminalSuppressionContract(t *testing.T) {
+	finding := func(id, title string) Finding {
+		return Finding{ID: id, Title: title, Category: "policy", Severity: "low", Confidence: "high", Summary: title + " summary", Evidence: []Evidence{}}
+	}
+	tests := []struct {
+		name    string
+		result  ReviewResult
+		want    []string
+		notWant []string
+		order   []string
+	}{
+		{
+			name:    "zero counts remain quiet",
+			result:  ReviewResult{Findings: []Finding{}},
+			notWant: []string{"Suppressed observations", "Suppressed findings", "reason unavailable"},
+		},
+		{
+			name:    "observation count does not disclose details",
+			result:  ReviewResult{Findings: []Finding{}, Suppressed: Suppressed{Observations: 3}},
+			want:    []string{"Findings: 0", "Suppressed observations: 3"},
+			notWant: []string{"Suppressed findings", "reason unavailable"},
+		},
+		{
+			name:    "finding count without requested details",
+			result:  ReviewResult{Findings: []Finding{}, Suppressed: Suppressed{Findings: 2}},
+			want:    []string{"Findings: 0", "Suppressed findings: 2"},
+			notWant: []string{"reason unavailable"},
+		},
+		{
+			name: "included details preserve producer order and do not change visible total",
+			result: ReviewResult{
+				Findings:           []Finding{finding("visible", "Visible finding")},
+				Suppressed:         Suppressed{Findings: 2},
+				SuppressedFindings: []Finding{finding("z", "Producer first"), finding("a", "Producer second")},
+			},
+			want:  []string{"Findings: 1", "Suppressed findings: 2", "[low; suppressed; reason unavailable] Producer first", "[low; suppressed; reason unavailable] Producer second"},
+			order: []string{"Visible finding", "Producer first", "Producer second"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out strings.Builder
+			if err := RenderTerminal(&out, tt.result); err != nil {
+				t.Fatal(err)
+			}
+			got := out.String()
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("missing %q in:\n%s", want, got)
+				}
+			}
+			for _, notWant := range tt.notWant {
+				if strings.Contains(got, notWant) {
+					t.Errorf("unexpected %q in:\n%s", notWant, got)
+				}
+			}
+			position := -1
+			for _, want := range tt.order {
+				next := strings.Index(got, want)
+				if next <= position {
+					t.Errorf("%q is not in producer order in:\n%s", want, got)
+				}
+				position = next
+			}
+		})
+	}
+}
+
+func TestRenderTerminalSuppressionGoldens(t *testing.T) {
+	finding := func(id, title string) Finding {
+		return Finding{ID: id, Title: title, Category: "policy", Severity: "low", Confidence: "high", Summary: title + " summary", Evidence: []Evidence{}}
+	}
+	tests := []struct {
+		name   string
+		result ReviewResult
+	}{
+		{"counts", ReviewResult{Findings: []Finding{}, Suppressed: Suppressed{Observations: 3, Findings: 2}}},
+		{"included", ReviewResult{Findings: []Finding{}, Suppressed: Suppressed{Findings: 2}, SuppressedFindings: []Finding{finding("z", "Producer first"), finding("a", "Producer second")}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out strings.Builder
+			if err := RenderTerminal(&out, tt.result); err != nil {
+				t.Fatal(err)
+			}
+			want, err := os.ReadFile(filepath.Join("testdata", "suppression-"+tt.name+".golden"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.String() != string(want) {
+				t.Fatalf("output changed\n--- want\n%s--- got\n%s", want, out.String())
+			}
+			if strings.Contains(out.String(), "\x1b[") {
+				t.Fatal("terminal contract emitted ANSI color")
+			}
+		})
+	}
+}
+
+func TestRenderTerminalSanitizesUntrustedProtocolStringsGolden(t *testing.T) {
+	result := ReviewResult{
+		Adversary:    ReviewAdversary{Name: "alpha\x1b[2J\rOVER"},
+		Target:       ReviewTarget{Repository: "repo\u202etxt\u2028next"},
+		Assessment:   &Assessment{Risk: "low", Summary: "first\rOVER\x1b[2J\n\nsecond\x00tail"},
+		Positives:    []Note{{Key: "unused", Summary: "positive\nINJECT"}},
+		Observations: []Note{{Key: "unused", Summary: "observe\u0085INJECT"}},
+		Findings: []Finding{{
+			ID: "not-rendered\x1b", Title: "title\rOVER", Category: "cat\u2066evil", Severity: "low\x1b[31m", Confidence: "high\tINJECT",
+			Summary: "line one\rOVER\x1b[2J\n\nline two\u202ehidden", Evidence: []Evidence{{File: "file\rOVER", Message: "message\x1b[2J", Snippet: "snippet\nINJECT"}},
+			Recommendation: "recommend\u009b31m", Remediation: &Remediation{Estimate: "soon\rOVER"},
+		}},
+		Opinion: &Opinion{Summary: "ship\x07bell"},
+	}
+	var out strings.Builder
+	if err := RenderTerminal(&out, result); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(filepath.Join("testdata", "terminal-sanitization.golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != string(want) {
+		t.Fatalf("output changed\n--- want\n%s--- got\n%s", want, out.String())
+	}
+	for _, r := range out.String() {
+		if r != '\n' && (unicode.IsControl(r) || isTerminalDirectionControl(r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r)) {
+			t.Fatalf("unsafe terminal rune U+%04X in %q", r, out.String())
+		}
+	}
+}
+
+func TestRenderTerminalPreservesLegitimateUnicodeFormatCharacters(t *testing.T) {
+	const emoji = "developer 👩‍💻"
+	const persian = "می‌روم"
+	const bom = "before\ufeffafter"
+	result := ReviewResult{
+		Adversary:    ReviewAdversary{Name: emoji},
+		Observations: []Note{{Key: "persian", Summary: persian}, {Key: "bom", Summary: bom}},
+		Findings:     []Finding{},
+	}
+	var out strings.Builder
+	if err := RenderTerminal(&out, result); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{emoji, persian, bom} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("legitimate Unicode %q changed in %q", want, out.String())
+		}
+		if sanitizeTerminalInline(want) != want {
+			t.Fatalf("inline sanitizer changed %q", want)
 		}
 	}
 }

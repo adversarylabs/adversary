@@ -19,11 +19,11 @@ closure claim and must be updated by their final remediation PR.
 | CLI-010 | PR #4; `docs/auth-credential-storage.md` and locked-store tests |
 | CLI-011 | PRs #3, #23, and manifest-runtime closure PR; canonical `validate` surface, exactly-one runtime identity, environment-independent image-reference validation, semantic runtime/path/project checks, schema/parser parity, and malformed YAML policy corpus. Rollback: revert the closure PR; manifests relying on both runtime identities were ambiguous and are intentionally not compatible. |
 | CLI-012 | PRs #5, #6, #7, #8, #9, #11, and #12; staged repository migration and publication tests |
-| CLI-013 | PRs #1 and #23; canonical input/review plus error schemas, Go/TypeScript validation, version rejection, and ordering parity tests; a final-audit follow-up remains pending |
+| CLI-013 | PRs #1 and #23 plus output-contract closure PR; canonical input/review and error schemas, Go/TypeScript validation, version rejection, ordering parity tests, caller-enforced suppressed-detail disclosure, and control-sequence-safe suppression terminal goldens. Rollback: revert the output-contract closure PR to remove the additive terminal presentation without changing protocol decoding. |
 | CLI-014 | PR #16; lifecycle contracts and signal tests |
 | CLI-015 | PR #15; deterministic git/build decision and regression tests |
 | CLI-016 | PRs #3 and #23; atomic init, deterministic TypeScript lockfile/`npm ci`, and injected render/write cleanup tests |
-| CLI-017 | PRs #17 and #18; `docs/cli-output-contract.md`, help goldens, and DTO tests; a final-audit follow-up remains pending |
+| CLI-017 | PRs #17 and #18 plus output-contract closure PR; `docs/cli-output-contract.md`, help/suppression/terminal-injection goldens, strict `validate` v1 success/failure fixtures, schema-negative tests, JSON-purity tests, and text/JSON suppression-disclosure tests. Rollback: revert the closure PR to remove the additive schema branch; command behavior and existing v1 shapes remain unchanged. |
 | CLI-018 | PR #19; `docs/platform-runtime-support.md`, native CI matrix |
 | CLI-019 | PRs #6 and #24 through #26; production pack, repository import/payload/repair, OCI upload, and OCI download/materialization use bounded repeatable sources with explicit leases/cleanup; PR #26 removes the legacy byte-slice compatibility APIs |
 | CLI-020 | PRs #6 and #27; sealed publication plus a non-mutating `pack --check`, deterministic file inventories, path-only secret-risk warnings, and traversal close-error tests; a final-audit follow-up remains pending. Rollback: remove the additive `--check` flag and inventory fields; repository/artifact formats are unchanged. |

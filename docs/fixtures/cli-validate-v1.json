@@ -1,0 +1,1 @@
+{"schemaVersion":1,"command":"validate","data":{"path":"/workspace/example/adversary.yaml","manifestVersion":"adversary.manifest.v1","name":"example","runtime":"node","status":"valid","errors":[]}}
