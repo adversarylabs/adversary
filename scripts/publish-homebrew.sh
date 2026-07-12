@@ -8,12 +8,24 @@ export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/adversary-go-build}"
 
 TEMP_PATHS=()
 cleanup() {
+  local status=$? path
+  # Cleanup must not replace the command's success/failure status. Guarding the
+  # indexed array length also keeps expansion safe under Bash 3.2 + set -u.
+  trap - EXIT
+  set +e
   HOMEBREW_TAP_TOKEN=""
-  unset HOMEBREW_TAP_TOKEN GH_TOKEN GIT_ASKPASS
-  local path
-  for path in "${TEMP_PATHS[@]}"; do rm -rf -- "$path"; done
+  GITHUB_TOKEN=""
+  GH_TOKEN=""
+  unset HOMEBREW_TAP_TOKEN GITHUB_TOKEN GH_TOKEN GIT_ASKPASS
+  if [[ ${#TEMP_PATHS[@]} -gt 0 ]]; then
+    for path in "${TEMP_PATHS[@]}"; do rm -rf -- "$path"; done
+  fi
+  return "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 log() { printf '==> %s\n' "$*"; }
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -71,7 +83,9 @@ verify_binary() {
   local file="$1" metadata
   metadata="$(go version -m "$file")"
   grep -Fq 'path' <<<"$metadata" || fail "Go build metadata missing from ${file}"
+  if grep -Fq $'\tbuild\tvcs.' <<<"$metadata"; then fail "automatic Go VCS metadata present in deterministic release binary: ${file}"; fi
   LC_ALL=C grep -aFq -- "$VERSION" "$file" || fail "stamped version missing from ${file}"
+  LC_ALL=C grep -aFq -- "$COMMIT" "$file" || fail "stamped commit missing from ${file}"
 }
 
 build_release() {
@@ -83,7 +97,9 @@ build_release() {
     build_dir="${DIST_DIR}/${BINARY}_${VERSION}_${goos}_${goarch}"
     archive="${BINARY}_${VERSION}_${goos}_${goarch}.tar.gz"
     mkdir -p "$build_dir/docs"
-    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
+    # The verified commit is stamped explicitly; ambient VCS inspection would
+    # make release bytes depend on checkout/cache state.
+    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -buildvcs=false -trimpath \
       -ldflags="-s -w -X github.com/adversarylabs/adversary/internal/version.Version=${VERSION} -X github.com/adversarylabs/adversary/internal/version.Commit=${COMMIT} -X github.com/adversarylabs/adversary/internal/version.BuildDate=${BUILD_DATE}" \
       -o "${build_dir}/${BINARY}" .
     verify_binary "${build_dir}/${BINARY}"
@@ -116,12 +132,95 @@ verify_bundle() {
 
 upload_release_assets() {
   local assets=("${DIST_DIR}/${ARCHIVES[0]}" "${DIST_DIR}/${ARCHIVES[1]}" "${DIST_DIR}/${ARCHIVES[2]}" "${DIST_DIR}/${ARCHIVES[3]}" "${DIST_DIR}/adversary_${VERSION}.spdx.json" "${DIST_DIR}/${FORMULA_NAME}" "${DIST_DIR}/release-manifest.json" "${DIST_DIR}/checksums.txt")
+  local missing=() remote_snapshot confirmed_snapshot remote_names remote_dir asset name downloaded remote_name expected
+  local remote_id remote_size remote_digest
+  local is_draft is_prerelease confirmed_draft confirmed_prerelease expected_prerelease=false
+  if [[ "$IS_PRERELEASE" == 1 ]]; then expected_prerelease=true; fi
   export GH_TOKEN="$GITHUB_TOKEN"
-  if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-    gh release upload "$TAG" "${assets[@]}" --repo "$REPO" --clobber
-  else
-    local flags=(); [[ "$IS_PRERELEASE" == 1 ]] && flags+=(--prerelease)
-    gh release create "$TAG" "${assets[@]}" --repo "$REPO" --title "$TAG" --generate-notes "${flags[@]}"
+  if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+    local flags=()
+    if [[ "$IS_PRERELEASE" == 1 ]]; then flags+=(--prerelease); fi
+    # Creation is deliberately non-public and carries no assets. Only a fully
+    # re-downloaded and verified draft is promoted below.
+    gh release create "$TAG" --repo "$REPO" --draft --title "$TAG" --generate-notes "${flags[@]}"
+  fi
+
+  is_draft="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')"
+  is_prerelease="$(gh release view "$TAG" --repo "$REPO" --json isPrerelease --jq '.isPrerelease')"
+  [[ "$is_draft" == true || "$is_draft" == false ]] || fail "GitHub release returned invalid draft state"
+  [[ "$is_prerelease" == "$expected_prerelease" ]] || fail "GitHub release prerelease state does not match tag"
+
+  remote_snapshot="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | sort_by(.name)[] | [.id, .name, .size, (.digest // "")] | @tsv')"
+  remote_names="$(awk -F '\t' 'NF >= 3 { print $2 }' <<<"$remote_snapshot")"
+  while IFS=$'\t' read -r remote_id remote_name remote_size remote_digest; do
+    [[ -n "$remote_name" ]] || continue
+    [[ -n "$remote_id" && "$remote_size" =~ ^[0-9]+$ ]] || fail "GitHub release returned incomplete asset identity metadata"
+    [[ -z "$remote_digest" || "$remote_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "GitHub release returned invalid asset digest metadata"
+    expected=0
+    for asset in "${assets[@]}"; do
+      if [[ "${asset##*/}" == "$remote_name" ]]; then expected=$((expected + 1)); fi
+    done
+    [[ $expected -eq 1 ]] || fail "unexpected or duplicate asset already exists on GitHub release: ${remote_name}"
+  done <<<"$remote_snapshot"
+
+  for asset in "${assets[@]}"; do
+    name="${asset##*/}"
+    if ! grep -Fxq -- "$name" <<<"$remote_names"; then missing+=("$asset"); fi
+  done
+  if [[ -n "$remote_names" ]]; then
+    remote_dir="$(mktemp -d "${TMPDIR:-/tmp}/adversary-release-existing.XXXXXX")"
+    TEMP_PATHS+=("$remote_dir")
+    for asset in "${assets[@]}"; do
+      name="${asset##*/}"
+      if grep -Fxq -- "$name" <<<"$remote_names"; then
+        gh release download "$TAG" --repo "$REPO" --pattern "$name" --dir "$remote_dir"
+        downloaded="${remote_dir}/${name}"
+        [[ -f "$downloaded" ]] || fail "GitHub release asset download missing: ${name}"
+        cmp -s -- "$asset" "$downloaded" || fail "GitHub release asset differs from verified bundle: ${name}"
+      fi
+    done
+  fi
+  if [[ "$is_draft" == false && ${#missing[@]} -gt 0 ]]; then
+    fail "published GitHub release is incomplete and immutable"
+  fi
+  if [[ "$is_draft" == true && ${#missing[@]} -gt 0 ]]; then
+    gh release upload "$TAG" "${missing[@]}" --repo "$REPO"
+  fi
+
+  # Take a fresh post-upload snapshot, require its exact name set, then fetch
+  # and compare every byte. A final name snapshot catches concurrent mutation
+  # before the draft is made public.
+  remote_snapshot="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | sort_by(.name)[] | [.id, .name, .size, (.digest // "")] | @tsv')"
+  remote_names="$(awk -F '\t' 'NF >= 3 { print $2 }' <<<"$remote_snapshot")"
+  while IFS=$'\t' read -r remote_id remote_name remote_size remote_digest; do
+    [[ -n "$remote_name" ]] || continue
+    [[ -n "$remote_id" && "$remote_size" =~ ^[0-9]+$ ]] || fail "GitHub release returned incomplete post-upload asset identity metadata"
+    [[ -z "$remote_digest" || "$remote_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "GitHub release returned invalid post-upload asset digest metadata"
+  done <<<"$remote_snapshot"
+  for asset in "${assets[@]}"; do
+    name="${asset##*/}"
+    [[ "$(grep -Fxc -- "$name" <<<"$remote_names")" -eq 1 ]] || fail "GitHub release does not contain exactly one expected asset: ${name}"
+  done
+  [[ "$(grep -c . <<<"$remote_names")" -eq ${#assets[@]} ]] || fail "GitHub release contains unexpected assets after upload"
+  remote_dir="$(mktemp -d "${TMPDIR:-/tmp}/adversary-release-assets.XXXXXX")"
+  TEMP_PATHS+=("$remote_dir")
+  for asset in "${assets[@]}"; do
+    name="${asset##*/}"
+    gh release download "$TAG" --repo "$REPO" --pattern "$name" --dir "$remote_dir"
+    downloaded="${remote_dir}/${name}"
+    [[ -f "$downloaded" ]] || fail "GitHub release asset download missing: ${name}"
+    cmp -s -- "$asset" "$downloaded" || fail "GitHub release asset differs from verified bundle: ${name}"
+  done
+  confirmed_snapshot="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | sort_by(.name)[] | [.id, .name, .size, (.digest // "")] | @tsv')"
+  [[ "$confirmed_snapshot" == "$remote_snapshot" ]] || fail "GitHub release assets changed during verification"
+  confirmed_draft="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')"
+  confirmed_prerelease="$(gh release view "$TAG" --repo "$REPO" --json isPrerelease --jq '.isPrerelease')"
+  [[ "$confirmed_draft" == "$is_draft" ]] || fail "GitHub release draft state changed during verification"
+  [[ "$confirmed_prerelease" == "$is_prerelease" && "$confirmed_prerelease" == "$expected_prerelease" ]] \
+    || fail "GitHub release prerelease state changed during verification"
+
+  if [[ "$is_draft" == true ]]; then
+    gh release edit "$TAG" --repo "$REPO" --draft=false
   fi
 }
 
@@ -142,7 +241,17 @@ publish_formula() {
   git -C "$tap_dir" diff --cached --quiet || { git -C "$tap_dir" commit -m "Update adversary to ${TAG}"; git -C "$tap_dir" push origin HEAD; }
 }
 
-need git; need go; need shasum; need gzip; need tar
+for legacy_mode in BUILD_ONLY PUBLISH_ONLY VERIFY_ONLY SKIP_PUBLISH; do
+  [[ -z "${!legacy_mode:-}" ]] || fail "${legacy_mode} is obsolete; set RELEASE_MODE to build, verify, publish-github, or publish-homebrew"
+done
+MODE="${RELEASE_MODE:-}"
+case "$MODE" in
+  build|verify|publish-github|publish-homebrew) ;;
+  *) fail "RELEASE_MODE must be build, verify, publish-github, or publish-homebrew" ;;
+esac
+
+need git; need go; need shasum
+if [[ "$MODE" == build ]]; then need gzip; need tar; fi
 [[ -f "$FORMULA_TEMPLATE" && -f LICENSE ]] || fail "release metadata is missing"
 TAG="$(detect_tag "${1:-}")"; [[ -n "$TAG" ]] || fail "could not determine release tag"
 [[ "$TAG" =~ ^20[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] || fail "invalid CalVer tag: ${TAG}"
@@ -155,15 +264,38 @@ DARWIN_AMD64_ARCHIVE="${BINARY}_${VERSION}_darwin_amd64.tar.gz"; DARWIN_ARM64_AR
 LINUX_AMD64_ARCHIVE="${BINARY}_${VERSION}_linux_amd64.tar.gz"; LINUX_ARM64_ARCHIVE="${BINARY}_${VERSION}_linux_arm64.tar.gz"
 ARCHIVES=("$DARWIN_AMD64_ARCHIVE" "$DARWIN_ARM64_ARCHIVE" "$LINUX_AMD64_ARCHIVE" "$LINUX_ARM64_ARCHIVE")
 
-[[ "${PUBLISH_ONLY:-0}" == 1 ]] || build_release
-if [[ "${PUBLISH_ONLY:-0}" == 1 ]]; then verify_bundle; fi
+if [[ "$MODE" == build ]]; then
+  [[ -z "${GITHUB_TOKEN:-}" && -z "${GH_TOKEN:-}" && -z "${HOMEBREW_TAP_TOKEN:-}" ]] || fail "build mode does not accept publication credentials"
+  build_release
+else
+  verify_bundle
+fi
 for archive in "${ARCHIVES[@]}"; do checksum_for "$archive" >/dev/null; done
 DARWIN_AMD64_SHA256="$(checksum_for "$DARWIN_AMD64_ARCHIVE")"; DARWIN_ARM64_SHA256="$(checksum_for "$DARWIN_ARM64_ARCHIVE")"
 LINUX_AMD64_SHA256="$(checksum_for "$LINUX_AMD64_ARCHIVE")"; LINUX_ARM64_SHA256="$(checksum_for "$LINUX_ARM64_ARCHIVE")"
 base="https://github.com/${REPO}/releases/download/${TAG}"
 DARWIN_AMD64_URL="$base/$DARWIN_AMD64_ARCHIVE"; DARWIN_ARM64_URL="$base/$DARWIN_ARM64_ARCHIVE"
 LINUX_AMD64_URL="$base/$LINUX_AMD64_ARCHIVE"; LINUX_ARM64_URL="$base/$LINUX_ARM64_ARCHIVE"
-if [[ "${PUBLISH_ONLY:-0}" != 1 ]]; then finalize_bundle; verify_bundle; fi
-if [[ "${BUILD_ONLY:-0}" == 1 || "${SKIP_PUBLISH:-0}" == 1 || "${VERIFY_ONLY:-0}" == 1 ]]; then exit 0; fi
-[[ -n "${HOMEBREW_TAP_TOKEN:-}" && -n "${GITHUB_TOKEN:-}" ]] || fail "publishing tokens are required"
-need gh; upload_release_assets; publish_formula; log "Published ${TAG}"
+if [[ "$MODE" == build ]]; then
+  finalize_bundle
+  verify_bundle
+  exit 0
+fi
+if [[ "$MODE" == verify ]]; then
+  [[ -z "${GITHUB_TOKEN:-}" && -z "${GH_TOKEN:-}" && -z "${HOMEBREW_TAP_TOKEN:-}" ]] || fail "verify mode does not accept publication credentials"
+  exit 0
+fi
+if [[ "$MODE" == publish-github ]]; then
+  [[ -n "${GITHUB_TOKEN:-}" ]] || fail "publish-github mode requires GITHUB_TOKEN"
+  [[ -z "${GH_TOKEN:-}" ]] || fail "publish-github mode rejects GH_TOKEN so it cannot override GITHUB_TOKEN"
+  [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]] || fail "publish-github mode rejects HOMEBREW_TAP_TOKEN"
+  need gh; need cmp
+  upload_release_assets
+  log "Published ${TAG} to GitHub Releases"
+  exit 0
+fi
+[[ -n "${HOMEBREW_TAP_TOKEN:-}" ]] || fail "publish-homebrew mode requires HOMEBREW_TAP_TOKEN"
+[[ -z "${GITHUB_TOKEN:-}" ]] || fail "publish-homebrew mode rejects GITHUB_TOKEN"
+[[ -z "${GH_TOKEN:-}" ]] || fail "publish-homebrew mode rejects GH_TOKEN"
+publish_formula
+log "Published ${TAG} to the Homebrew tap"

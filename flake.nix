@@ -37,6 +37,8 @@
             pkgs.shellcheck
             pkgs.gnutar
             pkgs.gzip
+            pkgs.curl
+            pkgs.xz
           ];
 
           shellHook = ''

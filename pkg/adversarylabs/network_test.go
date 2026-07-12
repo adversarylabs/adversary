@@ -1,9 +1,10 @@
 package adversarylabs
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -32,14 +33,27 @@ func TestNewHTTPClientIsBounded(t *testing.T) {
 }
 
 func TestAPIClientTimeoutIsEnforced(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(100 * time.Millisecond)
-		_, _ = w.Write([]byte(`{"results":[]}`))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+			_, _ = w.Write([]byte(`{"results":[]}`))
+		}
 	}))
 	defer server.Close()
-	client := Client{BaseURL: server.URL, HTTP: newHTTPClientWithTimeout(20 * time.Millisecond)}
-	if _, err := client.Search(t.Context(), "query", ""); err == nil || !strings.Contains(err.Error(), "Client.Timeout") {
-		t.Fatalf("Search error = %v, want enforced client timeout", err)
+	httpClient := newHTTPClientWithTimeout(20 * time.Millisecond)
+	client := Client{BaseURL: server.URL, HTTP: httpClient}
+	started := time.Now()
+	_, err := client.Search(t.Context(), "query", "")
+	elapsed := time.Since(started)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Search error = %v, want context deadline exceeded", err)
+	}
+	if httpClient.Timeout != 20*time.Millisecond {
+		t.Fatalf("HTTP timeout = %s, want 20ms", httpClient.Timeout)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("Search elapsed = %s, timeout was not enforced within the 1s test bound", elapsed)
 	}
 }
 

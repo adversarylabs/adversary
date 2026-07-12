@@ -14,6 +14,7 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -34,7 +35,7 @@ jobs:
           scripts/test-release-contract.sh
       - name: Build deterministic release bundle
         env:
-          BUILD_ONLY: "1"
+          RELEASE_MODE: build
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: scripts/publish-homebrew.sh
       - name: Upload release bundle
@@ -48,6 +49,7 @@ jobs:
   attest:
     needs: build-and-test
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
@@ -69,10 +71,9 @@ jobs:
           path: dist
       - name: Verify release bundle
         env:
-          PUBLISH_ONLY: "1"
-          VERIFY_ONLY: "1"
+          RELEASE_MODE: verify
         run: scripts/publish-homebrew.sh
-      - name: Recheck tracked checkout before publication
+      - name: Recheck tracked checkout before attestation
         run: |
           git diff --quiet --ignore-submodules --
           git diff --cached --quiet --ignore-submodules --
@@ -85,9 +86,13 @@ jobs:
             dist/*.rb
             dist/checksums.txt
             dist/release-manifest.json
-  publish:
+
+  # GitHub permissions are job-scoped. This is the smallest isolated protected
+  # job that can independently re-verify and publish the attested bytes.
+  publish-github:
     needs: attest
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     environment: release
     permissions:
       contents: write
@@ -106,19 +111,57 @@ jobs:
         with:
           name: release-${{ github.ref_name }}
           path: dist
-      - name: Verify clean publication workspace and exact bundle
+      - name: Verify exact GitHub publication state
         env:
-          PUBLISH_ONLY: "1"
-          VERIFY_ONLY: "1"
+          RELEASE_MODE: verify
         run: |
           git diff --exit-code --ignore-submodules --
           git diff --cached --exit-code --ignore-submodules --
           git ls-files --others --exclude-standard | LC_ALL=C sort > /tmp/untracked-files
           test ! -s /tmp/untracked-files
           scripts/publish-homebrew.sh
-      - name: Publish GitHub release and verified Homebrew formula
+      - name: Publish GitHub release
         env:
-          PUBLISH_ONLY: "1"
+          RELEASE_MODE: publish-github
           GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/publish-homebrew.sh
+
+  # Tap publication has no contents:write permission and cannot publish a
+  # GitHub release. Its only repository write credential is the fine-grained
+  # tap token, exposed after independent bundle verification in the final step.
+  publish-homebrew:
+    needs: publish-github
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+    env:
+      GITHUB_REF_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Check out release metadata
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable clean tag checkout
+        run: scripts/verify-release-ref.sh
+      - name: Download GitHub-published attested bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-${{ github.ref_name }}
+          path: dist
+      - name: Verify exact Homebrew publication state
+        env:
+          RELEASE_MODE: verify
+        run: |
+          git diff --exit-code --ignore-submodules --
+          git diff --cached --exit-code --ignore-submodules --
+          git ls-files --others --exclude-standard | LC_ALL=C sort > /tmp/untracked-files
+          test ! -s /tmp/untracked-files
+          scripts/publish-homebrew.sh
+      - name: Publish Homebrew formula
+        env:
+          RELEASE_MODE: publish-homebrew
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: scripts/publish-homebrew.sh
