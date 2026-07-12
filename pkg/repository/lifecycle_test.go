@@ -77,8 +77,176 @@ func TestGCPlanApplyPreservesReachableAndDeletesUnreachable(t *testing.T) {
 	if _, err := r.Resolve(drop.Digest); !os.IsNotExist(err) {
 		t.Fatalf("unreachable resolve err=%v", err)
 	}
+	if got, err := r.Resolve("test:1.0.0"); err != nil || got.Digest != keep.Digest {
+		t.Fatalf("GC did not prune stale tagged alias: got=%#v err=%v", got, err)
+	}
 	if _, err := os.Stat(filepath.Join(r.Root, "materialized", key(drop.Digest))); !os.IsNotExist(err) {
 		t.Fatalf("materialization remains: %v", err)
+	}
+}
+
+func TestCheckRejectsAndRepairRebuildsCorruptAliasIndex(t *testing.T) {
+	r := Repository{Root: t.TempDir()}
+	rec, err := r.ImportPacked(artifact(t, "one"), "registry.example/team/test:1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasPath := filepath.Join(r.Root, "aliases", key("test:1.0.0")+".json")
+	if err := os.WriteFile(aliasPath, []byte(`[]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CheckAll(); err == nil {
+		t.Fatal("check accepted corrupt alias")
+	}
+	if _, err := r.RepairAll(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CheckAll(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Resolve("test:1.0.0")
+	if err != nil || got.Digest != rec.Digest {
+		t.Fatalf("rebuilt alias got=%#v err=%v", got, err)
+	}
+}
+
+func TestCopiedAliasCannotRedirectAndRepairUsesAuthoritativeMetadata(t *testing.T) {
+	r := Repository{Root: t.TempDir()}
+	a, b := artifact(t, "one"), artifact(t, "two")
+	if _, err := r.ImportPacked(a, "one.example/team-a/test:1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	bRec, err := r.ImportPacked(b, "two.example/team-b/test:1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := r.read("aliases/" + key("team-a/test:1.0.0") + ".json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.atomic("aliases/"+key("team-b/test:1.0.0")+".json", source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve("team-b/test:1.0.0"); err == nil {
+		t.Fatal("copied alias redirected lookup")
+	}
+	if _, err := r.CheckAll(); err == nil {
+		t.Fatal("check accepted copied alias")
+	}
+	if _, err := r.RepairAll(nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Resolve("team-b/test:1.0.0")
+	if err != nil || got.Digest != bRec.Digest {
+		t.Fatalf("repair got=%#v err=%v", got, err)
+	}
+}
+
+func TestOmittedAmbiguousAliasTargetFailsAndRepairRestoresExactSet(t *testing.T) {
+	r := Repository{Root: t.TempDir()}
+	if _, err := r.ImportPacked(artifact(t, "one"), "one.example/team/test:1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ImportPacked(artifact(t, "two"), "two.example/team/test:1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	path := "aliases/" + key("test:1.0.0") + ".json"
+	data, err := r.read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx aliasIndex
+	if err := json.Unmarshal(data, &idx); err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.Targets) != 2 {
+		t.Fatalf("targets=%v", idx.Targets)
+	}
+	idx.Targets = idx.Targets[:1]
+	tampered, _ := json.Marshal(idx)
+	if err := r.atomic(path, tampered); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve("test:1.0.0"); err == nil {
+		t.Fatal("subset alias accepted")
+	}
+	if _, err := r.CheckAll(); err == nil {
+		t.Fatal("check accepted subset alias")
+	}
+	if _, err := r.RepairAll(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve("test:1.0.0"); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("repaired alias err=%v", err)
+	}
+}
+
+func TestMissingAliasFileIsUnhealthyAndRepairRestoresUnreferencedLookup(t *testing.T) {
+	r := Repository{Root: t.TempDir()}
+	rec, err := r.ImportPacked(artifact(t, "one"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := rec.Name + ":" + rec.Version
+	if err := os.Remove(filepath.Join(r.Root, "aliases", key(alias)+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve(alias); !os.IsNotExist(err) {
+		t.Fatalf("missing alias lookup err=%v", err)
+	}
+	if _, err := r.CheckAll(); err == nil {
+		t.Fatal("check accepted missing canonical alias file")
+	}
+	if _, err := r.RepairAll(nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Resolve(alias)
+	if err != nil || got.Digest != rec.Digest {
+		t.Fatalf("repaired lookup=%#v err=%v", got, err)
+	}
+}
+
+func TestAliasSymlinkFailsClosed(t *testing.T) {
+	r := Repository{Root: t.TempDir()}
+	if _, err := r.ImportPacked(artifact(t, "one"), "one.example/team/test:1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(r.Root, "aliases", key("test:1.0.0")+".json")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(r.Root, "aliases", key("test")+".json"), path); err != nil {
+		t.Skip(err)
+	}
+	if _, err := r.Resolve("test:1.0.0"); err == nil {
+		t.Fatal("alias symlink accepted")
+	}
+	if _, err := r.CheckAll(); err == nil {
+		t.Fatal("check accepted alias symlink")
+	}
+}
+
+func TestReferenceSymlinkFailsCheckAndRepairClosed(t *testing.T) {
+	r := Repository{Root: t.TempDir()}
+	if _, err := r.ImportPacked(artifact(t, "one"), "one.example/team/test:1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	refPath := filepath.Join(r.Root, "refs", key("one.example/team/test:1.0.0")+".json")
+	outside := filepath.Join(t.TempDir(), "ref.json")
+	if err := os.WriteFile(outside, []byte(`{"Reference":"one.example/team/test:1.0.0","Digest":"sha256:bad"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(refPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, refPath); err != nil {
+		t.Skip(err)
+	}
+	if _, err := r.CheckAll(); err == nil {
+		t.Fatal("check accepted reference symlink")
+	}
+	if _, err := r.RepairAll(nil); err == nil {
+		t.Fatal("repair accepted reference symlink")
 	}
 }
 

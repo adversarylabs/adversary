@@ -134,6 +134,10 @@ func (fakeResolver) Lookup(context.Context, string) (Resolution, error)  { retur
 func (fakeResolver) ResolveRecord(string) (repository.Record, error)     { return repository.Record{}, nil }
 func (fakeResolver) HasExact(string) (bool, error)                       { return false, nil }
 func (fakeResolver) Entries(int) ([]repository.Entry, error)             { return nil, nil }
+func (fakeResolver) CanonicalReferenceFor(string, string) (string, error) {
+	return "registry.test/library/example:1", nil
+}
+func (fakeResolver) Inventory(repository.Record) ([]pack.File, error) { return nil, nil }
 func (fakeResolver) PayloadSources(repository.Record) (*repository.PayloadLease, error) {
 	return nil, nil
 }

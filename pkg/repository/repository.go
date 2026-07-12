@@ -27,8 +27,42 @@ import (
 
 var ErrAmbiguous = errors.New("ambiguous artifact alias")
 var ErrCAS = errors.New("reference changed")
+var errLegacyAlias = errors.New("legacy alias index requires repair")
 
-type Repository struct{ Root string }
+type aliasIndex struct {
+	Version int      `json:"version"`
+	Alias   string   `json:"alias"`
+	Targets []string `json:"targets"`
+}
+
+type Repository struct {
+	Root             string
+	DefaultRegistry  string
+	DefaultNamespace string
+}
+
+func (r Repository) registryDefaults() (string, string) {
+	registry, namespace := strings.TrimSpace(r.DefaultRegistry), strings.TrimSpace(r.DefaultNamespace)
+	if registry == "" {
+		registry = oci.DefaultRegistry
+	}
+	if namespace == "" {
+		namespace = oci.DefaultNamespace
+	}
+	return registry, namespace
+}
+func (r Repository) canonicalRef(s string) (string, error) {
+	if strings.TrimSpace(s) == "" {
+		return "", nil
+	}
+	registry, namespace := r.registryDefaults()
+	ref, err := oci.ParseReferenceWithDefaults(s, registry, namespace)
+	if err != nil {
+		return "", err
+	}
+	return ref.Locator(), nil
+}
+
 type Record struct {
 	Digest                  string `json:"digest"`
 	Name                    string `json:"name"`
@@ -63,7 +97,7 @@ func (r Repository) ImportPacked(a pack.Artifact, reference string) (Record, err
 	return r.ImportSources(SourceImport{Reference: reference, Name: a.ManifestName, Version: a.Version, Manifest: blobsource.Bytes(a.Manifest), Blobs: blobs, AdversaryManifest: blobsource.Bytes(a.AdversaryManifest)})
 }
 
-func (r Repository) importData(in importMetadata, lifecycleHeld bool) (Record, error) {
+func (r Repository) importData(in importMetadata, lifecycleHeld bool) (_ Record, retErr error) {
 	if err := r.init(); err != nil {
 		return Record{}, err
 	}
@@ -84,7 +118,7 @@ func (r Repository) importData(in importMetadata, lifecycleHeld bool) (Record, e
 			return Record{}, fmt.Errorf("%s digest mismatch", label)
 		}
 	}
-	ref, err := canonicalRef(in.Reference)
+	ref, err := r.canonicalRef(in.Reference)
 	if err != nil {
 		return Record{}, err
 	}
@@ -95,6 +129,16 @@ func (r Repository) importData(in importMetadata, lifecycleHeld bool) (Record, e
 	if rec.Name != in.Name || rec.Version != in.Version {
 		return Record{}, fmt.Errorf("caller identity conflicts with artifact")
 	}
+	previousRef := ""
+	if ref != "" {
+		previousRef, err = r.referenceDigest(ref)
+		if err != nil && !os.IsNotExist(err) {
+			return Record{}, err
+		}
+		if previousRef != "" && previousRef != rec.Digest {
+			return Record{}, ErrCAS
+		}
+	}
 	lock, err := publock.Acquire(r.Root, "repo-digest\x00"+rec.Digest)
 	if err != nil {
 		return Record{}, err
@@ -102,6 +146,25 @@ func (r Repository) importData(in importMetadata, lifecycleHeld bool) (Record, e
 	defer lock.Close()
 	data, _ := json.MarshalIndent(rec, "", "  ")
 	recordPath := "records/" + key(rec.Digest) + ".json"
+	commitPath := "commits/" + key(rec.Digest) + ".json"
+	_, recordProbeErr := r.read(recordPath)
+	_, commitProbeErr := r.read(commitPath)
+	if recordProbeErr != nil && !os.IsNotExist(recordProbeErr) {
+		return Record{}, recordProbeErr
+	}
+	if commitProbeErr != nil && !os.IsNotExist(commitProbeErr) {
+		return Record{}, commitProbeErr
+	}
+	journal := importJournal{Version: 1, Digest: rec.Digest, Reference: ref, CreatedRecord: os.IsNotExist(recordProbeErr), CreatedCommit: os.IsNotExist(commitProbeErr), CreatedReference: previousRef == "" && ref != ""}
+	if err := r.saveImportJournal(journal); err != nil {
+		return Record{}, err
+	}
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		retErr = errors.Join(retErr, r.rollbackImportJournal(journal))
+	}()
 	if existing, e := r.read(recordPath); e == nil {
 		if !bytes.Equal(existing, data) {
 			return Record{}, fmt.Errorf("immutable record conflicts with digest")
@@ -110,16 +173,8 @@ func (r Repository) importData(in importMetadata, lifecycleHeld bool) (Record, e
 		if err := r.atomicImmutable(recordPath, data); err != nil {
 			return Record{}, err
 		}
-	} else {
-		return Record{}, e
-	}
-	commitPath := "commits/" + key(rec.Digest) + ".json"
-	if existing, e := r.read(commitPath); e == nil {
-		if string(existing) != rec.Digest {
-			return Record{}, fmt.Errorf("commit marker conflict")
-		}
-	} else if os.IsNotExist(e) {
-		if err := r.atomicImmutable(commitPath, []byte(rec.Digest)); err != nil {
+		journal.CreatedRecord = true
+		if err := r.saveImportJournal(journal); err != nil {
 			return Record{}, err
 		}
 	} else {
@@ -130,27 +185,87 @@ func (r Repository) importData(in importMetadata, lifecycleHeld bool) (Record, e
 			return Record{}, err
 		}
 	}
-	for _, alias := range aliases(rec, ref) {
-		if err := r.addAlias(alias, rec.Digest); err != nil {
+	if existing, e := r.read(commitPath); e == nil {
+		if string(existing) != rec.Digest {
+			return Record{}, fmt.Errorf("commit marker conflict")
+		}
+	} else if os.IsNotExist(e) {
+		if err := r.atomicImmutable(commitPath, []byte(rec.Digest)); err != nil {
 			return Record{}, err
 		}
+		journal.CreatedCommit = true
+		if err := r.saveImportJournal(journal); err != nil {
+			return Record{}, err
+		}
+	} else {
+		return Record{}, e
+	}
+	if importStepHook != nil {
+		if err := importStepHook("commit"); err != nil {
+			return Record{}, err
+		}
+	}
+	if ref != "" {
+		if err := r.updateRefWithHook(ref, previousRef, rec.Digest, func() error {
+			if importStepHook != nil {
+				return importStepHook("reference")
+			}
+			return nil
+		}); err != nil {
+			return Record{}, err
+		}
+	} else if err := r.rebuildAliases(); err != nil {
+		return Record{}, err
 	}
 	if importStepHook != nil {
 		if err := importStepHook("aliases"); err != nil {
 			return Record{}, err
 		}
 	}
-	if importStepHook != nil {
-		if err := importStepHook("reference"); err != nil {
-			return Record{}, err
-		}
+	root, err := os.OpenRoot(r.Root)
+	if err != nil {
+		return Record{}, err
 	}
-	if ref != "" {
-		if err := r.updateRef(ref, "", rec.Digest); err != nil {
-			return Record{}, err
-		}
+	removeErr := root.Remove(importJournalPath(rec.Digest, ref))
+	closeErr := root.Close()
+	if removeErr != nil || closeErr != nil {
+		return Record{}, errors.Join(removeErr, closeErr)
 	}
 	return rec, nil
+}
+
+func (r Repository) referenceDigest(ref string) (string, error) {
+	if j, err := r.readRefMutationJournal(ref); err == nil {
+		if _, err := r.validateRefMutationCurrent(j); err != nil {
+			return "", err
+		}
+		if j.Previous == "" {
+			return "", os.ErrNotExist
+		}
+		return j.Previous, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	return r.referenceDigestRaw(ref)
+}
+
+func (r Repository) referenceDigestRaw(ref string) (string, error) {
+	info, err := os.Lstat(filepath.Join(r.Root, "refs", key(ref)+".json"))
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("reference index is not a regular file")
+	}
+	data, err := r.readLimit("refs/"+key(ref)+".json", maxIndexBytes)
+	if err != nil {
+		return "", err
+	}
+	var idx struct{ Reference, Digest string }
+	if json.Unmarshal(data, &idx) != nil || idx.Reference != ref || idx.Digest == "" {
+		return "", fmt.Errorf("corrupt reference index")
+	}
+	return idx.Digest, nil
 }
 
 func deriveRecord(manifestData, configData, adversary []byte, adversaryDigest string) (Record, error) {
@@ -201,10 +316,47 @@ func (r Repository) UpdateRef(reference, oldDigest, newDigest string) error {
 		return err
 	}
 	defer lifecycleLock.Close()
-	return r.updateRef(reference, oldDigest, newDigest)
+	if err := r.recoverImportsLocked(); err != nil {
+		return err
+	}
+	ref, err := r.canonicalRef(reference)
+	if err != nil || ref == "" {
+		return fmt.Errorf("canonical reference required")
+	}
+	previous, readErr := r.referenceDigest(ref)
+	if os.IsNotExist(readErr) {
+		previous = ""
+	} else if readErr != nil {
+		return readErr
+	}
+	if previous != oldDigest {
+		return ErrCAS
+	}
+	if previous == newDigest {
+		return r.updateRef(ref, oldDigest, newDigest)
+	}
+	j := refMutationJournal{Version: 1, Reference: ref, Previous: previous, Next: newDigest}
+	if err := r.saveRefMutationJournal(j); err != nil {
+		return err
+	}
+	if err := r.updateRefWithHook(ref, oldDigest, newDigest, func() error {
+		if refMutationHook != nil {
+			return refMutationHook("after-write")
+		}
+		return nil
+	}); err != nil {
+		return errors.Join(err, r.rollbackRefMutation(j))
+	}
+	if err := r.commitRefMutation(j); err != nil {
+		return errors.Join(err, r.rollbackRefMutation(j))
+	}
+	return nil
 }
 func (r Repository) updateRef(reference, oldDigest, newDigest string) error {
-	ref, err := canonicalRef(reference)
+	return r.updateRefWithHook(reference, oldDigest, newDigest, nil)
+}
+func (r Repository) updateRefWithHook(reference, oldDigest, newDigest string, afterReference func() error) error {
+	ref, err := r.canonicalRef(reference)
 	if err != nil {
 		return err
 	}
@@ -214,7 +366,8 @@ func (r Repository) updateRef(reference, oldDigest, newDigest string) error {
 	if _, err := oci.ParseDigest(newDigest); err != nil {
 		return err
 	}
-	if _, err := r.loadRecord(newDigest, true); err != nil {
+	_, err = r.loadRecordMode(newDigest, true, true)
+	if err != nil {
 		return fmt.Errorf("reference target does not exist: %w", err)
 	}
 	lock, err := publock.Acquire(r.Root, "repo-ref\x00"+ref)
@@ -224,24 +377,48 @@ func (r Repository) updateRef(reference, oldDigest, newDigest string) error {
 	defer lock.Close()
 	path := "refs/" + key(ref) + ".json"
 	var current struct{ Reference, Digest string }
-	if data, e := r.read(path); e == nil {
-		if json.Unmarshal(data, &current) != nil {
-			return fmt.Errorf("corrupt reference")
-		}
-		if current.Reference != ref || current.Digest == "" {
-			return fmt.Errorf("corrupt reference identity")
-		}
+	if digest, e := r.referenceDigestRaw(ref); e == nil {
+		current.Reference, current.Digest = ref, digest
 	} else if !os.IsNotExist(e) {
 		return e
 	}
 	if current.Digest == newDigest {
-		return nil
+		if afterReference != nil {
+			if err := afterReference(); err != nil {
+				return err
+			}
+		}
+		return r.rebuildAliases()
 	}
 	if current.Digest != oldDigest {
 		return ErrCAS
 	}
 	data, _ := json.Marshal(struct{ Reference, Digest string }{ref, newDigest})
-	return r.atomic(path, data)
+	if err := r.atomic(path, data); err != nil {
+		return err
+	}
+	var transitionErr error
+	if afterReference != nil {
+		transitionErr = afterReference()
+	}
+	if transitionErr == nil {
+		transitionErr = r.rebuildAliases()
+	}
+	if transitionErr != nil {
+		root, openErr := os.OpenRoot(r.Root)
+		if openErr == nil {
+			if current.Digest == "" {
+				_ = root.Remove(path)
+			} else {
+				previous, _ := json.Marshal(struct{ Reference, Digest string }{ref, current.Digest})
+				_ = r.atomic(path, previous)
+			}
+			_ = root.Close()
+			_ = r.rebuildAliases()
+		}
+		return errors.Join(transitionErr, openErr)
+	}
+	return nil
 }
 func (r Repository) DeleteRef(reference, oldDigest string) error {
 	if err := r.init(); err != nil {
@@ -252,23 +429,44 @@ func (r Repository) DeleteRef(reference, oldDigest string) error {
 		return err
 	}
 	defer lifecycleLock.Close()
-	ref, err := canonicalRef(reference)
+	if err := r.recoverImportsLocked(); err != nil {
+		return err
+	}
+	ref, err := r.canonicalRef(reference)
 	if err != nil || ref == "" {
 		return fmt.Errorf("canonical reference required")
 	}
+	digest, err := r.referenceDigest(ref)
+	if err != nil {
+		return err
+	}
+	if digest != oldDigest {
+		return ErrCAS
+	}
+	j := refMutationJournal{Version: 1, Reference: ref, Previous: digest, Delete: true}
+	if err := r.saveRefMutationJournal(j); err != nil {
+		return err
+	}
+	if err := r.deleteRefLocked(ref, oldDigest); err != nil {
+		return errors.Join(err, r.rollbackRefMutation(j))
+	}
+	if err := r.commitRefMutation(j); err != nil {
+		return errors.Join(err, r.rollbackRefMutation(j))
+	}
+	return nil
+}
+
+func (r Repository) deleteRefLocked(ref, oldDigest string) error {
 	lock, err := publock.Acquire(r.Root, "repo-ref\x00"+ref)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
-	data, err := r.read("refs/" + key(ref) + ".json")
+	digest, err := r.referenceDigestRaw(ref)
 	if err != nil {
 		return err
 	}
-	var current struct{ Reference, Digest string }
-	if json.Unmarshal(data, &current) != nil || current.Reference != ref {
-		return fmt.Errorf("corrupt reference")
-	}
+	current := struct{ Reference, Digest string }{ref, digest}
 	if current.Digest != oldDigest {
 		return ErrCAS
 	}
@@ -277,43 +475,45 @@ func (r Repository) DeleteRef(reference, oldDigest string) error {
 		return e
 	}
 	defer root.Close()
-	return root.Remove("refs/" + key(ref) + ".json")
+	if err := root.Remove("refs/" + key(ref) + ".json"); err != nil {
+		return err
+	}
+	if refMutationHook != nil {
+		if err := refMutationHook("after-write"); err != nil {
+			return err
+		}
+	}
+	if err := r.rebuildAliases(); err != nil {
+		encoded, _ := json.Marshal(current)
+		restoreErr := r.atomic("refs/"+key(ref)+".json", encoded)
+		_ = r.rebuildAliases()
+		return errors.Join(err, restoreErr)
+	}
+	return nil
 }
 func (r Repository) Resolve(value string) (Record, error) {
 	if strings.HasPrefix(value, "sha256:") {
 		return r.record(value)
 	}
-	if ref, err := canonicalRef(value); err == nil {
-		var idx struct{ Reference, Digest string }
-		if data, e := r.read("refs/" + key(ref) + ".json"); e == nil {
-			if json.Unmarshal(data, &idx) != nil {
-				return Record{}, fmt.Errorf("corrupt exact reference index")
-			}
-			if idx.Reference != ref || idx.Digest == "" {
-				return Record{}, fmt.Errorf("reference index identity mismatch")
-			}
-			return r.record(idx.Digest)
-		} else if os.IsNotExist(e) && explicitReference(value) {
+	if explicitReference(value) {
+		ref, err := r.canonicalRef(value)
+		if err != nil {
+			return Record{}, err
+		}
+		if digest, e := r.referenceDigest(ref); e == nil {
+			return r.record(digest)
+		} else if os.IsNotExist(e) {
 			return Record{}, e
 		} else if !os.IsNotExist(e) {
 			return Record{}, e
 		}
 	}
-	var list []string
-	data, err := r.read("aliases/" + key(value) + ".json")
+	list, err := r.readAlias(value)
+	if (os.IsNotExist(err) || errors.Is(err, errLegacyAlias)) && !explicitReference(value) {
+		return r.resolveStoredShorthand(value)
+	}
 	if err != nil {
 		return Record{}, err
-	}
-	if json.Unmarshal(data, &list) != nil {
-		return Record{}, fmt.Errorf("corrupt alias")
-	}
-	if len(list) == 0 || len(unique(list)) != len(list) {
-		return Record{}, fmt.Errorf("malformed alias index")
-	}
-	for _, d := range list {
-		if _, err := oci.ParseDigest(d); err != nil {
-			return Record{}, fmt.Errorf("malformed alias target")
-		}
 	}
 	visible := list[:0]
 	for _, d := range list {
@@ -330,18 +530,66 @@ func (r Repository) Resolve(value string) (Record, error) {
 	}
 	return r.record(list[0])
 }
+
+// resolveStoredShorthand supports repositories created before tagged aliases
+// were persisted. It derives candidates exclusively from durable ref records;
+// process registry configuration is deliberately irrelevant. Multiple matches
+// fail closed rather than selecting an arbitrary registry.
+func (r Repository) resolveStoredShorthand(value string) (Record, error) {
+	digests, err := r.storedShorthandDigests(value)
+	if err != nil {
+		return Record{}, err
+	}
+	if len(digests) == 0 {
+		return Record{}, os.ErrNotExist
+	}
+	if len(digests) != 1 {
+		return Record{}, ErrAmbiguous
+	}
+	return r.record(digests[0])
+}
+
+func (r Repository) storedShorthandDigests(value string) ([]string, error) {
+	snapshot, err := r.referenceSnapshot()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var digests []string
+	for stored, digest := range snapshot {
+		ref, err := oci.ParseReferenceWithDefaults(stored, oci.DefaultRegistry, oci.DefaultNamespace)
+		if err != nil {
+			return nil, fmt.Errorf("corrupt stored reference: %w", err)
+		}
+		short := ref.ShortName()
+		if value == short || value == ref.Repository || value == short+":"+ref.Tag || value == ref.Repository+":"+ref.Tag {
+			digests = append(digests, digest)
+		}
+	}
+	digests = unique(digests)
+	return digests, nil
+}
 func explicitReference(v string) bool {
+	if strings.Contains(v, "@") {
+		return true
+	}
 	first := v
 	if i := strings.IndexByte(v, '/'); i >= 0 {
 		first = v[:i]
+		return strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost" || strings.HasPrefix(first, "[")
 	}
-	return strings.Contains(first, ".") || strings.Contains(first, ":") || strings.Contains(v, "@")
+	return false
 }
 func (r Repository) record(d string) (Record, error) {
 	return r.loadRecord(d, true)
 }
 func (r Repository) loadRecord(d string, requireCommit bool) (Record, error) {
-	rec, err := r.loadRecordMetadata(d, requireCommit)
+	return r.loadRecordMode(d, requireCommit, false)
+}
+func (r Repository) loadRecordMode(d string, requireCommit, allowPending bool) (Record, error) {
+	rec, err := r.loadRecordMetadataMode(d, requireCommit, allowPending)
 	if err != nil {
 		return rec, err
 	}
@@ -371,6 +619,18 @@ func (r Repository) loadRecord(d string, requireCommit bool) (Record, error) {
 }
 
 func (r Repository) loadRecordMetadata(d string, requireCommit bool) (Record, error) {
+	return r.loadRecordMetadataMode(d, requireCommit, false)
+}
+func (r Repository) loadRecordMetadataMode(d string, requireCommit, allowPending bool) (Record, error) {
+	if !allowPending {
+		pending, err := r.pendingImport(d)
+		if err != nil {
+			return Record{}, err
+		}
+		if pending {
+			return Record{}, os.ErrNotExist
+		}
+	}
 	if requireCommit {
 		marker, err := r.read("commits/" + key(d) + ".json")
 		if err != nil || string(marker) != d {
@@ -752,7 +1012,7 @@ func (r Repository) init() error {
 		return err
 	}
 	defer root.Close()
-	for _, d := range []string{"blobs", "manifests", "adversary-manifests", "records", "refs", "aliases", "commits", "checkpoints", "materialized"} {
+	for _, d := range []string{"blobs", "manifests", "adversary-manifests", "records", "refs", "aliases", "commits", "checkpoints", "materialized", "transactions"} {
 		if err := root.MkdirAll(d, 0700); err != nil {
 			return err
 		}
@@ -767,17 +1027,150 @@ func (r Repository) addAlias(alias, digest string) error {
 	defer lock.Close()
 	path := "aliases/" + key(alias) + ".json"
 	var list []string
-	if data, e := r.read(path); e == nil {
-		if err := json.Unmarshal(data, &list); err != nil {
-			return fmt.Errorf("malformed alias index: %w", err)
-		}
+	if existing, e := r.readAlias(alias); e == nil {
+		list = existing
+	} else if errors.Is(e, errLegacyAlias) {
+		// The authoritative records and refs are used below; legacy unauthenticated
+		// targets are never trusted or copied into the new index.
 	} else if !os.IsNotExist(e) {
 		return e
 	}
 	list = append(list, digest)
 	list = unique(list)
-	data, _ := json.Marshal(list)
+	data, _ := json.Marshal(aliasIndex{Version: 1, Alias: alias, Targets: list})
 	return r.atomic(path, data)
+}
+
+func (r Repository) readAlias(alias string) ([]string, error) {
+	info, err := os.Lstat(filepath.Join(r.Root, "aliases", key(alias)+".json"))
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("alias index is not a regular file")
+	}
+	data, err := r.readLimit("aliases/"+key(alias)+".json", maxIndexBytes)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 0 && data[0] == '[' {
+		return nil, errLegacyAlias
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var idx aliasIndex
+	if err := dec.Decode(&idx); err != nil {
+		return nil, fmt.Errorf("malformed alias index: %w", err)
+	}
+	if dec.Decode(&struct{}{}) != io.EOF || idx.Version != 1 || idx.Alias != alias || key(idx.Alias)+".json" != key(alias)+".json" || len(idx.Targets) == 0 || len(unique(idx.Targets)) != len(idx.Targets) {
+		return nil, fmt.Errorf("alias index identity mismatch")
+	}
+	expected, err := r.authoritativeAliasTargets(alias)
+	if err != nil {
+		return nil, err
+	}
+	actual := unique(idx.Targets)
+	if len(actual) != len(idx.Targets) || len(actual) != len(expected) {
+		return nil, fmt.Errorf("alias target set does not match authoritative metadata")
+	}
+	for i := range actual {
+		if actual[i] != expected[i] {
+			return nil, fmt.Errorf("alias target set does not match authoritative metadata")
+		}
+	}
+	return idx.Targets, nil
+}
+
+func (r Repository) authoritativeAliasTargets(alias string) ([]string, error) {
+	all, err := r.authoritativeAliasMap(false)
+	if err != nil {
+		return nil, err
+	}
+	return all[alias], nil
+}
+
+func (r Repository) authoritativeAliasMap(allowPending bool) (map[string][]string, error) {
+	records, err := r.scanRecordsMode(false, allowPending)
+	if err != nil {
+		return nil, err
+	}
+	refs, err := r.referenceSnapshotMode(allowPending)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, rec := range records {
+		for _, alias := range aliases(rec, "") {
+			out[alias] = append(out[alias], rec.Digest)
+		}
+		for ref, digest := range refs {
+			if digest == rec.Digest {
+				for _, alias := range aliases(rec, ref) {
+					out[alias] = append(out[alias], rec.Digest)
+				}
+			}
+		}
+	}
+	for alias, targets := range out {
+		out[alias] = unique(targets)
+	}
+	if len(out) > maxLifecycleEntries {
+		return nil, fmt.Errorf("repository authoritative alias set exceeds lifecycle limit")
+	}
+	return out, nil
+}
+
+// pruneAliasTarget removes a GC'd digest from durable aliases. Callers hold
+// the repository lifecycle lock, which excludes imports and other lifecycle
+// mutations while the bounded index is scanned.
+func (r Repository) pruneAliasTarget(digest string) error {
+	root, err := os.OpenRoot(r.Root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), "aliases")
+	if err != nil {
+		return err
+	}
+	if len(entries) > maxLifecycleEntries {
+		return fmt.Errorf("repository alias index exceeds lifecycle limit")
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return fmt.Errorf("invalid alias index entry %q", entry.Name())
+		}
+		name := entry.Name()
+		data, err := r.read("aliases/" + name)
+		if err != nil {
+			return err
+		}
+		var idx aliasIndex
+		if json.Unmarshal(data, &idx) != nil || idx.Version != 1 || key(idx.Alias)+".json" != name || len(idx.Targets) == 0 || len(unique(idx.Targets)) != len(idx.Targets) {
+			return fmt.Errorf("malformed alias index %q", name)
+		}
+		current := idx.Targets
+		next := make([]string, 0, len(current))
+		for _, item := range current {
+			if item != digest {
+				next = append(next, item)
+			}
+		}
+		if len(next) == len(current) {
+			continue
+		}
+		if len(next) == 0 {
+			if err := root.Remove("aliases/" + name); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		} else {
+			encoded, _ := json.Marshal(aliasIndex{Version: 1, Alias: idx.Alias, Targets: next})
+			if err := r.atomic("aliases/"+name, encoded); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 func (r Repository) atomic(rel string, data []byte) error {
 	return r.writeAtomic(rel, data, false)
@@ -856,20 +1249,13 @@ func (r Repository) verifyContent(kind, digest string) error {
 	return nil
 }
 func (r Repository) content(kind, d string) string { return filepath.Join(r.Root, kind, key(d)) }
-func canonicalRef(s string) (string, error) {
-	if strings.TrimSpace(s) == "" {
-		return "", nil
-	}
-	ref, err := oci.ParseReference(s)
-	if err != nil {
-		return "", err
-	}
-	return ref.Locator(), nil
-}
 func aliases(r Record, reference string) []string {
-	out := []string{r.Name}
-	if ref, err := oci.ParseReference(reference); err == nil {
+	out := []string{r.Name, r.Name + ":" + r.Version}
+	if ref, err := oci.ParseReferenceWithDefaults(reference, oci.DefaultRegistry, oci.DefaultNamespace); err == nil {
 		out = append(out, ref.ShortName(), ref.Repository)
+		if ref.Tag != "" {
+			out = append(out, ref.ShortName()+":"+ref.Tag, ref.Repository+":"+ref.Tag)
+		}
 	}
 	return unique(out)
 }
@@ -930,6 +1316,9 @@ func (r Repository) Enumerate(after string, limit int) ([]Record, error) {
 				return nil, fmt.Errorf("corrupt committed record %s", rec.Digest)
 			}
 			rec, err = r.record(rec.Digest)
+			if os.IsNotExist(err) {
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}

@@ -42,8 +42,11 @@ func newListCommand(app *application.App) *cobra.Command {
 				}
 				items := make([]artifactDTO, 0, len(entries))
 				for _, e := range entries {
-					r := e.Record
-					items = append(items, storedArtifactDTO(e.CanonicalReference, e.Digest, r.Name, r.Version, r.ManifestDigest, r.ConfigDigest, r.LayerDigest, r.AdversaryManifestDigest))
+					files, err := app.Dependencies().Resolver.Inventory(e.Record)
+					if err != nil {
+						return fmt.Errorf("read stored artifact inventory for %s: %w", e.CanonicalReference, err)
+					}
+					items = append(items, storedArtifactDTOWithFiles(e.CanonicalReference, e.Digest, e.Record, files))
 				}
 				return writeJSON(cmd.OutOrStdout(), "list", listDTO{Artifacts: items})
 			}

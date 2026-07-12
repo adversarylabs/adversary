@@ -8,7 +8,7 @@ closure claim and must be updated by their final remediation PR.
 | ID | Resolution evidence |
 | --- | --- |
 | CLI-001 | PR #2; `docs/trust-model.md`; host-boundary security tests |
-| CLI-002 | PRs #7, #8, and #9; unified repository migration evidence; a final-audit follow-up remains pending |
+| CLI-002 | PRs #7, #8, and #9 plus artifact-identity closure PR; unified repository migration, injected qualification defaults, authenticated derived alias indexes, journaled import rollback, CAS latest retargeting, restart stability, and ambiguity/tamper tests. Rollback: revert the closure PR; existing durable refs remain readable, while shorthand again follows process registry configuration. |
 | CLI-003 | PR #4; OAuth state/PKCE/device-flow tests |
 | CLI-004 | PRs #1, #2, #16, and #17; strict protocol, JSON purity, output-bound, DTO, and unsafe-execution tests |
 | CLI-005 | PR #6; bounded ingestion and archive regression tests |
@@ -23,10 +23,10 @@ closure claim and must be updated by their final remediation PR.
 | CLI-014 | PR #16; lifecycle contracts and signal tests |
 | CLI-015 | PR #15; deterministic git/build decision and regression tests |
 | CLI-016 | PRs #3 and #23; atomic init, deterministic TypeScript lockfile/`npm ci`, and injected render/write cleanup tests |
-| CLI-017 | PRs #17 and #18 plus output-contract closure PR; `docs/cli-output-contract.md`, help/suppression/terminal-injection goldens, strict `validate` v1 success/failure fixtures, schema-negative tests, JSON-purity tests, and text/JSON suppression-disclosure tests. Rollback: revert the closure PR to remove the additive schema branch; command behavior and existing v1 shapes remain unchanged. |
+| CLI-017 | PRs #17 and #18 plus output-contract and artifact-identity closure PRs; `docs/cli-output-contract.md`, versioned inspect v2 schema, canonical repository-derived identity, help/suppression/terminal-injection goldens, strict `validate` fixtures, schema-negative tests, and stdout-purity tests. Rollback: revert the closure PRs to remove additive schema branches; deprecated JSON shapes remain unchanged. |
 | CLI-018 | PR #19; `docs/platform-runtime-support.md`, native CI matrix |
 | CLI-019 | PRs #6 and #24 through #26; production pack, repository import/payload/repair, OCI upload, and OCI download/materialization use bounded repeatable sources with explicit leases/cleanup; PR #26 removes the legacy byte-slice compatibility APIs |
-| CLI-020 | PRs #6 and #27; sealed publication plus a non-mutating `pack --check`, deterministic file inventories, path-only secret-risk warnings, and traversal close-error tests; a final-audit follow-up remains pending. Rollback: remove the additive `--check` flag and inventory fields; repository/artifact formats are unchanged. |
+| CLI-020 | PRs #6 and #27 plus artifact-identity closure PR; sealed publication, non-mutating `pack --check`, immutable config-backed `inspect --files`, inspect v2 file DTO/schema, deterministic inventories, corruption failure, path-only secret-risk warnings, and traversal close-error tests. Rollback: remove additive inspection surfaces; packed config and repository content remain compatible. |
 | CLI-021 | Final CI/release-hardening PR; required native, quality, race, coverage, cross-build, generated-template, CLI-smoke, tooling, and release-contract gates aggregate as `ci / test` |
 | CLI-022 | PR #20 and final CI/release-hardening PR; channel-isolated publication, pinned workflows/tools, deterministic archives, SBOM, attestation, and the job-scoped GitHub permission decision in `docs/release.md` |
 | CLI-023 | PRs #2, #19, and #20; README, trust/platform/config/output/license/compatibility decisions; a final-audit follow-up remains pending |

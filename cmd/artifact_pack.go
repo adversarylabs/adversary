@@ -56,12 +56,21 @@ func newPackCommand(app *application.App) *cobra.Command {
 				return err
 			}
 			resolver := app.Dependencies().Resolver
-			canonical := artifact.Name + ":" + artifact.Version
-			unified, importErr := resolver.ImportPacked(artifact, canonical)
+			requested := artifact.Name + ":" + artifact.Version
+			unified, importErr := resolver.ImportPacked(artifact, requested)
 			if err := errors.Join(importErr, artifact.Close()); err != nil {
 				return err
 			}
-			latest := artifact.Name + ":" + oci.DefaultTag
+			canonical, err := resolver.CanonicalReferenceFor(unified.Digest, requested)
+			if err != nil {
+				return fmt.Errorf("read committed canonical reference: %w", err)
+			}
+			canonicalRef, err := oci.ParseReferenceWithDefaults(canonical, oci.DefaultRegistry, oci.DefaultNamespace)
+			if err != nil {
+				return fmt.Errorf("read committed canonical reference: %w", err)
+			}
+			canonicalRef.Tag, canonicalRef.Digest = oci.DefaultTag, ""
+			latest := canonicalRef.Locator()
 			if err := registerExactRef(resolver, latest, unified.Digest); err != nil {
 				return err
 			}
@@ -72,7 +81,7 @@ func newPackCommand(app *application.App) *cobra.Command {
 				}
 				files, warnings := packOutputDetails(artifact.Files, pack.WarningsForFiles(artifact.Files))
 				if opts.json {
-					return writeJSON(cmd.OutOrStdout(), "pack", legacyPackV1DTO{Name: artifact.ManifestName, Version: artifact.Version, Runtime: artifact.Runtime, RuntimeRequirement: requirement, Digest: unified.Digest, CanonicalReference: canonical, SizeBytes: artifact.Size, References: []string{canonical, latest}})
+					return writeJSON(cmd.OutOrStdout(), "pack", legacyPackV1DTO{Name: artifact.ManifestName, Version: artifact.Version, Runtime: artifact.Runtime, RuntimeRequirement: requirement, Digest: unified.Digest, CanonicalReference: requested, SizeBytes: artifact.Size, References: []string{requested, artifact.Name + ":" + oci.DefaultTag}})
 				}
 				return writeJSONVersion(cmd.OutOrStdout(), 2, "pack", packDTO{Name: artifact.ManifestName, Version: artifact.Version, Runtime: artifact.Runtime, RuntimeRequirement: requirement, Digest: unified.Digest, CanonicalReference: canonical, SizeBytes: artifact.Size, References: []string{canonical, latest}, Files: files, Warnings: warnings})
 			}

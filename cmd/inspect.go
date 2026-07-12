@@ -6,12 +6,14 @@ import (
 	"fmt"
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/spf13/cobra"
 )
 
 type inspectOptions struct {
 	json   bool
 	format string
+	files  bool
 }
 
 func newInspectCommand(app *application.App) *cobra.Command {
@@ -42,10 +44,26 @@ func newInspectCommand(app *application.App) *cobra.Command {
 					if inspectOpts.json {
 						return json.NewEncoder(cmd.OutOrStdout()).Encode(legacyArtifact(resolution.CanonicalReference, resolution.Digest, resolution.Record))
 					}
-					r := resolution.Record
-					return writeJSON(cmd.OutOrStdout(), "inspect", storedArtifactDTO(resolution.CanonicalReference, resolution.Digest, r.Name, r.Version, r.ManifestDigest, r.ConfigDigest, r.LayerDigest, r.AdversaryManifestDigest))
+					files, err := deps.Resolver.Inventory(resolution.Record)
+					if err != nil {
+						return fmt.Errorf("read stored artifact inventory: %w", err)
+					}
+					return writeJSONVersion(cmd.OutOrStdout(), 2, "inspect", storedArtifactDTOWithFiles(resolution.CanonicalReference, resolution.Digest, resolution.Record, files))
+				}
+				var files []pack.File
+				if inspectOpts.files {
+					files, err = deps.Resolver.Inventory(resolution.Record)
+					if err != nil {
+						return fmt.Errorf("read stored artifact inventory: %w", err)
+					}
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Canonical reference: %s\nDigest: %s\nName: %s\nVersion: %s\n", resolution.CanonicalReference, resolution.Digest, resolution.Record.Name, resolution.Record.Version)
+				if inspectOpts.files {
+					fmt.Fprintln(cmd.OutOrStdout(), "Files:")
+					for _, f := range files {
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s  %d bytes  sha256:%s  mode %#o\n", f.Path, f.Size, f.SHA256, f.Mode)
+					}
+				}
 				return nil
 			}
 			if lookupErr != nil && !errors.Is(lookupErr, internaladversary.ErrNotFound) {
@@ -71,6 +89,7 @@ func newInspectCommand(app *application.App) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.noNetwork, "no-network", false, "disable network access when supported by the runtime")
 	cmd.Flags().BoolVar(&inspectOpts.json, "json", false, "print local store metadata as JSON")
 	cmd.Flags().StringVar(&inspectOpts.format, "format", "text", "output format: text or json")
+	cmd.Flags().BoolVar(&inspectOpts.files, "files", false, "include the verified stored file inventory")
 
 	return cmd
 }

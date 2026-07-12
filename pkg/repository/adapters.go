@@ -1,9 +1,8 @@
 package repository
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,30 +30,14 @@ func (r Repository) List(limit int) ([]Record, error) {
 }
 func (r Repository) RootPath() string { return filepath.Clean(r.Root) }
 func (r Repository) CanonicalReference(digest string) (string, error) {
-	root, err := os.OpenRoot(r.Root)
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
-	entries, err := fs.ReadDir(root.FS(), "refs")
+	snapshot, err := r.referenceSnapshot()
 	if err != nil {
 		return "", err
 	}
 	var refs []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		data, err := r.read("refs/" + entry.Name())
-		if err != nil {
-			return "", err
-		}
-		var idx struct{ Reference, Digest string }
-		if json.Unmarshal(data, &idx) != nil || idx.Reference == "" || key(idx.Reference)+".json" != entry.Name() {
-			return "", fmt.Errorf("corrupt reference index %q", entry.Name())
-		}
-		if idx.Digest == digest {
-			refs = append(refs, idx.Reference)
+	for ref, target := range snapshot {
+		if target == digest {
+			refs = append(refs, ref)
 		}
 	}
 	if len(refs) == 0 {
@@ -62,6 +45,23 @@ func (r Repository) CanonicalReference(digest string) (string, error) {
 	}
 	sort.Strings(refs)
 	return refs[0], nil
+}
+
+// CanonicalReferenceFor returns the exact durable reference committed for a
+// caller's preferred spelling and verifies that it targets digest.
+func (r Repository) CanonicalReferenceFor(digest, preferred string) (string, error) {
+	ref, err := r.canonicalRef(preferred)
+	if err != nil {
+		return "", err
+	}
+	target, err := r.referenceDigest(ref)
+	if err != nil {
+		return "", err
+	}
+	if target != digest {
+		return "", fmt.Errorf("committed reference identity mismatch")
+	}
+	return ref, nil
 }
 func (r Repository) Entries(limit int) ([]Entry, error) {
 	records, err := r.List(limit)
@@ -83,7 +83,7 @@ func (r Repository) Entries(limit int) ([]Entry, error) {
 }
 func (r Repository) HasExact(value string) (bool, error) {
 	if strings.HasPrefix(value, "sha256:") {
-		_, err := r.read("commits/" + key(value) + ".json")
+		_, err := r.record(value)
 		if err == nil {
 			return true, nil
 		}
@@ -92,16 +92,34 @@ func (r Repository) HasExact(value string) (bool, error) {
 		}
 		return false, err
 	}
-	ref, err := canonicalRef(value)
-	if err != nil {
-		return false, nil
+	if explicitReference(value) {
+		ref, err := r.canonicalRef(value)
+		if err != nil {
+			return false, nil
+		}
+		if _, err := r.referenceDigest(ref); err == nil {
+			return true, nil
+		} else if !os.IsNotExist(err) {
+			return false, err
+		}
 	}
-	_, err = r.read("refs/" + key(ref) + ".json")
-	if err == nil {
+	if digests, err := r.readAlias(value); err == nil {
+		if len(digests) > 1 {
+			return false, ErrAmbiguous
+		}
 		return true, nil
+	} else if !os.IsNotExist(err) && !errors.Is(err, errLegacyAlias) {
+		return false, err
 	}
-	if os.IsNotExist(err) {
-		return false, nil
+	if !explicitReference(value) {
+		digests, err := r.storedShorthandDigests(value)
+		if err != nil {
+			return false, err
+		}
+		if len(digests) > 1 {
+			return false, ErrAmbiguous
+		}
+		return len(digests) == 1, nil
 	}
-	return false, err
+	return false, nil
 }

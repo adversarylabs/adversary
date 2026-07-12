@@ -94,6 +94,8 @@ type Resolver interface {
 	ResolveRecord(string) (repository.Record, error)
 	HasExact(string) (bool, error)
 	Entries(int) ([]repository.Entry, error)
+	CanonicalReferenceFor(string, string) (string, error)
+	Inventory(repository.Record) ([]pack.File, error)
 	PayloadSources(repository.Record) (*repository.PayloadLease, error)
 	ImportPacked(pack.Artifact, string) (repository.Record, error)
 	ImportSources(repository.SourceImport) (repository.Record, error)

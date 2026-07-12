@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/adversarylabs/adversary/internal/version"
+	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/adversarylabs/adversary/pkg/review"
 	"github.com/spf13/cobra"
@@ -118,6 +119,15 @@ func storedArtifactDTO(canonical, digest string, recName, recVersion, manifest, 
 		Manifest: artifactManifestDTO{Validation: "strictOnImport", ManifestDigest: manifest, ConfigDigest: config, LayerDigest: layer, AdversaryManifestDigest: adversaryManifest},
 		Files:    artifactFilesDTO{Status: "unavailable", Reason: "The resolver interface does not expose a per-file inventory; no file metadata was inferred.", Entries: []artifactFileDTO{}},
 	}
+}
+
+func storedArtifactDTOWithFiles(canonical, digest string, rec repository.Record, files []pack.File) artifactDTO {
+	out := storedArtifactDTO(canonical, digest, rec.Name, rec.Version, rec.ManifestDigest, rec.ConfigDigest, rec.LayerDigest, rec.AdversaryManifestDigest)
+	out.Files = artifactFilesDTO{Status: "available", Reason: "Inventory verified from the immutable OCI config.", Entries: make([]artifactFileDTO, 0, len(files))}
+	for _, f := range files {
+		out.Files.Entries = append(out.Files.Entries, artifactFileDTO{Path: f.Path, Digest: "sha256:" + f.SHA256, SizeBytes: f.Size, Mode: fmt.Sprintf("%#o", f.Mode)})
+	}
+	return out
 }
 
 type legacyRecordV0DTO struct {

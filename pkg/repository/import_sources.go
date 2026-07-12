@@ -33,6 +33,9 @@ func (r Repository) ImportSources(in SourceImport) (_ Record, retErr error) {
 		return Record{}, err
 	}
 	defer func() { retErr = errors.Join(retErr, lifecycle.Close()) }()
+	if err := r.recoverImportsLocked(); err != nil {
+		return Record{}, err
+	}
 	var configBlob, layerBlob oci.SourceBlob
 	if len(in.Blobs) != 2 {
 		return Record{}, fmt.Errorf("exactly one config and one layer source are required")

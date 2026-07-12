@@ -64,6 +64,12 @@ func (p processResolver) HasExact(value string) (bool, error) {
 func (p processResolver) Entries(limit int) ([]repository.Entry, error) {
 	return p.resolver.Repository.Entries(limit)
 }
+func (p processResolver) CanonicalReferenceFor(digest, preferred string) (string, error) {
+	return p.resolver.Repository.CanonicalReferenceFor(digest, preferred)
+}
+func (p processResolver) Inventory(record repository.Record) ([]pack.File, error) {
+	return p.resolver.Repository.Inventory(record)
+}
 func (p processResolver) PayloadSources(record repository.Record) (*repository.PayloadLease, error) {
 	return p.resolver.Repository.PayloadSources(record)
 }
@@ -265,6 +271,8 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	apiURL := snapshotEnvDefault(environment, "ADVERSARY_API_URL", adversarylabs.DefaultAPIURL)
 	host := snapshotEnvDefault(environment, "ADVERSARY_REGISTRY_HOST", adversarylabs.DefaultRegistry)
 	namespace := snapshotEnvDefault(environment, "ADVERSARY_REGISTRY_NAMESPACE", "")
+	resolver.Repository.DefaultRegistry = host
+	resolver.Repository.DefaultNamespace = namespace
 	var debug io.Writer
 	if value, ok := environment.Lookup("ADVERSARY_OCI_DEBUG"); ok && strings.TrimSpace(value) != "" {
 		debug = stderr
