@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -82,16 +81,33 @@ type processRepository struct{ repository.Repository }
 
 func (p processRepository) BindingIdentity() string { return p.RootPath() }
 
-type processRuntime struct{ resolver internaladversary.Resolver }
+type processRuntime struct {
+	resolver          internaladversary.Resolver
+	stdin             io.Reader
+	tempDir, homeDir  string
+	environment       internaladversary.ProcessEnvironment
+	resolveExecutable func(string) (string, error)
+	launcher          internaladversary.ProcessLauncher
+	timer             func(time.Duration) internaladversary.RuntimeTimer
+	git               internaladversary.GitDiffer
+	now               func() time.Time
+	node              internaladversary.NodeResolver
+	files             internaladversary.RuntimeFiles
+	dataRoot          string
+}
 
 func (p processRuntime) BindingIdentity() string { return p.resolver.Repository.RootPath() }
 func (p processRuntime) Run(ctx context.Context, opts application.AdversaryRunOptions) error {
-	r := internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
+	r := p.runner(opts)
 	return r.Run(ctx, toInternalRunOptions(opts))
 }
 func (p processRuntime) Inspect(ctx context.Context, opts application.AdversaryRunOptions) error {
-	r := internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
+	r := p.runner(opts)
 	return r.Inspect(toInternalRunOptions(opts))
+}
+func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladversary.Runner {
+	shell := func() ([]string, error) { return internaladversary.PlatformShell(p.node.LookPath) }
+	return internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: p.stdin, Git: p.git, TempDir: p.tempDir, HomeDir: p.homeDir, DataRoot: p.dataRoot, Now: p.now, Files: p.files, BuildProject: pack.BuildProject, Shell: shell, Executor: internaladversary.HostExecutor{Stdout: opts.Stderr, Stderr: opts.Stderr, Stdin: p.stdin, Environment: p.environment, ResolveExecutable: p.resolveExecutable, FindNode: p.node.Find, Shell: shell, Launcher: p.launcher, Timer: p.timer}, HostExecution: true, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
 }
 func toInternalRunOptions(opts application.AdversaryRunOptions) internaladversary.RunOptions {
 	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout}
@@ -232,6 +248,7 @@ func (processTTY) ReadSecret(ctx context.Context, r io.Reader, w io.Writer) ([]b
 }
 
 func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App, error) {
+	environment := internaladversary.NewProcessEnvironment(os.Environ(), runtime.GOOS == "windows")
 	resolver, err := internaladversary.DefaultResolver()
 	if err != nil {
 		return nil, err
@@ -241,34 +258,107 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 		return nil, err
 	}
 	configDir := filepath.Dir(store.Path)
-	apiURL := envDefault("ADVERSARY_API_URL", adversarylabs.DefaultAPIURL)
-	host := envDefault("ADVERSARY_REGISTRY_HOST", adversarylabs.DefaultRegistry)
-	namespace := envDefault("ADVERSARY_REGISTRY_NAMESPACE", "")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+	apiURL := snapshotEnvDefault(environment, "ADVERSARY_API_URL", adversarylabs.DefaultAPIURL)
+	host := snapshotEnvDefault(environment, "ADVERSARY_REGISTRY_HOST", adversarylabs.DefaultRegistry)
+	namespace := snapshotEnvDefault(environment, "ADVERSARY_REGISTRY_NAMESPACE", "")
 	var debug io.Writer
-	if value, ok := os.LookupEnv("ADVERSARY_OCI_DEBUG"); ok && strings.TrimSpace(value) != "" {
+	if value, ok := environment.Lookup("ADVERSARY_OCI_DEBUG"); ok && strings.TrimSpace(value) != "" {
 		debug = stderr
 	}
 	docker := oci.DockerCredentialStore{}
 	authStore := processAuthStore{store}
 	apiFactory := processAPIFactory{store: store}
 	registryFactory := processRegistryFactory{store: authStore, docker: docker, host: host, namespace: namespace, debug: debug, identity: store.Path}
-	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Env: dependencies.Environment{LookupFunc: os.LookupEnv}, Config: processConfig{}, Paths: processPaths{data: resolver.Repository.Root, config: configDir}, HTTP: dependencies.HTTPClient{DoFunc: http.DefaultClient.Do}, Credentials: docker, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{resolver: resolver}, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(u) }}, TTY: processTTY{}})
+	files := internaladversary.OSRuntimeFiles{}
+	pathext, _ := environment.Lookup("PATHEXT")
+	resolveExplicitExecutable, resolvePATHExecutable := executableResolvers(files, pathext)
+	lookPath := func(file string) (string, error) { return environment.LookPath(file, resolvePATHExecutable) }
+	output := internaladversary.ExecProcessOutputRunner{}
+	node := internaladversary.NodeResolver{LookupEnv: environment.Lookup, LookPath: lookPath, HomeDir: homeDir, Glob: files.Glob, ResolveExecutable: resolveExplicitExecutable, Environment: environment, Output: output}
+	gitPath, gitErr := lookPath("git")
+	git := internaladversary.CommandGitDiffer{Executable: gitPath, Environment: environment, Output: output, ResolutionError: gitErr}
+	process := processRuntime{resolver: resolver, stdin: stdin, tempDir: internalpaths.TempDir(), homeDir: homeDir, dataRoot: applicationDataRoot(resolver.Repository.Root), environment: environment, resolveExecutable: func(name string) (string, error) {
+		if filepath.IsAbs(name) {
+			return resolveExplicitExecutable(name)
+		}
+		return lookPath(name)
+	}, launcher: internaladversary.ExecProcessLauncher{}, timer: internaladversary.NewRuntimeTimer, git: git, now: time.Now, node: node, files: files}
+	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Env: dependencies.Environment{LookupFunc: environment.Lookup}, Config: processConfig{}, Paths: processPaths{data: resolver.Repository.Root, config: configDir}, HTTP: dependencies.HTTPClient{DoFunc: http.DefaultClient.Do}, Credentials: docker, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: process, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(ctx, u, environment, lookPath, output) }}, TTY: processTTY{}})
 }
 
-func envDefault(key, fallback string) string {
-	if value, ok := os.LookupEnv(key); ok && strings.TrimSpace(value) != "" {
+func executableResolvers(files internaladversary.RuntimeFiles, pathext string) (strict, fromPATH func(string) (string, error)) {
+	validate := func(path string) error { return internaladversary.ValidateExecutable(path, pathext) }
+	canonicalize := func(path string) (string, error) {
+		if !filepath.IsAbs(path) {
+			return "", fmt.Errorf("executable path %q is not absolute", path)
+		}
+		path = filepath.Clean(path)
+		canonical, err := files.EvalSymlinks(path)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(canonical) {
+			return "", fmt.Errorf("canonical executable path %q is not absolute", canonical)
+		}
+		return filepath.Clean(canonical), nil
+	}
+	strict = func(path string) (string, error) {
+		if !filepath.IsAbs(path) {
+			return "", fmt.Errorf("executable path %q is not absolute", path)
+		}
+		path = filepath.Clean(path)
+		if err := validate(path); err != nil {
+			return "", err
+		}
+		return canonicalize(path)
+	}
+	fromPATH = func(path string) (string, error) {
+		canonical, err := canonicalize(path)
+		if err != nil {
+			return "", err
+		}
+		if err := validate(canonical); err != nil {
+			return "", err
+		}
+		return canonical, nil
+	}
+	return strict, fromPATH
+}
+
+func applicationDataRoot(repositoryRoot string) string { return filepath.Dir(repositoryRoot) }
+
+func snapshotEnvDefault(environment internaladversary.ProcessEnvironment, key, fallback string) string {
+	if value, ok := environment.Lookup(key); ok && strings.TrimSpace(value) != "" {
 		return strings.TrimRight(strings.TrimSpace(value), "/")
 	}
 	return strings.TrimRight(fallback, "/")
 }
 
-func openBrowser(url string) error {
+func openBrowser(ctx context.Context, url string, environment internaladversary.ProcessEnvironment, lookPath func(string) (string, error), output internaladversary.ProcessOutputRunner) error {
+	var name string
+	var args []string
 	switch runtime.GOOS {
 	case "darwin":
-		return exec.Command("open", url).Start()
+		name, args = "open", []string{url}
 	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+		name, args = "rundll32", []string{"url.dll,FileProtocolHandler", url}
 	default:
-		return exec.Command("xdg-open", url).Start()
+		name, args = "xdg-open", []string{url}
 	}
+	executable, err := lookPath(name)
+	if err != nil {
+		return fmt.Errorf("resolve browser launcher: %w", err)
+	}
+	_, stderr, err := output.RunOutput(ctx, internaladversary.ProcessOutputOptions{Path: executable, Args: args, Env: environment.Entries(nil)})
+	if err != nil {
+		if detail := strings.TrimSpace(string(stderr)); detail != "" {
+			return fmt.Errorf("open browser: %s", detail)
+		}
+		return fmt.Errorf("open browser: %w", err)
+	}
+	return nil
 }

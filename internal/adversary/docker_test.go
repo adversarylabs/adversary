@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -13,6 +14,29 @@ import (
 
 	semver "github.com/Masterminds/semver/v3"
 )
+
+type completedRuntimeProcess struct{}
+
+func (completedRuntimeProcess) PID() int    { return 0 }
+func (completedRuntimeProcess) Wait() error { return nil }
+func (completedRuntimeProcess) Kill() error { return nil }
+
+type recordingProcessLauncher struct{ options ProcessLaunchOptions }
+
+func (l *recordingProcessLauncher) Start(options ProcessLaunchOptions) (RunningProcess, error) {
+	l.options = options
+	return completedRuntimeProcess{}, nil
+}
+
+type recordingOutputRunner struct {
+	options ProcessOutputOptions
+	stdout  []byte
+}
+
+func (r *recordingOutputRunner) RunOutput(_ context.Context, options ProcessOutputOptions) ([]byte, []byte, error) {
+	r.options = options
+	return append([]byte(nil), r.stdout...), nil, nil
+}
 
 func TestHostExecutorRejectsNetworkRestriction(t *testing.T) {
 	result, err := (HostExecutor{}).Run(context.Background(), ContainerSpec{NetworkDisabled: true, Command: []string{"true"}})
@@ -44,6 +68,88 @@ func TestHostExecutorArgsUseCommandAndEnvironment(t *testing.T) {
 	}
 	if len(spec.Command) != 2 || spec.Command[0] != "node" {
 		t.Fatalf("unexpected host command: %#v", spec.Command)
+	}
+}
+
+func TestHostExecutorResolvesNamedProcessFromCapturedEnvironment(t *testing.T) {
+	captured, hostile := t.TempDir(), t.TempDir()
+	environment := NewProcessEnvironment([]string{"PATH=" + captured, "MARKER=captured"}, false)
+	t.Setenv("PATH", hostile)
+	launcher := &recordingProcessLauncher{}
+	resolved := filepath.Join(captured, "scanner")
+	executor := HostExecutor{
+		Environment: environment,
+		ResolveExecutable: func(name string) (string, error) {
+			if name != "scanner" {
+				t.Fatalf("resolver input = %q", name)
+			}
+			return resolved, nil
+		},
+		Launcher: launcher,
+	}
+	if _, err := executor.Run(context.Background(), ContainerSpec{RuntimeName: "process", Command: []string{"scanner", "--check"}, AdversaryPath: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if launcher.options.Path != resolved || len(launcher.options.Args) != 1 || launcher.options.Args[0] != "--check" {
+		t.Fatalf("launch options = %#v", launcher.options)
+	}
+	joined := strings.Join(launcher.options.Env, "\n")
+	if !strings.Contains(joined, "PATH="+captured) || strings.Contains(joined, hostile) || !strings.Contains(joined, "MARKER=captured") {
+		t.Fatalf("launch environment = %#v", launcher.options.Env)
+	}
+}
+
+func TestNodeVersionProbeUsesCapturedEnvironment(t *testing.T) {
+	captured, hostile := t.TempDir(), t.TempDir()
+	node := filepath.Join(captured, "node")
+	environment := NewProcessEnvironment([]string{"PATH=" + hostile, "PATH=" + captured, "NODE_PROBE=captured"}, false)
+	t.Setenv("PATH", hostile)
+	output := &recordingOutputRunner{stdout: []byte("v22.4.0\n")}
+	resolver := NodeResolver{
+		LookupEnv: environment.Lookup,
+		LookPath: func(name string) (string, error) {
+			if name != "node" {
+				t.Fatalf("lookup = %q", name)
+			}
+			return node, nil
+		},
+		HomeDir:           t.TempDir(),
+		Glob:              func(string) ([]string, error) { return nil, nil },
+		ResolveExecutable: func(path string) (string, error) { return path, nil },
+		Environment:       environment,
+		Output:            output,
+	}
+	got, err := resolver.Find(context.Background(), "22")
+	if err != nil || got != node {
+		t.Fatalf("Find = %q, %v", got, err)
+	}
+	if output.options.Path != node || !reflect.DeepEqual(output.options.Args, []string{"--version"}) {
+		t.Fatalf("probe options = %#v", output.options)
+	}
+	joined := strings.Join(output.options.Env, "\n")
+	if !strings.Contains(joined, "PATH="+captured) || strings.Contains(joined, "PATH="+hostile) || !strings.Contains(joined, "NODE_PROBE=captured") {
+		t.Fatalf("probe environment = %#v", output.options.Env)
+	}
+}
+
+func TestNodeResolverFailsClosedOnUnsafeCapturedPATH(t *testing.T) {
+	environment := NewProcessEnvironment([]string{"PATH=relative"}, false)
+	resolver := NodeResolver{
+		LookupEnv: environment.Lookup,
+		LookPath: func(name string) (string, error) {
+			return environment.LookPath(name, func(candidate string) (string, error) { return candidate, nil })
+		},
+		HomeDir: t.TempDir(),
+		Glob: func(string) ([]string, error) {
+			t.Fatal("unsafe PATH fell through to conventional runtime discovery")
+			return nil, nil
+		},
+		ResolveExecutable: func(path string) (string, error) { return path, nil },
+		Environment:       environment,
+		Output:            &recordingOutputRunner{stdout: []byte("v22.4.0\n")},
+	}
+	if _, err := resolver.Find(context.Background(), "22"); !errors.Is(err, ErrUnsafeCapturedPATH) {
+		t.Fatalf("error = %v", err)
 	}
 }
 

@@ -2,10 +2,9 @@ package adversary
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -21,9 +20,20 @@ type ContainerExecutor interface {
 }
 
 type HostExecutor struct {
-	Stdout io.Writer
-	Stderr io.Writer
-	Stdin  io.Reader
+	Stdout            io.Writer
+	Stderr            io.Writer
+	Stdin             io.Reader
+	Environment       ProcessEnvironment
+	ResolveExecutable func(string) (string, error)
+	FindNode          func(context.Context, string) (string, error)
+	Shell             func() ([]string, error)
+	Launcher          ProcessLauncher
+	Timer             func(time.Duration) RuntimeTimer
+}
+
+type RuntimeTimer interface {
+	C() <-chan time.Time
+	Stop() bool
 }
 
 type ContainerSpec struct {
@@ -74,7 +84,10 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 	command := spec.Command
 	if spec.Shell {
 		var err error
-		command, err = platformShell()
+		if e.Shell == nil {
+			return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host shell dependency is required")
+		}
+		command, err = e.Shell()
 		if err != nil {
 			return ContainerResult{ExitCode: -1, Kind: "Process"}, err
 		}
@@ -83,28 +96,44 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution command is empty")
 	}
 	if command[0] == "node" {
-		node, err := findNode(spec.RuntimeVersion)
+		find := e.FindNode
+		if find == nil {
+			return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution Node.js resolver dependency is required")
+		}
+		node, err := find(ctx, spec.RuntimeVersion)
 		if err != nil {
 			return ContainerResult{ExitCode: -1, Kind: "Process"}, err
 		}
 		command = append([]string{node}, command[1:]...)
 	}
-	cmd := exec.Command(command[0], command[1:]...)
-	configureProcess(cmd)
-	cmd.Dir = spec.AdversaryPath
-	cmd.Stdout = e.Stdout
-	cmd.Stderr = e.Stderr
-	cmd.Stdin = e.Stdin
-	cmd.Env = os.Environ()
-	for _, key := range sortedEnvKeys(spec.Env) {
-		cmd.Env = append(cmd.Env, key+"="+spec.Env[key])
+	resolve := e.ResolveExecutable
+	if resolve == nil {
+		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution executable resolver dependency is required")
 	}
-	if err := cmd.Start(); err != nil {
+	executable := command[0]
+	if !filepath.IsAbs(executable) && strings.ContainsAny(executable, `/\\`) {
+		executable = filepath.Join(spec.AdversaryPath, executable)
+	}
+	executable, err := resolve(executable)
+	if err != nil {
+		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("resolve host executable %q: %w", command[0], err)
+	}
+	if !filepath.IsAbs(executable) {
+		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("resolved host executable %q is not absolute", executable)
+	}
+	if e.Launcher == nil {
+		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution process launcher dependency is required")
+	}
+	if err := ctx.Err(); err != nil {
 		return ContainerResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
 	}
-	group := supervisedProcessGroup(cmd)
+	process, err := e.Launcher.Start(ProcessLaunchOptions{Path: executable, Args: command[1:], Dir: spec.AdversaryPath, Stdout: e.Stdout, Stderr: e.Stderr, Stdin: e.Stdin, Env: e.Environment.Entries(spec.Env)})
+	if err != nil {
+		return ContainerResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
+	}
+	group := supervisedProcessGroup(process)
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() { done <- process.Wait() }()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -113,61 +142,85 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 		}
 		return ContainerResult{ExitCode: 0, Kind: "Process"}, nil
 	case <-ctx.Done():
-		requestProcessTermination(cmd, group)
-		timer := time.NewTimer(750 * time.Millisecond)
-		var err error
+		requestProcessTermination(process, group)
+		var waitErr error
 		reaped := false
-		select {
-		case err = <-done:
+		if processGroupNeedsGrace(group) {
+			if e.Timer == nil {
+				killProcessTree(process, group)
+				waitErr = <-done
+				return ContainerResult{ExitCode: exitCode(waitErr), Kind: "Process"}, fmt.Errorf("host execution grace timer dependency is required")
+			}
+			timer := e.Timer(750 * time.Millisecond)
+			for timer != nil {
+				select {
+				case waitErr = <-done:
+					reaped = true
+					done = nil
+				case <-timer.C():
+					timer = nil
+				}
+			}
+		} else {
+			waitErr = <-done
 			reaped = true
-			<-timer.C
-		case <-timer.C:
 		}
-		killProcessTree(cmd, group)
+		killProcessTree(process, group)
 		if !reaped {
-			err = <-done
+			waitErr = <-done
 		}
-		code := exitCode(err)
+		code := exitCode(waitErr)
 		return ContainerResult{ExitCode: code, Kind: "Process"}, &ChildExitError{ExitCode: code, Err: ctx.Err()}
 	}
 }
 
-func findNode(version string) (string, error) {
+type NodeResolver struct {
+	LookupEnv         func(string) (string, bool)
+	LookPath          func(string) (string, error)
+	HomeDir           string
+	Glob              func(string) ([]string, error)
+	ResolveExecutable func(string) (string, error)
+	Environment       ProcessEnvironment
+	Output            ProcessOutputRunner
+}
+
+func (r NodeResolver) Find(ctx context.Context, version string) (string, error) {
+	if r.LookupEnv == nil || r.LookPath == nil || r.HomeDir == "" || r.Glob == nil || r.ResolveExecutable == nil || r.Output == nil {
+		return "", fmt.Errorf("Node.js resolver dependencies are incomplete")
+	}
 	constraint, err := nodeConstraint(version)
 	if err != nil {
 		return "", fmt.Errorf("invalid Node.js runtime requirement %q: %w", version, err)
 	}
-	if override := strings.TrimSpace(os.Getenv("ADVERSARY_NODE_PATH")); override != "" {
-		override, err = filepath.Abs(override)
+	if override, ok := r.LookupEnv("ADVERSARY_NODE_PATH"); ok && strings.TrimSpace(override) != "" {
+		requested := strings.TrimSpace(override)
+		override, err = r.ResolveExecutable(requested)
 		if err != nil {
-			return "", fmt.Errorf("resolve ADVERSARY_NODE_PATH: %w", err)
+			return "", fmt.Errorf("ADVERSARY_NODE_PATH %q: %w", requested, err)
 		}
-		if err := validateExecutable(override); err != nil {
-			return "", fmt.Errorf("ADVERSARY_NODE_PATH %q: %w", override, err)
-		}
-		if err := nodeSatisfies(override, constraint); err != nil {
+		if err := r.nodeSatisfies(ctx, override, constraint); err != nil {
 			return "", fmt.Errorf("ADVERSARY_NODE_PATH %q: %w", override, err)
 		}
 		return override, nil
 	}
-	if path, err := exec.LookPath("node"); err == nil {
-		if validateExecutable(path) == nil && nodeSatisfies(path, constraint) == nil {
+	if path, pathErr := r.LookPath("node"); pathErr == nil {
+		if r.nodeSatisfies(ctx, path, constraint) == nil {
 			return path, nil
 		}
+	} else if errors.Is(pathErr, ErrUnsafeCapturedPATH) {
+		return "", fmt.Errorf("resolve Node.js from captured PATH: %w", pathErr)
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	matches, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", "node"))
+	home := r.HomeDir
+	matches, _ := r.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", "node"))
 	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
 	candidates := append(matches,
 		filepath.Join(home, ".volta", "bin", "node"),
 		filepath.Join(home, ".asdf", "shims", "node"),
 	)
 	for _, candidate := range candidates {
-		if validateExecutable(candidate) == nil && nodeSatisfies(candidate, constraint) == nil {
-			return candidate, nil
+		resolved, resolveErr := r.ResolveExecutable(candidate)
+		if resolveErr == nil && r.nodeSatisfies(ctx, resolved, constraint) == nil {
+			return resolved, nil
 		}
 	}
 	if version != "" {
@@ -176,13 +229,16 @@ func findNode(version string) (string, error) {
 	return "", fmt.Errorf("host execution failed: Node.js was not found; install Node.js or set ADVERSARY_NODE_PATH")
 }
 
-func nodeSatisfies(path string, constraint *semver.Constraints) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (r NodeResolver) nodeSatisfies(parent context.Context, path string, constraint *semver.Constraints) error {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	out, stderr, err := r.Output.RunOutput(ctx, ProcessOutputOptions{Path: path, Args: []string{"--version"}, Env: r.Environment.Entries(nil)})
 	if err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("query Node.js version: %w", ctx.Err())
+		}
+		if detail := strings.TrimSpace(string(stderr)); detail != "" {
+			return fmt.Errorf("query Node.js version: %s", detail)
 		}
 		return fmt.Errorf("query Node.js version: %w", err)
 	}
@@ -230,7 +286,8 @@ func sortedEnvKeys(env map[string]string) []string {
 }
 
 func exitCode(err error) int {
-	if exitErr, ok := err.(*exec.ExitError); ok {
+	var exitErr interface{ ExitCode() int }
+	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode()
 	}
 	return -1

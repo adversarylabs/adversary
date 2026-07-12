@@ -340,9 +340,10 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 
 	executor := &recordingExecutor{}
 	err := Runner{
-		Stdout:   &strings.Builder{},
-		Stderr:   &strings.Builder{},
-		Executor: executor,
+		Stdout:       &strings.Builder{},
+		Stderr:       &strings.Builder{},
+		Executor:     executor,
+		BuildProject: pack.BuildProject,
 	}.Run(context.Background(), RunOptions{
 		AdversaryRef: adversaryDir,
 		RepoPath:     t.TempDir(),
@@ -544,8 +545,9 @@ writeFileSync(process.env.ADVERSARY_OUTPUT, JSON.stringify(output, null, 2));
 
 	var stdout strings.Builder
 	err := Runner{
-		Stdout: &stdout,
-		Stderr: &strings.Builder{},
+		Stdout:   &stdout,
+		Stderr:   &strings.Builder{},
+		Executor: systemHostExecutorForTest(nil, &strings.Builder{}, &strings.Builder{}),
 	}.Run(context.Background(), RunOptions{
 		AdversaryRef: adversaryDir,
 		RepoPath:     repoDir,
@@ -618,8 +620,9 @@ writeFileSync(process.env.ADVERSARY_OUTPUT, JSON.stringify({
 
 	var stdout strings.Builder
 	err := Runner{
-		Stdout: &stdout,
-		Stderr: &strings.Builder{},
+		Stdout:   &stdout,
+		Stderr:   &strings.Builder{},
+		Executor: systemHostExecutorForTest(nil, &strings.Builder{}, &strings.Builder{}),
 	}.Run(context.Background(), RunOptions{
 		AdversaryRef: adversaryDir,
 		RepoPath:     t.TempDir(),

@@ -56,7 +56,7 @@ func TestExecutableCandidateRejectsDirectoryAndSymlinks(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "directory"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateExecutable(filepath.Join(root, "directory")); err == nil || !strings.Contains(err.Error(), "regular") {
+	if err := ValidateExecutable(filepath.Join(root, "directory"), ""); err == nil || !strings.Contains(err.Error(), "regular") {
 		t.Fatalf("directory error = %v", err)
 	}
 	target := filepath.Join(root, "node-real")
@@ -65,19 +65,19 @@ func TestExecutableCandidateRejectsDirectoryAndSymlinks(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateExecutable(link); err == nil || !strings.Contains(err.Error(), "symlink component") {
+	if err := ValidateExecutable(link, ""); err == nil || !strings.Contains(err.Error(), "symlink component") {
 		t.Fatalf("final symlink error = %v", err)
 	}
 	parentLink := filepath.Join(realTempDir(t), "bin-link")
 	if err := os.Symlink(root, parentLink); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateExecutable(filepath.Join(parentLink, "node-real")); err == nil || !strings.Contains(err.Error(), "symlink component") {
+	if err := ValidateExecutable(filepath.Join(parentLink, "node-real"), ""); err == nil || !strings.Contains(err.Error(), "symlink component") {
 		t.Fatalf("parent symlink error = %v", err)
 	}
 }
 
-func TestFindNodeRejectsSymlinkPATHCandidate(t *testing.T) {
+func TestFindNodeExecutesCanonicalTargetFromCapturedPATHSymlink(t *testing.T) {
 	bin := realTempDir(t)
 	target := filepath.Join(realTempDir(t), "node-real")
 	writeNodeCandidate(t, target, 0755)
@@ -85,7 +85,22 @@ func TestFindNodeRejectsSymlinkPATHCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	isolatedNodeSearch(t, bin)
-	if got, err := findNode("22"); err == nil || got != "" {
-		t.Fatalf("findNode = %q, %v", got, err)
+	if got, err := findNode("22"); err != nil || got != target {
+		t.Fatalf("findNode = %q, %v; want canonical target %q", got, err, target)
+	}
+}
+
+func TestFindNodeRejectsExplicitSymlinkOverride(t *testing.T) {
+	root := realTempDir(t)
+	target := filepath.Join(root, "node-real")
+	writeNodeCandidate(t, target, 0755)
+	link := filepath.Join(root, "node-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	isolatedNodeSearch(t, realTempDir(t))
+	t.Setenv("ADVERSARY_NODE_PATH", link)
+	if got, err := findNode("22"); err == nil || got != "" || !strings.Contains(err.Error(), "symlink component") {
+		t.Fatalf("findNode explicit symlink = %q, %v", got, err)
 	}
 }

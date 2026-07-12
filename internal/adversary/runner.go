@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -60,16 +60,26 @@ func (e *ExecutionError) Unwrap() error { return e.Err }
 type Runner struct {
 	Stdout                  io.Writer
 	Stderr                  io.Writer
+	Stdin                   io.Reader
 	Git                     GitDiffer
 	Executor                ContainerExecutor
+	HostExecution           bool
 	MkdirTemp               func(dir, pattern string) (string, error)
 	RemoveAll               func(string) error
+	TempDir                 string
+	HomeDir                 string
+	DataRoot                string
+	Now                     func() time.Time
+	Files                   RuntimeFiles
+	BuildProject            func(context.Context, pack.BuildOptions) error
+	Shell                   func() ([]string, error)
 	Repository              *repository.Repository
 	Resolver                *Resolver
 	RequireInjectedResolver bool
 }
 
 func (r Runner) Run(ctx context.Context, opts RunOptions) error {
+	files := r.runtimeFiles()
 	stdout := r.Stdout
 	if stdout == nil {
 		stdout = io.Discard
@@ -80,27 +90,24 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	}
 
 	git := r.Git
-	if git == nil {
-		git = CommandGitDiffer{}
-	}
 
 	executor := r.Executor
 	if executor == nil {
-		executor = HostExecutor{Stdout: stderr, Stderr: stderr, Stdin: os.Stdin}
+		executor = HostExecutor{Stdout: stderr, Stderr: stderr, Stdin: r.Stdin}
 	}
 
 	mkdirTemp := r.MkdirTemp
 	if mkdirTemp == nil {
-		mkdirTemp = os.MkdirTemp
+		mkdirTemp = files.MkdirTemp
 	}
 
-	explicitLocalPath, err := isExplicitLocalAdversaryPath(opts.AdversaryRef)
+	explicitLocalPath, err := r.isExplicitLocalAdversaryPath(opts.AdversaryRef)
 	if err != nil {
 		return err
 	}
 	var resolved ResolvedAdversary
 	if r.Resolver != nil {
-		resolved, err = ResolveReferenceWithResolver(opts.AdversaryRef, *r.Resolver)
+		resolved, err = ResolveReferenceWithRuntime(opts.AdversaryRef, *r.Resolver, files)
 	} else if r.RequireInjectedResolver {
 		return fmt.Errorf("injected resolver is required")
 	} else {
@@ -130,7 +137,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		resolved.BuildContext = lease.Path
 		resolved.StorePath = lease.Path
 	}
-	if r.Executor == nil {
+	if r.Executor == nil || r.HostExecution {
 		if err := validateHostExecution(resolved, explicitLocalPath, opts); err != nil {
 			return err
 		}
@@ -140,7 +147,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	if repoPath == "" {
 		repoPath = "."
 	}
-	repoPath, err = filepath.Abs(repoPath)
+	repoPath, err = files.Abs(repoPath)
 	if err != nil {
 		return err
 	}
@@ -154,6 +161,9 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	if opts.BaseRef != "" || opts.HeadRef != "" {
 		if opts.BaseRef == "" || opts.HeadRef == "" {
 			return fmt.Errorf("--base and --head must be provided together")
+		}
+		if git == nil {
+			return fmt.Errorf("Git differ dependency is required for --base/--head")
 		}
 		changedFiles, err = git.ChangedFiles(ctx, repoPath, opts.BaseRef, opts.HeadRef)
 		if err != nil {
@@ -187,16 +197,24 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		}
 	}
 
-	started := time.Now()
+	now := r.Now
+	if now == nil {
+		now = func() time.Time { return time.Time{} }
+	}
+	started := now()
 	var buildDuration time.Duration
 	if resolved.LocalDir && !resolved.StoreBacked && opts.Build {
-		buildStarted := time.Now()
+		buildProject := r.BuildProject
+		if buildProject == nil {
+			return fmt.Errorf("build project dependency is required")
+		}
+		buildStarted := now()
 		buildCtx := ctx
 		cancelBuild := func() {}
 		if opts.BuildTimeout > 0 {
 			buildCtx, cancelBuild = context.WithTimeout(ctx, opts.BuildTimeout)
 		}
-		if err := pack.BuildProject(buildCtx, pack.BuildOptions{
+		if err := buildProject(buildCtx, pack.BuildOptions{
 			Dir:     resolved.BuildContext,
 			Builder: opts.Builder,
 			Stdout:  stderr,
@@ -207,10 +225,10 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			return err
 		}
 		cancelBuild()
-		buildDuration = time.Since(buildStarted)
+		buildDuration = now().Sub(buildStarted)
 	}
-	if r.Executor == nil && resolved.LocalDir && !resolved.StoreBacked {
-		if err := validateLocalCommandFiles(resolved.Command); err != nil {
+	if (r.Executor == nil || r.HostExecution) && resolved.LocalDir && !resolved.StoreBacked {
+		if err := validateLocalCommandFiles(files, resolved.Command); err != nil {
 			if !opts.Build {
 				return fmt.Errorf("local build output is unavailable or stale; rerun with --build: %w", err)
 			}
@@ -218,14 +236,14 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		}
 	}
 
-	runDir, err := mkdirTemp(os.TempDir(), "adversary-run-*")
+	runDir, err := mkdirTemp(r.TempDir, "adversary-run-*")
 	if err != nil {
 		return err
 	}
 	if !opts.KeepTemp {
 		removeAll := r.RemoveAll
 		if removeAll == nil {
-			removeAll = os.RemoveAll
+			removeAll = files.RemoveAll
 		}
 		defer func() {
 			if err := removeAll(runDir); err != nil && opts.Verbose {
@@ -241,12 +259,12 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	inputPath := filepath.Join(runDir, "input.json")
-	if err := os.WriteFile(inputPath, inputData, 0644); err != nil {
+	if err := files.WriteFile(inputPath, inputData, 0644); err != nil {
 		return err
 	}
 
 	outputPath := filepath.Join(runDir, "output.json")
-	if err := os.WriteFile(outputPath, nil, 0644); err != nil {
+	if err := files.WriteFile(outputPath, nil, 0644); err != nil {
 		return err
 	}
 	if resolved.LocalDir {
@@ -256,9 +274,9 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	}
 
 	if opts.Verbose {
-		PrintVerboseLaunch(stderr, config)
+		printVerboseLaunch(stderr, config, files.ReadDir)
 	}
-	runStarted := time.Now()
+	runStarted := now()
 	runCtx := ctx
 	cancelRun := func() {}
 	if opts.RunTimeout > 0 {
@@ -266,8 +284,8 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	}
 	result, err := executor.Run(runCtx, config.ContainerSpec())
 	cancelRun()
-	scanDuration := time.Since(runStarted)
-	totalDuration := time.Since(started)
+	scanDuration := now().Sub(runStarted)
+	totalDuration := now().Sub(started)
 	if opts.Verbose {
 		printExecutionSummary(stderr, result, buildDuration, scanDuration, totalDuration)
 	}
@@ -289,7 +307,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		return nil
 	}
 
-	outputData, err := readBoundedRunOutput(outputPath)
+	outputData, err := readBoundedRunOutput(files, outputPath)
 	if err != nil {
 		return err
 	}
@@ -320,32 +338,33 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	return nil
 }
 
-func isExplicitLocalAdversaryPath(ref string) (bool, error) {
-	info, err := os.Stat(filepath.Join(ref, "adversary.yaml"))
+func (r Runner) isExplicitLocalAdversaryPath(ref string) (bool, error) {
+	files := r.runtimeFiles()
+	info, err := files.Stat(filepath.Join(ref, "adversary.yaml"))
 	if err != nil || info.IsDir() {
 		return false, nil
 	}
-	candidate, err := filepath.Abs(ref)
+	candidate, err := files.Abs(ref)
 	if err != nil {
 		return false, fmt.Errorf("classify adversary path: %w", err)
 	}
-	canonicalCandidate, err := filepath.EvalSymlinks(candidate)
+	canonicalCandidate, err := files.EvalSymlinks(candidate)
 	if err != nil {
 		return false, fmt.Errorf("classify adversary path safely: %w", err)
 	}
-	roots, err := artifactStorageRoots()
+	roots, err := r.artifactStorageRoots()
 	if err != nil {
 		return false, err
 	}
 	for _, root := range roots {
-		absoluteRoot, err := filepath.Abs(root)
+		absoluteRoot, err := files.Abs(root)
 		if err != nil {
 			return false, fmt.Errorf("classify artifact storage root: %w", err)
 		}
 		if pathWithin(candidate, absoluteRoot) {
 			return false, nil
 		}
-		canonicalRoot, err := filepath.EvalSymlinks(absoluteRoot)
+		canonicalRoot, err := files.EvalSymlinks(absoluteRoot)
 		if err == nil && pathWithin(canonicalCandidate, canonicalRoot) {
 			return false, nil
 		}
@@ -353,19 +372,20 @@ func isExplicitLocalAdversaryPath(ref string) (bool, error) {
 	return true, nil
 }
 
-func artifactStorageRoots() ([]string, error) {
-	dataRoot, err := resolverDataRoot()
-	if err != nil {
-		return nil, fmt.Errorf("locate unified artifact repository: %w", err)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("locate retired artifact cache: %w", err)
-	}
+func (r Runner) artifactStorageRoots() ([]string, error) {
+	dataRoot := r.DataRoot
+	home := r.HomeDir
 	// Classify the whole data root as artifact-controlled, not just the unified
 	// repository subtree. This preserves the host-execution boundary for paths
 	// left by retired stores without consulting those stores at runtime.
-	return []string{dataRoot, filepath.Join(home, ".adversary", "cache")}, nil
+	roots := []string{}
+	if dataRoot != "" {
+		roots = append(roots, dataRoot)
+	}
+	if home != "" {
+		roots = append(roots, filepath.Join(home, ".adversary", "cache"))
+	}
+	return roots, nil
 }
 
 func pathWithin(path, root string) bool {
@@ -395,8 +415,8 @@ func validateHostExecution(resolved ResolvedAdversary, explicitLocalPath bool, o
 	return nil
 }
 
-func readBoundedRunOutput(path string) ([]byte, error) {
-	file, err := os.Open(path)
+func readBoundedRunOutput(files RuntimeFiles, path string) ([]byte, error) {
+	file, err := files.Open(path)
 	if err != nil {
 		return nil, &ProtocolError{Err: err}
 	}
@@ -414,10 +434,10 @@ func readBoundedRunOutput(path string) ([]byte, error) {
 	return data, nil
 }
 
-func validateLocalCommandFiles(command []string) error {
+func validateLocalCommandFiles(files RuntimeFiles, command []string) error {
 	for _, part := range command {
 		if filepath.IsAbs(part) && strings.HasSuffix(part, ".js") {
-			if info, err := os.Stat(part); err != nil {
+			if info, err := files.Stat(part); err != nil {
 				return fmt.Errorf("local adversary command file %s was not found; run npm install and npm run build, or pack the adversary first", part)
 			} else if info.IsDir() {
 				return fmt.Errorf("local adversary command file %s is a directory", part)
@@ -428,6 +448,7 @@ func validateLocalCommandFiles(command []string) error {
 }
 
 func (r Runner) Inspect(opts RunOptions) error {
+	files := r.runtimeFiles()
 	stdout := r.Stdout
 	if stdout == nil {
 		stdout = io.Discard
@@ -436,7 +457,7 @@ func (r Runner) Inspect(opts RunOptions) error {
 	var resolved ResolvedAdversary
 	var err error
 	if r.Resolver != nil {
-		resolved, err = ResolveReferenceWithResolver(opts.AdversaryRef, *r.Resolver)
+		resolved, err = ResolveReferenceWithRuntime(opts.AdversaryRef, *r.Resolver, files)
 	} else if r.RequireInjectedResolver {
 		return fmt.Errorf("injected resolver is required")
 	} else {
@@ -449,14 +470,21 @@ func (r Runner) Inspect(opts RunOptions) error {
 	if repoPath == "" {
 		repoPath = "."
 	}
-	repoPath, err = filepath.Abs(repoPath)
+	repoPath, err = files.Abs(repoPath)
 	if err != nil {
 		return err
 	}
 
-	config := NewRunConfig(resolved, repoPath, filepath.Join(os.TempDir(), "adversary-run"), opts)
-	PrintInspect(stdout, opts.AdversaryRef, config)
+	config := NewRunConfig(resolved, repoPath, filepath.Join(r.TempDir, "adversary-run"), opts)
+	printInspect(stdout, opts.AdversaryRef, config, files.ReadDir, r.Shell)
 	return nil
+}
+
+func (r Runner) runtimeFiles() RuntimeFiles {
+	if r.Files != nil {
+		return r.Files
+	}
+	return OSRuntimeFiles{}
 }
 
 type RunConfig struct {
@@ -525,6 +553,9 @@ func PrintVerboseLoad(w io.Writer, ref string, resolved ResolvedAdversary) {
 }
 
 func PrintVerboseLaunch(w io.Writer, config RunConfig) {
+	printVerboseLaunch(w, config, OSRuntimeFiles{}.ReadDir)
+}
+func printVerboseLaunch(w io.Writer, config RunConfig, readDir func(string) ([]fs.DirEntry, error)) {
 	fmt.Fprintln(w, "Launching adversary")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Command:")
@@ -539,11 +570,14 @@ func PrintVerboseLaunch(w io.Writer, config RunConfig) {
 	fmt.Fprintln(w)
 	PrintEnvironment(w, config.Env)
 	fmt.Fprintln(w)
-	PrintRepositoryContents(w, config.RepoPath)
+	printRepositoryContents(w, config.RepoPath, readDir)
 	fmt.Fprintln(w)
 }
 
 func PrintInspect(w io.Writer, ref string, config RunConfig) {
+	printInspect(w, ref, config, OSRuntimeFiles{}.ReadDir, nil)
+}
+func printInspect(w io.Writer, ref string, config RunConfig, readDir func(string) ([]fs.DirEntry, error), shell func() ([]string, error)) {
 	resolved := config.Resolved
 	fmt.Fprintln(w, "Adversary")
 	fmt.Fprintln(w)
@@ -572,14 +606,18 @@ func PrintInspect(w io.Writer, ref string, config RunConfig) {
 	fmt.Fprintln(w, "  Host:")
 	fmt.Fprintf(w, "    %s\n", config.RepoPath)
 	fmt.Fprintln(w)
-	PrintRepositoryContents(w, config.RepoPath)
+	printRepositoryContents(w, config.RepoPath, readDir)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Command")
 	fmt.Fprintln(w)
 	command := resolved.Command
 	if config.Options.Shell {
-		if shell, err := platformShell(); err == nil {
-			command = shell
+		if shell != nil {
+			if value, err := shell(); err == nil {
+				command = value
+			} else {
+				command = []string{"<host shell unavailable>"}
+			}
 		} else {
 			command = []string{"<host shell unavailable>"}
 		}
@@ -604,9 +642,12 @@ func PrintEnvironment(w io.Writer, env map[string]string) {
 }
 
 func PrintRepositoryContents(w io.Writer, repoPath string) {
+	printRepositoryContents(w, repoPath, OSRuntimeFiles{}.ReadDir)
+}
+func printRepositoryContents(w io.Writer, repoPath string, readDir func(string) ([]fs.DirEntry, error)) {
 	fmt.Fprintln(w, "Repository contents")
 	fmt.Fprintln(w)
-	entries, err := RepositoryContents(repoPath)
+	entries, err := repositoryContents(repoPath, readDir)
 	if err != nil {
 		fmt.Fprintf(w, "  error: %v\n", err)
 		return
@@ -617,7 +658,10 @@ func PrintRepositoryContents(w io.Writer, repoPath string) {
 }
 
 func RepositoryContents(repoPath string) ([]string, error) {
-	entries, err := os.ReadDir(repoPath)
+	return repositoryContents(repoPath, OSRuntimeFiles{}.ReadDir)
+}
+func repositoryContents(repoPath string, readDir func(string) ([]fs.DirEntry, error)) ([]string, error) {
+	entries, err := readDir(repoPath)
 	if err != nil {
 		return nil, err
 	}

@@ -2,7 +2,7 @@ package adversary
 
 import (
 	"errors"
-	"os"
+	"io"
 	"path/filepath"
 	"strings"
 
@@ -17,28 +17,36 @@ type Permissions = canonical.Permissions
 type FilesystemPermissions = canonical.FilesystemPermissions
 type Findings = canonical.Findings
 
-func LoadManifest(path string) (Manifest, error) {
-	return canonical.Load(path)
-}
-
 func parseManifest(data []byte) (Manifest, error) {
 	return canonical.Parse(data)
 }
 
-func ResolveReference(ref string) (ResolvedAdversary, error) {
-	return resolveReference(ref, nil)
+func ResolveReferenceWithRuntime(ref string, resolver Resolver, files RuntimeFiles) (ResolvedAdversary, error) {
+	if files == nil {
+		return ResolvedAdversary{}, errors.New("runtime filesystem dependency is required")
+	}
+	return resolveReference(ref, &resolver, files)
 }
-func ResolveReferenceWithResolver(ref string, resolver Resolver) (ResolvedAdversary, error) {
-	return resolveReference(ref, &resolver)
-}
-func resolveReference(ref string, resolver *Resolver) (ResolvedAdversary, error) {
+func resolveReference(ref string, resolver *Resolver, files RuntimeFiles) (ResolvedAdversary, error) {
 	manifestPath := filepath.Join(ref, "adversary.yaml")
-	if info, err := os.Stat(manifestPath); err == nil && !info.IsDir() {
-		buildContext, err := filepath.Abs(ref)
+	if info, err := files.Stat(manifestPath); err == nil && !info.IsDir() {
+		buildContext, err := files.Abs(ref)
 		if err != nil {
 			return ResolvedAdversary{}, err
 		}
-		manifest, err := LoadManifest(manifestPath)
+		manifestFile, err := files.Open(manifestPath)
+		if err != nil {
+			return ResolvedAdversary{}, err
+		}
+		manifestData, readErr := io.ReadAll(io.LimitReader(manifestFile, canonical.MaxSize+1))
+		closeErr := manifestFile.Close()
+		if readErr != nil {
+			return ResolvedAdversary{}, readErr
+		}
+		if closeErr != nil {
+			return ResolvedAdversary{}, closeErr
+		}
+		manifest, err := parseManifest(manifestData)
 		if err != nil {
 			return ResolvedAdversary{}, err
 		}
@@ -71,7 +79,7 @@ func resolveReference(ref string, resolver *Resolver) (ResolvedAdversary, error)
 		resolver = &defaultResolver
 	}
 	if resolution, resolveErr := resolver.Resolve(ref); resolveErr == nil && !resolution.Local {
-		resolved, err := resolveReference(resolution.Path, resolver)
+		resolved, err := resolveReference(resolution.Path, resolver, files)
 		if err != nil {
 			return ResolvedAdversary{}, err
 		}

@@ -16,14 +16,14 @@ func TestValidateExecutableUsesPATHEXT(t *testing.T) {
 	if err := os.WriteFile(exe, []byte("test"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateExecutable(exe); err != nil {
+	if err := ValidateExecutable(exe, ".COM;.EXE;.BAT;.CMD"); err != nil {
 		t.Fatal(err)
 	}
 	plain := filepath.Join(root, "node.txt")
 	if err := os.WriteFile(plain, []byte("test"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateExecutable(plain); err == nil || !strings.Contains(err.Error(), "PATHEXT") {
+	if err := ValidateExecutable(plain, ".COM;.EXE;.BAT;.CMD"); err == nil || !strings.Contains(err.Error(), "PATHEXT") {
 		t.Fatalf("error = %v", err)
 	}
 }
