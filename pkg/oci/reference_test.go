@@ -108,6 +108,17 @@ func TestParseReferenceUsesRegistryHostOverride(t *testing.T) {
 	}
 }
 
+func TestParseReferenceWithDefaultsIgnoresRegistryEnvironment(t *testing.T) {
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "poison.example")
+	ref, err := ParseReferenceWithDefaults("security-reviewer:1.2.3", DefaultRegistry, DefaultNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ref.Locator(), "registry.adversarylabs.ai/library/security-reviewer:1.2.3"; got != want {
+		t.Fatalf("locator=%q want %q", got, want)
+	}
+}
+
 func TestRegistryHostOverrideRejectsScheme(t *testing.T) {
 	t.Setenv("ADVERSARY_REGISTRY_HOST", "http://localhost:5000")
 	if _, err := ParseReference("security-reviewer"); err == nil {

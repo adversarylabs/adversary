@@ -44,6 +44,29 @@ local source path is execution-plan validation and remains text-only until a
 separate execution-plan schema is designed; the command fails rather than
 silently returning a different JSON shape.
 
+Stored-artifact inspect JSON is version 2. Its `files.entries` array is decoded
+from the immutable, digest-verified OCI config with a 1 MiB bound. Entries retain
+the deterministic packed order and include path, size, mode, and SHA-256 digest.
+`inspect --files` exposes the same verified inventory in human output. The
+deprecated `inspect --json` shape remains unchanged and does not add inventory.
+Failure to read, decode, or verify the config is an inspect error; the CLI never
+reports a known stored inventory as unavailable.
+Modern `list --format json` uses the same verified entries and likewise fails
+instead of claiming that an inventory present in the config is unavailable.
+
+Canonical references in modern pack output come from the committed repository
+reference index. Local shorthand lookup uses durable aliases and stored refs,
+not the live `ADVERSARY_REGISTRY_HOST`; an environment change therefore cannot
+rename an installed artifact, and multiple matching aliases fail closed.
+The registry and namespace used when qualifying a new shorthand are injected
+once by command composition; repositories without explicit settings retain the
+public defaults. Versioned alias indexes authenticate their plaintext alias and
+derive targets from committed record/reference metadata. Alias files are a
+repairable cache, never an authority. A bounded import journal rolls back any
+unacknowledged record, reference, and alias metadata on restart while retaining
+content-addressed staged blobs. `latest` is CAS-retargeted between successful
+pack versions; concurrent writers have exactly one winner.
+
 Text tables sanitize control characters and line breaks. This migration emits
 no ANSI color under any circumstances, so output is stable and uncolored for
 interactive and noninteractive use and inherently honors `NO_COLOR`.

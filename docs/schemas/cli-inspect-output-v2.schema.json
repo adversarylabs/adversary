@@ -1,0 +1,20 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://adversarylabs.dev/schemas/cli-inspect-output-v2.schema.json",
+  "title":"Adversary CLI stored-artifact inspect output v2",
+  "type":"object","additionalProperties":false,
+  "required":["schemaVersion","command","data"],
+  "properties":{
+    "schemaVersion":{"const":2},"command":{"const":"inspect"},
+    "data":{"type":"object","additionalProperties":false,
+      "required":["canonicalReference","digest","name","version","origin","trust","manifest","files"],
+      "properties":{
+        "canonicalReference":{"type":"string","minLength":1},"digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"name":{"type":"string","minLength":1},"version":{"type":"string","minLength":1},
+        "origin":{"type":"object","additionalProperties":false,"required":["kind","canonicalSource"],"properties":{"kind":{"const":"unifiedRepository"},"canonicalSource":{"type":"string","minLength":1}}},
+        "trust":{"type":"object","additionalProperties":false,"required":["status","decision"],"properties":{"status":{"type":"string"},"decision":{"type":"string","pattern":"\\S"}}},
+        "manifest":{"type":"object","additionalProperties":false,"required":["validation","manifestDigest","configDigest","layerDigest","adversaryManifestDigest"],"properties":{"validation":{"const":"strictOnImport"},"manifestDigest":{"type":"string"},"configDigest":{"type":"string"},"layerDigest":{"type":"string"},"adversaryManifestDigest":{"type":"string"}}},
+        "files":{"type":"object","additionalProperties":false,"required":["status","reason","entries"],"properties":{"status":{"const":"available"},"reason":{"type":"string","pattern":"\\S"},"entries":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","digest","sizeBytes","mode"],"properties":{"path":{"type":"string","minLength":1},"digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"sizeBytes":{"type":"integer","minimum":0},"mode":{"enum":["0644","0755"]}}}}}}
+      }
+    }
+  }
+}

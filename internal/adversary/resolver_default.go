@@ -19,7 +19,15 @@ func DefaultResolver() (Resolver, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return Resolver{}, err
 	}
-	return Resolver{Repository: repository.Repository{Root: root}, Files: OSRuntimeFiles{}}, nil
+	repo := repository.Repository{Root: root}
+	if entries, readErr := os.ReadDir(filepath.Join(root, "transactions")); readErr == nil && len(entries) > 0 {
+		if err := repo.Recover(); err != nil {
+			return Resolver{}, err
+		}
+	} else if readErr != nil && !os.IsNotExist(readErr) {
+		return Resolver{}, readErr
+	}
+	return Resolver{Repository: repo, Files: OSRuntimeFiles{}}, nil
 }
 
 func resolverDataRoot() (string, error) {

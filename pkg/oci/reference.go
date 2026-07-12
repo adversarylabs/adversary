@@ -17,6 +17,13 @@ const (
 type Reference struct{ Registry, Repository, Tag, Digest string }
 
 func ParseReference(input string) (Reference, error) {
+	return ParseReferenceWithDefaults(input, DefaultRegistryHost(), DefaultNamespace)
+}
+
+// ParseReferenceWithDefaults parses a reference using caller-owned defaults.
+// Persistent indexes must use this function rather than process environment so
+// their identity remains stable across restarts and configuration changes.
+func ParseReferenceWithDefaults(input, registry, namespace string) (Reference, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return Reference{}, fmt.Errorf("reference is required")
@@ -34,15 +41,16 @@ func ParseReference(input string) (Reference, error) {
 		namePart = before
 	}
 	first := namePart
+	hasSlash := strings.Contains(first, "/")
 	if before, _, ok := strings.Cut(first, "/"); ok {
 		first = before
 	}
-	explicitRegistry := strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost" || strings.HasPrefix(first, "[")
+	explicitRegistry := hasSlash && (strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost" || strings.HasPrefix(first, "["))
 	if !explicitRegistry {
 		if !strings.Contains(namePart, "/") {
-			qualified = DefaultRegistryHost() + "/" + DefaultNamespace + "/" + input
+			qualified = strings.TrimRight(registry, "/") + "/" + strings.Trim(namespace, "/") + "/" + input
 		} else {
-			qualified = DefaultRegistryHost() + "/" + input
+			qualified = strings.TrimRight(registry, "/") + "/" + input
 		}
 	}
 	named, err := distref.ParseNormalizedNamed(qualified)

@@ -90,7 +90,7 @@ func registerExactRef(resolver application.Resolver, ref, digest string) error {
 		if current.Digest == digest {
 			return nil
 		}
-		return fmt.Errorf("%w: %s currently points to %s", repository.ErrCAS, ref, current.Digest)
+		return resolver.UpdateRef(ref, current.Digest, digest)
 	}
 	if !os.IsNotExist(err) {
 		return err

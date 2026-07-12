@@ -236,6 +236,52 @@ func TestPublishedPackV2FixtureMatchesSchema(t *testing.T) {
 	}
 }
 
+func TestPublishedInspectV2FixtureMatchesSchema(t *testing.T) {
+	root := filepath.Join("..", "docs")
+	schemaBytes, err := os.ReadFile(filepath.Join(root, "schemas", "cli-inspect-output-v2.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schemaDocument any
+	if err := json.Unmarshal(schemaBytes, &schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	const schemaURL = "https://adversarylabs.dev/schemas/cli-inspect-output-v2.schema.json"
+	if err := compiler.AddResource(schemaURL, schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(schemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "cli-inspect-v2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value any
+	if err := json.Unmarshal(fixture, &value); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(value); err != nil {
+		t.Fatal(err)
+	}
+	invalid := []string{
+		`{"schemaVersion":1,"command":"inspect","data":{}}`,
+		strings.ReplaceAll(string(fixture), `"status":"available"`, `"status":"unavailable"`),
+		strings.ReplaceAll(string(fixture), `"digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"`, `"digest":"bad"`),
+	}
+	for _, document := range invalid {
+		if err := json.Unmarshal([]byte(document), &value); err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(value); err == nil {
+			t.Fatalf("schema accepted invalid document: %s", document)
+		}
+	}
+}
+
 type countingRuntime struct {
 	inner application.Runtime
 	calls int

@@ -97,6 +97,62 @@ func TestCreatePreservesExecutableMode(t *testing.T) {
 	}
 }
 
+func TestCreateNormalizesAnyExecutableModeInInventoryAndTar(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX modes unavailable")
+	}
+	dir := testProject(t)
+	if got := normalizedFileMode(0100); got != 0755 {
+		t.Fatalf("0100 normalized to %#o", got)
+	}
+	for name, mode := range map[string]os.FileMode{"owner-all.sh": 0700, "owner-exec.sh": 0500} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer artifact.Close()
+	for _, file := range artifact.Files {
+		if file.Path == "owner-all.sh" || file.Path == "owner-exec.sh" {
+			if file.Mode != 0755 {
+				t.Fatalf("inventory %s mode=%#o", file.Path, file.Mode)
+			}
+		}
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(readArtifactLayer(t, artifact)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	seen := 0
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Name == "owner-all.sh" || h.Name == "owner-exec.sh" {
+			seen++
+			if h.Mode != 0755 {
+				t.Fatalf("tar %s mode=%#o", h.Name, h.Mode)
+			}
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("seen executable headers=%d", seen)
+	}
+}
+
 func TestCreateIsDeterministic(t *testing.T) {
 	dir := testProject(t)
 	first, err := Create(context.Background(), Options{Dir: dir})

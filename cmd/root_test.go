@@ -905,6 +905,156 @@ func TestPackRejectsOversizedAdversaryManifest(t *testing.T) {
 	}
 }
 
+func TestPackAndInspectUseDurableCanonicalIdentityAndInventory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "poison.invalid")
+	project := t.TempDir()
+	writeProject(t, project)
+
+	var packOut, packErr bytes.Buffer
+	packCmd := NewRootCommand(&packOut, &packErr)
+	packCmd.SetArgs([]string{"pack", project, "--format", "json"})
+	if err := packCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(packOut.String(), "Packing adversary") {
+		t.Fatalf("stdout contaminated: %s", packOut.String())
+	}
+	var packed struct {
+		SchemaVersion int `json:"schemaVersion"`
+		Data          struct {
+			CanonicalReference string        `json:"canonicalReference"`
+			Files              []packFileDTO `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(packOut.Bytes(), &packed); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := packed.Data.CanonicalReference, "poison.invalid/library/security-reviewer:1.4.2"; got != want {
+		t.Fatalf("canonical=%q want %q", got, want)
+	}
+	if len(packed.Data.Files) == 0 {
+		t.Fatal("pack inventory missing")
+	}
+
+	// Simulate a restart with different registry configuration. Local identity
+	// and exact shorthand lookup remain bound to durable repository indexes.
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "different.invalid")
+	var inspectOut, inspectErr bytes.Buffer
+	inspectCmd := NewRootCommand(&inspectOut, &inspectErr)
+	inspectCmd.SetArgs([]string{"inspect", "security-reviewer:1.4.2", "--format", "json"})
+	if err := inspectCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var inspected struct {
+		SchemaVersion int `json:"schemaVersion"`
+		Data          struct {
+			CanonicalReference string           `json:"canonicalReference"`
+			Files              artifactFilesDTO `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(inspectOut.Bytes(), &inspected); err != nil {
+		t.Fatalf("stdout=%q: %v", inspectOut.String(), err)
+	}
+	if inspected.SchemaVersion != 2 || inspected.Data.CanonicalReference != packed.Data.CanonicalReference {
+		t.Fatalf("inspect=%+v", inspected)
+	}
+	if inspected.Data.Files.Status != "available" || len(inspected.Data.Files.Entries) != len(packed.Data.Files) {
+		t.Fatalf("files=%+v", inspected.Data.Files)
+	}
+	for i := 1; i < len(inspected.Data.Files.Entries); i++ {
+		if inspected.Data.Files.Entries[i-1].Path >= inspected.Data.Files.Entries[i].Path {
+			t.Fatalf("unsorted files=%+v", inspected.Data.Files.Entries)
+		}
+	}
+
+	var textOut, textErr bytes.Buffer
+	textCmd := NewRootCommand(&textOut, &textErr)
+	textCmd.SetArgs([]string{"inspect", "security-reviewer:1.4.2", "--files"})
+	if err := textCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(textOut.String(), "Files:\n") || !strings.Contains(textOut.String(), "sha256:") {
+		t.Fatalf("files output=%s", textOut.String())
+	}
+	var listOut, listErr bytes.Buffer
+	listCmd := NewRootCommand(&listOut, &listErr)
+	listCmd.SetArgs([]string{"list", "--format", "json"})
+	if err := listCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listOut.String(), `"status":"available"`) || strings.Contains(listOut.String(), `"status":"unavailable"`) {
+		t.Fatalf("list inventory output=%s", listOut.String())
+	}
+
+	resolver, err := internaladversary.DefaultResolver()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := resolver.Repository.Resolve("security-reviewer:1.4.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configKey := fmt.Sprintf("v1-%x", sha256.Sum256([]byte(record.ConfigDigest)))
+	if err := os.WriteFile(filepath.Join(resolver.Repository.RootPath(), "blobs", configKey), []byte(`{"files":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var corruptOut, corruptErr bytes.Buffer
+	corruptCmd := NewRootCommand(&corruptOut, &corruptErr)
+	corruptCmd.SetArgs([]string{"inspect", "security-reviewer:1.4.2", "--files"})
+	if err := corruptCmd.Execute(); err == nil {
+		t.Fatal("corrupt inventory accepted")
+	}
+	if corruptOut.Len() != 0 {
+		t.Fatalf("failed inspect contaminated stdout: %q", corruptOut.String())
+	}
+}
+
+func TestPackLatestRegistrationRetargetsAcrossVersionsAndRestart(t *testing.T) {
+	repo := repository.Repository{Root: t.TempDir()}
+	aProject, bProject := t.TempDir(), t.TempDir()
+	writeProject(t, aProject)
+	writeProject(t, bProject)
+	bManifest := strings.ReplaceAll(readFile(t, filepath.Join(bProject, "adversary.yaml")), "version: 1.4.2", "version: 1.4.3")
+	if err := os.WriteFile(filepath.Join(bProject, "adversary.yaml"), []byte(bManifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bProject, "dist", "index.js"), []byte("export default 'v2'\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := pack.Create(context.Background(), pack.Options{Dir: aProject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := pack.Create(context.Background(), pack.Options{Dir: bProject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	aRec, err := repo.ImportPacked(a, "security-reviewer:1.4.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bRec, err := repo.ImportPacked(b, "security-reviewer:1.4.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := processResolver{resolver: internaladversary.Resolver{Repository: repo}}
+	latest := "registry.adversarylabs.ai/library/security-reviewer:latest"
+	if err := registerExactRef(resolver, latest, aRec.Digest); err != nil {
+		t.Fatal(err)
+	}
+	if err := registerExactRef(resolver, latest, bRec.Digest); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (repository.Repository{Root: repo.Root}).Resolve("security-reviewer:latest")
+	if err != nil || got.Digest != bRec.Digest {
+		t.Fatalf("restart latest=%#v err=%v", got, err)
+	}
+}
+
 func extractDigest(t *testing.T, output string) string {
 	t.Helper()
 	for _, line := range strings.Split(output, "\n") {

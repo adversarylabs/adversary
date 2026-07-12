@@ -451,7 +451,8 @@ func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, e
 			return errors.Join(fmt.Errorf("package file changed while opening: %s", rel), f.Close())
 		}
 		h := sha256.New()
-		header := &tar.Header{Name: rel, Mode: int64(0644 | after.Mode().Perm()&0111), Size: after.Size(), ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatPAX}
+		mode := normalizedFileMode(after.Mode())
+		header := &tar.Header{Name: rel, Mode: mode, Size: after.Size(), ModTime: time.Unix(0, 0).UTC(), Format: tar.FormatPAX}
 		if err := tw.WriteHeader(header); err != nil {
 			return errors.Join(err, f.Close())
 		}
@@ -463,7 +464,7 @@ func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, e
 		if n != after.Size() {
 			return fmt.Errorf("package file changed while reading: %s", rel)
 		}
-		files = append(files, File{Path: rel, Size: n, SHA256: hex.EncodeToString(h.Sum(nil)), Mode: int64(after.Mode().Perm() & 0111)})
+		files = append(files, File{Path: rel, Size: n, SHA256: hex.EncodeToString(h.Sum(nil)), Mode: mode})
 		return nil
 	})
 	if err != nil {
@@ -1637,7 +1638,7 @@ func collectFiles(dir string) ([]File, error) {
 		if closeErr != nil {
 			return closeErr
 		}
-		files = append(files, File{Path: rel, Size: info.Size(), SHA256: hex.EncodeToString(h.Sum(nil)), Mode: int64(info.Mode().Perm() & 0111)})
+		files = append(files, File{Path: rel, Size: info.Size(), SHA256: hex.EncodeToString(h.Sum(nil)), Mode: normalizedFileMode(info.Mode())})
 		return nil
 	})
 	if err != nil {
@@ -1645,6 +1646,13 @@ func collectFiles(dir string) ([]File, error) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
+}
+
+func normalizedFileMode(mode fs.FileMode) int64 {
+	if mode.Perm()&0111 != 0 {
+		return 0755
+	}
+	return 0644
 }
 
 func detectRuntime(dir string, m manifest.Manifest) string {

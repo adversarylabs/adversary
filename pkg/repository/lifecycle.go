@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -248,6 +249,11 @@ func (r Repository) ApplyGC(plan GCPlan, dryRun bool) (GCReport, error) {
 				digestLock.Close()
 				return report, ErrCAS
 			}
+			if err := r.pruneAliasTarget(rec.Digest); err != nil {
+				materializeLock.Close()
+				digestLock.Close()
+				return report, err
+			}
 			rel := "commits/" + key(rec.Digest) + ".json"
 			if err := root.Remove(rel); err != nil && !os.IsNotExist(err) {
 				materializeLock.Close()
@@ -446,6 +452,9 @@ func (r Repository) CheckAll() (CheckReport, error) {
 			return CheckReport{}, fmt.Errorf("reference target corrupt or missing: %w", err)
 		}
 	}
+	if err := r.checkAliases(); err != nil {
+		return CheckReport{}, err
+	}
 	return report, nil
 }
 
@@ -472,7 +481,109 @@ func (r Repository) RepairAll(sources map[string]blobsource.Source) (RepairRepor
 	}
 	sort.Strings(report.Repaired)
 	sort.Strings(report.Unresolved)
+	if err := r.rebuildAliases(); err != nil {
+		return report, err
+	}
 	return report, nil
+}
+
+func (r Repository) checkAliases() error {
+	expected, err := r.authoritativeAliasMap(false)
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(r.Root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), "aliases")
+	if err != nil {
+		return err
+	}
+	if len(entries) > maxLifecycleEntries {
+		return fmt.Errorf("repository alias index exceeds lifecycle limit")
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return fmt.Errorf("unexpected alias directory %q", entry.Name())
+		}
+		data, err := r.readLimit("aliases/"+entry.Name(), maxIndexBytes)
+		if err != nil {
+			return err
+		}
+		var idx aliasIndex
+		if json.Unmarshal(data, &idx) != nil || idx.Version != 1 || idx.Alias == "" || key(idx.Alias)+".json" != entry.Name() {
+			return fmt.Errorf("malformed alias index %q", entry.Name())
+		}
+		if _, err := r.readAlias(idx.Alias); err != nil {
+			return fmt.Errorf("invalid alias index %q: %w", entry.Name(), err)
+		}
+		delete(expected, idx.Alias)
+	}
+	if len(expected) != 0 {
+		return fmt.Errorf("repository alias index is incomplete")
+	}
+	return nil
+}
+
+func (r Repository) rebuildAliases() error {
+	desired, err := r.authoritativeAliasMap(true)
+	if err != nil {
+		return err
+	}
+	type aliasValue struct {
+		alias   string
+		digests []string
+	}
+	byFile := map[string]aliasValue{}
+	for alias, digests := range desired {
+		byFile[key(alias)+".json"] = aliasValue{alias: alias, digests: digests}
+	}
+
+	root, err := os.OpenRoot(r.Root)
+	if err != nil {
+		return err
+	}
+	entries, err := fs.ReadDir(root.FS(), "aliases")
+	if err != nil {
+		root.Close()
+		return err
+	}
+	if len(entries) > maxLifecycleEntries {
+		root.Close()
+		return fmt.Errorf("repository alias index exceeds lifecycle limit")
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			root.Close()
+			return fmt.Errorf("invalid alias index entry %q", entry.Name())
+		}
+		value, ok := byFile[entry.Name()]
+		if !ok {
+			if err := root.RemoveAll("aliases/" + entry.Name()); err != nil {
+				root.Close()
+				return err
+			}
+			continue
+		}
+		encoded, _ := json.Marshal(aliasIndex{Version: 1, Alias: value.alias, Targets: value.digests})
+		if err := r.atomic("aliases/"+entry.Name(), encoded); err != nil {
+			root.Close()
+			return err
+		}
+		delete(byFile, entry.Name())
+	}
+	if err := root.Close(); err != nil {
+		return err
+	}
+	for filename, value := range byFile {
+		encoded, _ := json.Marshal(aliasIndex{Version: 1, Alias: value.alias, Targets: value.digests})
+		if err := r.atomic("aliases/"+filename, encoded); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r Repository) MigrationStatus(name string) (MigrationStatus, error) {
@@ -533,6 +644,9 @@ func (r Repository) scanAllRecords() ([]Record, error) {
 }
 
 func (r Repository) scanRecords(validateContent bool) ([]Record, error) {
+	return r.scanRecordsMode(validateContent, false)
+}
+func (r Repository) scanRecordsMode(validateContent, allowPending bool) ([]Record, error) {
 	root, err := os.OpenRoot(r.Root)
 	if err != nil {
 		return nil, err
@@ -550,8 +664,8 @@ func (r Repository) scanRecords(validateContent bool) ([]Record, error) {
 			return nil, e
 		}
 		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
+			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+				return nil, fmt.Errorf("invalid reference index entry %q", entry.Name())
 			}
 			if len(out) >= maxLifecycleEntries {
 				return nil, fmt.Errorf("repository exceeds bounded lifecycle limit")
@@ -564,12 +678,21 @@ func (r Repository) scanRecords(validateContent bool) ([]Record, error) {
 			if json.Unmarshal(data, &rec) != nil || rec.Digest == "" || entry.Name() != key(rec.Digest)+".json" {
 				return nil, fmt.Errorf("malformed repository record")
 			}
-			canonical, loadErr := r.loadRecordMetadata(rec.Digest, false)
+			if !allowPending {
+				pending, pendingErr := r.pendingImport(rec.Digest)
+				if pendingErr != nil {
+					return nil, pendingErr
+				}
+				if pending {
+					continue
+				}
+			}
+			canonical, loadErr := r.loadRecordMetadataMode(rec.Digest, false, allowPending)
 			if loadErr != nil || canonical != rec {
 				return nil, fmt.Errorf("corrupt repository record %s", rec.Digest)
 			}
 			if validateContent {
-				if _, loadErr := r.loadRecord(rec.Digest, false); loadErr != nil {
+				if _, loadErr := r.loadRecordMode(rec.Digest, false, allowPending); loadErr != nil {
 					return nil, fmt.Errorf("corrupt repository record %s", rec.Digest)
 				}
 			}
@@ -584,6 +707,17 @@ func (r Repository) scanRecords(validateContent bool) ([]Record, error) {
 }
 
 func (r Repository) referenceSnapshot() (map[string]string, error) {
+	return r.referenceSnapshotMode(false)
+}
+func (r Repository) referenceSnapshotMode(allowPending bool) (map[string]string, error) {
+	pendingRefs := map[string]refMutationJournal{}
+	if !allowPending {
+		var err error
+		pendingRefs, err = r.refMutationJournals()
+		if err != nil {
+			return nil, err
+		}
+	}
 	root, err := os.OpenRoot(r.Root)
 	if err != nil {
 		return nil, err
@@ -602,14 +736,14 @@ func (r Repository) referenceSnapshot() (map[string]string, error) {
 			return nil, e
 		}
 		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
+			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+				return nil, fmt.Errorf("invalid reference index entry %q", entry.Name())
 			}
 			count++
 			if count > maxLifecycleEntries {
 				return nil, fmt.Errorf("repository exceeds bounded reference limit")
 			}
-			data, readErr := r.read("refs/" + entry.Name())
+			data, readErr := r.readLimit("refs/"+entry.Name(), maxIndexBytes)
 			if readErr != nil {
 				return nil, readErr
 			}
@@ -617,7 +751,23 @@ func (r Repository) referenceSnapshot() (map[string]string, error) {
 			if json.Unmarshal(data, &idx) != nil || idx.Reference == "" || idx.Digest == "" || entry.Name() != key(idx.Reference)+".json" {
 				return nil, fmt.Errorf("corrupt reference index")
 			}
-			if _, loadErr := r.loadRecord(idx.Digest, true); loadErr != nil {
+			if j, ok := pendingRefs[idx.Reference]; ok {
+				if _, err := r.validateRefMutationCurrent(j); err != nil {
+					return nil, err
+				}
+				delete(pendingRefs, idx.Reference)
+				if j.Previous == "" {
+					continue
+				}
+				idx.Digest = j.Previous
+			}
+			if _, loadErr := r.loadRecordMode(idx.Digest, true, allowPending); loadErr != nil {
+				if !allowPending {
+					pending, pendingErr := r.pendingImport(idx.Digest)
+					if pendingErr == nil && pending {
+						continue
+					}
+				}
 				return nil, fmt.Errorf("corrupt reference target: %w", loadErr)
 			}
 			out[idx.Reference] = idx.Digest
@@ -625,6 +775,18 @@ func (r Repository) referenceSnapshot() (map[string]string, error) {
 		if e == io.EOF {
 			break
 		}
+	}
+	for ref, j := range pendingRefs {
+		if _, err := r.validateRefMutationCurrent(j); err != nil {
+			return nil, err
+		}
+		if j.Previous == "" {
+			continue
+		}
+		if _, err := r.loadRecordMode(j.Previous, true, false); err != nil {
+			return nil, fmt.Errorf("corrupt previous reference target: %w", err)
+		}
+		out[ref] = j.Previous
 	}
 	return out, nil
 }
