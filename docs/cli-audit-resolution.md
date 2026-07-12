@@ -12,12 +12,12 @@ closure claim and must be updated by their final remediation PR.
 | CLI-003 | PR #4; OAuth state/PKCE/device-flow tests |
 | CLI-004 | PRs #1, #2, #16, and #17; strict protocol, JSON purity, output-bound, DTO, and unsafe-execution tests |
 | CLI-005 | PR #6; bounded ingestion and archive regression tests |
-| CLI-006 | PR #5; `docs/artifact-trust-and-limits.md` and digest tests; a final-audit follow-up remains pending |
+| CLI-006 | PR #5 and manifest-runtime closure PR; `docs/artifact-trust-and-limits.md`, digest tests, and deterministic OCI runtime-image validation. Rollback: revert the closure PR to restore the former permissive image string check. |
 | CLI-007 | PRs #15 and #16; `docs/build-and-git-contract.md` and build/git tests |
 | CLI-008 | PRs #10 and #22; `docs/network-oci-policy.md`, production API-client, fallback-tag, and transport tests |
 | CLI-009 | PRs #10 and #22; OCI fallback integrity, auth/redirect/debug-redaction tests |
 | CLI-010 | PR #4; `docs/auth-credential-storage.md` and locked-store tests |
-| CLI-011 | PRs #3 and #23; canonical `validate` surface, semantic runtime/path/project checks, and malformed YAML policy corpus; a final-audit follow-up remains pending |
+| CLI-011 | PRs #3, #23, and manifest-runtime closure PR; canonical `validate` surface, exactly-one runtime identity, environment-independent image-reference validation, semantic runtime/path/project checks, schema/parser parity, and malformed YAML policy corpus. Rollback: revert the closure PR; manifests relying on both runtime identities were ambiguous and are intentionally not compatible. |
 | CLI-012 | PRs #5, #6, #7, #8, #9, #11, and #12; staged repository migration and publication tests |
 | CLI-013 | PRs #1 and #23; canonical input/review plus error schemas, Go/TypeScript validation, version rejection, and ordering parity tests; a final-audit follow-up remains pending |
 | CLI-014 | PR #16; lifecycle contracts and signal tests |

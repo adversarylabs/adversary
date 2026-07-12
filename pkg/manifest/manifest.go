@@ -3,9 +3,11 @@ package manifest
 
 import (
 	"bytes"
+	_ "crypto/sha512" // register maintained OCI SHA-384 and SHA-512 digests
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +16,7 @@ import (
 	"unicode"
 
 	semver "github.com/Masterminds/semver/v3"
+	distref "github.com/distribution/reference"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -60,10 +63,16 @@ type Findings struct {
 }
 
 var (
-	nameRE    = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)*$`)
-	versionRE = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
-	envRE     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	nameRE           = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)*$`)
+	versionRE        = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
+	envRE            = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	imageComponentRE = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$`)
+	imageTagRE       = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+	imageDigestRE    = regexp.MustCompile(`^(?:sha256:[a-f0-9]{64}|sha384:[a-f0-9]{96}|sha512:[a-f0-9]{128})$`)
+	registryHostRE   = regexp.MustCompile(`^(?:localhost|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*)(?::[0-9]{1,5})?$`)
 )
+
+const runtimeImageRepositoryMax = 255 // distribution/reference.RepositoryNameTotalLengthMax
 
 func Load(path string) (Manifest, error) {
 	f, err := os.Open(path)
@@ -114,6 +123,13 @@ func Parse(data []byte) (Manifest, error) {
 	}
 	if err := out.Validate(); err != nil {
 		return Manifest{}, err
+	}
+	if out.Runtime.Image != "" {
+		canonicalImage, err := canonicalRuntimeImage(out.Runtime.Image)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("manifest runtime.image: canonicalize reference: %w", err)
+		}
+		out.Runtime.Image = canonicalImage
 	}
 	return out, nil
 }
@@ -191,18 +207,25 @@ func (m Manifest) Validate() error {
 	if m.Version != "" && !versionRE.MatchString(m.Version) {
 		return fmt.Errorf("manifest version %q must be semantic version x.y.z", m.Version)
 	}
-	if m.Runtime.Image != "" {
-		if strings.ContainsRune(m.Runtime.Image, 0) || strings.IndexFunc(m.Runtime.Image, unicode.IsSpace) >= 0 {
-			return errors.New("manifest runtime.image must be a normalized image reference")
+	hasName, hasImage := m.Runtime.Name != "", m.Runtime.Image != ""
+	if hasName == hasImage {
+		return errors.New("manifest runtime must specify exactly one execution identity: runtime.name or runtime.image")
+	}
+	if hasImage {
+		if err := validateRuntimeImage(m.Runtime.Image); err != nil {
+			return fmt.Errorf("manifest runtime.image: %w", err)
+		}
+		if _, err := canonicalRuntimeImage(m.Runtime.Image); err != nil {
+			return fmt.Errorf("manifest runtime.image: canonicalize reference: %w", err)
+		}
+		if m.Runtime.Version != "" {
+			return errors.New("manifest runtime.version is only valid with runtime.name; image commands execute inside the image")
 		}
 	}
 	if m.Runtime.Name != "" && m.Runtime.Name != "node" && m.Runtime.Name != "process" {
 		return fmt.Errorf("manifest runtime.name %q is unsupported (supported: node, process)", m.Runtime.Name)
 	}
-	if m.Runtime.Image == "" && m.Runtime.Name == "" {
-		return errors.New("manifest runtime.name or runtime.image is required")
-	}
-	if m.Runtime.Image == "" && m.Runtime.Version == "" {
+	if hasName && m.Runtime.Version == "" {
 		return errors.New("manifest runtime.version is required for named runtimes")
 	}
 	if m.Runtime.Version != "" {
@@ -255,6 +278,109 @@ func (m Manifest) Validate() error {
 	}
 	if m.Findings.Format != "" && m.Findings.Format != "adversary.review.v1" {
 		return fmt.Errorf("manifest findings.format %q is unsupported", m.Findings.Format)
+	}
+	return nil
+}
+
+// validateRuntimeImage validates stable distribution-reference syntax without
+// applying registry defaults or consulting process environment. Familiar names
+// such as "node:22" are valid here; Parse canonicalizes them with fixed defaults.
+func validateRuntimeImage(value string) error {
+	if !normalizedNonEmpty(value) || strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+		return errors.New("must be a non-empty reference without whitespace")
+	}
+	if strings.Contains(value, "://") || strings.Contains(value, "\\") || strings.Contains(value, "?") || strings.Contains(value, "#") {
+		return errors.New("must be an OCI image reference, not a URL")
+	}
+	if strings.Count(value, "@") > 1 {
+		return errors.New("has repeated digest separators")
+	}
+	nameTag, digest, hasDigest := strings.Cut(value, "@")
+	if hasDigest && !imageDigestRE.MatchString(digest) {
+		return errors.New("has a malformed digest")
+	}
+	if nameTag == "" {
+		return errors.New("is missing an image name")
+	}
+
+	name := nameTag
+	lastSlash, lastColon := strings.LastIndex(nameTag, "/"), strings.LastIndex(nameTag, ":")
+	if lastColon > lastSlash {
+		name = nameTag[:lastColon]
+		if !imageTagRE.MatchString(nameTag[lastColon+1:]) {
+			return errors.New("has a malformed tag")
+		}
+	}
+	if strings.Contains(name, "@") || strings.Contains(name, "//") || strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") {
+		return errors.New("has a malformed repository name")
+	}
+	parts := strings.Split(name, "/")
+	start := 0
+	if len(parts) > 1 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":") || parts[0] == "localhost" || strings.HasPrefix(parts[0], "[")) {
+		if err := validateRegistryHost(parts[0]); err != nil {
+			return err
+		}
+		start = 1
+	}
+	for _, part := range parts[start:] {
+		if !imageComponentRE.MatchString(part) {
+			return errors.New("repository components must be normalized lowercase names")
+		}
+	}
+	// The distribution reference library applies its 255-byte bound only to
+	// the repository path; the registry host, tag, and digest are excluded.
+	// canonicalRuntimeImage below rechecks after familiar-name normalization
+	// (including an injected "library/" namespace where applicable).
+	if len(strings.Join(parts[start:], "/")) > runtimeImageRepositoryMax {
+		return fmt.Errorf("repository path must not exceed %d bytes", runtimeImageRepositoryMax)
+	}
+	return nil
+}
+
+// canonicalRuntimeImage applies distribution/reference's fixed Docker Hub
+// familiar-name normalization. It deliberately does not consult Adversary's
+// configurable registry host. Non-digested references always carry a tag.
+func canonicalRuntimeImage(value string) (string, error) {
+	named, err := distref.ParseNormalizedNamed(value)
+	if err != nil {
+		return "", err
+	}
+	if _, digested := named.(distref.Digested); !digested {
+		named = distref.TagNameOnly(named)
+	}
+	return named.String(), nil
+}
+
+func validateRegistryHost(host string) error {
+	port := ""
+	hasPort := false
+	if strings.HasPrefix(host, "[") {
+		end := strings.Index(host, "]")
+		if end < 0 || net.ParseIP(host[1:end]) == nil || !strings.Contains(host[1:end], ":") {
+			return errors.New("has a malformed registry IPv6 host")
+		}
+		suffix := host[end+1:]
+		if suffix != "" {
+			if !strings.HasPrefix(suffix, ":") {
+				return errors.New("has a malformed registry IPv6 host")
+			}
+			port = strings.TrimPrefix(suffix, ":")
+			hasPort = true
+		}
+	} else {
+		if !registryHostRE.MatchString(host) {
+			return errors.New("has a malformed registry host")
+		}
+		if colon := strings.LastIndex(host, ":"); colon >= 0 {
+			port = host[colon+1:]
+			hasPort = true
+		}
+	}
+	if hasPort {
+		value, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || value == 0 {
+			return errors.New("registry port must be between 1 and 65535")
+		}
 	}
 	return nil
 }

@@ -50,9 +50,9 @@ func resolveReference(ref string, resolver *Resolver, files RuntimeFiles) (Resol
 		if err != nil {
 			return ResolvedAdversary{}, err
 		}
-		image := manifest.Runtime.Image
-		if manifest.Runtime.Name != "" {
-			image = "host:" + manifest.Runtime.Name
+		image, err := runtimeExecutionImage(manifest.Runtime)
+		if err != nil {
+			return ResolvedAdversary{}, err
 		}
 		resolved := ResolvedAdversary{
 			Name:           manifest.Name,
@@ -100,6 +100,19 @@ func resolveReference(ref string, resolver *Resolver, files RuntimeFiles) (Resol
 	return ResolvedAdversary{
 		Name: ref,
 	}, nil
+}
+
+func runtimeExecutionImage(runtime canonical.Runtime) (string, error) {
+	switch {
+	case runtime.Name != "" && runtime.Image != "":
+		return "", errors.New("manifest runtime has both name and image execution identities")
+	case runtime.Name != "":
+		return "host:" + runtime.Name, nil
+	case runtime.Image != "":
+		return runtime.Image, nil
+	default:
+		return "", errors.New("manifest runtime has no execution identity")
+	}
 }
 
 func typeScriptHostCommand(path, runtimeName string, command []string) []string {
