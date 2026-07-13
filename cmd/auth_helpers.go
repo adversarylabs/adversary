@@ -13,7 +13,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -155,7 +155,7 @@ func publishBrowserOutcome(ch chan<- browserLoginOutcome, outcome browserLoginOu
 }
 
 func browserCallbackHandler(state string, result chan<- browserLoginOutcome, exchange func(string) (adversarylabs.TokenResponse, error)) http.Handler {
-	var once sync.Once
+	var claimed atomic.Bool
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
 			http.Error(w, "Method not allowed.", http.StatusMethodNotAllowed)
@@ -167,15 +167,12 @@ func browserCallbackHandler(state string, result chan<- browserLoginOutcome, exc
 			return
 		}
 		if query.Get("error") != "" {
-			handled := false
-			once.Do(func() {
-				handled = true
-				publishBrowserOutcome(result, browserLoginOutcome{err: fmt.Errorf("login authorization failed")})
-				http.Error(w, "Login failed. You can close this window.", http.StatusBadRequest)
-			})
-			if !handled {
+			if !claimed.CompareAndSwap(false, true) {
 				http.Error(w, "Login callback was already handled.", http.StatusConflict)
+				return
 			}
+			publishBrowserOutcome(result, browserLoginOutcome{err: fmt.Errorf("login authorization failed")})
+			http.Error(w, "Login failed. You can close this window.", http.StatusBadRequest)
 			return
 		}
 		code := query.Get("code")
@@ -183,21 +180,18 @@ func browserCallbackHandler(state string, result chan<- browserLoginOutcome, exc
 			http.Error(w, "Login callback was missing a code.", http.StatusBadRequest)
 			return
 		}
-		handled := false
-		once.Do(func() {
-			handled = true
-			token, err := exchange(code)
-			if err != nil {
-				publishBrowserOutcome(result, browserLoginOutcome{err: err})
-				http.Error(w, "Login failed. You can close this window.", http.StatusBadGateway)
-				return
-			}
-			publishBrowserOutcome(result, browserLoginOutcome{token: token})
-			fmt.Fprintln(w, "Login complete. You can close this window.")
-		})
-		if !handled {
+		if !claimed.CompareAndSwap(false, true) {
 			http.Error(w, "Login callback was already handled.", http.StatusConflict)
+			return
 		}
+		token, err := exchange(code)
+		if err != nil {
+			publishBrowserOutcome(result, browserLoginOutcome{err: err})
+			http.Error(w, "Login failed. You can close this window.", http.StatusBadGateway)
+			return
+		}
+		publishBrowserOutcome(result, browserLoginOutcome{token: token})
+		fmt.Fprintln(w, "Login complete. You can close this window.")
 	})
 }
 
