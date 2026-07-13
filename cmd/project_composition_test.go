@@ -140,9 +140,19 @@ func TestPackBuildUsesCapturedEnvironmentAndInjectedRunner(t *testing.T) {
 		return nil, os.WriteFile(filepath.Join(dir, "dist", "index.js"), []byte("built"), 0600)
 	}}
 	refs := processReferences{registry: "registry.example", namespace: "team"}
-	projects := processProjects{references: refs, build: build}
+	capturedHome := t.TempDir()
+	t.Setenv("HOME", capturedHome)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(capturedHome, "captured-cache"))
+	buildStateDir, err := pack.ResolveBuildStateDir("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects := processProjects{references: refs, build: build, buildStateDir: buildStateDir}
 	t.Setenv("PATH", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
+	poisonedHome := t.TempDir()
+	poisonedCache := filepath.Join(poisonedHome, "poisoned-cache")
+	t.Setenv("HOME", poisonedHome)
+	t.Setenv("XDG_CACHE_HOME", poisonedCache)
 	artifact, err := projects.Pack(context.Background(), pack.Options{Dir: project, Build: true, Builder: "local"})
 	if err != nil {
 		t.Fatal(err)
@@ -150,5 +160,11 @@ func TestPackBuildUsesCapturedEnvironmentAndInjectedRunner(t *testing.T) {
 	defer artifact.Close()
 	if calls != 2 {
 		t.Fatalf("runner calls=%d", calls)
+	}
+	if info, err := os.Stat(buildStateDir); err != nil || !info.IsDir() {
+		t.Fatalf("captured build state=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(poisonedCache, "adversary", "build-state")); !os.IsNotExist(err) {
+		t.Fatalf("mutated cache used for pack build: %v", err)
 	}
 }

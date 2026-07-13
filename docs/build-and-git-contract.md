@@ -6,8 +6,9 @@ CLI-015.
 ## Explicit, isolated builds (CLI-007)
 
 Packing is the explicit release-build operation. `pack.Create` only builds when
-its caller requests `Build`; `BuildProject` never guesses from the presence of
-the word `build`. It parses `package.json` and runs only a non-empty string at
+its caller requests `Build`; the injected production operation backed by
+`BuildProjectWithEnvironment` never guesses from the presence of the word
+`build`. It parses `package.json` and runs only a non-empty string at
 `scripts.build`. Malformed and unreadable package files are errors.
 
 Builder selection and cancellation are validated before project filesystem
@@ -35,6 +36,12 @@ and Linux arm64/v8 manifest
 
 Each project has one lock in the private per-user
 `UserCacheDir/adversary/build-state` root (or an explicit hermetic override).
+Production composition resolves and canonicalizes that root once while
+constructing `application.App`, then forces the captured value through both
+`pack --build` and `run --build`. Later HOME or XDG cache mutations cannot move
+the lock/journal boundary. Direct library callers retain the explicit
+`BuildOptions.BuildStateDir` override and otherwise resolve their default when
+they invoke the builder.
 The root is a non-symlink directory restricted to mode 0700 and checked for
 current-user ownership where the platform exposes Unix ownership. A SHA-256 of
 the canonical existing project path keys both its lock and private state

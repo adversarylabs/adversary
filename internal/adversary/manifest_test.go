@@ -357,10 +357,22 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
+	capturedHome := t.TempDir()
+	t.Setenv("HOME", capturedHome)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(capturedHome, "captured-cache"))
+	buildStateDir, err := pack.ResolveBuildStateDir("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	poisonedCache := filepath.Join(t.TempDir(), "poisoned-cache")
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", poisonedCache)
 
 	executor := &recordingExecutor{}
 	buildProject := func(ctx context.Context, opts pack.BuildOptions) error {
+		if opts.BuildStateDir != buildStateDir {
+			t.Fatalf("build state=%q want=%q", opts.BuildStateDir, buildStateDir)
+		}
 		environment := pack.BuildEnvironment{
 			NPM:         npmPath,
 			Node:        nodePath,
@@ -376,11 +388,12 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 		}
 		return pack.BuildProjectWithEnvironment(ctx, opts, environment)
 	}
-	err := Runner{
-		Stdout:       &strings.Builder{},
-		Stderr:       &strings.Builder{},
-		Executor:     executor,
-		BuildProject: buildProject,
+	err = Runner{
+		Stdout:        &strings.Builder{},
+		Stderr:        &strings.Builder{},
+		Executor:      executor,
+		BuildProject:  buildProject,
+		BuildStateDir: buildStateDir,
 	}.Run(context.Background(), RunOptions{
 		AdversaryRef: adversaryDir,
 		RepoPath:     t.TempDir(),
@@ -391,6 +404,9 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 	}
 	if !executor.called {
 		t.Fatal("executor was not called")
+	}
+	if _, err := os.Stat(filepath.Join(poisonedCache, "adversary", "build-state")); !os.IsNotExist(err) {
+		t.Fatalf("mutated cache used for run build: %v", err)
 	}
 	builtPath := filepath.Join(adversaryDir, "dist", "index.js")
 	if _, err := os.Stat(builtPath); err != nil {

@@ -616,6 +616,13 @@ func BuildProjectWithEnvironment(ctx context.Context, opts BuildOptions, environ
 	panic("validated builder became invalid")
 }
 
+// ResolveBuildStateDir resolves the canonical private build-state root without
+// creating it. Production composition calls this once and passes the result in
+// BuildOptions; library callers may continue to provide their own override.
+func ResolveBuildStateDir(override string) (string, error) {
+	return buildStatePath(override)
+}
+
 func openValidatedProject(dir string) (string, *os.Root, error) {
 	if dir == "" {
 		dir = "."
