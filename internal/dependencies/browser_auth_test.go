@@ -222,6 +222,27 @@ func TestBrowserAuthInjectedFailuresAreBounded(t *testing.T) {
 			t.Fatalf("token=%#v err=%v", token, err)
 		}
 	})
+	t.Run("cleanup joins real serve failure with cancellation", func(t *testing.T) {
+		stopped := make(chan struct{})
+		var once sync.Once
+		auth := BrowserAuth{Entropy: bytes.NewReader(make([]byte, 104)), ListenFunc: net.Listen, NewServerFunc: func(http.Handler) CallbackServer {
+			return callbackServerStub{
+				serve: func(net.Listener) error {
+					<-stopped
+					return errors.Join(net.ErrClosed, errors.New("serve cleanup failed"))
+				},
+				shutdown: func(context.Context) error {
+					once.Do(func() { close(stopped) })
+					return nil
+				},
+			}
+		}, OpenFunc: func(context.Context, string) error { return nil }}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := auth.Login(ctx, newRequest()); !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "serve cleanup failed") {
+			t.Fatalf("err=%v", err)
+		}
+	})
 	t.Run("cancellation shuts down after browser fallback", func(t *testing.T) {
 		stopped := make(chan struct{})
 		var once sync.Once

@@ -88,7 +88,9 @@ exchange. Callback-server termination is ordered against cleanup atomically:
 even a normally benign closed-listener result is terminal when it happens before
 login cleanup begins, while shutdown-caused close results are suppressed. This
 prevents a prematurely stopped callback server from leaving login waiting for
-the operation deadline.
+the operation deadline. Cleanup also awaits the server goroutine under the same
+bounded context and joins any non-benign Serve failure into the login result, so
+shutdown cannot hide a companion server error before credential persistence.
 
 Rollback may restore the previous composition commit without changing repository
 formats, credential schemas, remote API contracts, or command output. Docker
