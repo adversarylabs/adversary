@@ -152,19 +152,8 @@ func Check(opts Options) (result Preflight, err error) {
 	if err != nil {
 		return result, err
 	}
-	if entrypoint, required, err := checkedPackageEntrypoint(m); err != nil {
+	if err := validatePackageEntrypoint(m, files); err != nil {
 		return result, err
-	} else if required {
-		found := false
-		for _, file := range files {
-			if file.Path == entrypoint {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return result, fmt.Errorf("runtime entrypoint %q is missing from packed files; build output is not ready", entrypoint)
-		}
 	}
 	version := m.Version
 	if version == "" {
@@ -197,6 +186,17 @@ func checkedPackageEntrypoint(m manifest.Manifest) (string, bool, error) {
 		return "", false, fmt.Errorf("runtime entrypoint %q escapes the package", command)
 	}
 	return entrypoint, true, nil
+}
+
+func validatePackageEntrypoint(m manifest.Manifest, files []File) error {
+	entrypoint, required, err := checkedPackageEntrypoint(m)
+	if err != nil {
+		return err
+	}
+	if required && !inventoryContains(files, entrypoint) {
+		return fmt.Errorf("runtime entrypoint %q is missing from packed files; build output is not ready", entrypoint)
+	}
+	return nil
 }
 
 func WarningsForFiles(files []File) []Warning {
@@ -313,6 +313,9 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 	if err != nil {
 		return Artifact{}, err
 	}
+	if err := validatePackageEntrypoint(m, files); err != nil {
+		return Artifact{}, err
+	}
 	name := manifest.ShortName(m.Name)
 	if strings.TrimSpace(opts.NameOverride) != "" {
 		name, err = normalizeNameOverride(opts.NameOverride, opts.ParseReference)
@@ -325,18 +328,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		version = oci.DefaultTag
 	}
 	runtime := detectRuntime(dir, m)
-	config, err := json.Marshal(struct {
-		Created        string   `json:"created"`
-		Name           string   `json:"name"`
-		FullName       string   `json:"full_name"`
-		Version        string   `json:"version"`
-		Runtime        string   `json:"runtime"`
-		RuntimeName    string   `json:"runtime_name,omitempty"`
-		RuntimeVersion string   `json:"runtime_version,omitempty"`
-		RuntimeImage   string   `json:"runtime_image,omitempty"`
-		Entrypoint     []string `json:"entrypoint,omitempty"`
-		Files          []File   `json:"files"`
-	}{
+	config, err := json.Marshal(ArtifactConfig{
 		Created:        "1970-01-01T00:00:00Z",
 		Name:           name,
 		FullName:       m.Name,

@@ -363,7 +363,7 @@ func TestInventoryIsVerifiedSortedAndCorruptionFails(t *testing.T) {
 	}
 }
 
-func TestInventoryPreservesValidEmptyConfigInventory(t *testing.T) {
+func TestImportRejectsConfigInventoryMissingLayerFiles(t *testing.T) {
 	r := Repository{Root: t.TempDir()}
 	a := artifact(t, "one")
 	var config map[string]any
@@ -381,16 +381,8 @@ func TestInventoryPreservesValidEmptyConfigInventory(t *testing.T) {
 	}
 	a.Config, a.ConfigDigest = configData, oci.Digest(configData)
 	a.Manifest, a.ManifestDigest, a.OCIManifest = manifestData, manifestDigest, manifest
-	rec, err := r.ImportPacked(a, "test:1.0.0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	files, err := r.Inventory(rec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if files == nil || len(files) != 0 {
-		t.Fatalf("empty inventory=%#v", files)
+	if _, err := r.ImportPacked(a, "test:1.0.0"); err == nil {
+		t.Fatal("empty inventory accepted for nonempty layer")
 	}
 }
 
@@ -415,11 +407,7 @@ func TestInventoryRejectsNonCanonicalDigestAndMode(t *testing.T) {
 			}
 			a.Config, a.ConfigDigest = configData, oci.Digest(configData)
 			a.Manifest, a.ManifestDigest, a.OCIManifest = manifestData, manifestDigest, manifest
-			rec, err := r.ImportPacked(a, "test:1.0.0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := r.Inventory(rec); err == nil {
+			if _, err := r.ImportPacked(a, "test:1.0.0"); err == nil {
 				t.Fatalf("%s accepted", name)
 			}
 		})

@@ -56,6 +56,9 @@ func (r Repository) PayloadSources(rec Record) (*PayloadLease, error) {
 	if err != nil {
 		return fail(err)
 	}
+	if err := r.validateStoredArtifactLayer(canonical); err != nil {
+		return fail(fmt.Errorf("artifact semantic validation failed: %w", err))
+	}
 	manifest, err := r.contentSource("manifests", canonical.ManifestDigest)
 	if err != nil {
 		return fail(err)

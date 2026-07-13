@@ -16,6 +16,9 @@ func BenchmarkCreateStreamingLargeLayer(b *testing.B) {
 	if err := os.WriteFile(filepath.Join(dir, "adversary.yaml"), []byte("name: team/benchmark\nversion: 1.0.0\nruntime:\n  name: node\n  version: '22'\n  command: [index.js]\n"), 0600); err != nil {
 		b.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "index.js"), []byte("export {};\n"), 0600); err != nil {
+		b.Fatal(err)
+	}
 	f, err := os.Create(filepath.Join(dir, "payload.bin"))
 	if err != nil {
 		b.Fatal(err)
@@ -48,6 +51,9 @@ func BenchmarkCreateStreamingLargeLayer(b *testing.B) {
 func TestCreateStreamingAllocationStaysBoundedForIncompressibleLayer(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "adversary.yaml"), []byte("name: team/allocation\nversion: 1.0.0\nruntime:\n  name: node\n  version: '22'\n  command: [index.js]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.js"), []byte("export {};\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	f, err := os.Create(filepath.Join(dir, "payload.bin"))

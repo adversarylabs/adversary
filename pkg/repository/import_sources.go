@@ -91,6 +91,14 @@ func (r Repository) ImportSources(in SourceImport) (_ Record, retErr error) {
 			return Record{}, fmt.Errorf("read adversary manifest: %w", err)
 		}
 	}
+	canonicalManifest, err := validateArtifactLayer(configData, adversary, parsed.Annotations, layer)
+	if err != nil {
+		return Record{}, err
+	}
+	if in.AdversaryManifest == nil {
+		in.AdversaryManifest = blobsource.Bytes(canonicalManifest)
+		adversary = canonicalManifest
+	}
 	for _, item := range []struct {
 		kind string
 		src  blobsource.Source
