@@ -13,6 +13,7 @@ import {
   parseInput,
   validateErrorEnvelope,
   validateReviewEnvelope,
+  writeOutput,
 } from "../dist/index.js";
 
 test("run remains legacy while runLegacy provides the explicit migration path", async () => {
@@ -72,6 +73,51 @@ test("canonical builder converts legacy findings, evidence, and suppression", ()
   ]);
   assert.equal(envelope.result.suppressed.findings, 1);
   assert.equal(envelope.result.suppressedFindings[0].id, "suppressed");
+});
+
+test("canonical builder strictly validates the legacy schema discriminator", () => {
+  const base = {
+    adversary: "local/additive-test",
+    summary: {},
+    findings: [],
+  };
+  assert.doesNotThrow(() =>
+    createReviewEnvelope({ ...base, schema_version: "adversary.review.v1" }),
+  );
+  assert.throws(
+    () => createReviewEnvelope({ ...base, schema_version: "adversary.review.v2" }),
+    /Unsupported legacy run result schema_version "adversary\.review\.v2"; expected "adversary\.review\.v1"/,
+  );
+  assert.throws(
+    () => createReviewEnvelope(base),
+    /schema_version must be the string "adversary\.review\.v1"/,
+  );
+  assert.throws(
+    () => createReviewEnvelope({ ...base, schema_version: 1 }),
+    /schema_version must be the string "adversary\.review\.v1"/,
+  );
+});
+
+test("writeOutput rejects invalid legacy discriminators before conversion", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "adversary-sdk-output-"));
+  const outputPath = join(directory, "output.json");
+  const base = { adversary: "local/additive-test", summary: {}, findings: [] };
+  try {
+    await assert.rejects(
+      writeOutput({ ...base, schema_version: "adversary.review.v2" }, outputPath),
+      /Unsupported legacy run result schema_version/,
+    );
+    await assert.rejects(
+      writeOutput(base, outputPath),
+      /schema_version must be the string "adversary\.review\.v1"/,
+    );
+    await assert.rejects(
+      writeOutput({ ...base, schema_version: false }, outputPath),
+      /schema_version must be the string "adversary\.review\.v1"/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("declarations expose canonical target and deprecated legacy compatibility", async () => {

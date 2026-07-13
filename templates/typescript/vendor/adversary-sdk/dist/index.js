@@ -140,12 +140,13 @@ export async function parseInput(path = process.env.ADVERSARY_INPUT ?? DEFAULT_I
 export async function writeOutput(output, path = process.env.ADVERSARY_OUTPUT ?? DEFAULT_OUTPUT_PATH) {
     const envelope = isRunEnvelope(output)
         ? output
-        : createAdversaryRunEnvelope(output, process.env.ADVERSARY_REPO ?? DEFAULT_REPO_PATH, []);
+        : createAdversaryRunEnvelope(validateLegacyRunResult(output), process.env.ADVERSARY_REPO ?? DEFAULT_REPO_PATH, []);
     validateReviewEnvelope(envelope);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
 }
 export function createReviewEnvelope(output, options = {}) {
+    validateLegacyRunResult(output);
     const findings = Array.isArray(output.findings) ? output.findings : [];
     const embeddedSuppressed = findings.filter((finding) => finding.suppressed === true);
     const visibleOutput = {
@@ -156,6 +157,18 @@ export function createReviewEnvelope(output, options = {}) {
     const envelope = createAdversaryRunEnvelope(visibleOutput, options.repoPath ?? DEFAULT_REPO_PATH, suppressedFindings, options.includeSuppressed ?? false);
     validateReviewEnvelope(envelope);
     return envelope;
+}
+function validateLegacyRunResult(output) {
+    if (output === null || typeof output !== "object" || Array.isArray(output)) {
+        throw new Error("Legacy run result must be an object.");
+    }
+    if (typeof output.schema_version !== "string") {
+        throw new Error(`Legacy run result schema_version must be the string "${REVIEW_SCHEMA_VERSION}".`);
+    }
+    if (output.schema_version !== REVIEW_SCHEMA_VERSION) {
+        throw new Error(`Unsupported legacy run result schema_version "${output.schema_version}"; expected "${REVIEW_SCHEMA_VERSION}".`);
+    }
+    return output;
 }
 export function sortFindings(findings) {
     return [...findings].sort((left, right) => {

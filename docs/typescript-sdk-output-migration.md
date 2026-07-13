@@ -19,6 +19,9 @@ review normalization used by runtime output, constructs suppression counts,
 controls suppressed-detail disclosure explicitly, and validates the resulting
 `AdversaryRunEnvelope` before returning it. Canonical callers should use this
 builder and the exported `AdversaryRunEnvelope`/`ReviewResult` types.
+Both this builder and `writeOutput()` require legacy objects to carry exactly
+`schema_version: "adversary.review.v1"` before conversion; missing, non-string,
+and unsupported discriminators are rejected rather than silently rewritten.
 
 The migration sequence is:
 
