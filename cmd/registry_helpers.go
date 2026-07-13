@@ -20,6 +20,10 @@ func (s scopedCredentialStore) Credentials(registry string) (oci.Credentials, bo
 	return oci.Credentials{Token: s.token}, true
 }
 
+func (s scopedCredentialStore) CredentialsContext(_ context.Context, registry string) (oci.Credentials, bool) {
+	return s.Credentials(registry)
+}
+
 func scopedAuth(store application.AuthStore, apiURL, profile, registryHost string) (adversarylabs.Auth, bool, error) {
 	key := adversarylabs.AuthKey(apiURL, profile)
 	auth, ok, err := store.ExactAuthE(key)

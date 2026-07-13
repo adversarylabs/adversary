@@ -26,7 +26,12 @@ referrer requests. Manifest and server-provided digests, blob sizes/digests,
 and referrer subjects are verified. Pull supports both the Referrers API and
 the standard digest-derived fallback tag. Docker inline credentials,
 per-registry helpers, and `credsStore` are read on demand without copying or
-persisting helper secrets. Bearer challenges are case-insensitive and support
+persisting helper secrets. Credential-helper subprocesses inherit the registry
+request context as well as a five-second child deadline, so command cancellation
+stops helper discovery instead of waiting on an unrelated background operation.
+The context-aware store interface is additive; external legacy stores retain the
+original lookup method and bounded in-tree stores use the request-aware path.
+Bearer challenges are case-insensitive and support
 quoted commas and escapes; Docker reference normalization continues to use the
 maintained Distribution reference parser.
 
@@ -80,7 +85,12 @@ uncontrolled external outage.
 
 Rollback is a revert of the client construction and registry policy changes.
 No credential or repository schema changes are made, and helper credentials are
-never persisted. Reverting also restores the timeout, redirect, realm, upload,
+never persisted. Reverting only context-aware credential lookup allows bounded
+helper attempts to delay cancellation for helper-backed registries;
+aliases, multiple helpers, and process wait cleanup can extend the delay beyond
+one helper timeout. This does not require stored-data migration but is not a safe
+reliability rollback. Reverting the
+broader policy also restores the timeout, redirect, realm, upload,
 and mutable-tag risks described by CLI-008 and CLI-009.
 After a SHA-384/512 record has been imported, however, reverting only the
 algorithm-consistency change would make that otherwise valid record unreadable

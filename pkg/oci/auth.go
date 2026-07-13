@@ -26,6 +26,12 @@ type CredentialStore interface {
 	Credentials(registry string) (Credentials, bool)
 }
 
+// ContextCredentialStore is an additive extension for stores that may perform
+// blocking I/O, such as invoking an external credential helper.
+type ContextCredentialStore interface {
+	CredentialsContext(context.Context, string) (Credentials, bool)
+}
+
 type DockerCredentialStore struct {
 	HomeDir   string
 	Lstat     func(string) (fs.FileInfo, error)
@@ -34,6 +40,10 @@ type DockerCredentialStore struct {
 }
 
 func (s DockerCredentialStore) Credentials(registry string) (Credentials, bool) {
+	return s.CredentialsContext(context.Background(), registry)
+}
+
+func (s DockerCredentialStore) CredentialsContext(ctx context.Context, registry string) (Credentials, bool) {
 	if strings.TrimSpace(s.HomeDir) == "" {
 		return Credentials{}, false
 	}
@@ -78,7 +88,7 @@ func (s DockerCredentialStore) Credentials(registry string) (Credentials, bool) 
 			helper = config.CredentialsStore
 		}
 		if helper != "" {
-			if creds, ok := credentialsFromHelper(s.RunHelper, helper, key); ok {
+			if creds, ok := credentialsFromHelper(ctx, s.RunHelper, helper, key); ok {
 				return creds, true
 			}
 		}
@@ -117,14 +127,14 @@ func (s DockerCredentialStore) readConfig() (data []byte, err error) {
 	return readLimited(file, 1<<20, "Docker config")
 }
 
-func credentialsFromHelper(run func(context.Context, string, string) ([]byte, error), helper, server string) (Credentials, bool) {
+func credentialsFromHelper(parent context.Context, run func(context.Context, string, string) ([]byte, error), helper, server string) (Credentials, bool) {
 	if strings.ContainsAny(helper, `/\\`) || strings.TrimSpace(helper) != helper || helper == "" {
 		return Credentials{}, false
 	}
 	if run == nil {
 		return Credentials{}, false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	out, err := run(ctx, "docker-credential-"+helper, server+"\n")
 	if err != nil || len(out) > 1<<20 {
@@ -292,13 +302,39 @@ func ApplyAuthHeader(req *http.Request, creds Credentials) {
 type ChainCredentialStore []CredentialStore
 
 func (stores ChainCredentialStore) Credentials(registry string) (Credentials, bool) {
+	return stores.CredentialsContext(context.Background(), registry)
+}
+
+func (stores ChainCredentialStore) CredentialsContext(ctx context.Context, registry string) (Credentials, bool) {
 	for _, store := range stores {
+		if contextFinished(ctx) {
+			return Credentials{}, false
+		}
 		if store == nil {
 			continue
 		}
-		if creds, ok := store.Credentials(registry); ok {
+		if creds, ok := credentialsForContext(ctx, store, registry); ok {
 			return creds, true
 		}
 	}
 	return Credentials{}, false
+}
+
+func credentialsForContext(ctx context.Context, store CredentialStore, registry string) (Credentials, bool) {
+	if contextFinished(ctx) {
+		return Credentials{}, false
+	}
+	if contextual, ok := store.(ContextCredentialStore); ok {
+		return contextual.CredentialsContext(ctx, registry)
+	}
+	return store.Credentials(registry)
+}
+
+func contextFinished(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
 }

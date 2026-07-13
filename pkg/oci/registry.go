@@ -350,7 +350,7 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	var creds Credentials
 	var hasCreds bool
 	if r.Credentials != nil {
-		creds, hasCreds = r.Credentials.Credentials(ref.Registry)
+		creds, hasCreds = credentialsForContext(req.Context(), r.Credentials, ref.Registry)
 		if hasCreds && req.Header.Get("Authorization") == "" && creds.Token == "" {
 			ApplyAuthHeader(req, creds)
 		}
