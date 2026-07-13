@@ -1,40 +1,50 @@
 # CLI audit resolution matrix
 
-This index maps every audit finding to current implementation/decision
-evidence. PR links are stable review records; repository documents and tests
-are the maintained contract after merge. Entries marked pending are not a
-closure claim and must be updated by their final remediation PR.
+This index maps every CLI audit finding to merged review records and maintained
+repository evidence. Pull-request links are the historical review trail; the
+linked decisions, schemas, tests, and verification script are the current
+contract.
 
-| ID | Resolution evidence |
-| --- | --- |
-| CLI-001 | PR #2; `docs/trust-model.md`; host-boundary security tests |
-| CLI-002 | PRs #7, #8, and #9 plus artifact-identity closure PR; unified repository migration, injected qualification defaults, authenticated derived alias indexes, journaled import rollback, CAS latest retargeting, restart stability, and ambiguity/tamper tests. Rollback: revert the closure PR; existing durable refs remain readable, while shorthand again follows process registry configuration. |
-| CLI-003 | PR #4; OAuth state/PKCE/device-flow tests |
-| CLI-004 | PRs #1, #2, #16, and #17; strict protocol, JSON purity, output-bound, DTO, and unsafe-execution tests |
-| CLI-005 | PR #6; bounded ingestion and archive regression tests |
-| CLI-006 | PR #5 and manifest-runtime closure PR; `docs/artifact-trust-and-limits.md`, digest tests, and deterministic OCI runtime-image validation. Rollback: revert the closure PR to restore the former permissive image string check. |
-| CLI-007 | PRs #15 and #16; `docs/build-and-git-contract.md` and build/git tests |
-| CLI-008 | PRs #10 and #22; `docs/network-oci-policy.md`, production API-client, fallback-tag, and transport tests |
-| CLI-009 | PRs #10 and #22; OCI fallback integrity, auth/redirect/debug-redaction tests |
-| CLI-010 | PR #4; `docs/auth-credential-storage.md` and locked-store tests |
-| CLI-011 | PRs #3, #23, and manifest-runtime closure PR; canonical `validate` surface, exactly-one runtime identity, environment-independent image-reference validation, semantic runtime/path/project checks, schema/parser parity, and malformed YAML policy corpus. Rollback: revert the closure PR; manifests relying on both runtime identities were ambiguous and are intentionally not compatible. |
-| CLI-012 | PRs #5, #6, #7, #8, #9, #11, and #12; staged repository migration and publication tests |
-| CLI-013 | PRs #1 and #23 plus output-contract closure PR; canonical input/review and error schemas, Go/TypeScript validation, version rejection, ordering parity tests, caller-enforced suppressed-detail disclosure, and control-sequence-safe suppression terminal goldens. Rollback: revert the output-contract closure PR to remove the additive terminal presentation without changing protocol decoding. |
-| CLI-014 | PR #16; lifecycle contracts and signal tests |
-| CLI-015 | PR #15; deterministic git/build decision and regression tests |
-| CLI-016 | PRs #3 and #23; atomic init, deterministic TypeScript lockfile/`npm ci`, and injected render/write cleanup tests |
-| CLI-017 | PRs #17 and #18 plus output-contract and artifact-identity closure PRs; `docs/cli-output-contract.md`, versioned inspect v2 schema, canonical repository-derived identity, help/suppression/terminal-injection goldens, strict `validate` fixtures, schema-negative tests, and stdout-purity tests. Rollback: revert the closure PRs to remove additive schema branches; deprecated JSON shapes remain unchanged. |
-| CLI-018 | PR #19; `docs/platform-runtime-support.md`, native CI matrix |
-| CLI-019 | PRs #6 and #24 through #26; production pack, repository import/payload/repair, OCI upload, and OCI download/materialization use bounded repeatable sources with explicit leases/cleanup; PR #26 removes the legacy byte-slice compatibility APIs |
-| CLI-020 | PRs #6 and #27 plus artifact-identity closure PR; sealed publication, non-mutating `pack --check`, immutable config-backed `inspect --files`, inspect v2 file DTO/schema, deterministic inventories, corruption failure, path-only secret-risk warnings, and traversal close-error tests. Rollback: remove additive inspection surfaces; packed config and repository content remain compatible. |
-| CLI-021 | Final CI/release-hardening PR; required native, quality, race, coverage, cross-build, generated-template, CLI-smoke, tooling, and release-contract gates aggregate as `ci / test` |
-| CLI-022 | PR #20 and final CI/release-hardening PR; channel-isolated publication, pinned workflows/tools, deterministic archives, SBOM, attestation, and the job-scoped GitHub permission decision in `docs/release.md` |
-| CLI-023 | PRs #2, #19, and #20; README, trust/platform/config/output/license/compatibility decisions; a final-audit follow-up remains pending |
-| CLI-024 | PRs #11 through #14, #28, and the App-composition closure PR; every I/O command receives `application.App`; project init/validation/build and captured reference parsing use replaceable ports; Docker credential home/helper policy is captured; dead mandatory ports are removed; handler AST and hermetic command tests prevent ambient dependency regressions. Rollback: revert the closure PR to restore direct project/reference/credential calls and re-open CLI-024. |
+| ID | Merged pull requests | Maintained resolution evidence |
+| --- | --- | --- |
+| CLI-001 | [#2](https://github.com/adversarylabs/adversary/pull/2) | `docs/trust-model.md` and host-execution fail-closed tests document that acknowledgement is not isolation. |
+| CLI-002 | [#7](https://github.com/adversarylabs/adversary/pull/7), [#8](https://github.com/adversarylabs/adversary/pull/8), [#9](https://github.com/adversarylabs/adversary/pull/9), [#32](https://github.com/adversarylabs/adversary/pull/32) | The unified repository owns qualification defaults, authenticated aliases, failure-atomic import journals, CAS reference updates, and restart-stable identity. Ambiguous or tampered aliases fail closed. |
+| CLI-003 | [#4](https://github.com/adversarylabs/adversary/pull/4) | OAuth state, PKCE, redirect, and device-flow regression tests cover authentication boundaries. |
+| CLI-004 | [#1](https://github.com/adversarylabs/adversary/pull/1), [#2](https://github.com/adversarylabs/adversary/pull/2), [#16](https://github.com/adversarylabs/adversary/pull/16), [#17](https://github.com/adversarylabs/adversary/pull/17) | Strict protocol decoding, JSON stdout purity, bounded output, typed errors, and unsafe-host-execution acknowledgement are enforced by tests and `docs/trust-model.md`. |
+| CLI-005 | [#5](https://github.com/adversarylabs/adversary/pull/5), [#6](https://github.com/adversarylabs/adversary/pull/6) | `docs/artifact-trust-and-limits.md` records hard network/archive limits, type rejection, staging, sealing, and rollback behavior; adversarial archive tests enforce them. |
+| CLI-006 | [#5](https://github.com/adversarylabs/adversary/pull/5), [#30](https://github.com/adversarylabs/adversary/pull/30) | Descriptor digests/sizes and config identity are cross-checked; runtime images use deterministic canonical OCI-reference validation. |
+| CLI-007 | [#15](https://github.com/adversarylabs/adversary/pull/15), [#16](https://github.com/adversarylabs/adversary/pull/16), [#33](https://github.com/adversarylabs/adversary/pull/33) | Builds are explicit, transactional, isolated from the source tree, and use captured executable/environment/process dependencies. See `docs/build-and-git-contract.md`. |
+| CLI-008 | [#10](https://github.com/adversarylabs/adversary/pull/10), [#22](https://github.com/adversarylabs/adversary/pull/22) | `docs/network-oci-policy.md` and API-client tests enforce bounded clients, safe retries, redirect/realm policy, and sanitized failures. |
+| CLI-009 | [#10](https://github.com/adversarylabs/adversary/pull/10), [#22](https://github.com/adversarylabs/adversary/pull/22) | OCI fallback tags, digest/size verification, credential scope, redirects, and debug redaction are covered by deterministic registry tests. |
+| CLI-010 | [#4](https://github.com/adversarylabs/adversary/pull/4) | `docs/auth-credential-storage.md` records the scoped, locked, owner-only credential decision and its same-user residual risk. |
+| CLI-011 | [#3](https://github.com/adversarylabs/adversary/pull/3), [#23](https://github.com/adversarylabs/adversary/pull/23), [#30](https://github.com/adversarylabs/adversary/pull/30) | `validate` uses the canonical parser/schema, requires exactly one runtime identity, and checks semantic paths, projects, and environment-independent image references. |
+| CLI-012 | [#5](https://github.com/adversarylabs/adversary/pull/5), [#6](https://github.com/adversarylabs/adversary/pull/6), [#7](https://github.com/adversarylabs/adversary/pull/7), [#8](https://github.com/adversarylabs/adversary/pull/8), [#9](https://github.com/adversarylabs/adversary/pull/9), [#11](https://github.com/adversarylabs/adversary/pull/11), [#12](https://github.com/adversarylabs/adversary/pull/12) | Repository publication, leases, lifecycle journals, migration checkpoints, check/GC behavior, and unified resolver migration are durable and regression-tested. |
+| CLI-013 | [#1](https://github.com/adversarylabs/adversary/pull/1), [#23](https://github.com/adversarylabs/adversary/pull/23), [#31](https://github.com/adversarylabs/adversary/pull/31) | Versioned input/review/error schemas have Go/TypeScript parity, strict version rejection, caller-controlled suppression disclosure, and terminal-control sanitization. |
+| CLI-014 | [#16](https://github.com/adversarylabs/adversary/pull/16) | `docs/process-lifecycle-and-exit-contract.md` defines cancellation, Unix process-group termination, cleanup, timeouts, typed exits, and the documented Windows limit. |
+| CLI-015 | [#15](https://github.com/adversarylabs/adversary/pull/15) | Typed Git changes preserve NUL-delimited paths, rename/copy identity, three-dot semantics, shallow-history errors, and safe glob compilation. |
+| CLI-016 | [#3](https://github.com/adversarylabs/adversary/pull/3), [#23](https://github.com/adversarylabs/adversary/pull/23) | Project initialization is atomic and injected; generated TypeScript uses a deterministic lockfile and `npm ci`, with render/write cleanup tests. |
+| CLI-017 | [#17](https://github.com/adversarylabs/adversary/pull/17), [#18](https://github.com/adversarylabs/adversary/pull/18), [#31](https://github.com/adversarylabs/adversary/pull/31), [#32](https://github.com/adversarylabs/adversary/pull/32) | `docs/cli-output-contract.md`, versioned schemas/fixtures, command-scoped streams, canonical repository identity, inspect inventory v2, suppression goldens, and stdout-purity tests define the automation surface. |
+| CLI-018 | [#19](https://github.com/adversarylabs/adversary/pull/19) | `docs/platform-runtime-support.md` records the OS/runtime matrix, captured executable discovery, data/config locations, and native CI coverage. |
+| CLI-019 | [#6](https://github.com/adversarylabs/adversary/pull/6), [#24](https://github.com/adversarylabs/adversary/pull/24), [#25](https://github.com/adversarylabs/adversary/pull/25), [#26](https://github.com/adversarylabs/adversary/pull/26) | Production package layers use bounded repeatable sources, owned temporary files, and repository leases end to end; whole-layer compatibility APIs were removed. |
+| CLI-020 | [#6](https://github.com/adversarylabs/adversary/pull/6), [#27](https://github.com/adversarylabs/adversary/pull/27), [#32](https://github.com/adversarylabs/adversary/pull/32) | Publication is sealed; `pack --check` is non-mutating; inspect v2 reads immutable config-backed inventories with modes, sizes, digests, corruption failures, and path-only risk warnings. |
+| CLI-021 | [#1](https://github.com/adversarylabs/adversary/pull/1), [#29](https://github.com/adversarylabs/adversary/pull/29), [#34](https://github.com/adversarylabs/adversary/pull/34) | `.depot/workflows/ci.yml` makes native tests, formatting, module verification, vet, race, coverage, five cross-builds, TypeScript/template and CLI smoke tests, security tooling, and release contracts dependencies of `ci / test`. |
+| CLI-022 | [#1](https://github.com/adversarylabs/adversary/pull/1), [#20](https://github.com/adversarylabs/adversary/pull/20), [#29](https://github.com/adversarylabs/adversary/pull/29), [#34](https://github.com/adversarylabs/adversary/pull/34) | `docs/release.md` records pinned tools/actions, deterministic archives, checksums, SBOMs, attestations, isolated publication credentials, draft-first verification, and job-scoped permissions. |
+| CLI-023 | [#2](https://github.com/adversarylabs/adversary/pull/2), [#19](https://github.com/adversarylabs/adversary/pull/19), [#20](https://github.com/adversarylabs/adversary/pull/20), [#29](https://github.com/adversarylabs/adversary/pull/29), [#34](https://github.com/adversarylabs/adversary/pull/34) | README and maintained decisions now cover installation, configuration precedence, trust, output/exits, storage, platform compatibility, release provenance, and the explicit no-license decision. The checked-in example has a lockfile, complete vendored SDK, and an authoritative clean-`npm ci` smoke stage. |
+| CLI-024 | [#11](https://github.com/adversarylabs/adversary/pull/11), [#12](https://github.com/adversarylabs/adversary/pull/12), [#13](https://github.com/adversarylabs/adversary/pull/13), [#14](https://github.com/adversarylabs/adversary/pull/14), [#28](https://github.com/adversarylabs/adversary/pull/28), [#33](https://github.com/adversarylabs/adversary/pull/33) | Every production command receives `application.App`; projects, references, credentials, runtime processes, filesystems, paths, environment, and streams cross replaceable ports. AST and hermetic tests reject ambient dependency regressions. |
 
-Rollback notes are recorded in each linked PR and its maintained decision
-document. `scripts/test-release-contract.sh` prevents release, formula, license,
-version, and README command-surface drift.
+## Rollback and compatibility
+
+The linked PRs contain change-specific rollback notes. The maintained decisions
+also identify the compatibility boundary before rollback: schema additions keep
+their prior versions, repository records and content paths remain readable,
+streaming and composition changes do not migrate stored data, and release/build
+policy changes can be reverted without changing artifact formats. Security
+hardening must be reverted as a coherent unit; selectively restoring ambient
+credential, execution, parsing, or alias behavior would restore the audit risk.
+
+`scripts/test-release-contract.sh` guards release, formula, license, version,
+and README command-surface drift. `scripts/ci-verify.sh` is the shared local/CI
+entry point for the complete verification contract.
 
 ## CLI-019 bounded-memory decision
 
@@ -56,3 +66,28 @@ that total allocations stay below 8 MiB. Repository source tests use a 12 MiB
 random layer and assert the packed artifact carries only an owned source;
 repository and OCI tests also cover repeatable reads, size/digest mismatch,
 overflow, stalled readers, cleanup on failure, and post-close invalidation.
+
+## Completion status and intentional limitations
+
+CLI-001 through CLI-024 have an implementation or an explicit repository
+decision above. The following are deliberate boundaries, not unfinished audit
+claims:
+
+- Host adversaries are not sandboxed; unsupported network, filesystem, and
+  environment restrictions fail closed.
+- Artifact digests prove integrity, not publisher authenticity. No publisher
+  trust-root/signature policy has been selected.
+- Windows terminates the direct child but does not yet supervise a descendant
+  tree with a Job Object.
+- Release archives target Linux and macOS on amd64/arm64. Windows is tested and
+  source-build supported, but has no packaged release.
+- Credential files are owner-only but not encrypted against the same OS user;
+  no native keyring backend is selected.
+- Multi-platform OCI indexes, referrer pagination, and resumable uploads remain
+  intentionally unsupported under the fail-closed policy in
+  `docs/network-oci-policy.md`.
+- The repository owner has not selected a source license. `LICENSE` therefore
+  grants no reuse rights and the Homebrew formula makes no license claim.
+
+Changing any boundary requires its own reviewed compatibility, trust, or legal
+decision; its absence is not implied support.

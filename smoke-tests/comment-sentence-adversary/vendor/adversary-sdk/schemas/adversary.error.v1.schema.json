@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adversary.dev/schemas/adversary.error.v1.schema.json",
+  "title": "Adversary Error Envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "error"],
+  "properties": {
+    "protocolVersion": { "const": 1 },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "details"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "message": { "type": "string", "pattern": "\\S" },
+        "retryable": { "type": "boolean" },
+        "details": { "type": "object" }
+      }
+    }
+  }
+}
