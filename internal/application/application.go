@@ -120,6 +120,7 @@ type Resolver interface {
 	PayloadSources(repository.Record) (*repository.PayloadLease, error)
 	ImportPacked(pack.Artifact, string) (repository.Record, error)
 	ImportSources(repository.SourceImport) (repository.Record, error)
+	CommitEquivalentManifest(string, string, []byte) (repository.Record, error)
 	UpdateRef(string, string, string) error
 }
 type Runtime interface {

@@ -27,8 +27,8 @@ func (r Repository) Inventory(rec Record) ([]pack.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if oci.Digest(data) != rec.ConfigDigest {
-		return nil, fmt.Errorf("config digest mismatch")
+	if err := oci.VerifyDigest(data, rec.ConfigDigest); err != nil {
+		return nil, fmt.Errorf("config digest mismatch: %w", err)
 	}
 	var config struct {
 		Files *[]pack.File `json:"files"`

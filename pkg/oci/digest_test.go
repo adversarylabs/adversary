@@ -18,8 +18,19 @@ func TestDigestValidation(t *testing.T) {
 		}
 	}
 	sha512sum := sha512.Sum512([]byte("data"))
-	if _, err := ParseDigest(fmt.Sprintf("sha512:%x", sha512sum)); err != nil {
+	sha512Digest := fmt.Sprintf("sha512:%x", sha512sum)
+	if _, err := ParseDigest(sha512Digest); err != nil {
 		t.Fatalf("sha512 rejected: %v", err)
+	}
+	if err := VerifyDigest([]byte("data"), sha512Digest); err != nil {
+		t.Fatalf("sha512 verification failed: %v", err)
+	}
+	sha384Digest := fmt.Sprintf("sha384:%x", sha512.Sum384([]byte("data")))
+	if _, err := ParseDigest(sha384Digest); err != nil {
+		t.Fatalf("sha384 rejected: %v", err)
+	}
+	if err := VerifyDigest([]byte("data"), sha384Digest); err != nil {
+		t.Fatalf("sha384 verification failed: %v", err)
 	}
 }
 

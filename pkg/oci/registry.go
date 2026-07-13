@@ -98,9 +98,10 @@ func (r *HTTPRegistry) pushManifest(ctx context.Context, ref Reference, manifest
 		return "", registryError(resp)
 	}
 	if got := resp.Header.Get("Docker-Content-Digest"); got != "" {
-		if got != digest {
-			return "", fmt.Errorf("registry manifest digest %s does not match uploaded content %s", got, digest)
+		if err := VerifyDigest(manifest, got); err != nil {
+			return "", fmt.Errorf("registry manifest digest %s does not match uploaded content: %w", got, err)
 		}
+		digest = got
 	}
 	return digest, nil
 }
@@ -140,20 +141,23 @@ func (r *HTTPRegistry) getManifest(ctx context.Context, ref Reference) ([]byte, 
 	if err != nil {
 		return nil, "", err
 	}
-	actual := Digest(data)
 	header := resp.Header.Get("Docker-Content-Digest")
 	digest := header
 	if ref.Digest != "" {
 		digest = ref.Digest
 	}
 	if digest == "" {
-		digest = actual
+		digest = Digest(data)
 	}
-	if header != "" && header != actual {
-		return nil, "", fmt.Errorf("manifest digest header %s does not match content %s", header, actual)
+	if header != "" {
+		if err := VerifyDigest(data, header); err != nil {
+			return nil, "", fmt.Errorf("manifest digest header %s does not match content: %w", header, err)
+		}
 	}
-	if ref.Digest != "" && actual != ref.Digest {
-		return nil, "", fmt.Errorf("requested manifest digest %s does not match content %s", ref.Digest, actual)
+	if ref.Digest != "" {
+		if err := VerifyDigest(data, ref.Digest); err != nil {
+			return nil, "", fmt.Errorf("requested manifest digest %s does not match content: %w", ref.Digest, err)
+		}
 	}
 	if err := VerifyDigest(data, digest); err != nil {
 		return nil, "", err
@@ -179,35 +183,33 @@ func (r *HTTPRegistry) getArtifactManifest(ctx context.Context, ref Reference, d
 	if err != nil {
 		return nil, "", err
 	}
-	actual := Digest(data)
 	header := resp.Header.Get("Docker-Content-Digest")
-	if header != "" && header != digest {
-		return nil, "", fmt.Errorf("artifact manifest digest header %s does not match requested %s", header, digest)
-	}
-	if actual != digest {
-		return nil, "", fmt.Errorf("requested artifact manifest digest %s does not match content %s", digest, actual)
+	if header != "" {
+		if err := VerifyDigest(data, header); err != nil {
+			return nil, "", fmt.Errorf("artifact manifest digest header %s does not match content: %w", header, err)
+		}
 	}
 	if err := VerifyDigest(data, digest); err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("requested artifact manifest digest %s does not match content: %w", digest, err)
 	}
 	return data, digest, nil
 }
 
-func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Reference, imageDigest string) ([]byte, error) {
+func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Reference, imageDigest string) ([]byte, string, error) {
 	req, err := r.newRequest(ctx, http.MethodGet, ref, "/referrers/"+imageDigest+"?artifactType="+url.QueryEscape(AdversaryManifestMediaType), nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	resp, err := r.do(req, ref, "repository:"+ref.Repository+":pull")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 		return r.getAdversaryManifestFallback(ctx, ref, imageDigest)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, registryError(resp)
+		return nil, "", registryError(resp)
 	}
 	// Do not traverse registry-provided pagination links. The deterministic
 	// digest-derived fallback avoids accepting another authority or ordering.
@@ -216,11 +218,11 @@ func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Ref
 	}
 	data, err := readLimited(resp.Body, DefaultIngestionLimits.ManifestBytes, "referrers response")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var referrers ReferrersResponse
 	if err := json.Unmarshal(data, &referrers); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	for _, descriptor := range referrers.Manifests {
 		if descriptor.ArtifactType != AdversaryManifestMediaType {
@@ -228,57 +230,60 @@ func (r *HTTPRegistry) getAdversaryManifestReferrer(ctx context.Context, ref Ref
 		}
 		data, _, err := r.getArtifactManifest(ctx, ref, descriptor.Digest)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		var artifact ArtifactManifest
 		if err := json.Unmarshal(data, &artifact); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if artifact.MediaType != OCIArtifactManifestMediaType || artifact.ArtifactType != AdversaryManifestMediaType || !isImageManifestMediaType(artifact.Subject.MediaType) || artifact.Subject.Digest != imageDigest || len(artifact.Blobs) != 1 || artifact.Blobs[0].MediaType != AdversaryManifestMediaType {
 			continue
 		}
-		return r.getBlob(ctx, ref, artifact.Blobs[0])
+		yaml, err := r.getBlob(ctx, ref, artifact.Blobs[0])
+		return yaml, artifact.Blobs[0].Digest, err
 	}
 	return r.getAdversaryManifestFallback(ctx, ref, imageDigest)
 }
 
-func (r *HTTPRegistry) getAdversaryManifestFallback(ctx context.Context, ref Reference, imageDigest string) ([]byte, error) {
+func (r *HTTPRegistry) getAdversaryManifestFallback(ctx context.Context, ref Reference, imageDigest string) ([]byte, string, error) {
 	tag, err := AdversaryManifestArtifactTag(imageDigest)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	req, err := r.newRequest(ctx, http.MethodGet, ref, "/manifests/"+tag, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	req.Header.Set("Accept", OCIArtifactManifestMediaType)
 	resp, err := r.do(req, ref, "repository:"+ref.Repository+":pull")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
+		return nil, "", nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, registryError(resp)
+		return nil, "", registryError(resp)
 	}
 	data, err := readLimited(resp.Body, DefaultIngestionLimits.ManifestBytes, "artifact manifest")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	actual := Digest(data)
-	if header := resp.Header.Get("Docker-Content-Digest"); header != "" && header != actual {
-		return nil, fmt.Errorf("artifact manifest digest header %s does not match content %s", header, actual)
+	if header := resp.Header.Get("Docker-Content-Digest"); header != "" {
+		if err := VerifyDigest(data, header); err != nil {
+			return nil, "", fmt.Errorf("artifact manifest digest header %s does not match content: %w", header, err)
+		}
 	}
 	var artifact ArtifactManifest
 	if err := json.Unmarshal(data, &artifact); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if artifact.MediaType != OCIArtifactManifestMediaType || artifact.ArtifactType != AdversaryManifestMediaType || artifact.Subject.Digest != imageDigest || !isImageManifestMediaType(artifact.Subject.MediaType) || len(artifact.Blobs) != 1 || artifact.Blobs[0].MediaType != AdversaryManifestMediaType {
-		return nil, fmt.Errorf("invalid adversary manifest fallback artifact")
+		return nil, "", fmt.Errorf("invalid adversary manifest fallback artifact")
 	}
-	return r.getBlob(ctx, ref, artifact.Blobs[0])
+	yaml, err := r.getBlob(ctx, ref, artifact.Blobs[0])
+	return yaml, artifact.Blobs[0].Digest, err
 }
 
 func isImageManifestMediaType(value string) bool {

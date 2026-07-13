@@ -30,6 +30,15 @@ persisting helper secrets. Bearer challenges are case-insensitive and support
 quoted commas and escapes; Docker reference normalization continues to use the
 maintained Distribution reference parser.
 
+SHA-256 is the default algorithm for artifacts produced by this CLI. OCI
+manifests, descriptors, and references using registered SHA-384 or SHA-512
+digests are also verified without rewriting their identity. The requested
+manifest digest remains the repository record identity across pull, import,
+repair, and materialization. Referrer fallback tags retain the existing literal
+SHA-256 convention. SHA-384 also fits that convention; SHA-512 uses a
+domain-separated SHA-256 projection of the canonical subject digest so the
+deterministic fallback remains within the OCI 128-character tag limit.
+
 Intentional compatibility limits: multi-platform indexes are rejected because
 Adversary artifacts are runtime packages rather than platform container images,
 and silently selecting a platform could change signed content. Referrers
@@ -41,6 +50,23 @@ same fallback. Uploads remain monolithic because
 restartable chunk state needs durable transaction semantics; the 256 MiB layer
 limit bounds the current request. These choices fail closed and retain the
 fallback-tag interoperability path.
+
+Registries may return a canonical manifest digest using a different supported
+algorithm than the retained local record. Push verifies that identity against
+the uploaded manifest bytes, commits an equivalent unreferenced local record,
+and registers the explicit remote reference only after the adversary-manifest
+referrer succeeds. This prevents the expected missing-local-record failure
+after successful publication while preserving the original generic reference.
+The payload lease is closed before local mutation; referrer or reference-CAS
+failure may leave an unreferenced verified record for normal GC, but never
+retargets the remote reference locally.
+
+Digest equivalence does not merge explicit remote identities. A remote
+reference and its digest resolve the registry-returned record, while generic
+name aliases deterministically resolve equivalent local identities. Equivalence
+requires the same exact verified manifest bytes and attached adversary-manifest
+digest; the persisted canonical alias is only a root preference and need not
+remain live after GC. Ordinary same-name collisions remain errors.
 
 Live GHCR, Docker Hub, Harbor, and CNCF Distribution conformance runs are
 deferred because release CI has no approved external credentials or durable
@@ -56,3 +82,7 @@ Rollback is a revert of the client construction and registry policy changes.
 No credential or repository schema changes are made, and helper credentials are
 never persisted. Reverting also restores the timeout, redirect, realm, upload,
 and mutable-tag risks described by CLI-008 and CLI-009.
+After a SHA-384/512 record has been imported, however, reverting only the
+algorithm-consistency change would make that otherwise valid record unreadable
+or unverifiable. Remove or migrate such records to SHA-256 identities before
+rollback; existing SHA-256 records and references require no migration.

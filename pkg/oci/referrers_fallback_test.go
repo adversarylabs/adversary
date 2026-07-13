@@ -31,6 +31,9 @@ func TestPullUsesVerifiedAdversaryManifestFallback(t *testing.T) {
 			if string(pulled.AdversaryManifest) != string(wantYAML) {
 				t.Fatalf("adversary manifest = %q, want %q", pulled.AdversaryManifest, wantYAML)
 			}
+			if want := testDigest("sha384", string(wantYAML)); pulled.AdversaryManifestDigest != want {
+				t.Fatalf("adversary manifest digest = %s, want %s", pulled.AdversaryManifestDigest, want)
+			}
 			if pulled.ManifestDigest != Digest(pulled.RawManifest) {
 				t.Fatalf("manifest digest = %s, content = %s", pulled.ManifestDigest, Digest(pulled.RawManifest))
 			}
@@ -59,6 +62,11 @@ func fallbackRegistry(t *testing.T, referrersStatus int, referrers ReferrersResp
 	}
 	yaml := []byte("name: verified-fallback\nversion: 1.0.0\n")
 	artifactData, _, artifact, err := NewAdversaryManifestArtifact(manifestDigest, yaml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact.Blobs[0].Digest = testDigest("sha384", string(yaml))
+	artifactData, err = json.Marshal(artifact)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +104,7 @@ func fallbackRegistry(t *testing.T, referrersStatus int, referrers ReferrersResp
 		case strings.HasSuffix(path, "/manifests/"+fallbackTag):
 			w.Header().Set("Docker-Content-Digest", Digest(artifactData))
 			_, _ = w.Write(artifactData)
-		case strings.HasSuffix(path, "/blobs/"+Digest(yaml)):
+		case strings.HasSuffix(path, "/blobs/"+artifact.Blobs[0].Digest):
 			_, _ = w.Write(yaml)
 		default:
 			http.Error(w, fmt.Sprintf("unexpected %s", r.URL.RequestURI()), http.StatusNotFound)

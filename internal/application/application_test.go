@@ -165,6 +165,9 @@ func (fakeResolver) ImportPacked(pack.Artifact, string) (repository.Record, erro
 func (fakeResolver) ImportSources(repository.SourceImport) (repository.Record, error) {
 	return repository.Record{}, nil
 }
+func (fakeResolver) CommitEquivalentManifest(string, string, []byte) (repository.Record, error) {
+	return repository.Record{}, nil
+}
 func (fakeResolver) UpdateRef(string, string, string) error { return nil }
 
 type fakeRuntime struct{}
