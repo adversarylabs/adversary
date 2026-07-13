@@ -11,6 +11,7 @@ import {
   createReviewEnvelope,
   encodeErrorEnvelope,
   parseInput,
+  sortLegacyFindings,
   validateErrorEnvelope,
   validateReviewEnvelope,
   writeOutput,
@@ -182,35 +183,61 @@ test("canonical builder strictly validates the legacy schema discriminator", () 
   );
 });
 
-test("writeOutput rejects invalid legacy discriminators before conversion", async () => {
+test("writeOutput accepts canonical envelopes and rejects legacy objects", async () => {
   const directory = await mkdtemp(join(tmpdir(), "adversary-sdk-output-"));
   const outputPath = join(directory, "output.json");
-  const base = { adversary: "local/additive-test", summary: {}, findings: [] };
+  const legacy = {
+    schema_version: "adversary.review.v1",
+    adversary: "local/cleanup-test",
+    summary: {},
+    findings: [],
+  };
   try {
+    const envelope = createReviewEnvelope(legacy);
+    await writeOutput(envelope, outputPath);
+    assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), envelope);
     await assert.rejects(
-      writeOutput({ ...base, schema_version: "adversary.review.v2" }, outputPath),
-      /Unsupported legacy run result schema_version/,
-    );
-    await assert.rejects(
-      writeOutput(base, outputPath),
-      /schema_version must be the string "adversary\.review\.v1"/,
-    );
-    await assert.rejects(
-      writeOutput({ ...base, schema_version: false }, outputPath),
-      /schema_version must be the string "adversary\.review\.v1"/,
+      writeOutput(legacy, outputPath),
+      /envelope/,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("declarations expose canonical target and deprecated legacy compatibility", async () => {
+test("declarations expose only explicit canonical and legacy paths", async () => {
   const declarations = await readFile(new URL("../dist/index.d.ts", import.meta.url), "utf8");
   assert.match(declarations, /interface LegacyRunResult/);
-  assert.match(declarations, /@deprecated Use LegacyRunResult/);
+  assert.doesNotMatch(declarations, /interface Output\b/);
+  assert.doesNotMatch(declarations, /schemaVersion/);
   assert.match(declarations, /run\(options\?: RunOptions\): Promise<AdversaryRunEnvelope>/);
   assert.match(declarations, /runLegacy\(options\?: RunOptions\): Promise<LegacyRunResult>/);
+  assert.match(declarations, /writeOutput\(output: AdversaryRunEnvelope/);
   assert.match(declarations, /createReviewEnvelope\(output: LegacyRunResult/);
+  assert.match(declarations, /sortLegacyFindings\(findings: SerializedFinding/);
+  assert.doesNotMatch(declarations, /sortFindings\(/);
+  assert.equal("schemaVersion" in new Adversary({ name: "local/cleanup-test" }), false);
+});
+
+test("sortLegacyFindings explicitly sorts serialized legacy findings", () => {
+  const finding = (rule_id, path, line) => ({
+    rule_id,
+    id: `${rule_id}:${path}:${line}`,
+    severity: Severity.Low,
+    title: rule_id,
+    path,
+    line,
+  });
+  const findings = [
+    finding("z.rule", "b.ts", 1),
+    finding("z.rule", "a.ts", 2),
+    finding("a.rule", "a.ts", 2),
+  ];
+  assert.deepEqual(
+    sortLegacyFindings(findings).map(({ id }) => id),
+    ["a.rule:a.ts:2", "z.rule:a.ts:2", "z.rule:b.ts:1"],
+  );
+  assert.equal(findings[0].id, "z.rule:b.ts:1");
 });
 
 test("shared error fixture has deterministic encoding and rejects newer versions", async () => {
