@@ -16,8 +16,13 @@ compressed, 1 GiB expanded, 256 MiB per file, 10,000 entries, 4,096 bytes per
 path, and a 100:1 expansion ratio. Extraction streams into a private staging
 directory and accepts regular files and directories only. Links, devices,
 sparse entries, duplicate paths, traversal, and paths outside that directory
-are rejected. The config is mandatory and its identity, runtime, annotations,
-complete file set, sizes, modes, and hashes are cross-checked. Published files
+are rejected. The config is mandatory, strictly typed, and rejects unknown or
+duplicate JSON fields. Its deterministic creation marker, identity, runtime
+name/version/image, entrypoint, producer annotations, and complete uniquely
+sorted file inventory are cross-checked against both the canonical
+`adversary.yaml` and the extracted package layer. Every listed path must exist
+exactly once with no unlisted files; sizes, normalized `0644`/`0755` modes, and
+SHA-256 hashes must match. Published files
 are read-only and every published directory is non-writable; executable intent
 is retained as read-and-execute mode. Staging trees are sealed and policy-checked
 before atomic publication, then checked again at the destination. Named and
@@ -50,6 +55,27 @@ just like post-install permission changes by that same principal.
 Repository name and reference aliases have exact-byte interprocess locks and
 atomic record replacement, so readers observe one complete record. Reference
 updates use compare-and-swap and aliases fail closed when ambiguous.
+
+Canonical `adversary.yaml` is normally an attached OCI referrer and is injected
+only when the validated package layer does not already contain it. A legacy
+layer-backed copy is accepted only when it is present in the exact config
+inventory; it is promoted to durable attached metadata during import. If both
+copies exist their bytes must be identical. Missing or conflicting copies fail
+before content, record, reference, or materialization publication. Content that
+was durably written by a later transaction failure remains untrusted and
+unreferenced for normal GC; validation failures occur before those writes.
+Import opens each caller-owned source exactly once into a verified private
+stage; semantic validation and durable publication reopen only that immutable
+stage, preventing a changing source from swapping bytes between validation and
+commit.
+
+Stored records are semantically revalidated from the immutable config and a
+fresh bounded extraction before inventory display, republishing, or execution.
+An older record created before this gate therefore cannot bypass the checks via
+an already sealed materialization. For a valid pre-gate record whose only
+canonical manifest is inventory-backed in the layer, payload acquisition
+synthesizes the verified attached-manifest source without mutating repository
+state while the digest lease is held.
 
 Digest verification provides content integrity, not publisher identity. This
 change does not introduce signatures because the repository has no configured
@@ -91,8 +117,10 @@ tar writes, produces deterministic timestamps and ordering, and records the
 executable bits. Existing ignore-file matching remains intentionally unchanged;
 changing its grammar is a separate compatibility decision.
 
-Rollback is code-only: the streaming source migration and cleanup can be
-reverted without changing repository records or content paths. Reverting the
+Rollback is code-only and introduces no record or content-path migration. Valid
+existing artifacts remain readable; previously accepted artifacts whose config,
+layer, annotations, or canonical manifest conflict now fail closed and must be
+repacked. Reverting the
 bounded reader/extractor hardening reopens the resource-amplification and
 link/type acceptance risks described here, so those checks must remain a
 coherent unit. Previously installed digest-addressed artifacts remain usable.

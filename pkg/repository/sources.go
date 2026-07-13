@@ -56,6 +56,10 @@ func (r Repository) PayloadSources(rec Record) (*PayloadLease, error) {
 	if err != nil {
 		return fail(err)
 	}
+	canonicalManifest, err := r.validateStoredArtifactLayer(canonical)
+	if err != nil {
+		return fail(fmt.Errorf("artifact semantic validation failed: %w", err))
+	}
 	manifest, err := r.contentSource("manifests", canonical.ManifestDigest)
 	if err != nil {
 		return fail(err)
@@ -87,6 +91,8 @@ func (r Repository) PayloadSources(rec Record) (*PayloadLease, error) {
 			return fail(sourceErr)
 		}
 		lease.AdversaryManifest = lease.wrap(adversaryManifest)
+	} else {
+		lease.AdversaryManifest = lease.wrap(blobsource.Bytes(canonicalManifest))
 	}
 	return lease, nil
 }

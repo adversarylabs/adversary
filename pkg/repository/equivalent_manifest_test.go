@@ -137,7 +137,7 @@ func TestCommitEquivalentManifestReusesIndependentExistingTarget(t *testing.T) {
 
 func TestEquivalentManifestWithDifferentAttachedManifestIsAmbiguous(t *testing.T) {
 	repo, root, manifest := equivalentManifestFixture(t)
-	different := []byte("name: local/test\nversion: 1.0.0\nruntime:\n  name: node\n  version: \"22\"\n  command: [alternate.js]\n")
+	different := []byte("name: local/test\nversion: 1.0.0\ndescription: semantically distinct attachment\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
 	target := importIndependentEquivalent(t, repo, root, manifest, different)
 	rootKey, err := repo.recordSemanticKey(root)
 	if err != nil {

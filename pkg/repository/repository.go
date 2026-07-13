@@ -305,24 +305,20 @@ func deriveRecord(manifestData, configData, adversary []byte, manifestDigest, co
 	if _, err := oci.ParseDigest(ld); err != nil {
 		return Record{}, fmt.Errorf("invalid layer digest: %w", err)
 	}
-	var c struct {
-		FullName string `json:"full_name"`
-		Version  string `json:"version"`
-		Name     string `json:"name"`
-	}
-	if err := json.Unmarshal(configData, &c); err != nil {
+	c, err := pack.DecodeArtifactConfig(configData)
+	if err != nil {
 		return Record{}, err
-	}
-	if c.FullName == "" || c.Version == "" || m.Annotations["ai.adversary.full_name"] != c.FullName || m.Annotations["ai.adversary.version"] != c.Version || m.Annotations["ai.adversary.name"] != c.Name {
-		return Record{}, fmt.Errorf("annotations conflict with config")
 	}
 	if len(adversary) > 0 {
 		if len(adversary) > 1<<20 || oci.VerifyDigest(adversary, adversaryDigest) != nil {
 			return Record{}, fmt.Errorf("adversary manifest linkage mismatch")
 		}
 		parsed, err := canonical.Parse(adversary)
-		if err != nil || parsed.Name != c.FullName || (parsed.Version != "" && parsed.Version != c.Version) {
-			return Record{}, fmt.Errorf("adversary identity conflicts with config")
+		if err != nil {
+			return Record{}, fmt.Errorf("parse attached adversary manifest: %w", err)
+		}
+		if err := pack.ValidateArtifactMetadata(c, m.Annotations, parsed, c.Files); err != nil {
+			return Record{}, err
 		}
 	} else if adversaryDigest != "" {
 		return Record{}, fmt.Errorf("missing adversary manifest")
@@ -764,6 +760,11 @@ func (r Repository) Verify(rec Record) VerifyResult {
 			out.Corrupt = append(out.Corrupt, v.d)
 		}
 	}
+	if len(out.Missing)+len(out.Corrupt) == 0 {
+		if _, err := r.validateStoredArtifactLayer(rec); err != nil {
+			out.Corrupt = append(out.Corrupt, rec.Digest)
+		}
+	}
 	return out
 }
 func (r Repository) Repair(rec Record, sources map[string]blobsource.Source) error {
@@ -806,6 +807,9 @@ func (r Repository) repairLocked(rec Record, sources map[string]blobsource.Sourc
 	}
 	if _, err := r.record(rec.Digest); err != nil {
 		return repaired, err
+	}
+	if _, err := r.validateStoredArtifactLayer(rec); err != nil {
+		return repaired, fmt.Errorf("artifact semantic validation failed after repair: %w", err)
 	}
 	return repaired, nil
 }
