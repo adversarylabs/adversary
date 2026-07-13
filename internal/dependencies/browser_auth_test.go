@@ -164,6 +164,29 @@ func TestBrowserAuthInjectedFailuresAreBounded(t *testing.T) {
 			t.Fatalf("err=%v", err)
 		}
 	})
+	for name, serveErr := range map[string]error{
+		"premature net close":  net.ErrClosed,
+		"premature HTTP close": http.ErrServerClosed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			auth := BrowserAuth{Entropy: bytes.NewReader(make([]byte, 104)), ListenFunc: net.Listen, NewServerFunc: func(http.Handler) CallbackServer {
+				return callbackServerStub{serve: func(net.Listener) error { return serveErr }, shutdown: func(context.Context) error { return nil }}
+			}, OpenFunc: func(context.Context, string) error { return nil }}
+			done := make(chan error, 1)
+			go func() {
+				_, err := auth.Login(context.Background(), newRequest())
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err == nil || !errors.Is(err, serveErr) {
+					t.Fatalf("err=%v, want %v", err, serveErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("login did not wake after premature callback server close")
+			}
+		})
+	}
 	t.Run("joined serve error retains real failure", func(t *testing.T) {
 		auth := BrowserAuth{Entropy: bytes.NewReader(make([]byte, 104)), ListenFunc: net.Listen, NewServerFunc: func(http.Handler) CallbackServer {
 			return callbackServerStub{serve: func(net.Listener) error { return errors.Join(net.ErrClosed, errors.New("serve failed")) }, shutdown: func(context.Context) error { return nil }}
@@ -197,6 +220,27 @@ func TestBrowserAuthInjectedFailuresAreBounded(t *testing.T) {
 		}
 		if token, err := auth.Login(context.Background(), newRequest()); token.Token != "token" || err == nil || !strings.Contains(err.Error(), "shutdown failed") {
 			t.Fatalf("token=%#v err=%v", token, err)
+		}
+	})
+	t.Run("cleanup joins real serve failure with cancellation", func(t *testing.T) {
+		stopped := make(chan struct{})
+		var once sync.Once
+		auth := BrowserAuth{Entropy: bytes.NewReader(make([]byte, 104)), ListenFunc: net.Listen, NewServerFunc: func(http.Handler) CallbackServer {
+			return callbackServerStub{
+				serve: func(net.Listener) error {
+					<-stopped
+					return errors.Join(net.ErrClosed, errors.New("serve cleanup failed"))
+				},
+				shutdown: func(context.Context) error {
+					once.Do(func() { close(stopped) })
+					return nil
+				},
+			}
+		}, OpenFunc: func(context.Context, string) error { return nil }}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := auth.Login(ctx, newRequest()); !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "serve cleanup failed") {
+			t.Fatalf("err=%v", err)
 		}
 	})
 	t.Run("cancellation shuts down after browser fallback", func(t *testing.T) {

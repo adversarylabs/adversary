@@ -146,19 +146,47 @@ func (b BrowserAuth) Login(parent context.Context, request application.BrowserAu
 	if server == nil {
 		return adversarylabs.TokenResponse{}, fmt.Errorf("browser auth server factory returned nil")
 	}
+	const (
+		callbackRunning int32 = iota
+		callbackCleanupStarted
+		callbackServeReturned
+	)
+	var callbackLifecycle atomic.Int32
+	serveDone := make(chan error, 1)
+	serveConsumed := false
 	go func() {
 		serveErr := server.Serve(listener)
+		serveReturnedBeforeCleanup := callbackLifecycle.CompareAndSwap(callbackRunning, callbackServeReturned)
 		if serveErr == nil {
 			serveErr = errors.New("browser auth callback server stopped unexpectedly")
 		}
-		if err := normalizeCallbackCloseError(serveErr); err != nil {
-			publishBrowserOutcome(result, browserLoginOutcome{err: fmt.Errorf("serve local login callback: %w", err)})
+		if !serveReturnedBeforeCleanup {
+			serveErr = normalizeCallbackCloseError(serveErr)
 		}
+		serveDone <- serveErr
 	}()
 	defer func() {
 		shutdownCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer stop()
-		retErr = errors.Join(retErr, normalizeCallbackCloseError(server.Shutdown(shutdownCtx)))
+		callbackLifecycle.CompareAndSwap(callbackRunning, callbackCleanupStarted)
+		shutdownErr := normalizeCallbackCloseError(server.Shutdown(shutdownCtx))
+		listenerErr := normalizeCallbackCloseError(listener.Close())
+		retErr = errors.Join(retErr, shutdownErr, listenerErr)
+		if serveConsumed {
+			return
+		}
+		select {
+		case serveErr := <-serveDone:
+			retErr = errors.Join(retErr, serveErr)
+			return
+		default:
+		}
+		select {
+		case serveErr := <-serveDone:
+			retErr = errors.Join(retErr, serveErr)
+		case <-shutdownCtx.Done():
+			retErr = errors.Join(retErr, fmt.Errorf("callback server did not stop during cleanup: %w", shutdownCtx.Err()))
+		}
 	}()
 	loginURL, err := request.Client.BrowserLoginURL(adversarylabs.BrowserLoginOptions{RedirectURI: callbackURL, State: state, CodeChallenge: challenge, Name: request.Name, CI: request.CI})
 	if err != nil {
@@ -177,6 +205,9 @@ func (b BrowserAuth) Login(parent context.Context, request application.BrowserAu
 	select {
 	case outcome := <-result:
 		return outcome.token, outcome.err
+	case serveErr := <-serveDone:
+		serveConsumed = true
+		return adversarylabs.TokenResponse{}, fmt.Errorf("serve local login callback: %w", serveErr)
 	case <-ctx.Done():
 		return adversarylabs.TokenResponse{}, ctx.Err()
 	}
