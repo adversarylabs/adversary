@@ -82,15 +82,10 @@ export class Finding {
 }
 export class Adversary {
     name;
-    schemaVersion;
     rules = [];
     constructor(options) {
         requireString(options.name, "Adversary name");
-        if (options.schemaVersion !== undefined && options.schemaVersion !== REVIEW_SCHEMA_VERSION) {
-            throw new Error(`Unsupported schemaVersion "${options.schemaVersion}".`);
-        }
         this.name = options.name;
-        this.schemaVersion = options.schemaVersion ?? REVIEW_SCHEMA_VERSION;
     }
     rule(id, handler) {
         requireString(id, "Rule id");
@@ -128,7 +123,7 @@ async function executeRules(adversary, options) {
     }
     const suppressedFindings = findings.filter((finding) => finding.suppressed === true);
     const legacy = {
-        schema_version: adversary.schemaVersion,
+        schema_version: REVIEW_SCHEMA_VERSION,
         adversary: adversary.name,
         summary,
         findings: findings.filter((finding) => finding.suppressed !== true).map(stripSuppressed),
@@ -148,12 +143,9 @@ export async function parseInput(path = process.env.ADVERSARY_INPUT ?? DEFAULT_I
     }
 }
 export async function writeOutput(output, path = process.env.ADVERSARY_OUTPUT ?? DEFAULT_OUTPUT_PATH) {
-    const envelope = isRunEnvelope(output)
-        ? output
-        : createAdversaryRunEnvelope(validateLegacyRunResult(output), process.env.ADVERSARY_REPO ?? DEFAULT_REPO_PATH, []);
-    validateReviewEnvelope(envelope);
+    validateReviewEnvelope(output);
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
+    await writeFile(path, `${JSON.stringify(output, null, 2)}\n`, "utf8");
 }
 export function createReviewEnvelope(output, options = {}) {
     validateLegacyRunResult(output);
@@ -180,7 +172,7 @@ function validateLegacyRunResult(output) {
     }
     return output;
 }
-export function sortFindings(findings) {
+export function sortLegacyFindings(findings) {
     return [...findings].sort((left, right) => {
         const pathComparison = compareStrings(left.path ?? "", right.path ?? "");
         if (pathComparison !== 0) {
@@ -449,9 +441,6 @@ function requireExactKeys(value, keys, field) {
             throw new Error(`${field}.${key} is required.`);
         }
     }
-}
-function isRunEnvelope(value) {
-    return isRecord(value) && "protocolVersion" in value;
 }
 export function validateReviewEnvelope(value) {
     validateObject(value, ["protocolVersion", "result"], ["protocolVersion", "result"], "envelope");

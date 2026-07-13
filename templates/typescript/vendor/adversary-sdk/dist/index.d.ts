@@ -75,9 +75,6 @@ export interface LegacyRunResult {
     summary: Summary;
     findings: SerializedFinding[];
 }
-/** @deprecated Use LegacyRunResult for legacy results and createReviewEnvelope for the canonical wire contract. */
-export interface Output extends LegacyRunResult {
-}
 export interface AdversaryRunEnvelope {
     protocolVersion: 1;
     result: ReviewResult;
@@ -132,7 +129,6 @@ export type RuleResult = undefined | null | Finding | Finding[];
 export type RuleHandler = (context: RuleContext) => RuleResult | Promise<RuleResult>;
 export interface AdversaryOptions {
     name: string;
-    schemaVersion?: typeof REVIEW_SCHEMA_VERSION;
 }
 export interface RunOptions {
     input?: RuntimeInput | { source: { path: string }; schema_version?: typeof INPUT_SCHEMA_VERSION; change?: RuntimeInput["change"] };
@@ -170,7 +166,6 @@ export declare class Finding {
 }
 export declare class Adversary {
     readonly name: string;
-    readonly schemaVersion: typeof REVIEW_SCHEMA_VERSION;
     readonly rules: Array<{
         id: string;
         handler: RuleHandler;
@@ -181,9 +176,9 @@ export declare class Adversary {
     runLegacy(options?: RunOptions): Promise<LegacyRunResult>;
 }
 export declare function parseInput(path?: string): Promise<RuntimeInput>;
-export declare function writeOutput(output: Output | AdversaryRunEnvelope, path?: string): Promise<void>;
+export declare function writeOutput(output: AdversaryRunEnvelope, path?: string): Promise<void>;
 export declare function createReviewEnvelope(output: LegacyRunResult, options?: ReviewEnvelopeOptions): AdversaryRunEnvelope;
-export declare function sortFindings(findings: SerializedFinding[]): SerializedFinding[];
+export declare function sortLegacyFindings(findings: SerializedFinding[]): SerializedFinding[];
 export declare function validateReviewEnvelope(value: unknown): asserts value is AdversaryRunEnvelope;
 export declare function validateErrorEnvelope(value: unknown): asserts value is ErrorEnvelope;
 export declare function encodeErrorEnvelope(value: ErrorEnvelope): string;
