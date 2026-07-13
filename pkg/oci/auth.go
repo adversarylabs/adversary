@@ -307,6 +307,9 @@ func (stores ChainCredentialStore) Credentials(registry string) (Credentials, bo
 
 func (stores ChainCredentialStore) CredentialsContext(ctx context.Context, registry string) (Credentials, bool) {
 	for _, store := range stores {
+		if contextFinished(ctx) {
+			return Credentials{}, false
+		}
 		if store == nil {
 			continue
 		}
@@ -318,8 +321,20 @@ func (stores ChainCredentialStore) CredentialsContext(ctx context.Context, regis
 }
 
 func credentialsForContext(ctx context.Context, store CredentialStore, registry string) (Credentials, bool) {
+	if contextFinished(ctx) {
+		return Credentials{}, false
+	}
 	if contextual, ok := store.(ContextCredentialStore); ok {
 		return contextual.CredentialsContext(ctx, registry)
 	}
 	return store.Credentials(registry)
+}
+
+func contextFinished(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
 }

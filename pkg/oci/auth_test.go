@@ -99,14 +99,48 @@ func TestCredentialChainPropagatesContextAndSupportsLegacyFallback(t *testing.T)
 	}
 }
 
-func TestRegistryCredentialLookupInheritsRequestCancellation(t *testing.T) {
-	seen := make(chan error, 1)
+func TestCredentialChainStopsBeforeLegacyFallbackAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	legacyCalled := false
+	contextual := contextCredentialStore{
+		context: func(got context.Context, registry string) (Credentials, bool) {
+			if got != ctx || registry != "registry.example" {
+				t.Fatalf("context=%v registry=%q", got, registry)
+			}
+			cancel()
+			return Credentials{}, false
+		},
+		legacy: func(string) (Credentials, bool) {
+			t.Fatal("context-aware store used legacy lookup")
+			return Credentials{}, false
+		},
+	}
+	legacy := legacyCredentialStore(func(string) (Credentials, bool) {
+		legacyCalled = true
+		return Credentials{Token: "must-not-return"}, true
+	})
+	if creds, ok := (ChainCredentialStore{contextual, legacy}).CredentialsContext(ctx, "registry.example"); ok || creds != (Credentials{}) {
+		t.Fatalf("credentials=%#v ok=%v", creds, ok)
+	}
+	if legacyCalled {
+		t.Fatal("legacy fallback ran after request cancellation")
+	}
+
+	directLegacyCalled := false
+	directLegacy := legacyCredentialStore(func(string) (Credentials, bool) {
+		directLegacyCalled = true
+		return Credentials{}, false
+	})
+	if _, ok := credentialsForContext(ctx, directLegacy, "registry.example"); ok || directLegacyCalled {
+		t.Fatal("canceled direct lookup reached credential store")
+	}
+}
+
+func TestRegistryCredentialLookupStopsOnCanceledRequest(t *testing.T) {
+	called := false
 	store := contextCredentialStore{
 		context: func(ctx context.Context, registry string) (Credentials, bool) {
-			if registry != "registry.example" {
-				t.Fatalf("registry=%q", registry)
-			}
-			seen <- ctx.Err()
+			called = true
 			return Credentials{}, false
 		},
 		legacy: func(string) (Credentials, bool) {
@@ -125,8 +159,8 @@ func TestRegistryCredentialLookupInheritsRequestCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("registry error=%v", err)
 	}
-	if err := <-seen; !errors.Is(err, context.Canceled) {
-		t.Fatalf("credential context error=%v", err)
+	if called {
+		t.Fatal("canceled registry request performed credential lookup")
 	}
 }
 
@@ -478,6 +512,12 @@ type staticCredentialStore struct {
 type contextCredentialStore struct {
 	context func(context.Context, string) (Credentials, bool)
 	legacy  func(string) (Credentials, bool)
+}
+
+type legacyCredentialStore func(string) (Credentials, bool)
+
+func (s legacyCredentialStore) Credentials(registry string) (Credentials, bool) {
+	return s(registry)
 }
 
 func (s contextCredentialStore) Credentials(registry string) (Credentials, bool) {

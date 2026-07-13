@@ -85,9 +85,11 @@ uncontrolled external outage.
 
 Rollback is a revert of the client construction and registry policy changes.
 No credential or repository schema changes are made, and helper credentials are
-never persisted. Reverting only context-aware credential lookup restores a
-five-second cancellation delay for helper-backed registries; it does not require
-stored-data migration but is not a safe reliability rollback. Reverting the
+never persisted. Reverting only context-aware credential lookup allows bounded
+helper attempts to delay cancellation for helper-backed registries;
+aliases, multiple helpers, and process wait cleanup can extend the delay beyond
+one helper timeout. This does not require stored-data migration but is not a safe
+reliability rollback. Reverting the
 broader policy also restores the timeout, redirect, realm, upload,
 and mutable-tag risks described by CLI-008 and CLI-009.
 After a SHA-384/512 record has been imported, however, reverting only the
