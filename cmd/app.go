@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -42,14 +43,15 @@ type processProjects struct {
 	references    application.References
 	build         pack.BuildEnvironment
 	buildStateDir string
+	platform      string
 }
 
 func (processProjects) Init(opts application.ProjectInitOptions) (application.ProjectInitResult, error) {
 	result, err := initproject.Create(initproject.Options{Destination: opts.Destination, SDK: opts.SDK})
 	return application.ProjectInitResult{Location: result.Location, SDK: result.SDK}, err
 }
-func (processProjects) RenderInit(w io.Writer, result application.ProjectInitResult, destination string) {
-	initproject.RenderSuccess(w, initproject.Result{Location: result.Location, SDK: result.SDK}, destination)
+func (p processProjects) RenderInit(w io.Writer, result application.ProjectInitResult, destination string) {
+	initproject.RenderSuccess(w, initproject.Result{Location: result.Location, SDK: result.SDK}, destination, p.platform)
 }
 func (processProjects) Validate(ctx context.Context, value string, resolver application.Resolver) (application.ProjectValidation, error) {
 	path, err := filepath.Abs(value)
@@ -354,8 +356,8 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	pathext, _ := environment.Lookup("PATHEXT")
 	resolveExplicitExecutable, resolvePATHExecutable := executableResolvers(files, pathext)
 	lookPath := func(file string) (string, error) { return environment.LookPath(file, resolvePATHExecutable) }
-	npm, npmErr := capturedNPM(homeDir, lookPath, files, resolveExplicitExecutable)
-	nodePath, nodeErr := capturedNode(npm, lookPath, files, resolveExplicitExecutable)
+	npm, npmErr := capturedNPM(runtime.GOOS, homeDir, environment.Lookup, lookPath, files.Stat, files.Glob, resolveExplicitExecutable)
+	nodePath, nodeErr := capturedNode(runtime.GOOS, npm, lookPath, files.Stat, resolveExplicitExecutable)
 	dockerPath, dockerErr := lookPath("docker")
 	buildEnvironment := pack.BuildEnvironment{NPM: npm, NPMError: npmErr, Node: nodePath, NodeError: nodeErr, Docker: dockerPath, DockerError: dockerErr, Environment: environment.Entries(nil), Run: func(ctx context.Context, executable string, args []string, dir string, env []string, stdout, stderr io.Writer, capture bool) ([]byte, error) {
 		cmd := exec.CommandContext(ctx, executable, args...)
@@ -387,19 +389,39 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	}, launcher: internaladversary.ExecProcessLauncher{}, timer: internaladversary.NewRuntimeTimer, git: git, now: time.Now, node: node, files: files, buildProject: buildProject}
 	references := processReferences{registry: host, namespace: namespace}
 	browserAuth := dependencies.BrowserAuth{Entropy: rand.Reader, ListenFunc: net.Listen, NewServerFunc: dependencies.NewHTTPCallbackServer, OpenFunc: func(ctx context.Context, u string) error { return openBrowser(ctx, u, environment, lookPath, output) }}
-	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Projects: processProjects{references: references, build: buildEnvironment, buildStateDir: buildStateDir}, References: references, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: process, BrowserAuth: browserAuth, TTY: processTTY{}})
+	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Projects: processProjects{references: references, build: buildEnvironment, buildStateDir: buildStateDir, platform: runtime.GOOS}, References: references, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: process, BrowserAuth: browserAuth, TTY: processTTY{}})
 }
 
-func capturedNPM(home string, lookPath func(string) (string, error), files internaladversary.RuntimeFiles, resolveExplicit func(string) (string, error)) (string, error) {
+func capturedNPM(platform, home string, lookupEnv func(string) (string, bool), lookPath func(string) (string, error), stat func(string) (fs.FileInfo, error), glob func(string) ([]string, error), resolveExplicit func(string) (string, error)) (string, error) {
 	if path, err := lookPath("npm"); err == nil {
 		return path, nil
 	}
-	candidates := []string{filepath.Join(home, ".volta", "bin", "npm"), filepath.Join(home, ".asdf", "shims", "npm")}
-	nvm, _ := files.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", "npm"))
-	sort.Sort(sort.Reverse(sort.StringSlice(nvm)))
-	candidates = append(nvm, candidates...)
+	var candidates []string
+	if platform == "windows" {
+		if root, ok := lookupEnv("ProgramFiles"); ok && strings.TrimSpace(root) != "" {
+			candidates = append(candidates, platformPath(platform, root, "nodejs", "npm.cmd"))
+		}
+		if root, ok := lookupEnv("LOCALAPPDATA"); ok && strings.TrimSpace(root) != "" {
+			candidates = append(candidates, platformPath(platform, root, "Volta", "bin", "npm.cmd"))
+		}
+		if root, ok := lookupEnv("APPDATA"); ok && strings.TrimSpace(root) != "" {
+			fnm, _ := glob(platformPath(platform, root, "fnm", "node-versions", "v*", "installation", "npm.cmd"))
+			sort.Sort(sort.Reverse(sort.StringSlice(fnm)))
+			candidates = append(candidates, fnm...)
+			candidates = append(candidates, platformPath(platform, root, "npm", "npm.cmd"))
+		}
+		candidates = append(candidates,
+			platformPath(platform, home, "scoop", "apps", "nodejs", "current", "npm.cmd"),
+			platformPath(platform, home, "scoop", "apps", "nodejs-lts", "current", "npm.cmd"),
+		)
+	} else {
+		candidates = []string{filepath.Join(home, ".volta", "bin", "npm"), filepath.Join(home, ".asdf", "shims", "npm")}
+		nvm, _ := glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", "npm"))
+		sort.Sort(sort.Reverse(sort.StringSlice(nvm)))
+		candidates = append(nvm, candidates...)
+	}
 	for _, candidate := range candidates {
-		info, err := files.Stat(candidate)
+		info, err := stat(candidate)
 		if err != nil || info.IsDir() {
 			continue
 		}
@@ -407,19 +429,44 @@ func capturedNPM(home string, lookPath func(string) (string, error), files inter
 			return resolved, nil
 		}
 	}
-	return "", fmt.Errorf("npm was not found in captured PATH or home")
+	return "", fmt.Errorf("npm was not found in captured PATH, environment, or home")
 }
 
-func capturedNode(npm string, lookPath func(string) (string, error), files internaladversary.RuntimeFiles, resolveExplicit func(string) (string, error)) (string, error) {
+func capturedNode(platform, npm string, lookPath func(string) (string, error), stat func(string) (fs.FileInfo, error), resolveExplicit func(string) (string, error)) (string, error) {
 	if npm != "" {
-		adjacent := filepath.Join(filepath.Dir(npm), "node")
-		if info, err := files.Stat(adjacent); err == nil && !info.IsDir() {
+		name := "node"
+		if platform == "windows" {
+			name = "node.exe"
+		}
+		adjacent := platformPath(platform, platformDir(platform, npm), name)
+		if info, err := stat(adjacent); err == nil && !info.IsDir() {
 			if resolved, err := resolveExplicit(adjacent); err == nil {
 				return resolved, nil
 			}
 		}
 	}
 	return lookPath("node")
+}
+
+func platformPath(platform, root string, elements ...string) string {
+	if platform != "windows" {
+		return filepath.Join(append([]string{root}, elements...)...)
+	}
+	result := strings.TrimRight(root, `\/`)
+	for _, element := range elements {
+		result += `\` + strings.Trim(element, `\/`)
+	}
+	return result
+}
+
+func platformDir(platform, value string) string {
+	if platform != "windows" {
+		return filepath.Dir(value)
+	}
+	if index := strings.LastIndexAny(value, `\/`); index >= 0 {
+		return value[:index]
+	}
+	return "."
 }
 
 var errCapturedOutputLimit = errors.New("captured process output limit exceeded")
