@@ -97,6 +97,9 @@ export class Adversary {
         this.rules.push({ id, handler });
     }
     async run(options = {}) {
+        return this.runLegacy(options);
+    }
+    async runLegacy(options = {}) {
         const input = options.input === undefined ? await parseInput(options.inputPath) : normalizeRuntimeInput(options.input);
         const repoPath = process.env.ADVERSARY_REPO ?? input.source.path ?? DEFAULT_REPO_PATH;
         const summary = {};
@@ -141,6 +144,18 @@ export async function writeOutput(output, path = process.env.ADVERSARY_OUTPUT ??
     validateReviewEnvelope(envelope);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
+}
+export function createReviewEnvelope(output, options = {}) {
+    const findings = Array.isArray(output.findings) ? output.findings : [];
+    const embeddedSuppressed = findings.filter((finding) => finding.suppressed === true);
+    const visibleOutput = {
+        ...output,
+        findings: findings.filter((finding) => finding.suppressed !== true).map(stripSuppressed),
+    };
+    const suppressedFindings = [...embeddedSuppressed, ...(options.suppressedFindings ?? [])];
+    const envelope = createAdversaryRunEnvelope(visibleOutput, options.repoPath ?? DEFAULT_REPO_PATH, suppressedFindings, options.includeSuppressed ?? false);
+    validateReviewEnvelope(envelope);
+    return envelope;
 }
 export function sortFindings(findings) {
     return [...findings].sort((left, right) => {
@@ -289,16 +304,15 @@ function stripSuppressed(finding) {
     const { suppressed: _suppressed, ...serialized } = finding;
     return serialized;
 }
-function createAdversaryRunEnvelope(output, repoPath, suppressedFindings) {
+function createAdversaryRunEnvelope(output, repoPath, suppressedFindings, includeSuppressed = verboseValues.has(process.env.ADVERSARY_INCLUDE_SUPPRESSED ?? "")) {
     return {
         protocolVersion: 1,
-        result: normalizeReviewResult(output, repoPath, suppressedFindings),
+        result: normalizeReviewResult(output, repoPath, suppressedFindings, includeSuppressed),
     };
 }
-function normalizeReviewResult(output, repoPath, suppressedFindings = []) {
+function normalizeReviewResult(output, repoPath, suppressedFindings = [], includeSuppressed = false) {
     const summary = output.summary ?? {};
     const normalizedSuppressed = suppressedFindings.map((finding) => normalizeReviewFinding(stripSuppressed(finding)));
-    const includeSuppressed = verboseValues.has(process.env.ADVERSARY_INCLUDE_SUPPRESSED ?? "");
     return omitUndefined({
         adversary: normalizeAdversary(output.adversary),
         target: omitUndefined({
