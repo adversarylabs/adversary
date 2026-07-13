@@ -16,22 +16,68 @@ import {
   writeOutput,
 } from "../dist/index.js";
 
-test("run remains legacy while runLegacy provides the explicit migration path", async () => {
+test("run returns and writes the same canonical envelope after one rule execution", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "adversary-sdk-run-"));
+  const outputPath = join(directory, "output.json");
+  const noWritePath = join(directory, "not-written.json");
+  let executions = 0;
   const app = new Adversary({ name: "local/additive-test" });
-  app.rule("additive.rule", () =>
-    new Finding({
+  app.rule("additive.rule", () => {
+    executions += 1;
+    return new Finding({
       ruleId: "additive.rule",
       severity: Severity.Low,
       title: "Additive finding",
-    }),
-  );
-  const options = { input: { source: { path: "/workspace" } }, write: false };
-  const current = await app.run(options);
-  const explicitLegacy = await app.runLegacy(options);
-  assert.deepEqual(current, explicitLegacy);
-  assert.equal(current.schema_version, "adversary.review.v1");
-  assert.equal(current.protocolVersion, undefined);
-  assert.equal(current.result, undefined);
+      evidence: "matched source",
+    });
+  });
+  try {
+    const current = await app.run({
+      input: { source: { path: "/workspace" } },
+      outputPath,
+    });
+    assert.equal(executions, 1);
+    assert.doesNotThrow(() => validateReviewEnvelope(current));
+    assert.deepEqual(current, JSON.parse(await readFile(outputPath, "utf8")));
+
+    const notWritten = await app.run({
+      input: { source: { path: "/workspace" } },
+      outputPath: noWritePath,
+      write: false,
+    });
+    assert.equal(executions, 2);
+    assert.doesNotThrow(() => validateReviewEnvelope(notWritten));
+    await assert.rejects(readFile(noWritePath), /ENOENT/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("runLegacy preserves its return shape while writing a canonical envelope", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "adversary-sdk-legacy-"));
+  const outputPath = join(directory, "output.json");
+  let executions = 0;
+  const app = new Adversary({ name: "local/legacy-test" });
+  app.rule("legacy.rule", () => {
+    executions += 1;
+    return new Finding({
+      ruleId: "legacy.rule",
+      severity: Severity.Low,
+      title: "Legacy finding",
+    });
+  });
+  try {
+    const legacy = await app.runLegacy({ input: { source: { path: directory } }, outputPath });
+    assert.equal(executions, 1);
+    assert.equal(legacy.schema_version, "adversary.review.v1");
+    assert.equal(legacy.findings[0].rule_id, "legacy.rule");
+    assert.equal(legacy.protocolVersion, undefined);
+    const written = JSON.parse(await readFile(outputPath, "utf8"));
+    assert.doesNotThrow(() => validateReviewEnvelope(written));
+    assert.equal(written.result.findings[0].ruleId, "legacy.rule");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("canonical builder converts legacy findings, evidence, and suppression", () => {
@@ -69,10 +115,48 @@ test("canonical builder converts legacy findings, evidence, and suppression", ()
   assert.equal(envelope.result.target.filesScanned, 2);
   assert.equal(envelope.result.findings[0].summary, "Visible summary");
   assert.deepEqual(envelope.result.findings[0].evidence, [
-    { file: "src/index.ts", line: 7, message: "matched source", metadata: undefined },
+    { file: "src/index.ts", line: 7, message: "matched source" },
   ]);
   assert.equal(envelope.result.suppressed.findings, 1);
   assert.equal(envelope.result.suppressedFindings[0].id, "suppressed");
+  const defaultTarget = createReviewEnvelope({
+    schema_version: "adversary.review.v1",
+    adversary: "local/default-target",
+    summary: {},
+    findings: [],
+  });
+  assert.equal(defaultTarget.result.target.repository, "/workspace");
+});
+
+test("run preserves environment-over-input repository precedence in return and output", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "adversary-sdk-repo-"));
+  const previous = process.env.ADVERSARY_REPO;
+  const app = new Adversary({ name: "local/repo-test" });
+  try {
+    delete process.env.ADVERSARY_REPO;
+    const inputPath = join(directory, "input-target");
+    const inputOutput = join(directory, "input.json");
+    const fromInput = await app.run({ input: { source: { path: inputPath } }, outputPath: inputOutput });
+    assert.equal(fromInput.result.target.repository, inputPath);
+    assert.equal(JSON.parse(await readFile(inputOutput, "utf8")).result.target.repository, inputPath);
+
+    const environmentPath = join(directory, "environment-target");
+    process.env.ADVERSARY_REPO = environmentPath;
+    const environmentOutput = join(directory, "environment.json");
+    const fromEnvironment = await app.run({
+      input: { source: { path: inputPath } },
+      outputPath: environmentOutput,
+    });
+    assert.equal(fromEnvironment.result.target.repository, environmentPath);
+    assert.equal(
+      JSON.parse(await readFile(environmentOutput, "utf8")).result.target.repository,
+      environmentPath,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.ADVERSARY_REPO;
+    else process.env.ADVERSARY_REPO = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("canonical builder strictly validates the legacy schema discriminator", () => {
@@ -124,6 +208,7 @@ test("declarations expose canonical target and deprecated legacy compatibility",
   const declarations = await readFile(new URL("../dist/index.d.ts", import.meta.url), "utf8");
   assert.match(declarations, /interface LegacyRunResult/);
   assert.match(declarations, /@deprecated Use LegacyRunResult/);
+  assert.match(declarations, /run\(options\?: RunOptions\): Promise<AdversaryRunEnvelope>/);
   assert.match(declarations, /runLegacy\(options\?: RunOptions\): Promise<LegacyRunResult>/);
   assert.match(declarations, /createReviewEnvelope\(output: LegacyRunResult/);
 });
@@ -253,15 +338,17 @@ test("suppressed findings are counted and included only when requested", async (
     const input = { source: { path: directory } };
     delete process.env.ADVERSARY_INCLUDE_SUPPRESSED;
     const hiddenPath = join(directory, "hidden.json");
-    await app.run({ input, outputPath: hiddenPath });
+    const hiddenReturn = await app.run({ input, outputPath: hiddenPath });
     const hidden = JSON.parse(await readFile(hiddenPath, "utf8"));
+    assert.deepEqual(hiddenReturn, hidden);
     assert.equal(hidden.result.suppressed.findings, 1);
     assert.equal(hidden.result.suppressedFindings, undefined);
 
     process.env.ADVERSARY_INCLUDE_SUPPRESSED = "true";
     const includedPath = join(directory, "included.json");
-    await app.run({ input, outputPath: includedPath });
+    const includedReturn = await app.run({ input, outputPath: includedPath });
     const included = JSON.parse(await readFile(includedPath, "utf8"));
+    assert.deepEqual(includedReturn, included);
     assert.equal(included.result.suppressed.findings, 1);
     assert.equal(included.result.suppressedFindings[0].ruleId, "suppressed.rule");
     assert.doesNotThrow(() => validateReviewEnvelope(included));

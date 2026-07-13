@@ -97,35 +97,45 @@ export class Adversary {
         this.rules.push({ id, handler });
     }
     async run(options = {}) {
-        return this.runLegacy(options);
+        const execution = await executeRules(this, options);
+        if (options.write !== false) {
+            await writeOutput(execution.envelope, options.outputPath);
+        }
+        return execution.envelope;
     }
     async runLegacy(options = {}) {
-        const input = options.input === undefined ? await parseInput(options.inputPath) : normalizeRuntimeInput(options.input);
-        const repoPath = process.env.ADVERSARY_REPO ?? input.source.path ?? DEFAULT_REPO_PATH;
-        const summary = {};
-        const cache = new Map();
-        const context = createRuleContext(repoPath, summary, cache);
-        const findings = [];
-        for (const rule of this.rules) {
-            log.debug(`running rule ${rule.id}`);
-            const result = await rule.handler(context);
-            findings.push(...normalizeRuleResult(result));
-        }
-        if (summary.rules_executed === undefined) {
-            summary.rules_executed = this.rules.length;
-        }
-        const suppressedFindings = findings.filter((finding) => finding.suppressed === true);
-        const output = {
-            schema_version: this.schemaVersion,
-            adversary: this.name,
-            summary,
-            findings: findings.filter((finding) => finding.suppressed !== true).map(stripSuppressed),
-        };
+        const execution = await executeRules(this, options);
         if (options.write !== false) {
-            await writeOutput(createAdversaryRunEnvelope(output, repoPath, suppressedFindings), options.outputPath);
+            await writeOutput(execution.envelope, options.outputPath);
         }
-        return output;
+        return execution.legacy;
     }
+}
+async function executeRules(adversary, options) {
+    const input = options.input === undefined ? await parseInput(options.inputPath) : normalizeRuntimeInput(options.input);
+    const repoPath = process.env.ADVERSARY_REPO ?? input.source.path ?? DEFAULT_REPO_PATH;
+    const summary = {};
+    const cache = new Map();
+    const context = createRuleContext(repoPath, summary, cache);
+    const findings = [];
+    for (const rule of adversary.rules) {
+        log.debug(`running rule ${rule.id}`);
+        const result = await rule.handler(context);
+        findings.push(...normalizeRuleResult(result));
+    }
+    if (summary.rules_executed === undefined) {
+        summary.rules_executed = adversary.rules.length;
+    }
+    const suppressedFindings = findings.filter((finding) => finding.suppressed === true);
+    const legacy = {
+        schema_version: adversary.schemaVersion,
+        adversary: adversary.name,
+        summary,
+        findings: findings.filter((finding) => finding.suppressed !== true).map(stripSuppressed),
+    };
+    const envelope = createAdversaryRunEnvelope(legacy, repoPath, suppressedFindings);
+    validateReviewEnvelope(envelope);
+    return { legacy, envelope };
 }
 export async function parseInput(path = process.env.ADVERSARY_INPUT ?? DEFAULT_INPUT_PATH) {
     const raw = await readFile(path, "utf8");
@@ -374,7 +384,7 @@ function normalizeReviewEvidence(evidence, file, line) {
 }
 function normalizeEvidenceItem(item) {
     if (item?.file !== undefined || item?.message !== undefined || item?.snippet !== undefined) {
-        return item;
+        return omitUndefined(item);
     }
     const location = item?.location ?? {};
     const data = item?.data ?? item?.evidence ?? {};
