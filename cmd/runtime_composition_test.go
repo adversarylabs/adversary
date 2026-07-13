@@ -13,6 +13,7 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/pkg/pack"
 )
 
 type compositionProcess struct{}
@@ -56,7 +57,7 @@ func TestProcessRuntimeRoutesDistinctStreamsAndSnapshot(t *testing.T) {
 	now := func() time.Time { return time.Unix(42, 0) }
 	launcher := &compositionLauncher{}
 	resolve := func(string) (string, error) { return executable, nil }
-	p := processRuntime{stdin: stdin, environment: env, resolveExecutable: resolve, launcher: launcher, git: compositionGit{}, tempDir: "/captured/tmp", homeDir: "/captured/home", dataRoot: "/captured/data", now: now, files: files, node: internaladversary.NodeResolver{LookPath: resolve}}
+	p := processRuntime{stdin: stdin, environment: env, resolveExecutable: resolve, launcher: launcher, git: compositionGit{}, tempDir: "/captured/tmp", homeDir: "/captured/home", dataRoot: "/captured/data", now: now, files: files, node: internaladversary.NodeResolver{LookPath: resolve}, buildProject: func(context.Context, pack.BuildOptions) error { return nil }}
 	runner := p.runner(application.AdversaryRunOptions{Stdout: stdout, Stderr: stderr})
 	executor, ok := runner.Executor.(internaladversary.HostExecutor)
 	if !ok {

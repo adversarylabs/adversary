@@ -25,21 +25,42 @@ type Timer interface {
 	C() <-chan time.Time
 	Stop() bool
 }
+
+// Environment and HTTPClient are adapter contracts used by concrete process
+// composition; they are deliberately not App dependencies.
 type Environment interface{ Lookup(string) (string, bool) }
-type Config interface {
-	Get(context.Context, string) (string, error)
-	Set(context.Context, string, string) error
-}
-type Paths interface {
-	DataDir() (string, error)
-	ConfigDir() (string, error)
-	TempDir() string
-}
 type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
-type Credentials interface {
-	Credentials(string) (oci.Credentials, bool)
+
+// Projects owns filesystem and build operations for project-facing commands.
+// Keeping these operations behind one port makes command handlers hermetic.
+type Projects interface {
+	Init(ProjectInitOptions) (ProjectInitResult, error)
+	RenderInit(io.Writer, ProjectInitResult, string)
+	Validate(context.Context, string, Resolver) (ProjectValidation, error)
+	Check(pack.Options) (pack.Preflight, error)
+	Pack(context.Context, pack.Options) (pack.Artifact, error)
+}
+
+const DefaultProjectSDK = "typescript"
+
+type ProjectInitOptions struct{ Destination, SDK string }
+type ProjectInitResult struct{ Location, SDK string }
+type ProjectValidation struct {
+	Path, Name, Runtime string
+}
+type ProjectError struct {
+	Code, Path string
+	Err        error
+}
+
+func (e *ProjectError) Error() string { return e.Err.Error() }
+func (e *ProjectError) Unwrap() error { return e.Err }
+
+// References parses references with defaults captured during App construction.
+type References interface {
+	Parse(string) (oci.Reference, error)
 }
 
 // AuthStore is the scoped credential persistence required by CLI handlers.
@@ -126,11 +147,8 @@ type Dependencies struct {
 	Stdin          io.Reader
 	Stdout, Stderr io.Writer
 	Clock          Clock
-	Env            Environment
-	Config         Config
-	Paths          Paths
-	HTTP           HTTPClient
-	Credentials    Credentials
+	Projects       Projects
+	References     References
 	Auth           AuthStore
 	API            APIFactory
 	Registries     RegistryFactory
@@ -162,20 +180,11 @@ func New(deps Dependencies) (*App, error) {
 	if deps.Clock == nil {
 		missing = append(missing, "clock")
 	}
-	if deps.Env == nil {
-		missing = append(missing, "environment")
+	if deps.Projects == nil {
+		missing = append(missing, "projects")
 	}
-	if deps.Config == nil {
-		missing = append(missing, "config")
-	}
-	if deps.Paths == nil {
-		missing = append(missing, "paths")
-	}
-	if deps.HTTP == nil {
-		missing = append(missing, "http")
-	}
-	if deps.Credentials == nil {
-		missing = append(missing, "credentials")
+	if deps.References == nil {
+		missing = append(missing, "references")
 	}
 	if deps.Auth == nil {
 		missing = append(missing, "auth store")
@@ -230,12 +239,6 @@ func New(deps Dependencies) (*App, error) {
 	}
 	validators := []Validatable{}
 	if v, ok := deps.Clock.(Validatable); ok {
-		validators = append(validators, v)
-	}
-	if v, ok := deps.Env.(Validatable); ok {
-		validators = append(validators, v)
-	}
-	if v, ok := deps.HTTP.(Validatable); ok {
 		validators = append(validators, v)
 	}
 	if v, ok := deps.Browser.(Validatable); ok {

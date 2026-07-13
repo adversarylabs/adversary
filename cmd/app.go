@@ -1,22 +1,28 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/dependencies"
+	"github.com/adversarylabs/adversary/internal/initproject"
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -30,16 +36,67 @@ func newSystemClock() application.Clock {
 	return dependencies.Clock{NowFunc: time.Now, TimerFunc: func(d time.Duration) application.Timer { return processTimer{time.NewTimer(d)} }}
 }
 
-type processConfig struct{}
+type processProjects struct {
+	references application.References
+	build      pack.BuildEnvironment
+}
 
-func (processConfig) Get(context.Context, string) (string, error) { return "", nil }
-func (processConfig) Set(context.Context, string, string) error   { return nil }
+func (processProjects) Init(opts application.ProjectInitOptions) (application.ProjectInitResult, error) {
+	result, err := initproject.Create(initproject.Options{Destination: opts.Destination, SDK: opts.SDK})
+	return application.ProjectInitResult{Location: result.Location, SDK: result.SDK}, err
+}
+func (processProjects) RenderInit(w io.Writer, result application.ProjectInitResult, destination string) {
+	initproject.RenderSuccess(w, initproject.Result{Location: result.Location, SDK: result.SDK}, destination)
+}
+func (processProjects) Validate(ctx context.Context, value string, resolver application.Resolver) (application.ProjectValidation, error) {
+	path, err := filepath.Abs(value)
+	if err != nil {
+		return application.ProjectValidation{}, &application.ProjectError{Code: "invalid_path", Path: value, Err: fmt.Errorf("validate path %q: %w", value, err)}
+	}
+	if _, statErr := os.Stat(path); statErr != nil && os.IsNotExist(statErr) {
+		resolution, resolveErr := resolver.Resolve(ctx, value)
+		if resolveErr != nil {
+			return application.ProjectValidation{}, &application.ProjectError{Code: "unresolved_reference", Path: value, Err: fmt.Errorf("validate path or reference %q: %w", value, resolveErr)}
+		}
+		path = resolution.Path
+	}
+	root := path
+	info, err := os.Stat(path)
+	if err != nil {
+		return application.ProjectValidation{}, &application.ProjectError{Code: "unreadable_path", Path: path, Err: fmt.Errorf("validate %q: %w", value, err)}
+	}
+	if info.IsDir() {
+		path = filepath.Join(path, manifest.FileName)
+	} else {
+		root = filepath.Dir(path)
+	}
+	m, err := manifest.Load(path)
+	if err != nil {
+		return application.ProjectValidation{}, &application.ProjectError{Code: "invalid_manifest", Path: path, Err: fmt.Errorf("validate manifest v1 %q: %w", path, err)}
+	}
+	if err := m.ValidateProject(root); err != nil {
+		return application.ProjectValidation{}, &application.ProjectError{Code: "invalid_project", Path: root, Err: fmt.Errorf("validate project v1 %q: %w", root, err)}
+	}
+	return application.ProjectValidation{Path: path, Name: m.Name, Runtime: m.Runtime.Name}, nil
+}
 
-type processPaths struct{ data, config string }
+func (p processProjects) Check(opts pack.Options) (pack.Preflight, error) {
+	opts.ParseReference = p.references.Parse
+	return pack.Check(opts)
+}
+func (p processProjects) Pack(ctx context.Context, opts pack.Options) (pack.Artifact, error) {
+	opts.ParseReference = p.references.Parse
+	opts.BuildProject = func(ctx context.Context, options pack.BuildOptions) error {
+		return pack.BuildProjectWithEnvironment(ctx, options, p.build)
+	}
+	return pack.Create(ctx, opts)
+}
 
-func (p processPaths) DataDir() (string, error)   { return p.data, nil }
-func (p processPaths) ConfigDir() (string, error) { return p.config, nil }
-func (processPaths) TempDir() string              { return internalpaths.TempDir() }
+type processReferences struct{ registry, namespace string }
+
+func (p processReferences) Parse(value string) (oci.Reference, error) {
+	return oci.ParseReferenceWithDefaults(value, p.registry, p.namespace)
+}
 
 type processResolver struct{ resolver internaladversary.Resolver }
 
@@ -100,6 +157,7 @@ type processRuntime struct {
 	node              internaladversary.NodeResolver
 	files             internaladversary.RuntimeFiles
 	dataRoot          string
+	buildProject      func(context.Context, pack.BuildOptions) error
 }
 
 func (p processRuntime) BindingIdentity() string { return p.resolver.Repository.RootPath() }
@@ -113,7 +171,7 @@ func (p processRuntime) Inspect(ctx context.Context, opts application.AdversaryR
 }
 func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladversary.Runner {
 	shell := func() ([]string, error) { return internaladversary.PlatformShell(p.node.LookPath) }
-	return internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: p.stdin, Git: p.git, TempDir: p.tempDir, HomeDir: p.homeDir, DataRoot: p.dataRoot, Now: p.now, Files: p.files, BuildProject: pack.BuildProject, Shell: shell, Executor: internaladversary.HostExecutor{Stdout: opts.Stderr, Stderr: opts.Stderr, Stdin: p.stdin, Environment: p.environment, ResolveExecutable: p.resolveExecutable, FindNode: p.node.Find, Shell: shell, Launcher: p.launcher, Timer: p.timer}, HostExecution: true, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
+	return internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: p.stdin, Git: p.git, TempDir: p.tempDir, HomeDir: p.homeDir, DataRoot: p.dataRoot, Now: p.now, Files: p.files, BuildProject: p.buildProject, Shell: shell, Executor: internaladversary.HostExecutor{Stdout: opts.Stderr, Stderr: opts.Stderr, Stdin: p.stdin, Environment: p.environment, ResolveExecutable: p.resolveExecutable, FindNode: p.node.Find, Shell: shell, Launcher: p.launcher, Timer: p.timer}, HostExecution: true, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
 }
 func toInternalRunOptions(opts application.AdversaryRunOptions) internaladversary.RunOptions {
 	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout}
@@ -213,7 +271,7 @@ func (s processAuthStore) BindingIdentity() string { return s.Path }
 
 type processRegistryFactory struct {
 	store                  application.AuthStore
-	docker                 application.Credentials
+	docker                 oci.CredentialStore
 	host, realm, namespace string
 	debug                  io.Writer
 	identity               string
@@ -263,7 +321,6 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	if err != nil {
 		return nil, err
 	}
-	configDir := filepath.Dir(store.Path)
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home directory: %w", err)
@@ -277,25 +334,134 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	if value, ok := environment.Lookup("ADVERSARY_OCI_DEBUG"); ok && strings.TrimSpace(value) != "" {
 		debug = stderr
 	}
-	docker := oci.DockerCredentialStore{}
-	authStore := processAuthStore{store}
-	apiFactory := processAPIFactory{store: store}
-	registryFactory := processRegistryFactory{store: authStore, docker: docker, host: host, namespace: namespace, debug: debug, identity: store.Path}
 	files := internaladversary.OSRuntimeFiles{}
 	pathext, _ := environment.Lookup("PATHEXT")
 	resolveExplicitExecutable, resolvePATHExecutable := executableResolvers(files, pathext)
 	lookPath := func(file string) (string, error) { return environment.LookPath(file, resolvePATHExecutable) }
+	npm, npmErr := capturedNPM(homeDir, lookPath, files, resolveExplicitExecutable)
+	nodePath, nodeErr := capturedNode(npm, lookPath, files, resolveExplicitExecutable)
+	dockerPath, dockerErr := lookPath("docker")
+	buildEnvironment := pack.BuildEnvironment{NPM: npm, NPMError: npmErr, Node: nodePath, NodeError: nodeErr, Docker: dockerPath, DockerError: dockerErr, Environment: environment.Entries(nil), Run: func(ctx context.Context, executable string, args []string, dir string, env []string, stdout, stderr io.Writer, capture bool) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, executable, args...)
+		cmd.WaitDelay = 2 * time.Second
+		cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, stdout, stderr
+		if !capture {
+			err := cmd.Run()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			return nil, err
+		}
+		return runCapturedProcess(ctx, cmd, 1<<20, "build probe")
+	}}
+	docker := oci.DockerCredentialStore{HomeDir: homeDir, Lstat: os.Lstat, Open: oci.OpenRegularNoFollow, RunHelper: newCredentialHelperRunner(environment, lookPath)}
+	authStore := processAuthStore{store}
+	apiFactory := processAPIFactory{store: store}
+	registryFactory := processRegistryFactory{store: authStore, docker: docker, host: host, namespace: namespace, debug: debug, identity: store.Path}
 	output := internaladversary.ExecProcessOutputRunner{}
 	node := internaladversary.NodeResolver{LookupEnv: environment.Lookup, LookPath: lookPath, HomeDir: homeDir, Glob: files.Glob, ResolveExecutable: resolveExplicitExecutable, Environment: environment, Output: output}
 	gitPath, gitErr := lookPath("git")
 	git := internaladversary.CommandGitDiffer{Executable: gitPath, Environment: environment, Output: output, ResolutionError: gitErr}
+	buildProject := func(ctx context.Context, options pack.BuildOptions) error {
+		return pack.BuildProjectWithEnvironment(ctx, options, buildEnvironment)
+	}
 	process := processRuntime{resolver: resolver, stdin: stdin, tempDir: internalpaths.TempDir(), homeDir: homeDir, dataRoot: applicationDataRoot(resolver.Repository.Root), environment: environment, resolveExecutable: func(name string) (string, error) {
 		if filepath.IsAbs(name) {
 			return resolveExplicitExecutable(name)
 		}
 		return lookPath(name)
-	}, launcher: internaladversary.ExecProcessLauncher{}, timer: internaladversary.NewRuntimeTimer, git: git, now: time.Now, node: node, files: files}
-	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Env: dependencies.Environment{LookupFunc: environment.Lookup}, Config: processConfig{}, Paths: processPaths{data: resolver.Repository.Root, config: configDir}, HTTP: dependencies.HTTPClient{DoFunc: http.DefaultClient.Do}, Credentials: docker, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: process, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(ctx, u, environment, lookPath, output) }}, TTY: processTTY{}})
+	}, launcher: internaladversary.ExecProcessLauncher{}, timer: internaladversary.NewRuntimeTimer, git: git, now: time.Now, node: node, files: files, buildProject: buildProject}
+	references := processReferences{registry: host, namespace: namespace}
+	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Projects: processProjects{references: references, build: buildEnvironment}, References: references, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: process, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(ctx, u, environment, lookPath, output) }}, TTY: processTTY{}})
+}
+
+func capturedNPM(home string, lookPath func(string) (string, error), files internaladversary.RuntimeFiles, resolveExplicit func(string) (string, error)) (string, error) {
+	if path, err := lookPath("npm"); err == nil {
+		return path, nil
+	}
+	candidates := []string{filepath.Join(home, ".volta", "bin", "npm"), filepath.Join(home, ".asdf", "shims", "npm")}
+	nvm, _ := files.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", "npm"))
+	sort.Sort(sort.Reverse(sort.StringSlice(nvm)))
+	candidates = append(nvm, candidates...)
+	for _, candidate := range candidates {
+		info, err := files.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if resolved, err := resolveExplicit(candidate); err == nil {
+			return resolved, nil
+		}
+	}
+	return "", fmt.Errorf("npm was not found in captured PATH or home")
+}
+
+func capturedNode(npm string, lookPath func(string) (string, error), files internaladversary.RuntimeFiles, resolveExplicit func(string) (string, error)) (string, error) {
+	if npm != "" {
+		adjacent := filepath.Join(filepath.Dir(npm), "node")
+		if info, err := files.Stat(adjacent); err == nil && !info.IsDir() {
+			if resolved, err := resolveExplicit(adjacent); err == nil {
+				return resolved, nil
+			}
+		}
+	}
+	return lookPath("node")
+}
+
+var errCapturedOutputLimit = errors.New("captured process output limit exceeded")
+
+type boundedCapture struct {
+	buffer    bytes.Buffer
+	remaining int
+	exceeded  bool
+	kill      func()
+}
+
+func (w *boundedCapture) Write(data []byte) (int, error) {
+	if len(data) <= w.remaining {
+		w.remaining -= len(data)
+		return w.buffer.Write(data)
+	}
+	w.exceeded = true
+	if w.kill != nil {
+		w.kill()
+	}
+	written := 0
+	if w.remaining > 0 {
+		written, _ = w.buffer.Write(data[:w.remaining])
+		w.remaining = 0
+	}
+	return written, errCapturedOutputLimit
+}
+
+func runCapturedProcess(ctx context.Context, cmd *exec.Cmd, limit int, label string) ([]byte, error) {
+	captured := &boundedCapture{remaining: limit, kill: func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}}
+	cmd.Stdout = captured
+	err := cmd.Run()
+	if captured.exceeded || errors.Is(err, errCapturedOutputLimit) {
+		return nil, fmt.Errorf("%s output exceeds %d bytes", label, limit)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	return captured.buffer.Bytes(), err
+}
+
+func newCredentialHelperRunner(environment internaladversary.ProcessEnvironment, lookPath func(string) (string, error)) func(context.Context, string, string) ([]byte, error) {
+	return func(ctx context.Context, executable, input string) ([]byte, error) {
+		resolved, err := lookPath(executable)
+		if err != nil {
+			return nil, err
+		}
+		cmd := exec.CommandContext(ctx, resolved, "get")
+		cmd.WaitDelay = 2 * time.Second
+		cmd.Stdin = strings.NewReader(input)
+		cmd.Env = environment.Entries(nil)
+		return runCapturedProcess(ctx, cmd, 1<<20, "credential helper")
+	}
 }
 
 func executableResolvers(files internaladversary.RuntimeFiles, pathext string) (strict, fromPATH func(string) (string, error)) {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -358,11 +360,27 @@ export async function writeOutput(output, path = DEFAULT_OUTPUT_PATH) {}
 	t.Setenv("HOME", t.TempDir())
 
 	executor := &recordingExecutor{}
+	buildProject := func(ctx context.Context, opts pack.BuildOptions) error {
+		environment := pack.BuildEnvironment{
+			NPM:         npmPath,
+			Node:        nodePath,
+			Environment: []string{"PATH=" + binDir, "HOME=" + t.TempDir()},
+			Run: func(ctx context.Context, executable string, args []string, dir string, env []string, stdout, stderr io.Writer, capture bool) ([]byte, error) {
+				cmd := exec.CommandContext(ctx, executable, args...)
+				cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, stdout, stderr
+				if capture {
+					return cmd.Output()
+				}
+				return nil, cmd.Run()
+			},
+		}
+		return pack.BuildProjectWithEnvironment(ctx, opts, environment)
+	}
 	err := Runner{
 		Stdout:       &strings.Builder{},
 		Stderr:       &strings.Builder{},
 		Executor:     executor,
-		BuildProject: pack.BuildProject,
+		BuildProject: buildProject,
 	}.Run(context.Background(), RunOptions{
 		AdversaryRef: adversaryDir,
 		RepoPath:     t.TempDir(),

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,19 +26,18 @@ type CredentialStore interface {
 	Credentials(registry string) (Credentials, bool)
 }
 
-type DockerCredentialStore struct{}
+type DockerCredentialStore struct {
+	HomeDir   string
+	Lstat     func(string) (fs.FileInfo, error)
+	Open      func(string) (io.ReadCloser, error)
+	RunHelper func(context.Context, string, string) ([]byte, error)
+}
 
-func (DockerCredentialStore) Credentials(registry string) (Credentials, bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
+func (s DockerCredentialStore) Credentials(registry string) (Credentials, bool) {
+	if strings.TrimSpace(s.HomeDir) == "" {
 		return Credentials{}, false
 	}
-	configFile, err := os.Open(filepath.Join(home, ".docker", "config.json"))
-	if err != nil {
-		return Credentials{}, false
-	}
-	defer configFile.Close()
-	data, err := readLimited(configFile, 1<<20, "Docker config")
+	data, err := s.readConfig()
 	if err != nil {
 		return Credentials{}, false
 	}
@@ -77,7 +78,7 @@ func (DockerCredentialStore) Credentials(registry string) (Credentials, bool) {
 			helper = config.CredentialsStore
 		}
 		if helper != "" {
-			if creds, ok := credentialsFromHelper(helper, key); ok {
+			if creds, ok := credentialsFromHelper(s.RunHelper, helper, key); ok {
 				return creds, true
 			}
 		}
@@ -85,25 +86,48 @@ func (DockerCredentialStore) Credentials(registry string) (Credentials, bool) {
 	return Credentials{}, false
 }
 
-func credentialsFromHelper(helper, server string) (Credentials, bool) {
+func (s DockerCredentialStore) readConfig() (data []byte, err error) {
+	if s.Open == nil || s.Lstat == nil {
+		return nil, fmt.Errorf("Docker config filesystem adapter is unavailable")
+	}
+	path := filepath.Join(s.HomeDir, ".docker", "config.json")
+	before, err := s.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if before.Mode()&fs.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("Docker config is not a regular non-symlink file")
+	}
+	file, err := s.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, file.Close()) }()
+	statter, ok := file.(interface{ Stat() (fs.FileInfo, error) })
+	if !ok {
+		return nil, fmt.Errorf("Docker config handle cannot be verified")
+	}
+	after, statErr := statter.Stat()
+	if statErr != nil {
+		return nil, statErr
+	}
+	if !after.Mode().IsRegular() || !os.SameFile(before, after) {
+		return nil, fmt.Errorf("Docker config changed while opening")
+	}
+	return readLimited(file, 1<<20, "Docker config")
+}
+
+func credentialsFromHelper(run func(context.Context, string, string) ([]byte, error), helper, server string) (Credentials, bool) {
 	if strings.ContainsAny(helper, `/\\`) || strings.TrimSpace(helper) != helper || helper == "" {
+		return Credentials{}, false
+	}
+	if run == nil {
 		return Credentials{}, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker-credential-"+helper, "get")
-	cmd.Stdin = strings.NewReader(server + "\n")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil || cmd.Start() != nil {
-		return Credentials{}, false
-	}
-	out, readErr := readLimited(stdout, 1<<20, "credential helper output")
-	if readErr != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return Credentials{}, false
-	}
-	if err := cmd.Wait(); err != nil {
+	out, err := run(ctx, "docker-credential-"+helper, server+"\n")
+	if err != nil || len(out) > 1<<20 {
 		return Credentials{}, false
 	}
 	var result struct{ Username, Secret string }

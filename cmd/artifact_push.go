@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/pkg/blobsource"
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/spf13/cobra"
 	"io"
 	"os"
+
+	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/pkg/blobsource"
+	"github.com/spf13/cobra"
 )
 
 func readSmallSource(src blobsource.Source, limit int64) ([]byte, error) {
@@ -90,7 +90,7 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 			return true, err
 		}
 	}
-	ref, err := oci.ParseReference(remote)
+	ref, err := app.Dependencies().References.Parse(remote)
 	if err != nil {
 		return true, err
 	}

@@ -29,7 +29,12 @@ func TestDockerCredentialHelper(t *testing.T) {
 	if err := os.WriteFile(helper, []byte("#!/bin/sh\nread server\n[ \"$server\" = registry.example ] || exit 1\nprintf '{\"Username\":\"user\",\"Secret\":\"secret\"}'\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := (DockerCredentialStore{}).Credentials("registry.example")
+	got, ok := (DockerCredentialStore{HomeDir: home, Lstat: os.Lstat, Open: func(path string) (io.ReadCloser, error) { return os.Open(path) }, RunHelper: func(_ context.Context, executable, input string) ([]byte, error) {
+		if executable != "docker-credential-fixture" || input != "registry.example\n" {
+			t.Fatalf("helper=%q input=%q", executable, input)
+		}
+		return []byte(`{"Username":"user","Secret":"secret"}`), nil
+	}}).Credentials("registry.example")
 	if !ok || got.Username != "user" || got.Password != "secret" {
 		t.Fatalf("got %#v, %v", got, ok)
 	}
@@ -45,8 +50,23 @@ func TestDockerCredentialInputsAreBounded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".docker", "config.json"), oversized, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := (DockerCredentialStore{}).Credentials("registry.example"); ok {
+	if _, ok := (DockerCredentialStore{HomeDir: home, Lstat: os.Lstat, Open: func(path string) (io.ReadCloser, error) { return os.Open(path) }}).Credentials("registry.example"); ok {
 		t.Fatal("accepted oversized Docker config")
+	}
+}
+
+func TestDockerConfigRequiresVerifiableOpenedHandle(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".docker", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"auths":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := DockerCredentialStore{HomeDir: home, Lstat: os.Lstat, Open: func(string) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(`{"auths":{}}`)), nil }}
+	if _, err := store.readConfig(); err == nil || !strings.Contains(err.Error(), "cannot be verified") {
+		t.Fatalf("error=%v", err)
 	}
 }
 
@@ -66,7 +86,9 @@ func TestCredentialHelperOutputIsBounded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "docker-credential-overflow"), []byte("#!/bin/sh\nyes x\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := (DockerCredentialStore{}).Credentials("registry.example"); ok {
+	if _, ok := (DockerCredentialStore{HomeDir: home, Lstat: os.Lstat, Open: func(path string) (io.ReadCloser, error) { return os.Open(path) }, RunHelper: func(context.Context, string, string) ([]byte, error) {
+		return bytes.Repeat([]byte("x"), (1<<20)+1), nil
+	}}).Credentials("registry.example"); ok {
 		t.Fatal("accepted oversized helper output")
 	}
 }

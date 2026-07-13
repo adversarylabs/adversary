@@ -37,7 +37,7 @@ func newPackCommand(app *application.App) *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
 			}
 			if opts.check {
-				checked, err := pack.Check(pack.Options{Dir: args[0], NameOverride: opts.name, Builder: opts.builder})
+				checked, err := app.Dependencies().Projects.Check(pack.Options{Dir: args[0], NameOverride: opts.name, Builder: opts.builder})
 				if err != nil {
 					return err
 				}
@@ -51,7 +51,7 @@ func newPackCommand(app *application.App) *cobra.Command {
 				return nil
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), "Packing adversary...")
-			artifact, err := pack.Create(cmd.Context(), pack.Options{Dir: args[0], NameOverride: opts.name, Build: true, Builder: opts.builder, Stdout: cmd.ErrOrStderr(), Stderr: cmd.ErrOrStderr()})
+			artifact, err := app.Dependencies().Projects.Pack(cmd.Context(), pack.Options{Dir: args[0], NameOverride: opts.name, Build: true, Builder: opts.builder, Stdout: cmd.ErrOrStderr(), Stderr: cmd.ErrOrStderr()})
 			if err != nil {
 				return err
 			}
@@ -65,7 +65,7 @@ func newPackCommand(app *application.App) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read committed canonical reference: %w", err)
 			}
-			canonicalRef, err := oci.ParseReferenceWithDefaults(canonical, oci.DefaultRegistry, oci.DefaultNamespace)
+			canonicalRef, err := app.Dependencies().References.Parse(canonical)
 			if err != nil {
 				return fmt.Errorf("read committed canonical reference: %w", err)
 			}

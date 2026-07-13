@@ -30,7 +30,7 @@ closure claim and must be updated by their final remediation PR.
 | CLI-021 | Final CI/release-hardening PR; required native, quality, race, coverage, cross-build, generated-template, CLI-smoke, tooling, and release-contract gates aggregate as `ci / test` |
 | CLI-022 | PR #20 and final CI/release-hardening PR; channel-isolated publication, pinned workflows/tools, deterministic archives, SBOM, attestation, and the job-scoped GitHub permission decision in `docs/release.md` |
 | CLI-023 | PRs #2, #19, and #20; README, trust/platform/config/output/license/compatibility decisions; a final-audit follow-up remains pending |
-| CLI-024 | PRs #11 through #14 and #28; application/process dependency injection evidence; a final-audit follow-up remains pending |
+| CLI-024 | PRs #11 through #14, #28, and the App-composition closure PR; every I/O command receives `application.App`; project init/validation/build and captured reference parsing use replaceable ports; Docker credential home/helper policy is captured; dead mandatory ports are removed; handler AST and hermetic command tests prevent ambient dependency regressions. Rollback: revert the closure PR to restore direct project/reference/credential calls and re-open CLI-024. |
 
 Rollback notes are recorded in each linked PR and its maintained decision
 document. `scripts/test-release-contract.sh` prevents release, formula, license,

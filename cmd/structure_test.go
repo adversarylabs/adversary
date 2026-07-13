@@ -72,6 +72,107 @@ func TestCommandConstructorsDoNotCaptureStreams(t *testing.T) {
 	}
 }
 
+func TestCommandHandlersDoNotBypassApplicationPorts(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") || path == "app.go" || path == "root.go" || strings.HasPrefix(path, "signals_") {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, data, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		imports := map[string]string{}
+		for _, spec := range file.Imports {
+			name := ""
+			if spec.Name != nil {
+				name = spec.Name.Name
+			}
+			value := strings.Trim(spec.Path.Value, `"`)
+			if name == "." {
+				t.Errorf("%s uses forbidden dot import %s", path, value)
+				continue
+			}
+			if name == "" {
+				name = filepath.Base(value)
+			}
+			imports[name] = value
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			sel, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			qualified := imports[ident.Name] + "." + sel.Sel.Name
+			for _, forbidden := range []string{
+				"os.Getenv", "os.LookupEnv", "os.Environ", "os.UserHomeDir", "os.TempDir", "os.Stat", "os.Open", "os.ReadFile", "os.WriteFile", "os.Mkdir", "os.MkdirAll", "os.Remove", "os.RemoveAll",
+				"os/exec.Command", "os/exec.CommandContext",
+				"github.com/adversarylabs/adversary/internal/initproject.Create", "github.com/adversarylabs/adversary/internal/initproject.RenderSuccess",
+				"github.com/adversarylabs/adversary/pkg/manifest.Load", "github.com/adversarylabs/adversary/pkg/pack.Create", "github.com/adversarylabs/adversary/pkg/pack.Check", "github.com/adversarylabs/adversary/pkg/oci.ParseReference",
+			} {
+				if qualified == forbidden {
+					t.Errorf("%s bypasses App port with %s", path, qualified)
+				}
+			}
+			return true
+		})
+	}
+}
+
+func TestAmbientGuardAdversarialSourceForms(t *testing.T) {
+	for name, source := range map[string]string{
+		"aliased import": `package fixture; import ambient "os"; var f = ambient.Stat`,
+		"function alias": `package fixture; import "os"; func x() { stat := os.Stat; _, _ = stat("x") }`,
+		"dot import":     `package fixture; import . "os"; var _ = Stat`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			file, err := parser.ParseFile(token.NewFileSet(), "fixture.go", source, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			imports := map[string]string{}
+			for _, spec := range file.Imports {
+				value := strings.Trim(spec.Path.Value, `"`)
+				alias := filepath.Base(value)
+				if spec.Name != nil {
+					alias = spec.Name.Name
+				}
+				if alias == "." {
+					found = true
+				} else {
+					imports[alias] = value
+				}
+			}
+			ast.Inspect(file, func(node ast.Node) bool {
+				sel, ok := node.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				id, ok := sel.X.(*ast.Ident)
+				if ok && imports[id.Name] == "os" && sel.Sel.Name == "Stat" {
+					found = true
+				}
+				return true
+			})
+			if !found {
+				t.Fatal("adversarial ambient access escaped guard")
+			}
+		})
+	}
+}
+
 func TestArtifactCommandsHaveNoByteLayerCompatibilityFallback(t *testing.T) {
 	for _, path := range []string{"artifact_pack.go", "artifact_pull.go", "artifact_push.go", "app.go"} {
 		data, err := os.ReadFile(path)

@@ -1,13 +1,13 @@
 package cmd
 
 import (
-	"github.com/adversarylabs/adversary/internal/initproject"
+	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/spf13/cobra"
 )
 
 type initOptions struct{ sdk string }
 
-func newInitCommand() *cobra.Command {
+func newInitCommand(app *application.App) *cobra.Command {
 	opts := &initOptions{}
 
 	cmd := &cobra.Command{
@@ -17,19 +17,19 @@ func newInitCommand() *cobra.Command {
   adversary init my-adversary --sdk typescript`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := initproject.Create(initproject.Options{
+			result, err := app.Dependencies().Projects.Init(application.ProjectInitOptions{
 				Destination: args[0],
 				SDK:         opts.sdk,
 			})
 			if err != nil {
 				return err
 			}
-			initproject.RenderSuccess(cmd.OutOrStdout(), result, args[0])
+			app.Dependencies().Projects.RenderInit(cmd.OutOrStdout(), result, args[0])
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.sdk, "sdk", initproject.DefaultSDK, "SDK template to use: typescript")
+	cmd.Flags().StringVar(&opts.sdk, "sdk", application.DefaultProjectSDK, "SDK template to use: typescript")
 
 	return cmd
 }
