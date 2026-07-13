@@ -55,9 +55,18 @@ The pack service receives immutable environment entries, canonical npm/Node/
 Docker executable paths, and a bounded context-aware process runner captured by
 the composition root. Both `pack` and runtime-requested project builds use this
 same dependency; changing HOME or PATH after App construction cannot change the
-selected tools. Package filesystem work remains in the explicit concrete pack
-adapter, while build policy has no ambient environment or process-discovery
-edge.
+selected tools. The canonical build-state root is captured at the same boundary
+and supplied to both pack and runtime build requests, so later HOME/XDG cache
+changes cannot redirect build locks or journals. Package filesystem work
+remains in the explicit concrete pack adapter, while build policy has no
+ambient environment or process-discovery edge.
+
+Path policy is captured for command and runtime resources that carry identity,
+coordination, or persistence semantics. Adapter-owned private scratch files
+(for example bounded archive spools and atomic publication stages) may continue
+to use the operating system temporary directory internally. Those resources
+are non-addressable implementation details with owned cleanup; this decision
+does not broaden temporary-directory injection across library adapters.
 
 Docker config opening rejects symlinks, FIFOs, devices, directories, and handle
 identity changes. Unix uses `O_NOFOLLOW|O_NONBLOCK`; Windows opens the reparse
@@ -68,5 +77,6 @@ wait policy, and helper errors never include credential input or stderr.
 Rollback may restore the previous composition commit without changing repository
 formats, credential schemas, remote API contracts, or command output. Docker
 credential lookup would again discover the live process home and helpers, and
-project/reference handlers would again bypass App composition; rollback
-therefore re-opens CLI-024.
+build-state lookup would again follow live HOME/XDG cache changes. The rollback
+therefore re-opens CLI-007/CLI-024 without requiring data migration; existing
+build-state directories remain disposable coordination state.

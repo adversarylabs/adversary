@@ -72,6 +72,7 @@ type Runner struct {
 	Now                     func() time.Time
 	Files                   RuntimeFiles
 	BuildProject            func(context.Context, pack.BuildOptions) error
+	BuildStateDir           string
 	Shell                   func() ([]string, error)
 	Repository              *repository.Repository
 	Resolver                *Resolver
@@ -215,11 +216,12 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			buildCtx, cancelBuild = context.WithTimeout(ctx, opts.BuildTimeout)
 		}
 		if err := buildProject(buildCtx, pack.BuildOptions{
-			Dir:     resolved.BuildContext,
-			Builder: opts.Builder,
-			Stdout:  stderr,
-			Stderr:  stderr,
-			Strict:  true,
+			Dir:           resolved.BuildContext,
+			Builder:       opts.Builder,
+			Stdout:        stderr,
+			Stderr:        stderr,
+			Strict:        true,
+			BuildStateDir: r.BuildStateDir,
 		}); err != nil {
 			cancelBuild()
 			return err

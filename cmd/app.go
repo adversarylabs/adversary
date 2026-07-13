@@ -37,8 +37,9 @@ func newSystemClock() application.Clock {
 }
 
 type processProjects struct {
-	references application.References
-	build      pack.BuildEnvironment
+	references    application.References
+	build         pack.BuildEnvironment
+	buildStateDir string
 }
 
 func (processProjects) Init(opts application.ProjectInitOptions) (application.ProjectInitResult, error) {
@@ -86,10 +87,15 @@ func (p processProjects) Check(opts pack.Options) (pack.Preflight, error) {
 }
 func (p processProjects) Pack(ctx context.Context, opts pack.Options) (pack.Artifact, error) {
 	opts.ParseReference = p.references.Parse
-	opts.BuildProject = func(ctx context.Context, options pack.BuildOptions) error {
-		return pack.BuildProjectWithEnvironment(ctx, options, p.build)
-	}
+	opts.BuildProject = composedBuildProject(p.build, p.buildStateDir)
 	return pack.Create(ctx, opts)
+}
+
+func composedBuildProject(environment pack.BuildEnvironment, buildStateDir string) func(context.Context, pack.BuildOptions) error {
+	return func(ctx context.Context, options pack.BuildOptions) error {
+		options.BuildStateDir = buildStateDir
+		return pack.BuildProjectWithEnvironment(ctx, options, environment)
+	}
 }
 
 type processReferences struct{ registry, namespace string }
@@ -160,6 +166,7 @@ type processRuntime struct {
 	node              internaladversary.NodeResolver
 	files             internaladversary.RuntimeFiles
 	dataRoot          string
+	buildStateDir     string
 	buildProject      func(context.Context, pack.BuildOptions) error
 }
 
@@ -174,7 +181,7 @@ func (p processRuntime) Inspect(ctx context.Context, opts application.AdversaryR
 }
 func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladversary.Runner {
 	shell := func() ([]string, error) { return internaladversary.PlatformShell(p.node.LookPath) }
-	return internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: p.stdin, Git: p.git, TempDir: p.tempDir, HomeDir: p.homeDir, DataRoot: p.dataRoot, Now: p.now, Files: p.files, BuildProject: p.buildProject, Shell: shell, Executor: internaladversary.HostExecutor{Stdout: opts.Stderr, Stderr: opts.Stderr, Stdin: p.stdin, Environment: p.environment, ResolveExecutable: p.resolveExecutable, FindNode: p.node.Find, Shell: shell, Launcher: p.launcher, Timer: p.timer}, HostExecution: true, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
+	return internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: p.stdin, Git: p.git, TempDir: p.tempDir, HomeDir: p.homeDir, DataRoot: p.dataRoot, BuildStateDir: p.buildStateDir, Now: p.now, Files: p.files, BuildProject: p.buildProject, Shell: shell, Executor: internaladversary.HostExecutor{Stdout: opts.Stderr, Stderr: opts.Stderr, Stdin: p.stdin, Environment: p.environment, ResolveExecutable: p.resolveExecutable, FindNode: p.node.Find, Shell: shell, Launcher: p.launcher, Timer: p.timer}, HostExecution: true, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
 }
 func toInternalRunOptions(opts application.AdversaryRunOptions) internaladversary.RunOptions {
 	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout}
@@ -328,6 +335,10 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	if err != nil {
 		return nil, fmt.Errorf("resolve home directory: %w", err)
 	}
+	buildStateDir, err := pack.ResolveBuildStateDir("")
+	if err != nil {
+		return nil, fmt.Errorf("resolve build state directory: %w", err)
+	}
 	apiURL := snapshotEnvDefault(environment, "ADVERSARY_API_URL", adversarylabs.DefaultAPIURL)
 	host := snapshotEnvDefault(environment, "ADVERSARY_REGISTRY_HOST", adversarylabs.DefaultRegistry)
 	namespace := snapshotEnvDefault(environment, "ADVERSARY_REGISTRY_NAMESPACE", "")
@@ -365,17 +376,15 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	node := internaladversary.NodeResolver{LookupEnv: environment.Lookup, LookPath: lookPath, HomeDir: homeDir, Glob: files.Glob, ResolveExecutable: resolveExplicitExecutable, Environment: environment, Output: output}
 	gitPath, gitErr := lookPath("git")
 	git := internaladversary.CommandGitDiffer{Executable: gitPath, Environment: environment, Output: output, ResolutionError: gitErr}
-	buildProject := func(ctx context.Context, options pack.BuildOptions) error {
-		return pack.BuildProjectWithEnvironment(ctx, options, buildEnvironment)
-	}
-	process := processRuntime{resolver: resolver, stdin: stdin, tempDir: internalpaths.TempDir(), homeDir: homeDir, dataRoot: applicationDataRoot(resolver.Repository.Root), environment: environment, resolveExecutable: func(name string) (string, error) {
+	buildProject := composedBuildProject(buildEnvironment, buildStateDir)
+	process := processRuntime{resolver: resolver, stdin: stdin, tempDir: internalpaths.TempDir(), homeDir: homeDir, dataRoot: applicationDataRoot(resolver.Repository.Root), buildStateDir: buildStateDir, environment: environment, resolveExecutable: func(name string) (string, error) {
 		if filepath.IsAbs(name) {
 			return resolveExplicitExecutable(name)
 		}
 		return lookPath(name)
 	}, launcher: internaladversary.ExecProcessLauncher{}, timer: internaladversary.NewRuntimeTimer, git: git, now: time.Now, node: node, files: files, buildProject: buildProject}
 	references := processReferences{registry: host, namespace: namespace}
-	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Projects: processProjects{references: references, build: buildEnvironment}, References: references, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: process, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(ctx, u, environment, lookPath, output) }}, TTY: processTTY{}})
+	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Projects: processProjects{references: references, build: buildEnvironment, buildStateDir: buildStateDir}, References: references, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: process, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(ctx, u, environment, lookPath, output) }}, TTY: processTTY{}})
 }
 
 func capturedNPM(home string, lookPath func(string) (string, error), files internaladversary.RuntimeFiles, resolveExplicit func(string) (string, error)) (string, error) {

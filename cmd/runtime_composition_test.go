@@ -20,6 +20,36 @@ type compositionProcess struct{}
 
 func (compositionProcess) PID() int    { return 0 }
 func (compositionProcess) Wait() error { return nil }
+
+func TestNewProcessAppCapturesBuildStateBeforeEnvironmentMutation(t *testing.T) {
+	capturedHome := t.TempDir()
+	t.Setenv("HOME", capturedHome)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(capturedHome, "captured-cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(capturedHome, "captured-config"))
+	t.Setenv("ADVERSARY_DATA_DIR", filepath.Join(capturedHome, "captured-data"))
+	want, err := pack.ResolveBuildStateDir("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := newProcessApp(&bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(t.TempDir(), "poisoned-cache"))
+	deps := app.Dependencies()
+	projects, ok := deps.Projects.(processProjects)
+	if !ok {
+		t.Fatalf("projects=%T", deps.Projects)
+	}
+	runtimeService, ok := deps.Runtime.(processRuntime)
+	if !ok {
+		t.Fatalf("runtime=%T", deps.Runtime)
+	}
+	if projects.buildStateDir != want || runtimeService.buildStateDir != want {
+		t.Fatalf("build state projects=%q runtime=%q want=%q", projects.buildStateDir, runtimeService.buildStateDir, want)
+	}
+}
 func (compositionProcess) Kill() error { return nil }
 
 type compositionLauncher struct {
@@ -57,7 +87,7 @@ func TestProcessRuntimeRoutesDistinctStreamsAndSnapshot(t *testing.T) {
 	now := func() time.Time { return time.Unix(42, 0) }
 	launcher := &compositionLauncher{}
 	resolve := func(string) (string, error) { return executable, nil }
-	p := processRuntime{stdin: stdin, environment: env, resolveExecutable: resolve, launcher: launcher, git: compositionGit{}, tempDir: "/captured/tmp", homeDir: "/captured/home", dataRoot: "/captured/data", now: now, files: files, node: internaladversary.NodeResolver{LookPath: resolve}, buildProject: func(context.Context, pack.BuildOptions) error { return nil }}
+	p := processRuntime{stdin: stdin, environment: env, resolveExecutable: resolve, launcher: launcher, git: compositionGit{}, tempDir: "/captured/tmp", homeDir: "/captured/home", dataRoot: "/captured/data", buildStateDir: "/captured/build-state", now: now, files: files, node: internaladversary.NodeResolver{LookPath: resolve}, buildProject: func(context.Context, pack.BuildOptions) error { return nil }}
 	runner := p.runner(application.AdversaryRunOptions{Stdout: stdout, Stderr: stderr})
 	executor, ok := runner.Executor.(internaladversary.HostExecutor)
 	if !ok {
@@ -66,7 +96,7 @@ func TestProcessRuntimeRoutesDistinctStreamsAndSnapshot(t *testing.T) {
 	if runner.Stdout != stdout || executor.Stdin != stdin || executor.Stdout != stderr || executor.Stderr != stderr {
 		t.Fatal("structured output and child diagnostics were not routed independently")
 	}
-	if runner.TempDir != "/captured/tmp" || runner.HomeDir != "/captured/home" || runner.DataRoot != "/captured/data" || runner.Files == nil || runner.BuildProject == nil || runner.Shell == nil || runner.Git == nil || runner.Now().Unix() != 42 {
+	if runner.TempDir != "/captured/tmp" || runner.HomeDir != "/captured/home" || runner.DataRoot != "/captured/data" || runner.BuildStateDir != "/captured/build-state" || runner.Files == nil || runner.BuildProject == nil || runner.Shell == nil || runner.Git == nil || runner.Now().Unix() != 42 {
 		t.Fatal("runtime dependencies were not retained by the composed runner")
 	}
 	if shell, err := executor.Shell(); err != nil || len(shell) != 1 || shell[0] != executable {
