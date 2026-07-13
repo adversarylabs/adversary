@@ -1,12 +1,10 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/spf13/cobra"
 )
 
@@ -47,37 +45,19 @@ func newValidateCommand(app *application.App) *cobra.Command {
 				}
 				return cause
 			}
-			path, err := filepath.Abs(args[0])
+			validated, err := app.Dependencies().Projects.Validate(cmd.Context(), args[0], app.Dependencies().Resolver)
 			if err != nil {
-				return fail("invalid_path", args[0], err)
-			}
-			if _, statErr := os.Stat(path); statErr != nil && os.IsNotExist(statErr) {
-				resolution, resolveErr := app.Dependencies().Resolver.Resolve(cmd.Context(), args[0])
-				if resolveErr != nil {
-					return fail("unresolved_reference", args[0], fmt.Errorf("validate path or reference %q: %w", args[0], resolveErr))
+				var projectErr *application.ProjectError
+				if errors.As(err, &projectErr) {
+					return fail(projectErr.Code, projectErr.Path, projectErr)
 				}
-				path = resolution.Path
+				return fail("invalid_project", args[0], err)
 			}
-			root := path
-			if info, statErr := os.Stat(path); statErr != nil {
-				return fail("unreadable_path", path, fmt.Errorf("validate %q: %w", args[0], statErr))
-			} else if !info.IsDir() {
-				root = filepath.Dir(path)
-			} else {
-				path = filepath.Join(path, manifest.FileName)
-			}
-			m, err := manifest.Load(path)
-			if err != nil {
-				return fail("invalid_manifest", path, fmt.Errorf("validate manifest v1 %q: %w", path, err))
-			}
-			if err := m.ValidateProject(root); err != nil {
-				return fail("invalid_project", root, fmt.Errorf("validate project v1 %q: %w", root, err))
-			}
-			result := validateDTO{Path: path, ManifestVersion: "adversary.manifest.v1", Name: m.Name, Runtime: m.Runtime.Name, Status: "valid", Errors: []validateIssue{}}
+			result := validateDTO{Path: validated.Path, ManifestVersion: "adversary.manifest.v1", Name: validated.Name, Runtime: validated.Runtime, Status: "valid", Errors: []validateIssue{}}
 			if format == "json" {
 				return writeJSON(cmd.OutOrStdout(), "validate", result)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Valid adversary.manifest.v1: %s\nName: %s\nRuntime: %s\n", path, m.Name, m.Runtime.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "Valid adversary.manifest.v1: %s\nName: %s\nRuntime: %s\n", validated.Path, validated.Name, validated.Runtime)
 			return nil
 		},
 	}

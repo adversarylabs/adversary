@@ -6,6 +6,13 @@ and OCI registry creation are strongly typed ports/factories; login, logout,
 search, whoami, push, pull, and default namespace selection do not construct or
 discover dependencies inside handlers.
 
+Project creation, manifest/project validation, pack preflight, and package
+building are owned by the injected `Projects` port. Handlers do not call the
+filesystem, template renderer, manifest loader, or builder directly. Reference
+parsing is injected with registry and namespace defaults captured during App
+construction, so later environment changes cannot make pack, push, pull, and
+repository qualification disagree.
+
 `cmd/app.go` is the production composition edge. It reads environment-backed
 flag defaults once, validates and binds the config/API/registry factories, and
 injects argv, stdio, the environment snapshot, home and temporary directories,
@@ -37,6 +44,29 @@ error codes. Handler behavior no longer depends on matching human-readable error
 strings. Factory binding identities fail closed when auth, API, and registry
 dependencies belong to different configurations.
 
+Docker credential discovery receives the captured home directory and an
+explicit helper-process adapter. Credential requests never rediscover HOME,
+PATH, or process execution policy. Dead mandatory Config, Paths, HTTP,
+Credentials, and Environment App fields were removed. An AST regression guard
+rejects ambient environment, home, temporary-directory, process, filesystem,
+project, build, manifest, and reference-parser calls from command handlers.
+
+The pack service receives immutable environment entries, canonical npm/Node/
+Docker executable paths, and a bounded context-aware process runner captured by
+the composition root. Both `pack` and runtime-requested project builds use this
+same dependency; changing HOME or PATH after App construction cannot change the
+selected tools. Package filesystem work remains in the explicit concrete pack
+adapter, while build policy has no ambient environment or process-discovery
+edge.
+
+Docker config opening rejects symlinks, FIFOs, devices, directories, and handle
+identity changes. Unix uses `O_NOFOLLOW|O_NONBLOCK`; Windows opens the reparse
+point itself with `FILE_FLAG_OPEN_REPARSE_POINT` and rejects non-regular handles.
+Credential helper and build-probe output are bounded, cancellation has a finite
+wait policy, and helper errors never include credential input or stderr.
+
 Rollback may restore the previous composition commit without changing repository
-formats, credential schemas, remote API contracts, or command output. It would
-restore ambient runtime discovery and therefore re-open CLI-024.
+formats, credential schemas, remote API contracts, or command output. Docker
+credential lookup would again discover the live process home and helpers, and
+project/reference handlers would again bypass App composition; rollback
+therefore re-opens CLI-024.

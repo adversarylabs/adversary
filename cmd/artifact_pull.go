@@ -3,12 +3,12 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
+
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
-	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/spf13/cobra"
-	"os"
 )
 
 func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Command {
@@ -31,7 +31,7 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
 			}
 			resolver := app.Dependencies().Resolver
-			ref, err := oci.ParseReference(args[0])
+			ref, err := app.Dependencies().References.Parse(args[0])
 			if err != nil {
 				return err
 			}

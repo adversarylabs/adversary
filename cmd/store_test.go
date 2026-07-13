@@ -100,7 +100,7 @@ func TestInjectedAuthSearchAndWhoamiNeedNoProcessEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	base.API = processAPIFactory{store: store, http: server.Client()}
-	base.Registries = processRegistryFactory{store: store, docker: base.Credentials, host: base.RegistryHost, identity: store.Path}
+	base.Registries = processRegistryFactory{store: store, docker: oci.DockerCredentialStore{HomeDir: t.TempDir()}, host: base.RegistryHost, identity: store.Path}
 	app, err := application.New(base)
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +195,7 @@ func TestLogoutPreservesCredentialReplacedDuringRevocation(t *testing.T) {
 	}
 	base.Auth = processAuthStore{store}
 	base.API = processAPIFactory{store: store, http: server.Client()}
-	base.Registries = processRegistryFactory{store: base.Auth, docker: base.Credentials, host: adversarylabs.DefaultRegistry, identity: store.Path}
+	base.Registries = processRegistryFactory{store: base.Auth, docker: oci.DockerCredentialStore{HomeDir: t.TempDir()}, host: adversarylabs.DefaultRegistry, identity: store.Path}
 	app, err := application.New(base)
 	if err != nil {
 		t.Fatal(err)
@@ -221,9 +221,10 @@ func TestLogoutPreservesCredentialReplacedDuringRevocation(t *testing.T) {
 func lifecycleTestApp(t *testing.T, repo repository.Repository, stdout, stderr *bytes.Buffer) *application.App {
 	t.Helper()
 	store := adversarylabs.ConfigStore{Path: filepath.Join(t.TempDir(), "config.json")}
-	docker := oci.DockerCredentialStore{}
+	docker := oci.DockerCredentialStore{HomeDir: t.TempDir()}
 	resolver := internaladversary.Resolver{Repository: repo}
-	app, err := application.New(application.Dependencies{Stdin: &bytes.Buffer{}, Stdout: stdout, Stderr: stderr, Clock: dependencies.Clock{NowFunc: func() time.Time { return time.Unix(1, 0) }, TimerFunc: func(time.Duration) application.Timer { return processTimer{time.NewTimer(time.Hour)} }}, Env: dependencies.Environment{LookupFunc: func(string) (string, bool) { return "", false }}, Config: processConfig{}, Paths: processPaths{data: repo.Root}, HTTP: dependencies.HTTPClient{DoFunc: http.DefaultClient.Do}, Credentials: docker, Auth: processAuthStore{store}, API: processAPIFactory{store: store, http: http.DefaultClient}, Registries: processRegistryFactory{store: store, docker: docker, host: adversarylabs.DefaultRegistry, identity: store.Path}, DefaultAPIURL: adversarylabs.DefaultAPIURL, RegistryHost: adversarylabs.DefaultRegistry, Repository: processRepository{repo}, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{resolver: resolver}, Browser: dependencies.Browser{OpenFunc: func(context.Context, string) error { return nil }}, TTY: processTTY{}})
+	references := processReferences{registry: adversarylabs.DefaultRegistry}
+	app, err := application.New(application.Dependencies{Stdin: &bytes.Buffer{}, Stdout: stdout, Stderr: stderr, Clock: dependencies.Clock{NowFunc: func() time.Time { return time.Unix(1, 0) }, TimerFunc: func(time.Duration) application.Timer { return processTimer{time.NewTimer(time.Hour)} }}, Projects: processProjects{references: references}, References: references, Auth: processAuthStore{store}, API: processAPIFactory{store: store, http: http.DefaultClient}, Registries: processRegistryFactory{store: store, docker: docker, host: adversarylabs.DefaultRegistry, identity: store.Path}, DefaultAPIURL: adversarylabs.DefaultAPIURL, RegistryHost: adversarylabs.DefaultRegistry, Repository: processRepository{repo}, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{resolver: resolver}, Browser: dependencies.Browser{OpenFunc: func(context.Context, string) error { return nil }}, TTY: processTTY{}})
 	if err != nil {
 		t.Fatal(err)
 	}

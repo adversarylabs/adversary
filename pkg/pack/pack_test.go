@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/adversarylabs/adversary/pkg/oci"
 )
 
 func TestCreateRejectsSymlink(t *testing.T) {
@@ -229,7 +231,7 @@ func TestCreateStoresAdversaryManifestOutsideImageLayer(t *testing.T) {
 
 func TestCreateNameOverride(t *testing.T) {
 	dir := testProject(t)
-	artifact, err := Create(context.Background(), Options{Dir: dir, NameOverride: "ghcr.io/acme/security-reviewer"})
+	artifact, err := Create(context.Background(), Options{Dir: dir, NameOverride: "ghcr.io/acme/security-reviewer", ParseReference: oci.ParseReference})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +245,7 @@ func TestCreateNameOverride(t *testing.T) {
 
 func TestCreateNameOverrideRejectsTag(t *testing.T) {
 	dir := testProject(t)
-	_, err := Create(context.Background(), Options{Dir: dir, NameOverride: "ghcr.io/acme/security-reviewer:dev"})
+	_, err := Create(context.Background(), Options{Dir: dir, NameOverride: "ghcr.io/acme/security-reviewer:dev", ParseReference: oci.ParseReference})
 	if err == nil {
 		t.Fatal("expected tag rejection")
 	}
@@ -301,7 +303,7 @@ func TestCreateRejectsImplicitStaleDistWhenNPMMissing(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	var stderr strings.Builder
-	_, err := Create(context.Background(), Options{Dir: dir, Build: true, Stderr: &stderr})
+	_, err := Create(context.Background(), Options{Dir: dir, Build: true, Stderr: &stderr, BuildProject: BuildProject})
 	if err == nil || !strings.Contains(err.Error(), "explicitly allow stale dist") {
 		t.Fatalf("error = %v", err)
 	}
@@ -1099,7 +1101,7 @@ func TestCreateRejectsUnsupportedBuilder(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Create(context.Background(), Options{Dir: dir, Build: true, Builder: "spaceship"})
+	_, err := Create(context.Background(), Options{Dir: dir, Build: true, Builder: "spaceship", BuildProject: BuildProject})
 	if err == nil {
 		t.Fatal("expected unsupported builder error")
 	}

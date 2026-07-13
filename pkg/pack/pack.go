@@ -13,7 +13,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -28,12 +27,14 @@ import (
 )
 
 type Options struct {
-	Dir          string
-	NameOverride string
-	Build        bool
-	Builder      string
-	Stdout       io.Writer
-	Stderr       io.Writer
+	Dir            string
+	NameOverride   string
+	Build          bool
+	Builder        string
+	Stdout         io.Writer
+	Stderr         io.Writer
+	ParseReference func(string) (oci.Reference, error)
+	BuildProject   func(context.Context, BuildOptions) error
 }
 
 type BuildOptions struct {
@@ -46,6 +47,13 @@ type BuildOptions struct {
 	Strict         bool
 	AllowStaleDist bool
 	BuildStateDir  string
+}
+
+type BuildEnvironment struct {
+	NPM, Node, Docker                string
+	NPMError, NodeError, DockerError error
+	Environment                      []string
+	Run                              func(context.Context, string, []string, string, []string, io.Writer, io.Writer, bool) ([]byte, error)
 }
 
 const nodeBuilderImage = "node:22.14.0-alpine3.21@sha256:9bef0ef1e268f60627da9ba7d7605e8831d5b56ad07487d24d1aa386336d1944"
@@ -135,7 +143,7 @@ func Check(opts Options) (result Preflight, err error) {
 	}
 	name := manifest.ShortName(m.Name)
 	if strings.TrimSpace(opts.NameOverride) != "" {
-		name, err = normalizeNameOverride(opts.NameOverride)
+		name, err = normalizeNameOverride(opts.NameOverride, opts.ParseReference)
 		if err != nil {
 			return result, err
 		}
@@ -248,7 +256,10 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		return Artifact{}, err
 	}
 	if opts.Build {
-		if err := BuildProject(ctx, BuildOptions{Dir: dir, Builder: opts.Builder, Stdout: opts.Stdout, Stderr: opts.Stderr}); err != nil {
+		if opts.BuildProject == nil {
+			return Artifact{}, fmt.Errorf("build dependency is required")
+		}
+		if err := opts.BuildProject(ctx, BuildOptions{Dir: dir, Builder: opts.Builder, Stdout: opts.Stdout, Stderr: opts.Stderr}); err != nil {
 			return Artifact{}, err
 		}
 	}
@@ -304,7 +315,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 	}
 	name := manifest.ShortName(m.Name)
 	if strings.TrimSpace(opts.NameOverride) != "" {
-		name, err = normalizeNameOverride(opts.NameOverride)
+		name, err = normalizeNameOverride(opts.NameOverride, opts.ParseReference)
 		if err != nil {
 			return Artifact{}, err
 		}
@@ -477,7 +488,7 @@ func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, e
 	return files, nil
 }
 
-func normalizeNameOverride(name string) (string, error) {
+func normalizeNameOverride(name string, parse func(string) (oci.Reference, error)) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", nil
@@ -490,13 +501,16 @@ func normalizeNameOverride(name string) (string, error) {
 	if lastColon > lastSlash {
 		return "", fmt.Errorf("--name must not include a tag; version comes from adversary.yaml")
 	}
-	if _, err := oci.ParseReference(name); err != nil {
+	if parse == nil {
+		return "", fmt.Errorf("reference parser dependency is required for --name")
+	}
+	if _, err := parse(name); err != nil {
 		return "", fmt.Errorf("invalid --name: %w", err)
 	}
 	return name, nil
 }
 
-func BuildProject(ctx context.Context, opts BuildOptions) error {
+func BuildProjectWithEnvironment(ctx context.Context, opts BuildOptions, environment BuildEnvironment) error {
 	if err := validateBuilder(opts.Builder); err != nil {
 		return err
 	}
@@ -603,9 +617,9 @@ func BuildProject(ctx context.Context, opts BuildOptions) error {
 			}
 			return fmt.Errorf("build failed: node_modules was not found; run npm install or use --builder docker")
 		}
-		return buildWithLocalNPM(ctx, state, root, dir, opts.Stdout, opts.Stderr, opts.AllowStaleDist)
+		return buildWithLocalNPM(ctx, state, root, dir, opts.Stdout, opts.Stderr, opts.AllowStaleDist, environment)
 	case "docker":
-		return buildWithDocker(ctx, state, root, dir, opts.Stdout, opts.Stderr)
+		return buildWithDocker(ctx, state, root, dir, opts.Stdout, opts.Stderr, environment)
 	}
 	panic("validated builder became invalid")
 }
@@ -805,9 +819,9 @@ func validateBuilder(builder string) error {
 	return nil
 }
 
-func buildWithLocalNPM(ctx context.Context, state, root *os.Root, dir string, stdout, stderr io.Writer, allowStale bool) error {
-	npm, err := findNPM()
-	if err != nil {
+func buildWithLocalNPM(ctx context.Context, state, root *os.Root, dir string, stdout, stderr io.Writer, allowStale bool, environment BuildEnvironment) error {
+	npm, err := environment.NPM, environment.NPMError
+	if npm == "" || err != nil {
 		if allowStale {
 			if info, statErr := os.Stat(filepath.Join(dir, "dist")); statErr == nil && info.IsDir() {
 				if stderr != nil {
@@ -818,7 +832,7 @@ func buildWithLocalNPM(ctx context.Context, state, root *os.Root, dir string, st
 		}
 		return fmt.Errorf("build failed: npm was not found; install Node 22/npm, use --builder docker, or explicitly allow stale dist")
 	}
-	if err := validateNodeRuntime(ctx, npm); err != nil {
+	if err := validateNodeRuntime(ctx, npm, environment); err != nil {
 		return err
 	}
 	stage, err := stageProject(ctx, root, dir, false)
@@ -826,18 +840,10 @@ func buildWithLocalNPM(ctx context.Context, state, root *os.Root, dir string, st
 		return err
 	}
 	defer os.RemoveAll(stage)
-	cmd := exec.CommandContext(ctx, npm, "run", "build")
-	cmd.Dir = stage
-	cmd.Env = withPathPrefix(os.Environ(), filepath.Dir(npm))
-	if stdout == nil {
-		stdout = os.Stdout
+	if environment.Run == nil {
+		return fmt.Errorf("build process dependency is required")
 	}
-	if stderr == nil {
-		stderr = os.Stderr
-	}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
+	if _, err := environment.Run(ctx, npm, []string{"run", "build"}, stage, withPathPrefix(environment.Environment, filepath.Dir(npm)), stdout, stderr, false); err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
 	return publishDist(ctx, state, root, filepath.Join(stage, "dist"))
@@ -855,17 +861,15 @@ func withPathPrefix(env []string, dir string) []string {
 	return append(append([]string(nil), env...), prefix+dir)
 }
 
-func validateNodeRuntime(ctx context.Context, npm string) error {
-	node := filepath.Join(filepath.Dir(npm), "node")
-	if info, err := os.Stat(node); err != nil || info.IsDir() {
-		var lookErr error
-		node, lookErr = exec.LookPath("node")
-		if lookErr != nil {
-			return fmt.Errorf("build failed: Node 22 was not found next to npm or on PATH")
-		}
+func validateNodeRuntime(ctx context.Context, npm string, environment BuildEnvironment) error {
+	node := environment.Node
+	if node == "" || environment.NodeError != nil {
+		return fmt.Errorf("build failed: Node 22 was not found next to npm or on captured PATH")
 	}
-	cmd := exec.CommandContext(ctx, node, "--version")
-	out, err := cmd.Output()
+	if environment.Run == nil {
+		return fmt.Errorf("build process dependency is required")
+	}
+	out, err := environment.Run(ctx, node, []string{"--version"}, "", environment.Environment, nil, nil, true)
 	if err != nil {
 		return fmt.Errorf("build failed: determine Node version: %w", err)
 	}
@@ -876,12 +880,12 @@ func validateNodeRuntime(ctx context.Context, npm string) error {
 	return nil
 }
 
-func buildWithDocker(ctx context.Context, state, root *os.Root, dir string, stdout, stderr io.Writer) error {
+func buildWithDocker(ctx context.Context, state, root *os.Root, dir string, stdout, stderr io.Writer, environment BuildEnvironment) error {
 	if _, err := root.Stat("package-lock.json"); err != nil {
 		return fmt.Errorf("docker release build requires package-lock.json and npm ci")
 	}
-	docker, err := exec.LookPath("docker")
-	if err != nil {
+	docker, err := environment.Docker, environment.DockerError
+	if docker == "" || err != nil {
 		return fmt.Errorf("build failed: docker was not found; install Docker or use --builder local")
 	}
 	tmp, err := os.MkdirTemp("", "adversary-pack-docker-*")
@@ -899,16 +903,10 @@ func buildWithDocker(ctx context.Context, state, root *os.Root, dir string, stdo
 		return err
 	}
 	outDir := filepath.Join(tmp, "out")
-	cmd := exec.CommandContext(ctx, docker, "build", "--output", "type=local,dest="+outDir, "-f", dockerfile, contextDir)
-	if stdout == nil {
-		stdout = os.Stdout
+	if environment.Run == nil {
+		return fmt.Errorf("build process dependency is required")
 	}
-	if stderr == nil {
-		stderr = os.Stderr
-	}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
+	if _, err := environment.Run(ctx, docker, []string{"build", "--output", "type=local,dest=" + outDir, "-f", dockerfile, contextDir}, "", environment.Environment, stdout, stderr, false); err != nil {
 		return fmt.Errorf("docker build failed: %w", err)
 	}
 	builtDist := filepath.Join(outDir, "dist")
@@ -1566,29 +1564,6 @@ func copyRootTree(ctx context.Context, source, destination *os.Root) error {
 		return fmt.Errorf("build produced an empty dist/")
 	}
 	return nil
-}
-
-func findNPM() (string, error) {
-	if path, err := exec.LookPath("npm"); err == nil {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	candidates := []string{
-		filepath.Join(home, ".volta", "bin", "npm"),
-		filepath.Join(home, ".asdf", "shims", "npm"),
-	}
-	nvmMatches, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", "npm"))
-	sort.Sort(sort.Reverse(sort.StringSlice(nvmMatches)))
-	candidates = append(nvmMatches, candidates...)
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-	}
-	return "", exec.ErrNotFound
 }
 
 func collectFiles(dir string) ([]File, error) {

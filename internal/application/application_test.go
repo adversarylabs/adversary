@@ -55,6 +55,24 @@ type fakeCreds struct{}
 
 func (fakeCreds) Credentials(string) (oci.Credentials, bool) { return oci.Credentials{}, false }
 
+type fakeProjects struct{}
+
+func (fakeProjects) Init(ProjectInitOptions) (ProjectInitResult, error) {
+	return ProjectInitResult{}, nil
+}
+func (fakeProjects) RenderInit(io.Writer, ProjectInitResult, string) {}
+func (fakeProjects) Validate(context.Context, string, Resolver) (ProjectValidation, error) {
+	return ProjectValidation{}, nil
+}
+func (fakeProjects) Check(pack.Options) (pack.Preflight, error) { return pack.Preflight{}, nil }
+func (fakeProjects) Pack(context.Context, pack.Options) (pack.Artifact, error) {
+	return pack.Artifact{}, nil
+}
+
+type fakeReferences struct{}
+
+func (fakeReferences) Parse(string) (oci.Reference, error) { return oci.Reference{}, nil }
+
 type fakeRegistry struct{}
 
 func (fakeRegistry) PushSources(context.Context, oci.Reference, []byte, []oci.SourceBlob) (string, error) {
@@ -109,7 +127,7 @@ func (mismatchedAPI) BindingIdentity() string { return "other" }
 
 func TestDependencyBindingMismatchFailsClosed(t *testing.T) {
 	b := &bytes.Buffer{}
-	_, err := New(Dependencies{Stdin: b, Stdout: b, Stderr: b, Clock: fakeClock{}, Env: fakeEnv{}, Config: fakeConfig{}, Paths: fakePaths{}, HTTP: fakeHTTP{}, Credentials: fakeCreds{}, Auth: fakeAuth{}, API: mismatchedAPI{}, Registries: fakeRegistryFactory{}, DefaultAPIURL: "https://api.test", RegistryHost: "registry.test", Repository: fakeRepo{}, Resolver: fakeResolver{}, Runtime: fakeRuntime{}, Browser: fakeBrowser{}, TTY: fakeTTY{}})
+	_, err := New(Dependencies{Stdin: b, Stdout: b, Stderr: b, Clock: fakeClock{}, Projects: fakeProjects{}, References: fakeReferences{}, Auth: fakeAuth{}, API: mismatchedAPI{}, Registries: fakeRegistryFactory{}, DefaultAPIURL: "https://api.test", RegistryHost: "registry.test", Repository: fakeRepo{}, Resolver: fakeResolver{}, Runtime: fakeRuntime{}, Browser: fakeBrowser{}, TTY: fakeTTY{}})
 	if err == nil || !IsKind(err, "invalid-dependency") {
 		t.Fatalf("error=%v", err)
 	}
@@ -161,7 +179,7 @@ func (mismatchedResolver) BindingIdentity() string { return "other-artifacts" }
 
 func TestArtifactBindingMismatchFailsClosed(t *testing.T) {
 	b := &bytes.Buffer{}
-	_, err := New(Dependencies{Stdin: b, Stdout: b, Stderr: b, Clock: fakeClock{}, Env: fakeEnv{}, Config: fakeConfig{}, Paths: fakePaths{}, HTTP: fakeHTTP{}, Credentials: fakeCreds{}, Auth: fakeAuth{}, API: fakeAPI{}, Registries: fakeRegistryFactory{}, DefaultAPIURL: "https://api.test", RegistryHost: "registry.test", Repository: fakeRepo{}, Resolver: mismatchedResolver{}, Runtime: fakeRuntime{}, Browser: fakeBrowser{}, TTY: fakeTTY{}})
+	_, err := New(Dependencies{Stdin: b, Stdout: b, Stderr: b, Clock: fakeClock{}, Projects: fakeProjects{}, References: fakeReferences{}, Auth: fakeAuth{}, API: fakeAPI{}, Registries: fakeRegistryFactory{}, DefaultAPIURL: "https://api.test", RegistryHost: "registry.test", Repository: fakeRepo{}, Resolver: mismatchedResolver{}, Runtime: fakeRuntime{}, Browser: fakeBrowser{}, TTY: fakeTTY{}})
 	if err == nil || !IsKind(err, "invalid-dependency") {
 		t.Fatalf("error=%v", err)
 	}
@@ -178,7 +196,7 @@ func (fakeTTY) ReadSecret(context.Context, io.Reader, io.Writer) ([]byte, error)
 
 func TestFullyPopulatedDependencyGraphIsConstructible(t *testing.T) {
 	b := &bytes.Buffer{}
-	app, err := New(Dependencies{Stdin: b, Stdout: b, Stderr: b, Clock: fakeClock{}, Env: fakeEnv{}, Config: fakeConfig{}, Paths: fakePaths{}, HTTP: fakeHTTP{}, Credentials: fakeCreds{}, Auth: fakeAuth{}, API: fakeAPI{}, Registries: fakeRegistryFactory{}, DefaultAPIURL: "https://api.test", RegistryHost: "registry.test", Repository: fakeRepo{}, Resolver: fakeResolver{}, Runtime: fakeRuntime{}, Browser: fakeBrowser{}, TTY: fakeTTY{}})
+	app, err := New(Dependencies{Stdin: b, Stdout: b, Stderr: b, Clock: fakeClock{}, Projects: fakeProjects{}, References: fakeReferences{}, Auth: fakeAuth{}, API: fakeAPI{}, Registries: fakeRegistryFactory{}, DefaultAPIURL: "https://api.test", RegistryHost: "registry.test", Repository: fakeRepo{}, Resolver: fakeResolver{}, Runtime: fakeRuntime{}, Browser: fakeBrowser{}, TTY: fakeTTY{}})
 	if err != nil || app == nil {
 		t.Fatalf("app=%v err=%v", app, err)
 	}
