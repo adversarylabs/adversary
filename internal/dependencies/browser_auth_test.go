@@ -164,6 +164,29 @@ func TestBrowserAuthInjectedFailuresAreBounded(t *testing.T) {
 			t.Fatalf("err=%v", err)
 		}
 	})
+	for name, serveErr := range map[string]error{
+		"premature net close":  net.ErrClosed,
+		"premature HTTP close": http.ErrServerClosed,
+	} {
+		t.Run(name, func(t *testing.T) {
+			auth := BrowserAuth{Entropy: bytes.NewReader(make([]byte, 104)), ListenFunc: net.Listen, NewServerFunc: func(http.Handler) CallbackServer {
+				return callbackServerStub{serve: func(net.Listener) error { return serveErr }, shutdown: func(context.Context) error { return nil }}
+			}, OpenFunc: func(context.Context, string) error { return nil }}
+			done := make(chan error, 1)
+			go func() {
+				_, err := auth.Login(context.Background(), newRequest())
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err == nil || !errors.Is(err, serveErr) {
+					t.Fatalf("err=%v, want %v", err, serveErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("login did not wake after premature callback server close")
+			}
+		})
+	}
 	t.Run("joined serve error retains real failure", func(t *testing.T) {
 		auth := BrowserAuth{Entropy: bytes.NewReader(make([]byte, 104)), ListenFunc: net.Listen, NewServerFunc: func(http.Handler) CallbackServer {
 			return callbackServerStub{serve: func(net.Listener) error { return errors.Join(net.ErrClosed, errors.New("serve failed")) }, shutdown: func(context.Context) error { return nil }}

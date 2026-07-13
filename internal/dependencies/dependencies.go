@@ -146,18 +146,29 @@ func (b BrowserAuth) Login(parent context.Context, request application.BrowserAu
 	if server == nil {
 		return adversarylabs.TokenResponse{}, fmt.Errorf("browser auth server factory returned nil")
 	}
+	const (
+		callbackRunning int32 = iota
+		callbackCleanupStarted
+		callbackServeReturned
+	)
+	var callbackLifecycle atomic.Int32
 	go func() {
 		serveErr := server.Serve(listener)
+		serveReturnedBeforeCleanup := callbackLifecycle.CompareAndSwap(callbackRunning, callbackServeReturned)
 		if serveErr == nil {
 			serveErr = errors.New("browser auth callback server stopped unexpectedly")
 		}
-		if err := normalizeCallbackCloseError(serveErr); err != nil {
-			publishBrowserOutcome(result, browserLoginOutcome{err: fmt.Errorf("serve local login callback: %w", err)})
+		if !serveReturnedBeforeCleanup {
+			serveErr = normalizeCallbackCloseError(serveErr)
+		}
+		if serveErr != nil {
+			publishBrowserOutcome(result, browserLoginOutcome{err: fmt.Errorf("serve local login callback: %w", serveErr)})
 		}
 	}()
 	defer func() {
 		shutdownCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer stop()
+		callbackLifecycle.CompareAndSwap(callbackRunning, callbackCleanupStarted)
 		retErr = errors.Join(retErr, normalizeCallbackCloseError(server.Shutdown(shutdownCtx)))
 	}()
 	loginURL, err := request.Client.BrowserLoginURL(adversarylabs.BrowserLoginOptions{RedirectURI: callbackURL, State: state, CodeChallenge: challenge, Name: request.Name, CI: request.CI})

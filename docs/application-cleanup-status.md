@@ -84,7 +84,11 @@ wait policy, and helper errors never include credential input or stderr. Browser
 callbacks have a ten-minute operation deadline, bounded server read timeouts,
 and a two-second injected shutdown deadline; state mismatch, token injection,
 and repeated callbacks fail closed, including concurrent repeats during code
-exchange.
+exchange. Callback-server termination is ordered against cleanup atomically:
+even a normally benign closed-listener result is terminal when it happens before
+login cleanup begins, while shutdown-caused close results are suppressed. This
+prevents a prematurely stopped callback server from leaving login waiting for
+the operation deadline.
 
 Rollback may restore the previous composition commit without changing repository
 formats, credential schemas, remote API contracts, or command output. Docker
@@ -93,4 +97,6 @@ build-state lookup would again follow live HOME/XDG cache changes. The rollback
 would also return listener, entropy, HTTP-server, and shutdown ownership to the
 login handler. It therefore re-opens CLI-003/CLI-007/CLI-024 without requiring
 data or credential migration; existing build-state directories remain
-disposable coordination state.
+disposable coordination state. Reverting only the callback lifecycle ordering
+can restore a ten-minute hang after an unexpected listener/server close and is
+not a safe partial rollback.
