@@ -3,6 +3,7 @@ package oci
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -37,6 +38,95 @@ func TestDockerCredentialHelper(t *testing.T) {
 	}}).Credentials("registry.example")
 	if !ok || got.Username != "user" || got.Password != "secret" {
 		t.Fatalf("got %#v, %v", got, ok)
+	}
+}
+
+func TestDockerCredentialHelperInheritsCallerCancellation(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".docker"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".docker", "config.json"), []byte(`{"credHelpers":{"registry.example":"fixture"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan error, 1)
+	store := DockerCredentialStore{
+		HomeDir: home,
+		Lstat:   os.Lstat,
+		Open:    func(path string) (io.ReadCloser, error) { return os.Open(path) },
+		RunHelper: func(ctx context.Context, executable, input string) ([]byte, error) {
+			if executable != "docker-credential-fixture" || input != "registry.example\n" {
+				t.Fatalf("helper=%q input=%q", executable, input)
+			}
+			observed <- ctx.Err()
+			return nil, ctx.Err()
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := store.CredentialsContext(ctx, "registry.example"); ok {
+		t.Fatal("canceled credential helper returned credentials")
+	}
+	if err := <-observed; !errors.Is(err, context.Canceled) {
+		t.Fatalf("helper context error=%v", err)
+	}
+}
+
+func TestCredentialChainPropagatesContextAndSupportsLegacyFallback(t *testing.T) {
+	type contextKey struct{}
+	wantCtx := context.WithValue(context.Background(), contextKey{}, "request")
+	seen := make(chan context.Context, 1)
+	contextual := contextCredentialStore{
+		context: func(ctx context.Context, registry string) (Credentials, bool) {
+			if registry != "registry.example" {
+				t.Fatalf("registry=%q", registry)
+			}
+			seen <- ctx
+			return Credentials{}, false
+		},
+		legacy: func(string) (Credentials, bool) {
+			t.Fatal("context-aware store used legacy lookup")
+			return Credentials{}, false
+		},
+	}
+	stores := ChainCredentialStore{contextual, staticCredentialStore{registry: "registry.example", creds: Credentials{Token: "legacy-token"}}}
+	got, ok := stores.CredentialsContext(wantCtx, "registry.example")
+	if !ok || got.Token != "legacy-token" {
+		t.Fatalf("credentials=%#v ok=%v", got, ok)
+	}
+	if gotCtx := <-seen; gotCtx != wantCtx {
+		t.Fatal("chain replaced caller context")
+	}
+}
+
+func TestRegistryCredentialLookupInheritsRequestCancellation(t *testing.T) {
+	seen := make(chan error, 1)
+	store := contextCredentialStore{
+		context: func(ctx context.Context, registry string) (Credentials, bool) {
+			if registry != "registry.example" {
+				t.Fatalf("registry=%q", registry)
+			}
+			seen <- ctx.Err()
+			return Credentials{}, false
+		},
+		legacy: func(string) (Credentials, bool) {
+			t.Fatal("registry used legacy credential lookup")
+			return Credentials{}, false
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://registry.example/v2/team/tool/manifests/latest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := &HTTPRegistry{Client: NewHTTPClient(), Credentials: store}
+	_, err = registry.do(req, Reference{Registry: "registry.example", Repository: "team/tool", Tag: "latest"}, "repository:team/tool:pull")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("registry error=%v", err)
+	}
+	if err := <-seen; !errors.Is(err, context.Canceled) {
+		t.Fatalf("credential context error=%v", err)
 	}
 }
 
@@ -383,6 +473,19 @@ func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 type staticCredentialStore struct {
 	registry string
 	creds    Credentials
+}
+
+type contextCredentialStore struct {
+	context func(context.Context, string) (Credentials, bool)
+	legacy  func(string) (Credentials, bool)
+}
+
+func (s contextCredentialStore) Credentials(registry string) (Credentials, bool) {
+	return s.legacy(registry)
+}
+
+func (s contextCredentialStore) CredentialsContext(ctx context.Context, registry string) (Credentials, bool) {
+	return s.context(ctx, registry)
 }
 
 func (s staticCredentialStore) Credentials(registry string) (Credentials, bool) {
