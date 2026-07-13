@@ -40,7 +40,7 @@ func (r Repository) CommitEquivalentManifest(sourceDigest, targetDigest string, 
 	if source.Digest != sourceDigest || source.ManifestDigest != sourceDigest {
 		return Record{}, fmt.Errorf("source manifest identity conflicts with committed record")
 	}
-	if err := r.validateStoredArtifactLayer(source); err != nil {
+	if _, err := r.validateStoredArtifactLayer(source); err != nil {
 		return Record{}, fmt.Errorf("source artifact semantic validation failed: %w", err)
 	}
 	if err := oci.VerifyDigest(manifest, source.ManifestDigest); err != nil {

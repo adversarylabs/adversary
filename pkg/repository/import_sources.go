@@ -62,6 +62,38 @@ func (r Repository) ImportSources(in SourceImport) (_ Record, retErr error) {
 	if in.Manifest == nil || configBlob.Source == nil || layerBlob.Source == nil {
 		return Record{}, fmt.Errorf("manifest, config, and layer sources are required")
 	}
+	var stagedSources []blobsource.SourceCloser
+	defer func() {
+		for i := len(stagedSources) - 1; i >= 0; i-- {
+			retErr = errors.Join(retErr, stagedSources[i].Close())
+		}
+	}()
+	stage := func(source blobsource.Source, limit int64) (blobsource.Source, error) {
+		staged, stageErr := stageImportSource(source, limit)
+		if stageErr != nil {
+			return nil, stageErr
+		}
+		stagedSources = append(stagedSources, staged)
+		return staged, nil
+	}
+	in.Manifest, err = stage(in.Manifest, 4<<20)
+	if err != nil {
+		return Record{}, fmt.Errorf("stage manifest: %w", err)
+	}
+	configBlob.Source, err = stage(configBlob.Source, 1<<20)
+	if err != nil {
+		return Record{}, fmt.Errorf("stage config: %w", err)
+	}
+	layerBlob.Source, err = stage(layerBlob.Source, 256<<20)
+	if err != nil {
+		return Record{}, fmt.Errorf("stage layer: %w", err)
+	}
+	if in.AdversaryManifest != nil {
+		in.AdversaryManifest, err = stage(in.AdversaryManifest, 1<<20)
+		if err != nil {
+			return Record{}, fmt.Errorf("stage adversary manifest: %w", err)
+		}
+	}
 	manifest, err := readSourceLimited(in.Manifest, 4<<20)
 	if err != nil {
 		return Record{}, fmt.Errorf("read manifest: %w", err)
@@ -113,6 +145,35 @@ func (r Repository) ImportSources(in SourceImport) (_ Record, retErr error) {
 		Manifest: manifest, Config: configData, AdversaryManifest: adversary,
 		ManifestDigest: in.Manifest.Digest(), ConfigDigest: config.Digest(), LayerDigest: layer.Digest(),
 		AdversaryManifestDigest: sourceDigest(in.AdversaryManifest)}, true)
+}
+
+func stageImportSource(source blobsource.Source, limit int64) (_ blobsource.SourceCloser, retErr error) {
+	if source == nil || source.Size() < 0 || source.Size() > limit {
+		return nil, fmt.Errorf("source exceeds %d byte limit", limit)
+	}
+	file, err := os.CreateTemp("", "adversary-import-source-")
+	if err != nil {
+		return nil, err
+	}
+	name := file.Name()
+	keep := false
+	defer func() {
+		if !keep {
+			retErr = errors.Join(retErr, os.Remove(name))
+		}
+	}()
+	copyErr := copyVerifiedSource(file, source)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if err := errors.Join(copyErr, syncErr, closeErr); err != nil {
+		return nil, err
+	}
+	staged, err := blobsource.File(name, source.Digest())
+	if err != nil {
+		return nil, err
+	}
+	keep = true
+	return blobsource.Owned(staged, func() error { return os.Remove(name) }), nil
 }
 
 func descriptorMatches(a, b oci.Descriptor) bool {

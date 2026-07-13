@@ -18,7 +18,7 @@ func (r Repository) Inventory(rec Record) ([]pack.File, error) {
 	if canonical != rec {
 		return nil, fmt.Errorf("record does not match committed artifact")
 	}
-	if err := r.validateStoredArtifactLayer(canonical); err != nil {
+	if _, err := r.validateStoredArtifactLayer(canonical); err != nil {
 		return nil, fmt.Errorf("artifact semantic validation failed: %w", err)
 	}
 	data, err := r.readLimit("blobs/"+key(rec.ConfigDigest), 1<<20)

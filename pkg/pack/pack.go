@@ -159,7 +159,7 @@ func Check(opts Options) (result Preflight, err error) {
 	if version == "" {
 		version = oci.DefaultTag
 	}
-	result = Preflight{Name: name, Version: version, Runtime: detectRuntime(dir, m), Files: files}
+	result = Preflight{Name: name, Version: version, Runtime: detectRuntime(files, m), Files: files}
 	result.Warnings = WarningsForFiles(files)
 	return result, nil
 }
@@ -327,7 +327,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 	if version == "" {
 		version = oci.DefaultTag
 	}
-	runtime := detectRuntime(dir, m)
+	runtime := detectRuntime(files, m)
 	config, err := json.Marshal(ArtifactConfig{
 		Created:        "1970-01-01T00:00:00Z",
 		Name:           name,
@@ -1622,8 +1622,8 @@ func normalizedFileMode(mode fs.FileMode) int64 {
 	return 0644
 }
 
-func detectRuntime(dir string, m manifest.Manifest) string {
-	if _, err := os.Stat(filepath.Join(dir, "package.json")); err == nil {
+func detectRuntime(files []File, m manifest.Manifest) string {
+	if inventoryContains(files, "package.json") {
 		return "typescript"
 	}
 	if runtimeName(m) == "node" {

@@ -1,10 +1,50 @@
 package pack
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestCreateDerivesRuntimeFromPackedInventory(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"adversary.yaml":   ".placeholder",
+		"package.json":     `{}`,
+		"bin/tool":         "#!/bin/sh\n",
+		".adversaryignore": "package.json\n",
+	}
+	files["adversary.yaml"] = "name: team/ignored-package\nversion: 1.0.0\nruntime:\n  name: process\n  version: '1'\n  command: [bin/tool]\n"
+	for name, content := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer artifact.Close()
+	config, err := DecodeArtifactConfig(artifact.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Runtime != "custom" || artifact.Runtime != "custom" {
+		t.Fatalf("runtime config=%q artifact=%q", config.Runtime, artifact.Runtime)
+	}
+	for _, file := range config.Files {
+		if file.Path == "package.json" {
+			t.Fatal("ignored package.json affected packed inventory")
+		}
+	}
+}
 
 func TestDecodeArtifactConfigStrictJSONAndInventory(t *testing.T) {
 	valid := ArtifactConfig{

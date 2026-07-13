@@ -145,32 +145,31 @@ func inventoryMismatch(expected, actual []pack.File) error {
 	return fmt.Errorf("package layer inventory file count conflicts: config=%d layer=%d", len(expected), len(actual))
 }
 
-func (r Repository) validateStoredArtifactLayer(rec Record) error {
+func (r Repository) validateStoredArtifactLayer(rec Record) ([]byte, error) {
 	config, err := r.readLimit("blobs/"+key(rec.ConfigDigest), 1<<20)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var adversary []byte
 	if rec.AdversaryManifestDigest != "" {
 		adversary, err = r.readLimit("adversary-manifests/"+key(rec.AdversaryManifestDigest), 1<<20)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	manifestData, err := r.readLimit("manifests/"+key(rec.ManifestDigest), 4<<20)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var manifest oci.Manifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return err
+		return nil, err
 	}
 	layer, err := r.contentSource("blobs", rec.LayerDigest)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = validateArtifactLayer(config, adversary, manifest.Annotations, layer)
-	return err
+	return validateArtifactLayer(config, adversary, manifest.Annotations, layer)
 }
 
 func errorsJoin(errs ...error) error {

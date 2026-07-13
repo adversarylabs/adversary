@@ -64,11 +64,18 @@ copies exist their bytes must be identical. Missing or conflicting copies fail
 before content, record, reference, or materialization publication. Content that
 was durably written by a later transaction failure remains untrusted and
 unreferenced for normal GC; validation failures occur before those writes.
+Import opens each caller-owned source exactly once into a verified private
+stage; semantic validation and durable publication reopen only that immutable
+stage, preventing a changing source from swapping bytes between validation and
+commit.
 
 Stored records are semantically revalidated from the immutable config and a
 fresh bounded extraction before inventory display, republishing, or execution.
 An older record created before this gate therefore cannot bypass the checks via
-an already sealed materialization.
+an already sealed materialization. For a valid pre-gate record whose only
+canonical manifest is inventory-backed in the layer, payload acquisition
+synthesizes the verified attached-manifest source without mutating repository
+state while the digest lease is held.
 
 Digest verification provides content integrity, not publisher identity. This
 change does not introduce signatures because the repository has no configured

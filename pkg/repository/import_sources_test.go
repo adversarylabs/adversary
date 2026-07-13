@@ -269,6 +269,20 @@ func TestLayerBackedAdversaryManifestIsValidatedPromotedAndReopened(t *testing.T
 	if rec.AdversaryManifestDigest == "" {
 		t.Fatal("layer-backed manifest was not promoted")
 	}
+	legacy := rec
+	legacy.AdversaryManifestDigest = ""
+	legacyData, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordPath := filepath.Join(repo.Root, "records", key(rec.Digest)+".json")
+	if err := os.Chmod(recordPath, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(recordPath, legacyData, 0444); err != nil {
+		t.Fatal(err)
+	}
+	rec = legacy
 	reopened := Repository{Root: repo.Root}
 	path, err := reopened.Materialize(rec)
 	if err != nil {
@@ -295,6 +309,10 @@ func TestLayerBackedAdversaryManifestIsValidatedPromotedAndReopened(t *testing.T
 	lease, err := reopened.PayloadSources(rec)
 	if err != nil {
 		t.Fatal(err)
+	}
+	payloadManifest, err := readSourceLimited(lease.AdversaryManifest, 1<<20)
+	if err != nil || !bytes.Equal(payloadManifest, a.AdversaryManifest) {
+		t.Fatalf("payload manifest=%q err=%v", payloadManifest, err)
 	}
 	if err := lease.Close(); err != nil {
 		t.Fatal(err)
@@ -381,6 +399,74 @@ func TestImportSourcesRejectsUnsafeLayerArchiveBeforePublication(t *testing.T) {
 			}
 			assertImportValidationLeftNoState(t, repo, in)
 		})
+	}
+}
+
+func commitWithoutLayerValidation(t *testing.T, repo Repository, in SourceImport) Record {
+	t.Helper()
+	manifestData, err := readSourceLimited(in.Manifest, 4<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configData := []byte(nil)
+	var config, layer blobsource.Source
+	for _, blob := range in.Blobs {
+		if err := repo.putSource("blobs", blob.Source); err != nil {
+			t.Fatal(err)
+		}
+		switch blob.Descriptor.MediaType {
+		case oci.EmptyConfigMediaType:
+			config = blob.Source
+			configData, err = readSourceLimited(config, 1<<20)
+		case oci.PackageLayerMediaType:
+			layer = blob.Source
+		}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	adversary, err := readSourceLimited(in.AdversaryManifest, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.putSource("manifests", in.Manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.putSource("adversary-manifests", in.AdversaryManifest); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := repo.importData(importMetadata{
+		Reference: in.Reference, Name: in.Name, Version: in.Version,
+		Manifest: manifestData, Config: configData, AdversaryManifest: adversary,
+		ManifestDigest: in.Manifest.Digest(), ConfigDigest: config.Digest(), LayerDigest: layer.Digest(),
+		AdversaryManifestDigest: in.AdversaryManifest.Digest(),
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+func TestRepairDoesNotReportSemanticCorruptionAsResolved(t *testing.T) {
+	a, in := sourceFixture(t)
+	defer a.Close()
+	in = mutateSourceMetadata(t, in, func(config map[string]any) {
+		config["files"].([]any)[0].(map[string]any)["size"] = float64(999)
+	}, nil)
+	repo := newSourceRepository(t)
+	rec := commitWithoutLayerValidation(t, repo, in)
+	if result := repo.Verify(rec); len(result.Corrupt) == 0 {
+		t.Fatal("semantic corruption reported healthy")
+	}
+	if err := repo.Repair(rec, nil); err == nil {
+		t.Fatal("Repair reported semantic corruption resolved")
+	}
+	report, err := repo.RepairAll(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Repaired) != 0 || len(report.Unresolved) != 1 || report.Unresolved[0] != rec.Digest {
+		t.Fatalf("repair report=%#v", report)
 	}
 }
 
@@ -471,7 +557,7 @@ func TestImportSourcesBoundsChangedLayerAtDeclaredSize(t *testing.T) {
 	}
 	in.Blobs[1].Source = changed
 	repo := newSourceRepository(t)
-	if _, err := repo.ImportSources(in); err == nil || !strings.Contains(err.Error(), "blob size exceeds declared") {
+	if _, err := repo.ImportSources(in); err == nil || !strings.Contains(err.Error(), "exceeds declared") {
 		t.Fatalf("expected overflow, got %v", err)
 	}
 	if read > original.Size()+1 {
@@ -620,6 +706,71 @@ type countedExtraReader struct {
 	io.Reader
 	close io.Closer
 	read  *int64
+}
+
+type alternatingSource struct {
+	size          int64
+	digest        string
+	first, second []byte
+	opens         int
+}
+
+func (s *alternatingSource) Size() int64    { return s.size }
+func (s *alternatingSource) Digest() string { return s.digest }
+func (s *alternatingSource) Open() (io.ReadCloser, error) {
+	s.opens++
+	data := s.first
+	if s.opens > 1 {
+		data = s.second
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func TestImportSourcesStagesAlternatingLayerExactlyOnce(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		firstValid bool
+	}{
+		{"trusted first read persists", true},
+		{"invalid first read leaves no state", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a, in := sourceFixture(t)
+			defer a.Close()
+			var layerIndex int
+			for i := range in.Blobs {
+				if in.Blobs[i].Descriptor.MediaType == oci.PackageLayerMediaType {
+					layerIndex = i
+				}
+			}
+			valid, err := readSourceLimited(in.Blobs[layerIndex].Source, 256<<20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			invalid := append([]byte(nil), valid...)
+			invalid[len(invalid)-1] ^= 0xff
+			first, second := valid, invalid
+			if !test.firstValid {
+				first, second = invalid, valid
+			}
+			alternating := &alternatingSource{size: int64(len(valid)), digest: in.Blobs[layerIndex].Descriptor.Digest, first: first, second: second}
+			in.Blobs[layerIndex].Source = alternating
+			repo := newSourceRepository(t)
+			_, err = repo.ImportSources(in)
+			if test.firstValid && err != nil {
+				t.Fatal(err)
+			}
+			if !test.firstValid && err == nil {
+				t.Fatal("invalid first read accepted")
+			}
+			if alternating.opens != 1 {
+				t.Fatalf("caller-owned layer opened %d times, want 1", alternating.opens)
+			}
+			if !test.firstValid {
+				assertImportValidationLeftNoState(t, repo, in)
+			}
+		})
+	}
 }
 
 func (r *countedExtraReader) Read(p []byte) (int, error) {

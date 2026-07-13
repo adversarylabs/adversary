@@ -761,7 +761,7 @@ func (r Repository) Verify(rec Record) VerifyResult {
 		}
 	}
 	if len(out.Missing)+len(out.Corrupt) == 0 {
-		if err := r.validateStoredArtifactLayer(rec); err != nil {
+		if _, err := r.validateStoredArtifactLayer(rec); err != nil {
 			out.Corrupt = append(out.Corrupt, rec.Digest)
 		}
 	}
@@ -807,6 +807,9 @@ func (r Repository) repairLocked(rec Record, sources map[string]blobsource.Sourc
 	}
 	if _, err := r.record(rec.Digest); err != nil {
 		return repaired, err
+	}
+	if _, err := r.validateStoredArtifactLayer(rec); err != nil {
+		return repaired, fmt.Errorf("artifact semantic validation failed after repair: %w", err)
 	}
 	return repaired, nil
 }
