@@ -20,8 +20,10 @@ type PulledSources struct {
 	Manifest          Manifest
 	ManifestDigest    string
 	AdversaryManifest []byte
-	Blobs             []SourceBlob
-	owned             []blobsource.SourceCloser
+	// AdversaryManifestDigest is the verified attached blob descriptor digest.
+	AdversaryManifestDigest string
+	Blobs                   []SourceBlob
+	owned                   []blobsource.SourceCloser
 }
 
 var (
@@ -161,7 +163,7 @@ func (r *HTTPRegistry) PullSources(ctx context.Context, ref Reference) (_ *Pulle
 		p.owned = append(p.owned, src)
 		p.Blobs = append(p.Blobs, SourceBlob{Descriptor: descriptor, Source: src})
 	}
-	p.AdversaryManifest, err = r.getAdversaryManifestReferrer(ctx, pinned, manifestDigest)
+	p.AdversaryManifest, p.AdversaryManifestDigest, err = r.getAdversaryManifestReferrer(ctx, pinned, manifestDigest)
 	if err != nil {
 		return nil, err
 	}

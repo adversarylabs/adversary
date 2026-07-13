@@ -24,6 +24,9 @@ before atomic publication, then checked again at the destination. Named and
 image-based runtime identities and entrypoints are carried and cross-checked.
 The package digest, manifest digest, and original reference are retained by the
 unified repository record and durable reference index.
+SHA-256 remains the producer default, while registered SHA-384 and SHA-512 OCI
+digests are preserved and verified for manifests, configs, layers, attached
+manifests, inventory reads, repository repair, and materialization.
 
 Publication uses a validated staging directory and an atomic no-follow,
 no-replace rename into the canonical digest path. On every platform all children

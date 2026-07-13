@@ -30,6 +30,15 @@ persisting helper secrets. Bearer challenges are case-insensitive and support
 quoted commas and escapes; Docker reference normalization continues to use the
 maintained Distribution reference parser.
 
+SHA-256 is the default algorithm for artifacts produced by this CLI. OCI
+manifests, descriptors, and references using registered SHA-384 or SHA-512
+digests are also verified without rewriting their identity. The requested
+manifest digest remains the repository record identity across pull, import,
+repair, and materialization. Referrer fallback tags retain the existing literal
+SHA-256 convention. SHA-384 also fits that convention; SHA-512 uses a
+domain-separated SHA-256 projection of the canonical subject digest so the
+deterministic fallback remains within the OCI 128-character tag limit.
+
 Intentional compatibility limits: multi-platform indexes are rejected because
 Adversary artifacts are runtime packages rather than platform container images,
 and silently selecting a platform could change signed content. Referrers
@@ -56,3 +65,7 @@ Rollback is a revert of the client construction and registry policy changes.
 No credential or repository schema changes are made, and helper credentials are
 never persisted. Reverting also restores the timeout, redirect, realm, upload,
 and mutable-tag risks described by CLI-008 and CLI-009.
+After a SHA-384/512 record has been imported, however, reverting only the
+algorithm-consistency change would make that otherwise valid record unreadable
+or unverifiable. Remove or migrate such records to SHA-256 identities before
+rollback; existing SHA-256 records and references require no migration.

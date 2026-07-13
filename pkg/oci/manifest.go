@@ -1,9 +1,9 @@
 package oci
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 const (
@@ -85,10 +85,18 @@ func NewAdversaryManifestArtifact(imageDigest string, yaml []byte) ([]byte, stri
 }
 
 func AdversaryManifestArtifactTag(imageDigest string) (string, error) {
-	const prefix = "sha256:"
-	hexValue := strings.TrimPrefix(imageDigest, prefix)
-	if hexValue == imageDigest || hexValue == "" {
-		return "", fmt.Errorf("invalid image digest %q", imageDigest)
+	digest, err := ParseDigest(imageDigest)
+	if err != nil {
+		return "", fmt.Errorf("invalid image digest %q: %w", imageDigest, err)
 	}
-	return "sha256-" + hexValue + ".adversary-manifest", nil
+	tag := digest.Algorithm().String() + "-" + digest.Encoded() + ".adversary-manifest"
+	if len(tag) <= 128 {
+		return tag, nil
+	}
+	// OCI tags are limited to 128 characters, so a literal SHA-512 digest does
+	// not fit. Hash the canonical subject identity with a domain separator while
+	// retaining the source algorithm in the tag. SHA-256 and SHA-384 keep the
+	// established literal digest-derived convention above.
+	projected := sha256.Sum256([]byte("adversary-referrer-fallback-v1\x00" + digest.String()))
+	return fmt.Sprintf("%s-sha256-%x.adversary-manifest", digest.Algorithm(), projected), nil
 }

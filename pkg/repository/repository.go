@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -114,15 +113,20 @@ func (r Repository) importData(in importMetadata, lifecycleHeld bool) (_ Record,
 		data   []byte
 		digest string
 	}{"manifest": {in.Manifest, in.ManifestDigest}, "config": {in.Config, in.ConfigDigest}, "adversary manifest": {in.AdversaryManifest, in.AdversaryManifestDigest}} {
-		if len(v.data) > 0 && (v.digest == "" || oci.Digest(v.data) != v.digest) {
-			return Record{}, fmt.Errorf("%s digest mismatch", label)
+		if len(v.data) > 0 {
+			if v.digest == "" {
+				return Record{}, fmt.Errorf("%s digest missing", label)
+			}
+			if err := oci.VerifyDigest(v.data, v.digest); err != nil {
+				return Record{}, fmt.Errorf("%s digest mismatch: %w", label, err)
+			}
 		}
 	}
 	ref, err := r.canonicalRef(in.Reference)
 	if err != nil {
 		return Record{}, err
 	}
-	rec, err := deriveRecord(in.Manifest, in.Config, in.AdversaryManifest, in.AdversaryManifestDigest)
+	rec, err := deriveRecord(in.Manifest, in.Config, in.AdversaryManifest, in.ManifestDigest, in.ConfigDigest, in.AdversaryManifestDigest)
 	if err != nil {
 		return Record{}, err
 	}
@@ -268,20 +272,27 @@ func (r Repository) referenceDigestRaw(ref string) (string, error) {
 	return idx.Digest, nil
 }
 
-func deriveRecord(manifestData, configData, adversary []byte, adversaryDigest string) (Record, error) {
+func deriveRecord(manifestData, configData, adversary []byte, manifestDigest, configDigest, adversaryDigest string) (Record, error) {
 	if len(manifestData) == 0 || len(manifestData) > 4<<20 || len(configData) == 0 || len(configData) > 1<<20 {
 		return Record{}, fmt.Errorf("artifact component size invalid")
 	}
-	md := oci.Digest(manifestData)
-	cd := oci.Digest(configData)
+	if err := oci.VerifyDigest(manifestData, manifestDigest); err != nil {
+		return Record{}, fmt.Errorf("manifest digest mismatch: %w", err)
+	}
+	if err := oci.VerifyDigest(configData, configDigest); err != nil {
+		return Record{}, fmt.Errorf("config digest mismatch: %w", err)
+	}
 	var m oci.Manifest
 	if err := json.Unmarshal(manifestData, &m); err != nil {
 		return Record{}, err
 	}
-	if m.SchemaVersion != 2 || m.MediaType != oci.ImageManifestMediaType || m.ArtifactType != oci.ArtifactMediaType || m.Config.MediaType != oci.EmptyConfigMediaType || m.Config.Digest != cd || m.Config.Size != int64(len(configData)) || len(m.Layers) != 1 || m.Layers[0].MediaType != oci.PackageLayerMediaType {
+	if m.SchemaVersion != 2 || m.MediaType != oci.ImageManifestMediaType || m.ArtifactType != oci.ArtifactMediaType || m.Config.MediaType != oci.EmptyConfigMediaType || m.Config.Digest != configDigest || m.Config.Size != int64(len(configData)) || len(m.Layers) != 1 || m.Layers[0].MediaType != oci.PackageLayerMediaType {
 		return Record{}, fmt.Errorf("unsupported or conflicting OCI manifest")
 	}
 	ld := m.Layers[0].Digest
+	if _, err := oci.ParseDigest(ld); err != nil {
+		return Record{}, fmt.Errorf("invalid layer digest: %w", err)
+	}
 	var c struct {
 		FullName string `json:"full_name"`
 		Version  string `json:"version"`
@@ -294,7 +305,7 @@ func deriveRecord(manifestData, configData, adversary []byte, adversaryDigest st
 		return Record{}, fmt.Errorf("annotations conflict with config")
 	}
 	if len(adversary) > 0 {
-		if len(adversary) > 1<<20 || oci.Digest(adversary) != adversaryDigest {
+		if len(adversary) > 1<<20 || oci.VerifyDigest(adversary, adversaryDigest) != nil {
 			return Record{}, fmt.Errorf("adversary manifest linkage mismatch")
 		}
 		parsed, err := canonical.Parse(adversary)
@@ -304,7 +315,7 @@ func deriveRecord(manifestData, configData, adversary []byte, adversaryDigest st
 	} else if adversaryDigest != "" {
 		return Record{}, fmt.Errorf("missing adversary manifest")
 	}
-	return Record{Digest: md, Name: c.FullName, Version: c.Version, ManifestDigest: md, ConfigDigest: cd, LayerDigest: ld, AdversaryManifestDigest: adversaryDigest}, nil
+	return Record{Digest: manifestDigest, Name: c.FullName, Version: c.Version, ManifestDigest: manifestDigest, ConfigDigest: configDigest, LayerDigest: ld, AdversaryManifestDigest: adversaryDigest}, nil
 }
 
 func (r Repository) UpdateRef(reference, oldDigest, newDigest string) error {
@@ -492,7 +503,7 @@ func (r Repository) deleteRefLocked(ref, oldDigest string) error {
 	return nil
 }
 func (r Repository) Resolve(value string) (Record, error) {
-	if strings.HasPrefix(value, "sha256:") {
+	if isContentDigest(value) {
 		return r.record(value)
 	}
 	if explicitReference(value) {
@@ -529,6 +540,11 @@ func (r Repository) Resolve(value string) (Record, error) {
 		return Record{}, ErrAmbiguous
 	}
 	return r.record(list[0])
+}
+
+func isContentDigest(value string) bool {
+	_, err := oci.ParseDigest(value)
+	return err == nil
 }
 
 // resolveStoredShorthand supports repositories created before tagged aliases
@@ -608,7 +624,7 @@ func (r Repository) loadRecordMode(d string, requireCommit, allowPending bool) (
 			return rec, err
 		}
 	}
-	derived, err := deriveRecord(manifest, config, adversary, rec.AdversaryManifestDigest)
+	derived, err := deriveRecord(manifest, config, adversary, rec.ManifestDigest, rec.ConfigDigest, rec.AdversaryManifestDigest)
 	if err != nil {
 		return rec, err
 	}
@@ -1235,15 +1251,19 @@ func (r Repository) verifyContent(kind, digest string) error {
 		return err
 	}
 	defer f.Close()
-	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(f, (256<<20)+1))
+	d, err := oci.ParseDigest(digest)
+	if err != nil {
+		return err
+	}
+	verifier := d.Verifier()
+	n, err := io.Copy(verifier, io.LimitReader(f, (256<<20)+1))
 	if err != nil {
 		return err
 	}
 	if n > 256<<20 {
 		return fmt.Errorf("content exceeds verification limit")
 	}
-	if "sha256:"+hex.EncodeToString(h.Sum(nil)) != digest {
+	if !verifier.Verified() {
 		return fmt.Errorf("digest mismatch")
 	}
 	return nil

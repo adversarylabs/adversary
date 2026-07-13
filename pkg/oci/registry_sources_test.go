@@ -3,6 +3,7 @@ package oci
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -162,6 +164,67 @@ func TestPullSourcesCleansAccumulatedDownloadsWhenLaterBlobFails(t *testing.T) {
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 			t.Fatalf("temporary file %s remains: %v", path, statErr)
 		}
+	}
+}
+
+func TestPullSourcesPreservesRegisteredManifestAndBlobDigests(t *testing.T) {
+	config := []byte(`{"full_name":"team/agile","version":"1.0.0","name":"agile","files":[]}`)
+	layer := []byte("algorithm-agile package layer")
+	configDigest := testDigest("sha512", string(config))
+	layerDigest := testDigest("sha384", string(layer))
+	manifest := Manifest{
+		SchemaVersion: 2,
+		MediaType:     ImageManifestMediaType,
+		ArtifactType:  ArtifactMediaType,
+		Config:        Descriptor{MediaType: EmptyConfigMediaType, Digest: configDigest, Size: int64(len(config))},
+		Layers:        []Descriptor{{MediaType: PackageLayerMediaType, Digest: layerDigest, Size: int64(len(layer))}},
+	}
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := testDigest("sha512", string(manifestData))
+
+	var requested []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/manifests/"+manifestDigest):
+			w.Header().Set("Docker-Content-Digest", manifestDigest)
+			_, _ = w.Write(manifestData)
+		case strings.HasSuffix(r.URL.Path, "/blobs/"+configDigest):
+			_, _ = w.Write(config)
+		case strings.HasSuffix(r.URL.Path, "/blobs/"+layerDigest):
+			_, _ = w.Write(layer)
+		case strings.Contains(r.URL.Path, "/referrers/"):
+			_, _ = w.Write([]byte(`{"manifests":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+	r := NewHTTPRegistry()
+	r.Client = server.Client()
+	r.PlainHTTP = true
+	pulled, err := r.PullSources(t.Context(), Reference{Registry: u.Host, Repository: "team/agile", Digest: manifestDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pulled.Close()
+	if pulled.ManifestDigest != manifestDigest || len(pulled.Blobs) != 2 {
+		t.Fatalf("pulled manifest=%s blobs=%d", pulled.ManifestDigest, len(pulled.Blobs))
+	}
+	if pulled.Blobs[0].Descriptor.Digest != configDigest || pulled.Blobs[1].Descriptor.Digest != layerDigest {
+		t.Fatalf("blob digests=%#v", pulled.Blobs)
+	}
+	for _, blob := range pulled.Blobs {
+		if err := blobsource.Verify(blob.Source); err != nil {
+			t.Fatalf("verify %s: %v", blob.Descriptor.Digest, err)
+		}
+	}
+	if !slices.Contains(requested, "/v2/team/agile/manifests/"+manifestDigest) || !slices.Contains(requested, "/v2/team/agile/blobs/"+configDigest) || !slices.Contains(requested, "/v2/team/agile/blobs/"+layerDigest) {
+		t.Fatalf("generic digest paths not requested: %#v", requested)
 	}
 }
 

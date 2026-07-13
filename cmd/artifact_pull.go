@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
+	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/spf13/cobra"
 )
@@ -65,11 +68,11 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 			if err != nil {
 				return err
 			}
-			var adversarySource blobsource.Source
-			if len(artifact.AdversaryManifest) > 0 {
-				adversarySource = blobsource.Bytes(artifact.AdversaryManifest)
+			manifestSource, adversarySource, sourceErr := pulledMetadataSources(artifact)
+			if sourceErr != nil {
+				return errors.Join(sourceErr, artifact.Close())
 			}
-			unified, importErr := resolver.ImportSources(repository.SourceImport{Reference: ref.Locator(), Name: artifact.Manifest.Annotations["ai.adversary.full_name"], Version: artifact.Manifest.Annotations["ai.adversary.version"], Manifest: blobsource.Bytes(artifact.RawManifest), Blobs: artifact.Blobs, AdversaryManifest: adversarySource})
+			unified, importErr := resolver.ImportSources(repository.SourceImport{Reference: ref.Locator(), Name: artifact.Manifest.Annotations["ai.adversary.full_name"], Version: artifact.Manifest.Annotations["ai.adversary.version"], Manifest: manifestSource, Blobs: artifact.Blobs, AdversaryManifest: adversarySource})
 			if err := errors.Join(importErr, artifact.Close()); err != nil {
 				return err
 			}
@@ -84,6 +87,34 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 	cmd.Flags().BoolVar(&legacyJSON, "json", false, "deprecated alias for --format json")
 	return cmd
 }
+
+func pulledMetadataSources(artifact *oci.PulledSources) (blobsource.Source, blobsource.Source, error) {
+	if artifact == nil {
+		return nil, nil, fmt.Errorf("pulled artifact is required")
+	}
+	manifest, err := pulledByteSource(artifact.RawManifest, artifact.ManifestDigest)
+	if err != nil {
+		return nil, nil, fmt.Errorf("bind pulled manifest digest: %w", err)
+	}
+	if len(artifact.AdversaryManifest) == 0 && artifact.AdversaryManifestDigest == "" {
+		return manifest, nil, nil
+	}
+	adversaryManifest, err := pulledByteSource(artifact.AdversaryManifest, artifact.AdversaryManifestDigest)
+	if err != nil {
+		return nil, nil, fmt.Errorf("bind pulled adversary manifest digest: %w", err)
+	}
+	return manifest, adversaryManifest, nil
+}
+
+func pulledByteSource(data []byte, digest string) (blobsource.Source, error) {
+	if err := oci.VerifyDigest(data, digest); err != nil {
+		return nil, err
+	}
+	return blobsource.New(int64(len(data)), digest, func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	})
+}
+
 func registerExactRef(resolver application.Resolver, ref, digest string) error {
 	current, err := resolver.ResolveRecord(ref)
 	if err == nil {

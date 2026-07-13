@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 type Entry struct {
@@ -82,7 +81,7 @@ func (r Repository) Entries(limit int) ([]Entry, error) {
 	return out, nil
 }
 func (r Repository) HasExact(value string) (bool, error) {
-	if strings.HasPrefix(value, "sha256:") {
+	if isContentDigest(value) {
 		_, err := r.record(value)
 		if err == nil {
 			return true, nil

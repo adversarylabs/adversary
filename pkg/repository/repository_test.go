@@ -3,6 +3,7 @@ package repository
 import (
 	"bytes"
 	"context"
+	"crypto/sha512"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,26 @@ import (
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 )
+
+func digestSource(t *testing.T, data []byte, algorithm string) blobsource.Source {
+	t.Helper()
+	var digest string
+	switch algorithm {
+	case "sha384":
+		digest = fmt.Sprintf("sha384:%x", sha512.Sum384(data))
+	case "sha512":
+		digest = fmt.Sprintf("sha512:%x", sha512.Sum512(data))
+	default:
+		t.Fatalf("unsupported test digest algorithm %q", algorithm)
+	}
+	source, err := blobsource.New(int64(len(data)), digest, func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return source
+}
 
 func artifact(t *testing.T, content string) pack.Artifact {
 	t.Helper()
@@ -83,6 +104,100 @@ func TestImportResolveVerifyMaterialize(t *testing.T) {
 	}
 	if filepath.IsAbs(rec.ManifestDigest) || stringsContainAbs(rec) {
 		t.Fatal("record contains absolute derived path")
+	}
+	makeWritable(path)
+}
+
+func TestRegisteredDigestsSurviveImportVerifyRepairAndMaterialize(t *testing.T) {
+	a := artifact(t, "algorithm-agile")
+	layerData := artifactLayer(t, a)
+	configSource := digestSource(t, a.Config, "sha512")
+	layerSource := digestSource(t, layerData, "sha384")
+	adversarySource := digestSource(t, a.AdversaryManifest, "sha512")
+
+	manifest := a.OCIManifest
+	manifest.Config.Digest = configSource.Digest()
+	manifest.Config.Size = configSource.Size()
+	manifest.Layers[0].Digest = layerSource.Digest()
+	manifest.Layers[0].Size = layerSource.Size()
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestSource := digestSource(t, manifestData, "sha512")
+	configBlob, err := oci.NewSourceBlob(manifest.Config, configSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layerBlob, err := oci.NewSourceBlob(manifest.Layers[0], layerSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := Repository{Root: t.TempDir()}
+	rec, err := repo.ImportSources(SourceImport{
+		Reference:         "registry.example/local/test@" + manifestSource.Digest(),
+		Name:              a.ManifestName,
+		Version:           a.Version,
+		Manifest:          manifestSource,
+		AdversaryManifest: adversarySource,
+		Blobs:             []oci.SourceBlob{configBlob, layerBlob},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Digest != manifestSource.Digest() || rec.ConfigDigest != configSource.Digest() || rec.LayerDigest != layerSource.Digest() || rec.AdversaryManifestDigest != adversarySource.Digest() {
+		t.Fatalf("record did not retain source algorithms: %#v", rec)
+	}
+
+	reopened := Repository{Root: repo.Root}
+	got, err := reopened.Resolve(rec.Digest)
+	if err != nil || got != rec {
+		t.Fatalf("resolve after reopen=%#v err=%v", got, err)
+	}
+	if ok, err := reopened.HasExact(rec.Digest); err != nil || !ok {
+		t.Fatalf("has exact=%v err=%v", ok, err)
+	}
+	if files, err := reopened.Inventory(rec); err != nil || len(files) == 0 {
+		t.Fatalf("inventory=%#v err=%v", files, err)
+	}
+	if result := reopened.Verify(rec); len(result.Missing)+len(result.Corrupt) != 0 {
+		t.Fatalf("initial verification=%#v", result)
+	}
+
+	if err := os.WriteFile(repo.content("blobs", rec.ConfigDigest), []byte("corrupt config"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.Inventory(rec); err == nil {
+		t.Fatal("inventory accepted corrupt SHA-512 config")
+	}
+	// Loading a record validates its config linkage first, so Verify reports the
+	// record identity as corrupt while Inventory reports the specific config.
+	if result := reopened.Verify(rec); len(result.Corrupt) != 1 || result.Corrupt[0] != rec.Digest {
+		t.Fatalf("config verification=%#v", result)
+	}
+	if err := reopened.Repair(rec, map[string]blobsource.Source{rec.ConfigDigest: configSource}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(repo.content("blobs", rec.LayerDigest), []byte("corrupt layer"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if result := reopened.Verify(rec); len(result.Corrupt) != 1 || result.Corrupt[0] != rec.LayerDigest {
+		t.Fatalf("layer verification=%#v", result)
+	}
+	if _, err := reopened.Materialize(rec); err == nil {
+		t.Fatal("materialized corrupt SHA-384 layer")
+	}
+	if err := reopened.Repair(rec, map[string]blobsource.Source{rec.LayerDigest: layerSource}); err != nil {
+		t.Fatal(err)
+	}
+	path, err := reopened.Materialize(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(path, "dist", "index.js")); err != nil {
+		t.Fatal(err)
 	}
 	makeWritable(path)
 }
