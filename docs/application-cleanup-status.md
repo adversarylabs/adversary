@@ -80,7 +80,8 @@ Docker config opening rejects symlinks, FIFOs, devices, directories, and handle
 identity changes. Unix uses `O_NOFOLLOW|O_NONBLOCK`; Windows opens the reparse
 point itself with `FILE_FLAG_OPEN_REPARSE_POINT` and rejects non-regular handles.
 Credential helper and build-probe output are bounded, cancellation has a finite
-wait policy, and helper errors never include credential input or stderr. Browser
+wait policy, registry requests propagate their context through helper lookup,
+and helper errors never include credential input or stderr. Browser
 callbacks have a ten-minute operation deadline, bounded server read timeouts,
 and a two-second injected shutdown deadline; state mismatch, token injection,
 and repeated callbacks fail closed, including concurrent repeats during code
