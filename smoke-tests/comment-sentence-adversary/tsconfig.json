@@ -10,7 +10,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "declaration": true,
-    "typeRoots": ["../../../adversary-sdk-typescript/node_modules/@types"],
+    "typeRoots": ["node_modules/@types"],
     "paths": {
       "@adversary/sdk": ["./vendor/adversary-sdk/dist/index.d.ts"]
     }

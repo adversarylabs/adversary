@@ -51,6 +51,6 @@ Uncommitted orphan records left by a crash are skipped explicitly; a malformed
 or tampered committed record fails reconciliation instead of being skipped.
 
 Intentional limits: referrer/signature trust remains governed by the artifact
-trust decision; cross-device repository moves are unsupported; and reference
-policy/UI choices remain for the migration phase. CAS avoids silent concurrent
-replacement while ambiguity errors require an exact reference or digest.
+trust decision, and cross-device repository moves are unsupported. Reference
+replacement uses compare-and-swap; ambiguity errors require an exact reference
+or digest rather than an inferred policy choice.

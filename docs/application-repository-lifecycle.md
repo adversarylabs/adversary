@@ -1,21 +1,17 @@
 # Application boundary and repository lifecycle (CLI-024, CLI-012)
 
-This additive phase begins, but does not complete, CLI-024 by introducing `internal/application` ports and
-`internal/dependencies` function adapters. `App` is constructed with explicit
-stdin/stdout/stderr, clock, environment, configuration, paths, HTTP,
-credentials, registry, repository, resolver, runtime, browser, and TTY
-dependencies. Missing dependencies return typed contextual errors. The new
-layer performs no process-global lookup and supplies no implicit defaults, so
-tests and future embedders can construct every boundary without mutating global
-state.
+This record describes the additive phase that introduced
+`internal/application` ports and function adapters. The completed CLI-024
+composition is documented in `application-cleanup-status.md`: production
+commands receive one explicit `App`, and the remaining required ports are
+captured at the process edge. Missing dependencies return typed contextual
+errors.
 
-Command migration is deliberately a later PR. Its sequence is: construct real
-adapters at the process edge; migrate read-only commands; migrate authentication
-and registry commands; migrate artifact mutation and run; then remove old
-constructors. During migration `cmd` owns flag/UI translation,
-`internal/application` owns use-case orchestration, adapters own external side
-effects, and `pkg/repository` owns persistence invariants. No command behavior
-changes in this phase.
+The completed migration constructed real adapters at the process edge, moved
+read-only, authentication, registry, artifact, and runtime commands, then
+removed production reliance on legacy constructors. `cmd` owns flag/UI
+translation, `internal/application` owns use-case orchestration, adapters own
+external side effects, and `pkg/repository` owns persistence invariants.
 
 Repository lifecycle APIs add CAS reference deletion, deterministic GC
 plan/apply reports, dry runs, full check/repair reports, and named migration
@@ -45,25 +41,23 @@ while its lifecycle decision remains pending.
 `Materialize` guarantees a complete path only at return time; it is not a
 runtime-use lease. `LeaseMaterialized` and `WithMaterialized` retain the same
 cross-process materialization lock until `Close` or callback return, preventing
-GC from deleting an artifact in use. The next migration must wire runner
-execution to this lease before exposing any GC command. Until then lifecycle GC
-remains an internal API and must not be reachable from CLI startup or
-maintenance commands.
+GC from deleting an artifact in use. Repository-backed runs now hold that lease
+through runner execution, and guarded maintenance commands expose GC only on
+the App-backed composition.
 The `WithMaterialized` callback is a pure runtime-use boundary: it must not call
 repository methods or take a nested lease because it already owns the
-cross-process materialization lock. Runner migration must resolve repository
-state before entering the callback and perform only runtime I/O inside it.
+cross-process materialization lock. Runner composition resolves repository
+state before entering the callback and performs only runtime I/O inside it.
 
 Alias indexes are discovery hints rather than reachability roots. GC may leave
 digest tombstones in an alias list; resolution already filters uncommitted
-digests and fails closed on ambiguity. Rebuilding compact alias indexes is
-deferred to the command migration/maintenance UI because deleting an alias
-without recording its original reference provenance can erase a still-useful
-name. This trades small bounded index growth for identity safety.
+digests and fails closed on ambiguity. Rebuilding compact alias indexes is not
+exposed because deleting an alias without recording its original reference
+provenance can erase a still-useful name. This trades small bounded index growth
+for identity safety.
 
 Rollback reverts these additive packages and methods. Existing repository data
 and schemas are unchanged. A GC apply cannot be rolled back from repository
 metadata alone, so callers must display and persist the dry-run plan before
 apply; content remains recoverable only from its registry/source. Command
-migration must therefore ship GC as opt-in maintenance, never an implicit
-startup action.
+maintenance therefore exposes GC as opt-in, never an implicit startup action.

@@ -33,7 +33,7 @@ by the user, not downloaded by this CLI.
 
 ```sh
 adversary init my-adversary --sdk typescript
-cd my-adversary && npm install && npm test && npm run build
+cd my-adversary && npm ci && npm test && npm run build
 adversary run . --repo /path/to/repository
 ```
 

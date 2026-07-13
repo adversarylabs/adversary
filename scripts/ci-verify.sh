@@ -109,7 +109,7 @@ cross_build() {
   trap - RETURN
 }
 
-template_tests() {
+generated_template_tests() {
   local tmp binary project
   need npm
   tmp="$(make_temp_dir)"
@@ -122,15 +122,46 @@ template_tests() {
   log "generated TypeScript npm ci, build, tests, and complete audit"
   (
     cd "$project"
-    export HOME="$tmp/home"
-    export npm_config_cache="$tmp/npm-cache"
-    npm ci
-    npm run build
-    npm test
-    npm audit --audit-level=low
+    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm ci
+    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm run build
+    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm test
+    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm audit --audit-level=low
   )
   rm -rf -- "$tmp"
   trap - RETURN
+}
+
+example_smoke_tests() {
+  local tmp project asset source duplicate
+  need npm
+  while IFS= read -r asset; do
+    source="$root/templates/typescript/vendor/adversary-sdk/$asset"
+    duplicate="$root/smoke-tests/comment-sentence-adversary/vendor/adversary-sdk/$asset"
+    cmp -s -- "$source" "$duplicate" || fail "checked-in example vendored SDK asset drift: $asset"
+  done < <(
+    cd "$root/templates/typescript/vendor/adversary-sdk"
+    find dist schemas -type f -print | LC_ALL=C sort
+  )
+  tmp="$(make_temp_dir)"
+  trap 'rm -rf -- "$tmp"' RETURN
+  project="$tmp/comment-sentence-adversary"
+  mkdir -p -- "$project"
+  log "checked-in comment-sentence example clean npm ci, build, tests, and audit"
+  git archive --format=tar HEAD:smoke-tests/comment-sentence-adversary | tar -xf - -C "$project"
+  (
+    cd "$project"
+    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm ci
+    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm run build
+    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm test
+    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm audit --audit-level=low
+  )
+  rm -rf -- "$tmp"
+  trap - RETURN
+}
+
+template_tests() {
+  generated_template_tests
+  example_smoke_tests
 }
 
 cli_smoke() {
@@ -250,6 +281,7 @@ case "${1:-all}" in
   coverage) coverage ;;
   cross) cross_build ;;
   template) template_tests ;;
+  example) example_smoke_tests ;;
   smoke) cli_smoke ;;
   tooling) security_tooling ;;
   release) release_contract ;;

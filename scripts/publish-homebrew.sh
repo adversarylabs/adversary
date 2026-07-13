@@ -138,11 +138,13 @@ upload_release_assets() {
   if [[ "$IS_PRERELEASE" == 1 ]]; then expected_prerelease=true; fi
   export GH_TOKEN="$GITHUB_TOKEN"
   if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-    local flags=()
-    if [[ "$IS_PRERELEASE" == 1 ]]; then flags+=(--prerelease); fi
     # Creation is deliberately non-public and carries no assets. Only a fully
     # re-downloaded and verified draft is promoted below.
-    gh release create "$TAG" --repo "$REPO" --draft --title "$TAG" --generate-notes "${flags[@]}"
+    if [[ "$IS_PRERELEASE" == 1 ]]; then
+      gh release create "$TAG" --repo "$REPO" --draft --title "$TAG" --generate-notes --prerelease
+    else
+      gh release create "$TAG" --repo "$REPO" --draft --title "$TAG" --generate-notes
+    fi
   fi
 
   is_draft="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')"

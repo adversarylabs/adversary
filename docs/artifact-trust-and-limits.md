@@ -56,17 +56,21 @@ identity bound to a package name before it can safely become an install gate.
 Running code obtained from a remote host therefore continues to require the
 existing explicit acknowledgement.
 
-The registry API still returns blobs as byte slices after a bounded streaming
-read because `PulledArtifact` and the store interfaces are byte-slice based.
-Moving the private temporary blob through the resolver and store without this
-final materialization is deferred to the unified resolver API migration; the
-bounds above apply at the network and extraction boundaries meanwhile.
+Package layers remain file-backed throughout production flows. Registry pulls
+stream into an owned temporary source while verifying the declared size and
+digest; repository import then streams that source into durable content. Push
+and repair paths open repeatable sources, and repository payload leases keep
+their records live across retry/reopen lifetimes. Every owner closes its readers
+before releasing the source or lease, including cancellation and error paths.
+Only bounded control-plane manifests and configs are materialized in memory.
 
 Packaging refuses non-regular inputs (including symlinks), streams hashing and
 tar writes, produces deterministic timestamps and ordering, and records the
 executable bits. Existing ignore-file matching remains intentionally unchanged;
 changing its grammar is a separate compatibility decision.
 
-Rollback is code-only: revert the bounded reader/extractor commit. Previously
-installed digest-addressed artifacts remain usable, but reverting reopens the
-resource-amplification and link/type acceptance risks described here.
+Rollback is code-only: the streaming source migration and cleanup can be
+reverted without changing repository records or content paths. Reverting the
+bounded reader/extractor hardening reopens the resource-amplification and
+link/type acceptance risks described here, so those checks must remain a
+coherent unit. Previously installed digest-addressed artifacts remain usable.
