@@ -36,10 +36,12 @@ test("reports expected findings from fixtures", async () => {
     write: false,
   });
 
-  assert.equal(output.summary.files_scanned, 2);
-  assert.equal(output.summary.rules_executed, 1);
+  assert.equal(output.result.target.filesScanned, 2);
   assert.deepEqual(
-    output.findings.map((finding) => `${finding.path}:${finding.line}:${finding.evidence}`),
+    output.result.findings.map((finding) => {
+      const evidence = finding.evidence[0];
+      return `${evidence.file}:${evidence.line}:${evidence.message}`;
+    }),
     [
       "bad.ts:1:// fix later",
       "bad.ts:4:// temporary",
@@ -62,6 +64,6 @@ test("ignores generated and dependency directories", async () => {
     write: false,
   });
 
-  assert.equal(output.summary.files_scanned, 1);
-  assert.deepEqual(output.findings.map((finding) => finding.path), ["index.ts"]);
+  assert.equal(output.result.target.filesScanned, 1);
+  assert.deepEqual(output.result.findings.map((finding) => finding.evidence[0].file), ["index.ts"]);
 });

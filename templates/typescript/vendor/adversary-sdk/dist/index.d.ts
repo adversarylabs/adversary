@@ -65,7 +65,7 @@ export interface SerializedFinding {
     suppressed?: boolean;
 }
 /**
- * The historical rule-summary object returned by Adversary.run().
+ * The historical rule-summary object returned by Adversary.runLegacy().
  * schema_version is a legacy discriminator; this object is not the
  * adversary.review.v1 wire envelope.
  */
@@ -177,7 +177,7 @@ export declare class Adversary {
     }>;
     constructor(options: AdversaryOptions);
     rule(id: string, handler: RuleHandler): void;
-    run(options?: RunOptions): Promise<Output>;
+    run(options?: RunOptions): Promise<AdversaryRunEnvelope>;
     runLegacy(options?: RunOptions): Promise<LegacyRunResult>;
 }
 export declare function parseInput(path?: string): Promise<RuntimeInput>;

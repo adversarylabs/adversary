@@ -6,10 +6,11 @@ output file. The returned object contains a `schema_version` value naming the
 wire schema even though it is not that schema. Existing callers may depend on
 that return shape, so changing it requires a staged migration.
 
-The additive phase names the historical object `LegacyRunResult`, retains the
+The completed additive phase names the historical object `LegacyRunResult`, retains the
 deprecated `Output` interface, and exposes `runLegacy()` as its durable
-compatibility path. `run()` delegates to `runLegacy()` in this phase and
-therefore has no runtime or declaration-shape break. The legacy
+compatibility path. The migration phase now makes `run()` return the canonical
+`AdversaryRunEnvelope`; maintained callers use `result.findings`, `ruleId`, and
+the other canonical fields. The legacy
 `schema_version` member is documented as a discriminator, not a claim that the
 object is a wire document.
 
@@ -25,15 +26,14 @@ and unsupported discriminators are rejected rather than silently rewritten.
 
 The migration sequence is:
 
-1. Add the truthful legacy name, explicit legacy method, and canonical builder
-   without changing `run()`.
-2. Migrate `run()` and maintained consumers to the canonical envelope while
-   callers that need the old object select `runLegacy()`.
+1. **Complete:** add the truthful legacy name, explicit legacy method, and
+   canonical builder without changing `run()`.
+2. **Complete:** migrate `run()` and maintained consumers to the canonical
+   envelope while callers that need the old object select `runLegacy()`.
 3. After the documented compatibility window, remove the deprecated `Output`
    name and any conversion-only compatibility surface in a cleanup release.
 
-Rollback of this additive phase removes only new names and the builder; it does
-not change runtime files, schemas, manifests, or existing `run()` behavior.
-Once a later phase changes the default return type, rollback must restore
-`run()` and its declarations together while retaining `runLegacy()` for callers
-that already migrated to the explicit path.
+Rollback of the migration phase restores `run()` and its declaration to the
+legacy result together, and reverts maintained consumers to legacy fields.
+`runLegacy()` and the additive conversion APIs remain available, so rollback
+does not change runtime files, schemas, manifests, or the compatibility path.

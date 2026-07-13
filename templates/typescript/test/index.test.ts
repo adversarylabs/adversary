@@ -8,8 +8,7 @@ test("clean fixture produces no findings", async () => {
     write: false,
   });
 
-  assert.equal(output.summary.rules_executed, 1);
-  assert.equal(output.findings.length, 0);
+  assert.equal(output.result.findings.length, 0);
 });
 
 test("vulnerable fixture produces one finding", async () => {
@@ -18,7 +17,6 @@ test("vulnerable fixture produces one finding", async () => {
     write: false,
   });
 
-  assert.equal(output.summary.rules_executed, 1);
-  assert.equal(output.findings.length, 1);
-  assert.equal(output.findings[0].rule_id, "readme.exists");
+  assert.equal(output.result.findings.length, 1);
+  assert.equal(output.result.findings[0].ruleId, "readme.exists");
 });
