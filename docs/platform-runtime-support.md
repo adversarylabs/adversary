@@ -57,6 +57,32 @@ Executable mode bits from artifacts remain preserved by the repository
 materializer. On Windows, executable overrides use `PATHEXT` semantics because
 POSIX execute bits do not exist.
 
+## Init and build-tool portability
+
+Generated TypeScript project names follow the repository's existing stricter
+unscoped, lowercase, URL-safe grammar plus the maintained new-package rules in
+[npm's validator](https://github.com/npm/validate-npm-package-name/tree/v8.0.0): at most 214
+bytes, neither `node_modules` nor `favicon.ico`, and not a Node core-module name
+from the validator's bundled list. The boundary is pinned to
+`validate-npm-package-name` v8.0.0; slash, colon, leading underscore, and other
+names outside the existing project grammar remain rejected before any
+destination parent or staging directory is created. This deliberately does not
+query the npm registry or attempt to reserve arbitrary ecosystem names.
+
+Build-tool discovery uses only startup-captured values. `PATH` remains first on
+all platforms. Unix then checks nvm, Volta, and asdf under the captured home.
+Windows checks captured `ProgramFiles` Node.js, `LOCALAPPDATA` Volta,
+`APPDATA` fnm and npm, then Scoop Node.js installations under the captured
+home. Candidates still pass the strict explicit-path resolver; unsafe or stale
+paths are skipped. When npm resolves to a Windows `npm.cmd`, adjacent
+`node.exe` is checked before the captured-`PATH` fallback. No discovery helper
+reads the live process environment after application construction.
+
+Init next steps use POSIX single-quote escaping on Unix. On Windows they emit
+PowerShell `Set-Location -LiteralPath` with doubled single quotes. Guidance is
+limited to navigation and the existing npm/adversary commands; cmd.exe-specific
+rendering and shell-profile mutation remain intentionally unsupported.
+
 ## Rollback
 
 When the new OS config file does not exist, credentials remain readable from
@@ -66,3 +92,8 @@ prefix-version behavior. Before rollback, copy newer credentials from the OS
 config directory to the legacy location if required. Persistent artifact data
 is not migrated or deleted by this change; an explicit `ADVERSARY_DATA_DIR` can
 point either version at the same repository.
+
+Rolling back init portability restores home-only Unix npm discovery and POSIX
+next-step rendering, and removes the added npm reserved-name boundary. It does
+not change already generated projects. A project rejected only by the newer
+naming rules can be generated after rollback, but may still be rejected by npm.
