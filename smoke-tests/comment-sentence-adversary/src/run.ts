@@ -42,6 +42,7 @@ export function createApp(): Adversary {
         findings.push(
           new Finding({
             ruleId: "comments.full-sentence",
+            id: `comments.full-sentence:${file.relPath}:${comment.line}`,
             severity: Severity.Low,
             title: "Comment is not a complete sentence",
             message: "Consider rewriting comments as complete sentences.",
