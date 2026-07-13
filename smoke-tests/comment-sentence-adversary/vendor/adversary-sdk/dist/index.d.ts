@@ -64,11 +64,19 @@ export interface SerializedFinding {
     metadata?: Record<string, unknown>;
     suppressed?: boolean;
 }
-export interface Output {
+/**
+ * The historical rule-summary object returned by Adversary.run().
+ * schema_version is a legacy discriminator; this object is not the
+ * adversary.review.v1 wire envelope.
+ */
+export interface LegacyRunResult {
     schema_version: typeof REVIEW_SCHEMA_VERSION;
     adversary: string;
     summary: Summary;
     findings: SerializedFinding[];
+}
+/** @deprecated Use LegacyRunResult for legacy results and createReviewEnvelope for the canonical wire contract. */
+export interface Output extends LegacyRunResult {
 }
 export interface AdversaryRunEnvelope {
     protocolVersion: 1;
@@ -132,6 +140,11 @@ export interface RunOptions {
     outputPath?: string;
     write?: boolean;
 }
+export interface ReviewEnvelopeOptions {
+    repoPath?: string;
+    suppressedFindings?: SerializedFinding[];
+    includeSuppressed?: boolean;
+}
 export declare const log: {
     debug(message: unknown): void;
     info(message: unknown): void;
@@ -165,9 +178,11 @@ export declare class Adversary {
     constructor(options: AdversaryOptions);
     rule(id: string, handler: RuleHandler): void;
     run(options?: RunOptions): Promise<Output>;
+    runLegacy(options?: RunOptions): Promise<LegacyRunResult>;
 }
 export declare function parseInput(path?: string): Promise<RuntimeInput>;
 export declare function writeOutput(output: Output | AdversaryRunEnvelope, path?: string): Promise<void>;
+export declare function createReviewEnvelope(output: LegacyRunResult, options?: ReviewEnvelopeOptions): AdversaryRunEnvelope;
 export declare function sortFindings(findings: SerializedFinding[]): SerializedFinding[];
 export declare function validateReviewEnvelope(value: unknown): asserts value is AdversaryRunEnvelope;
 export declare function validateErrorEnvelope(value: unknown): asserts value is ErrorEnvelope;

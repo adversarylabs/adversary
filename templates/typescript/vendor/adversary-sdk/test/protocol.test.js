@@ -8,11 +8,125 @@ import {
   Adversary,
   Finding,
   Severity,
+  createReviewEnvelope,
   encodeErrorEnvelope,
   parseInput,
   validateErrorEnvelope,
   validateReviewEnvelope,
+  writeOutput,
 } from "../dist/index.js";
+
+test("run remains legacy while runLegacy provides the explicit migration path", async () => {
+  const app = new Adversary({ name: "local/additive-test" });
+  app.rule("additive.rule", () =>
+    new Finding({
+      ruleId: "additive.rule",
+      severity: Severity.Low,
+      title: "Additive finding",
+    }),
+  );
+  const options = { input: { source: { path: "/workspace" } }, write: false };
+  const current = await app.run(options);
+  const explicitLegacy = await app.runLegacy(options);
+  assert.deepEqual(current, explicitLegacy);
+  assert.equal(current.schema_version, "adversary.review.v1");
+  assert.equal(current.protocolVersion, undefined);
+  assert.equal(current.result, undefined);
+});
+
+test("canonical builder converts legacy findings, evidence, and suppression", () => {
+  const envelope = createReviewEnvelope(
+    {
+      schema_version: "adversary.review.v1",
+      adversary: "local/additive-test",
+      summary: { files_scanned: 2 },
+      findings: [
+        {
+          rule_id: "visible.rule",
+          id: "visible",
+          severity: Severity.High,
+          title: "Visible finding",
+          message: "Visible summary",
+          file: "src/index.ts",
+          line: 7,
+          evidence: "matched source",
+        },
+        {
+          rule_id: "suppressed.rule",
+          id: "suppressed",
+          severity: Severity.Low,
+          title: "Suppressed finding",
+          message: "Suppressed summary",
+          suppressed: true,
+        },
+      ],
+    },
+    { repoPath: "/workspace", includeSuppressed: true },
+  );
+  assert.doesNotThrow(() => validateReviewEnvelope(envelope));
+  assert.equal(envelope.protocolVersion, 1);
+  assert.equal(envelope.result.target.repository, "/workspace");
+  assert.equal(envelope.result.target.filesScanned, 2);
+  assert.equal(envelope.result.findings[0].summary, "Visible summary");
+  assert.deepEqual(envelope.result.findings[0].evidence, [
+    { file: "src/index.ts", line: 7, message: "matched source", metadata: undefined },
+  ]);
+  assert.equal(envelope.result.suppressed.findings, 1);
+  assert.equal(envelope.result.suppressedFindings[0].id, "suppressed");
+});
+
+test("canonical builder strictly validates the legacy schema discriminator", () => {
+  const base = {
+    adversary: "local/additive-test",
+    summary: {},
+    findings: [],
+  };
+  assert.doesNotThrow(() =>
+    createReviewEnvelope({ ...base, schema_version: "adversary.review.v1" }),
+  );
+  assert.throws(
+    () => createReviewEnvelope({ ...base, schema_version: "adversary.review.v2" }),
+    /Unsupported legacy run result schema_version "adversary\.review\.v2"; expected "adversary\.review\.v1"/,
+  );
+  assert.throws(
+    () => createReviewEnvelope(base),
+    /schema_version must be the string "adversary\.review\.v1"/,
+  );
+  assert.throws(
+    () => createReviewEnvelope({ ...base, schema_version: 1 }),
+    /schema_version must be the string "adversary\.review\.v1"/,
+  );
+});
+
+test("writeOutput rejects invalid legacy discriminators before conversion", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "adversary-sdk-output-"));
+  const outputPath = join(directory, "output.json");
+  const base = { adversary: "local/additive-test", summary: {}, findings: [] };
+  try {
+    await assert.rejects(
+      writeOutput({ ...base, schema_version: "adversary.review.v2" }, outputPath),
+      /Unsupported legacy run result schema_version/,
+    );
+    await assert.rejects(
+      writeOutput(base, outputPath),
+      /schema_version must be the string "adversary\.review\.v1"/,
+    );
+    await assert.rejects(
+      writeOutput({ ...base, schema_version: false }, outputPath),
+      /schema_version must be the string "adversary\.review\.v1"/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("declarations expose canonical target and deprecated legacy compatibility", async () => {
+  const declarations = await readFile(new URL("../dist/index.d.ts", import.meta.url), "utf8");
+  assert.match(declarations, /interface LegacyRunResult/);
+  assert.match(declarations, /@deprecated Use LegacyRunResult/);
+  assert.match(declarations, /runLegacy\(options\?: RunOptions\): Promise<LegacyRunResult>/);
+  assert.match(declarations, /createReviewEnvelope\(output: LegacyRunResult/);
+});
 
 test("shared error fixture has deterministic encoding and rejects newer versions", async () => {
   const fixture = new URL(
