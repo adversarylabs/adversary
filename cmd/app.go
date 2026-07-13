@@ -3,9 +3,11 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -384,7 +386,8 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 		return lookPath(name)
 	}, launcher: internaladversary.ExecProcessLauncher{}, timer: internaladversary.NewRuntimeTimer, git: git, now: time.Now, node: node, files: files, buildProject: buildProject}
 	references := processReferences{registry: host, namespace: namespace}
-	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Projects: processProjects{references: references, build: buildEnvironment, buildStateDir: buildStateDir}, References: references, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: process, Browser: dependencies.Browser{OpenFunc: func(ctx context.Context, u string) error { return openBrowser(ctx, u, environment, lookPath, output) }}, TTY: processTTY{}})
+	browserAuth := dependencies.BrowserAuth{Entropy: rand.Reader, ListenFunc: net.Listen, NewServerFunc: dependencies.NewHTTPCallbackServer, OpenFunc: func(ctx context.Context, u string) error { return openBrowser(ctx, u, environment, lookPath, output) }}
+	return application.New(application.Dependencies{Stdin: stdin, Stdout: stdout, Stderr: stderr, Clock: newSystemClock(), Projects: processProjects{references: references, build: buildEnvironment, buildStateDir: buildStateDir}, References: references, Auth: authStore, API: apiFactory, Registries: registryFactory, DefaultAPIURL: apiURL, RegistryHost: host, RegistryNS: namespace, Repository: processRepository{resolver.Repository}, Resolver: processResolver{resolver: resolver}, Runtime: process, BrowserAuth: browserAuth, TTY: processTTY{}})
 }
 
 func capturedNPM(home string, lookPath func(string) (string, error), files internaladversary.RuntimeFiles, resolveExplicit func(string) (string, error)) (string, error) {

@@ -27,7 +27,7 @@ func newLoginCommand(app *application.App, apiURL, profile *string) *cobra.Comma
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			deps := app.Dependencies()
-			stdin, clock, browser, tty := cmd.InOrStdin(), deps.Clock, deps.Browser, deps.TTY
+			stdin, clock, browserAuth, tty := cmd.InOrStdin(), deps.Clock, deps.BrowserAuth, deps.TTY
 			store := deps.Auth
 			var err error
 			if _, _, err := store.ExactAuthE(adversarylabs.AuthKey(valueOf(apiURL), valueOf(profile))); err != nil {
@@ -68,7 +68,7 @@ func newLoginCommand(app *application.App, apiURL, profile *string) *cobra.Comma
 					return err
 				}
 			} else {
-				token, err = loginWithBrowser(cmd.Context(), browser, cmd.OutOrStdout(), client, opts)
+				token, err = browserAuth.Login(cmd.Context(), application.BrowserAuthRequest{Client: client, Name: opts.name, CI: opts.ci, Output: cmd.OutOrStdout()})
 				if err != nil {
 					return err
 				}

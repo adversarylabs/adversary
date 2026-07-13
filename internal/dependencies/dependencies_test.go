@@ -3,10 +3,12 @@ package dependencies
 import (
 	"context"
 	"testing"
+
+	"github.com/adversarylabs/adversary/internal/application"
 )
 
 func TestNilFunctionAdaptersAreSafeAndInvalid(t *testing.T) {
-	if (Clock{}).Validate() == nil || (Environment{}).Validate() == nil || (HTTPClient{}).Validate() == nil || (Browser{}).Validate() == nil {
+	if (Clock{}).Validate() == nil || (Environment{}).Validate() == nil || (HTTPClient{}).Validate() == nil || (BrowserAuth{}).Validate() == nil {
 		t.Fatal("nil adapter validated")
 	}
 	_ = (Clock{}).Now()
@@ -16,7 +18,7 @@ func TestNilFunctionAdaptersAreSafeAndInvalid(t *testing.T) {
 	if _, err := (HTTPClient{}).Do(nil); err == nil {
 		t.Fatal("nil HTTP adapter did not error")
 	}
-	if err := (Browser{}).Open(context.Background(), "https://example.test"); err == nil {
-		t.Fatal("nil browser adapter did not error")
+	if _, err := (BrowserAuth{}).Login(context.Background(), application.BrowserAuthRequest{}); err == nil {
+		t.Fatal("nil browser auth adapter did not error")
 	}
 }
