@@ -102,6 +102,10 @@ func TestAmbientGuardAdversarialSourceForms(t *testing.T) {
 		"entropy alias":       `package fixture; import entropy "crypto/rand"; var _ = entropy.Reader`,
 		"HTTP server":         `package fixture; import web "net/http"; var _ = web.Server{}`,
 		"background shutdown": `package fixture; import lifecycle "context"; var _ = lifecycle.Background`,
+		"detached shutdown":   `package fixture; import lifecycle "context"; var _ = lifecycle.WithoutCancel`,
+		"TODO context":        `package fixture; import lifecycle "context"; var _ = lifecycle.TODO`,
+		"default HTTP client": `package fixture; import web "net/http"; var _ = web.DefaultClient`,
+		"direct HTTP get":     `package fixture; import web "net/http"; var _ = web.Get`,
 		"dot import":          `package fixture; import . "net/http"; var _ = NewServeMux`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -120,7 +124,8 @@ var forbiddenHandlerSelectors = map[string]struct{}{
 	"os.Getenv": {}, "os.LookupEnv": {}, "os.Environ": {}, "os.UserHomeDir": {}, "os.TempDir": {}, "os.Stat": {}, "os.Open": {}, "os.ReadFile": {}, "os.WriteFile": {}, "os.Mkdir": {}, "os.MkdirAll": {}, "os.Remove": {}, "os.RemoveAll": {},
 	"os/exec.Command": {}, "os/exec.CommandContext": {},
 	"crypto/rand.Reader": {}, "crypto/rand.Read": {}, "net.Listen": {}, "net.ListenConfig": {},
-	"net/http.Server": {}, "net/http.NewServeMux": {}, "net/http.Serve": {}, "net/http.ServeTLS": {}, "net/http.ListenAndServe": {}, "net/http.ListenAndServeTLS": {}, "context.Background": {},
+	"net/http.Server": {}, "net/http.Client": {}, "net/http.Transport": {}, "net/http.DefaultClient": {}, "net/http.Get": {}, "net/http.Post": {}, "net/http.PostForm": {}, "net/http.NewRequest": {}, "net/http.NewRequestWithContext": {}, "net/http.NewServeMux": {}, "net/http.Serve": {}, "net/http.ServeTLS": {}, "net/http.ListenAndServe": {}, "net/http.ListenAndServeTLS": {},
+	"context.Background": {}, "context.TODO": {}, "context.WithoutCancel": {},
 	"github.com/adversarylabs/adversary/internal/initproject.Create": {}, "github.com/adversarylabs/adversary/internal/initproject.RenderSuccess": {},
 	"github.com/adversarylabs/adversary/pkg/manifest.Load": {}, "github.com/adversarylabs/adversary/pkg/pack.Create": {}, "github.com/adversarylabs/adversary/pkg/pack.Check": {}, "github.com/adversarylabs/adversary/pkg/oci.ParseReference": {},
 }

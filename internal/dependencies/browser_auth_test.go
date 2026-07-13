@@ -112,6 +112,12 @@ type callbackServerStub struct {
 func (s callbackServerStub) Serve(listener net.Listener) error  { return s.serve(listener) }
 func (s callbackServerStub) Shutdown(ctx context.Context) error { return s.shutdown(ctx) }
 
+type nilAddressListener struct{ closed bool }
+
+func (*nilAddressListener) Accept() (net.Conn, error) { return nil, net.ErrClosed }
+func (l *nilAddressListener) Close() error            { l.closed = true; return nil }
+func (*nilAddressListener) Addr() net.Addr            { return nil }
+
 func TestBrowserAuthInjectedFailuresAreBounded(t *testing.T) {
 	validClient := &browserAPI{}
 	validClient.exchange = func(context.Context, string, string, string) (adversarylabs.TokenResponse, error) {
@@ -134,8 +140,18 @@ func TestBrowserAuthInjectedFailuresAreBounded(t *testing.T) {
 	})
 	t.Run("nil listener", func(t *testing.T) {
 		auth := BrowserAuth{Entropy: bytes.NewReader(make([]byte, 104)), ListenFunc: func(string, string) (net.Listener, error) { return nil, nil }, NewServerFunc: NewHTTPCallbackServer, OpenFunc: func(context.Context, string) error { return nil }}
-		if _, err := auth.Login(context.Background(), newRequest()); err == nil || !strings.Contains(err.Error(), "listener or address is nil") {
+		if _, err := auth.Login(context.Background(), newRequest()); err == nil || !strings.Contains(err.Error(), "listener is nil") {
 			t.Fatalf("err=%v", err)
+		}
+	})
+	t.Run("nil address listener is closed", func(t *testing.T) {
+		listener := &nilAddressListener{}
+		auth := BrowserAuth{Entropy: bytes.NewReader(make([]byte, 104)), ListenFunc: func(string, string) (net.Listener, error) { return listener, nil }, NewServerFunc: NewHTTPCallbackServer, OpenFunc: func(context.Context, string) error { return nil }}
+		if _, err := auth.Login(context.Background(), newRequest()); err == nil || !strings.Contains(err.Error(), "listener address is nil") {
+			t.Fatalf("err=%v", err)
+		}
+		if !listener.closed {
+			t.Fatal("malformed listener was not closed")
 		}
 	})
 	t.Run("unexpected serve stop", func(t *testing.T) {
@@ -146,6 +162,41 @@ func TestBrowserAuthInjectedFailuresAreBounded(t *testing.T) {
 		defer cancel()
 		if _, err := auth.Login(ctx, newRequest()); err == nil || !strings.Contains(err.Error(), "stopped unexpectedly") {
 			t.Fatalf("err=%v", err)
+		}
+	})
+	t.Run("joined serve error retains real failure", func(t *testing.T) {
+		auth := BrowserAuth{Entropy: bytes.NewReader(make([]byte, 104)), ListenFunc: net.Listen, NewServerFunc: func(http.Handler) CallbackServer {
+			return callbackServerStub{serve: func(net.Listener) error { return errors.Join(net.ErrClosed, errors.New("serve failed")) }, shutdown: func(context.Context) error { return nil }}
+		}, OpenFunc: func(context.Context, string) error { return nil }}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if _, err := auth.Login(ctx, newRequest()); err == nil || !strings.Contains(err.Error(), "serve failed") {
+			t.Fatalf("err=%v", err)
+		}
+	})
+	t.Run("joined shutdown error retains real failure", func(t *testing.T) {
+		stopped := make(chan struct{})
+		var handler http.Handler
+		auth := BrowserAuth{Entropy: bytes.NewReader(make([]byte, 104)), ListenFunc: net.Listen, NewServerFunc: func(got http.Handler) CallbackServer {
+			handler = got
+			return callbackServerStub{
+				serve: func(net.Listener) error { <-stopped; return http.ErrServerClosed },
+				shutdown: func(context.Context) error {
+					close(stopped)
+					return errors.Join(net.ErrClosed, errors.New("shutdown failed"))
+				},
+			}
+		}, OpenFunc: func(context.Context, string) error {
+			options := validClient.loginOptions()
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, options.RedirectURI+"?code=code&state="+options.State, nil))
+			return nil
+		}}
+		validClient.exchange = func(context.Context, string, string, string) (adversarylabs.TokenResponse, error) {
+			return adversarylabs.TokenResponse{Token: "token"}, nil
+		}
+		if token, err := auth.Login(context.Background(), newRequest()); token.Token != "token" || err == nil || !strings.Contains(err.Error(), "shutdown failed") {
+			t.Fatalf("token=%#v err=%v", token, err)
 		}
 	})
 	t.Run("cancellation shuts down after browser fallback", func(t *testing.T) {
@@ -195,6 +246,10 @@ func TestBrowserCallbackRejectsMismatchTokenAndRepeatWithoutBlocking(t *testing.
 	}{
 		{"/?code=ok&state=wrong", http.MethodGet, http.StatusBadRequest},
 		{"/?code=ok&state=expected&token=leaked", http.MethodGet, http.StatusBadRequest},
+		{"/?code=ok&state=expected&token=", http.MethodGet, http.StatusBadRequest},
+		{"/?code=ok&state=expected&token=&token=secret", http.MethodGet, http.StatusBadRequest},
+		{"/?code=ok&state=expected&state=expected", http.MethodGet, http.StatusBadRequest},
+		{"/?code=ok&code=second&state=expected", http.MethodGet, http.StatusBadRequest},
 		{"/?code=ok&state=expected", http.MethodPost, http.StatusMethodNotAllowed},
 	} {
 		recorder := httptest.NewRecorder()

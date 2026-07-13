@@ -125,10 +125,13 @@ func (b BrowserAuth) Login(parent context.Context, request application.BrowserAu
 	if err != nil {
 		return adversarylabs.TokenResponse{}, fmt.Errorf("start local login callback: %w", err)
 	}
-	if listener == nil || listener.Addr() == nil {
-		return adversarylabs.TokenResponse{}, fmt.Errorf("start local login callback: listener or address is nil")
+	if listener == nil {
+		return adversarylabs.TokenResponse{}, fmt.Errorf("start local login callback: listener is nil")
 	}
 	defer func() { retErr = errors.Join(retErr, normalizeCallbackCloseError(listener.Close())) }()
+	if listener.Addr() == nil {
+		return adversarylabs.TokenResponse{}, fmt.Errorf("start local login callback: listener address is nil")
+	}
 	host, port, err := net.SplitHostPort(listener.Addr().String())
 	if err != nil || host != "127.0.0.1" || port == "" || port == "0" {
 		return adversarylabs.TokenResponse{}, fmt.Errorf("local login callback did not bind exact IPv4 loopback")
@@ -180,10 +183,32 @@ func (b BrowserAuth) Login(parent context.Context, request application.BrowserAu
 }
 
 func normalizeCallbackCloseError(err error) error {
-	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+	if callbackCloseOnly(err) {
 		return nil
 	}
 	return err
+}
+
+func callbackCloseOnly(err error) bool {
+	if err == nil {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !callbackCloseOnly(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return callbackCloseOnly(wrapped.Unwrap())
+	}
+	return errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed)
 }
 
 type browserLoginOutcome struct {
@@ -206,11 +231,16 @@ func browserCallbackHandler(state string, result chan<- browserLoginOutcome, exc
 			return
 		}
 		query := request.URL.Query()
-		if query.Get("state") != state {
+		states, statePresent := query["state"]
+		if !statePresent || len(states) != 1 || states[0] != state {
 			http.Error(w, "Invalid login state.", http.StatusBadRequest)
 			return
 		}
-		if query.Get("error") != "" {
+		if _, tokenPresent := query["token"]; tokenPresent {
+			http.Error(w, "Login callback contained a forbidden token.", http.StatusBadRequest)
+			return
+		}
+		if _, errorPresent := query["error"]; errorPresent {
 			if !claimed.CompareAndSwap(false, true) {
 				http.Error(w, "Login callback was already handled.", http.StatusConflict)
 				return
@@ -219,11 +249,12 @@ func browserCallbackHandler(state string, result chan<- browserLoginOutcome, exc
 			http.Error(w, "Login failed. You can close this window.", http.StatusBadRequest)
 			return
 		}
-		code := query.Get("code")
-		if code == "" || query.Get("token") != "" {
+		codes, codePresent := query["code"]
+		if !codePresent || len(codes) != 1 || codes[0] == "" {
 			http.Error(w, "Login callback was missing a code.", http.StatusBadRequest)
 			return
 		}
+		code := codes[0]
 		if !claimed.CompareAndSwap(false, true) {
 			http.Error(w, "Login callback was already handled.", http.StatusConflict)
 			return
