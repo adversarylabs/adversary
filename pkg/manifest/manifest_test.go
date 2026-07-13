@@ -42,6 +42,31 @@ func TestParseValid(t *testing.T) {
 	}
 }
 
+func TestValidateProjectNameNPMBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ok   bool
+	}{
+		{strings.Repeat("a", 214), true},
+		{strings.Repeat("a", 215), false},
+		{"node-module", true},
+		{"favicon-ico", true},
+		{"https-review", true},
+	} {
+		if err := ValidateProjectName(tc.name); (err == nil) != tc.ok {
+			t.Errorf("ValidateProjectName(len=%d, %q) error = %v, want valid=%t", len(tc.name), tc.name, err, tc.ok)
+		}
+	}
+}
+
+func TestValidateProjectNameRejectsMaintainedNPMReservedMatrix(t *testing.T) {
+	for name := range npmReservedProjectNames {
+		if err := ValidateProjectName(name); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Errorf("ValidateProjectName(%q) error = %v, want reserved-name error", name, err)
+		}
+	}
+}
+
 func TestParseRejectsUnsafeAndInvalidInput(t *testing.T) {
 	tests := map[string]string{
 		"unknown field":      valid + "unknown: true\n",

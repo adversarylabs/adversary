@@ -90,6 +90,20 @@ func TestCreateRejectsUnsafeProjectNamesWithoutCreatingDestination(t *testing.T)
 	}
 }
 
+func TestCreateRejectsNPMReservedAndOversizedNamesBeforeParentCreation(t *testing.T) {
+	for _, name := range []string{"node_modules", "favicon.ico", "http", strings.Repeat("a", 215)} {
+		root := t.TempDir()
+		parent := filepath.Join(root, "must-not-exist")
+		dst := filepath.Join(parent, name)
+		if _, err := Create(Options{Destination: dst}); err == nil {
+			t.Fatalf("Create(%q) succeeded", name)
+		}
+		if _, err := os.Lstat(parent); !os.IsNotExist(err) {
+			t.Fatalf("parent mutated after rejecting %q: %v", name, err)
+		}
+	}
+}
+
 func TestCreateNeverRemovesExistingDestinationData(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "existing-project")
 	if err := os.Mkdir(dst, 0755); err != nil {
@@ -184,11 +198,23 @@ func TestCreatePublishesProjectRootMode(t *testing.T) {
 func TestRenderSuccessUsesLocationAndShellQuotes(t *testing.T) {
 	var out bytes.Buffer
 	location := "/tmp/a path/it's-here"
-	RenderSuccess(&out, Result{Location: location, SDK: "TypeScript"}, "wrong")
+	RenderSuccess(&out, Result{Location: location, SDK: "TypeScript"}, "wrong", "linux")
 	if !strings.Contains(out.String(), location) || !strings.Contains(out.String(), `cd '/tmp/a path/it'"'"'s-here'`) {
 		t.Fatalf("output not safely rendered:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "npm ci") || strings.Contains(out.String(), "npm install") {
 		t.Fatalf("output does not use lockfile install:\n%s", out.String())
+	}
+}
+
+func TestRenderSuccessUsesPowerShellLiteralPathOnWindows(t *testing.T) {
+	var out bytes.Buffer
+	location := `C:\Users\Ada O'Brien\review`
+	RenderSuccess(&out, Result{Location: location, SDK: "TypeScript"}, "wrong", "windows")
+	if !strings.Contains(out.String(), `Set-Location -LiteralPath 'C:\Users\Ada O''Brien\review'`) {
+		t.Fatalf("output not safely rendered for PowerShell:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "  cd ") {
+		t.Fatalf("output contains POSIX navigation on Windows:\n%s", out.String())
 	}
 }
