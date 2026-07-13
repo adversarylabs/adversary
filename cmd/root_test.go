@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
@@ -1331,6 +1332,56 @@ func TestBrowserCallbackRejectsMismatchTokenAndRepeatWithoutBlocking(t *testing.
 	}
 	if calls != 1 {
 		t.Fatalf("exchange calls = %d", calls)
+	}
+	if got := <-results; got.token.Token != "exchanged" {
+		t.Fatalf("outcome = %#v", got)
+	}
+}
+
+func TestBrowserCallbackRepeatReturnsWhileExchangeIsBlocked(t *testing.T) {
+	results := make(chan browserLoginOutcome, 1)
+	exchangeStarted := make(chan struct{})
+	releaseExchange := make(chan struct{})
+	h := browserCallbackHandler("expected", results, func(code string) (adversarylabs.TokenResponse, error) {
+		if code != "first" {
+			t.Errorf("exchange code = %q", code)
+		}
+		close(exchangeStarted)
+		<-releaseExchange
+		return adversarylabs.TokenResponse{Token: "exchanged"}, nil
+	})
+
+	firstStatus := make(chan int, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?code=first&state=expected", nil))
+		firstStatus <- rec.Code
+	}()
+	<-exchangeStarted
+
+	secondStatus := make(chan int, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?code=second&state=expected", nil))
+		secondStatus <- rec.Code
+	}()
+	select {
+	case status := <-secondStatus:
+		if status != http.StatusConflict {
+			t.Fatalf("repeat status = %d", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("repeat callback blocked behind code exchange")
+	}
+
+	close(releaseExchange)
+	select {
+	case status := <-firstStatus:
+		if status != http.StatusOK {
+			t.Fatalf("first status = %d", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first callback did not finish after exchange release")
 	}
 	if got := <-results; got.token.Token != "exchanged" {
 		t.Fatalf("outcome = %#v", got)
