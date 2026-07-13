@@ -9,3 +9,15 @@ The fallback is deliberately constrained: the immediate directory and files are 
 Residual risk: a file token is available to any process running as the same OS user and is not encrypted at rest. Filesystem permissions do not protect against a compromised user session or privileged administrator. This implementation does not assert ownership or safety of every ancestor directory; Unix uses no-follow opens for the credential and lock files, while Windows performs best-effort immediate-path checks without a fully race-free no-follow primitive. Compatibility `Auth`/`Credentials` methods cannot surface errors; CLI paths use the error-returning scoped preflight instead, and compatibility registry lookup fails closed when scoped records are ambiguous.
 
 Migration path: add an explicit credential-backend setting and maintained native keyring adapter in an additive release; copy a credential only after the keyring write is verified; retain file reads during a deprecation window; then remove the file token after successful server validation. Headless users must be able to select the documented file backend explicitly. Rollback of this change is safe at the config schema level because unknown `registry_host` fields are ignored and legacy registry-keyed records remain supported.
+
+Browser authentication is a separate pre-persistence trust boundary. The login
+handler delegates it to an injected service whose production adapter binds only
+`127.0.0.1` on an ephemeral port, generates independent state, PKCE verifier,
+and callback-path tokens from injected cryptographic entropy, accepts one valid
+callback, and shuts down under a bounded context. State mismatch, query-token
+injection, repeated callbacks, listener/server failure, exchange failure, and
+cancellation return without writing credentials. Browser-launch failure is not
+an authentication bypass: the exact URL is rendered for manual continuation.
+This boundary changes no credential schema or on-disk migration. Rolling it
+back would restore ambient network/entropy dependencies in the command handler
+and re-open CLI-003/CLI-024.

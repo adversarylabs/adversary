@@ -17,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
@@ -1296,98 +1295,6 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-func TestBrowserCallbackRejectsMismatchTokenAndRepeatWithoutBlocking(t *testing.T) {
-	results := make(chan browserLoginOutcome, 1)
-	calls := 0
-	h := browserCallbackHandler("expected", results, func(code string) (adversarylabs.TokenResponse, error) {
-		calls++
-		return adversarylabs.TokenResponse{Token: "exchanged"}, nil
-	})
-	for _, tc := range []struct {
-		target, method string
-		status         int
-	}{
-		{"/?code=ok&state=wrong", http.MethodGet, http.StatusBadRequest},
-		{"/?code=ok&state=expected&token=leaked", http.MethodGet, http.StatusBadRequest},
-		{"/?code=ok&state=expected", http.MethodPost, http.StatusMethodNotAllowed},
-	} {
-		req := httptest.NewRequest(tc.method, tc.target, nil)
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		if rec.Code != tc.status {
-			t.Fatalf("%s: status = %d", tc.target, rec.Code)
-		}
-	}
-	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/?code=ok&state=expected", nil)
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		want := http.StatusOK
-		if i == 1 {
-			want = http.StatusConflict
-		}
-		if rec.Code != want {
-			t.Fatalf("repeat %d: status = %d", i, rec.Code)
-		}
-	}
-	if calls != 1 {
-		t.Fatalf("exchange calls = %d", calls)
-	}
-	if got := <-results; got.token.Token != "exchanged" {
-		t.Fatalf("outcome = %#v", got)
-	}
-}
-
-func TestBrowserCallbackRepeatReturnsWhileExchangeIsBlocked(t *testing.T) {
-	results := make(chan browserLoginOutcome, 1)
-	exchangeStarted := make(chan struct{})
-	releaseExchange := make(chan struct{})
-	h := browserCallbackHandler("expected", results, func(code string) (adversarylabs.TokenResponse, error) {
-		if code != "first" {
-			t.Errorf("exchange code = %q", code)
-		}
-		close(exchangeStarted)
-		<-releaseExchange
-		return adversarylabs.TokenResponse{Token: "exchanged"}, nil
-	})
-
-	firstStatus := make(chan int, 1)
-	go func() {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?code=first&state=expected", nil))
-		firstStatus <- rec.Code
-	}()
-	<-exchangeStarted
-
-	secondStatus := make(chan int, 1)
-	go func() {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?code=second&state=expected", nil))
-		secondStatus <- rec.Code
-	}()
-	select {
-	case status := <-secondStatus:
-		if status != http.StatusConflict {
-			t.Fatalf("repeat status = %d", status)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("repeat callback blocked behind code exchange")
-	}
-
-	close(releaseExchange)
-	select {
-	case status := <-firstStatus:
-		if status != http.StatusOK {
-			t.Fatalf("first status = %d", status)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("first callback did not finish after exchange release")
-	}
-	if got := <-results; got.token.Token != "exchanged" {
-		t.Fatalf("outcome = %#v", got)
-	}
-}
-
 func TestReadPasswordLine(t *testing.T) {
 	got, err := readPasswordLine(strings.NewReader("secret\r\n"))
 	if err != nil || got != "secret" {
@@ -1395,28 +1302,6 @@ func TestReadPasswordLine(t *testing.T) {
 	}
 	if _, err := readPasswordLine(strings.NewReader("\n")); err == nil {
 		t.Fatal("expected empty password error")
-	}
-}
-
-func TestBrowserCallbackOAuthErrorCompletesOnce(t *testing.T) {
-	results := make(chan browserLoginOutcome, 1)
-	h := browserCallbackHandler("expected", results, func(string) (adversarylabs.TokenResponse, error) {
-		t.Fatal("exchange called")
-		return adversarylabs.TokenResponse{}, nil
-	})
-	req := httptest.NewRequest(http.MethodGet, "/?error=access_denied&state=expected", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	if got := <-results; got.err == nil {
-		t.Fatal("expected OAuth error outcome")
-	}
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("repeat status = %d", rec.Code)
 	}
 }
 

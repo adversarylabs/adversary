@@ -5,7 +5,6 @@ import (
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"io"
 	"strings"
-	"time"
 )
 
 func whoamiData(account adversarylabs.WhoamiResponse) whoamiDTO {
@@ -74,23 +73,6 @@ func humanSize(size int64) string {
 		return fmt.Sprintf("%d B", size)
 	}
 	return fmt.Sprintf("%.1f %s", value, unit)
-}
-
-func relativeTime(t time.Time) string {
-	if t.IsZero() {
-		return "unknown"
-	}
-	d := time.Since(t)
-	if d < time.Minute {
-		return "now"
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	}
-	if d < 24*time.Hour {
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	}
-	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
 func valueOf(value *string) string {

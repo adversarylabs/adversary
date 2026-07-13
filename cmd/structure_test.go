@@ -89,88 +89,77 @@ func TestCommandHandlersDoNotBypassApplicationPorts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		imports := map[string]string{}
-		for _, spec := range file.Imports {
-			name := ""
-			if spec.Name != nil {
-				name = spec.Name.Name
-			}
-			value := strings.Trim(spec.Path.Value, `"`)
-			if name == "." {
-				t.Errorf("%s uses forbidden dot import %s", path, value)
-				continue
-			}
-			if name == "" {
-				name = filepath.Base(value)
-			}
-			imports[name] = value
+		if forbidden := forbiddenHandlerDependency(file); forbidden != "" {
+			t.Errorf("%s bypasses App port with %s", path, forbidden)
 		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			sel, ok := node.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			ident, ok := sel.X.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			qualified := imports[ident.Name] + "." + sel.Sel.Name
-			for _, forbidden := range []string{
-				"os.Getenv", "os.LookupEnv", "os.Environ", "os.UserHomeDir", "os.TempDir", "os.Stat", "os.Open", "os.ReadFile", "os.WriteFile", "os.Mkdir", "os.MkdirAll", "os.Remove", "os.RemoveAll",
-				"os/exec.Command", "os/exec.CommandContext",
-				"github.com/adversarylabs/adversary/internal/initproject.Create", "github.com/adversarylabs/adversary/internal/initproject.RenderSuccess",
-				"github.com/adversarylabs/adversary/pkg/manifest.Load", "github.com/adversarylabs/adversary/pkg/pack.Create", "github.com/adversarylabs/adversary/pkg/pack.Check", "github.com/adversarylabs/adversary/pkg/oci.ParseReference",
-			} {
-				if qualified == forbidden {
-					t.Errorf("%s bypasses App port with %s", path, qualified)
-				}
-			}
-			return true
-		})
 	}
 }
 
 func TestAmbientGuardAdversarialSourceForms(t *testing.T) {
 	for name, source := range map[string]string{
-		"aliased import": `package fixture; import ambient "os"; var f = ambient.Stat`,
-		"function alias": `package fixture; import "os"; func x() { stat := os.Stat; _, _ = stat("x") }`,
-		"dot import":     `package fixture; import . "os"; var _ = Stat`,
+		"aliased filesystem":  `package fixture; import ambient "os"; var f = ambient.Stat`,
+		"function alias":      `package fixture; import "net"; func x() { listen := net.Listen; _, _ = listen("tcp", "127.0.0.1:0") }`,
+		"entropy alias":       `package fixture; import entropy "crypto/rand"; var _ = entropy.Reader`,
+		"HTTP server":         `package fixture; import web "net/http"; var _ = web.Server{}`,
+		"background shutdown": `package fixture; import lifecycle "context"; var _ = lifecycle.Background`,
+		"dot import":          `package fixture; import . "net/http"; var _ = NewServeMux`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			file, err := parser.ParseFile(token.NewFileSet(), "fixture.go", source, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
-			found := false
-			imports := map[string]string{}
-			for _, spec := range file.Imports {
-				value := strings.Trim(spec.Path.Value, `"`)
-				alias := filepath.Base(value)
-				if spec.Name != nil {
-					alias = spec.Name.Name
-				}
-				if alias == "." {
-					found = true
-				} else {
-					imports[alias] = value
-				}
-			}
-			ast.Inspect(file, func(node ast.Node) bool {
-				sel, ok := node.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				id, ok := sel.X.(*ast.Ident)
-				if ok && imports[id.Name] == "os" && sel.Sel.Name == "Stat" {
-					found = true
-				}
-				return true
-			})
-			if !found {
+			if forbiddenHandlerDependency(file) == "" {
 				t.Fatal("adversarial ambient access escaped guard")
 			}
 		})
 	}
+}
+
+var forbiddenHandlerSelectors = map[string]struct{}{
+	"os.Getenv": {}, "os.LookupEnv": {}, "os.Environ": {}, "os.UserHomeDir": {}, "os.TempDir": {}, "os.Stat": {}, "os.Open": {}, "os.ReadFile": {}, "os.WriteFile": {}, "os.Mkdir": {}, "os.MkdirAll": {}, "os.Remove": {}, "os.RemoveAll": {},
+	"os/exec.Command": {}, "os/exec.CommandContext": {},
+	"crypto/rand.Reader": {}, "crypto/rand.Read": {}, "net.Listen": {}, "net.ListenConfig": {},
+	"net/http.Server": {}, "net/http.NewServeMux": {}, "net/http.Serve": {}, "net/http.ServeTLS": {}, "net/http.ListenAndServe": {}, "net/http.ListenAndServeTLS": {}, "context.Background": {},
+	"github.com/adversarylabs/adversary/internal/initproject.Create": {}, "github.com/adversarylabs/adversary/internal/initproject.RenderSuccess": {},
+	"github.com/adversarylabs/adversary/pkg/manifest.Load": {}, "github.com/adversarylabs/adversary/pkg/pack.Create": {}, "github.com/adversarylabs/adversary/pkg/pack.Check": {}, "github.com/adversarylabs/adversary/pkg/oci.ParseReference": {},
+}
+
+var forbiddenHandlerImports = map[string]struct{}{"crypto/rand": {}, "net": {}}
+
+func forbiddenHandlerDependency(file *ast.File) string {
+	imports := map[string]string{}
+	for _, spec := range file.Imports {
+		value := strings.Trim(spec.Path.Value, `"`)
+		if _, forbidden := forbiddenHandlerImports[value]; forbidden {
+			return "import " + value
+		}
+		name := filepath.Base(value)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		if name == "." {
+			return "dot import " + value
+		}
+		imports[name] = value
+	}
+	found := ""
+	ast.Inspect(file, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		identifier, ok := selector.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		qualified := imports[identifier.Name] + "." + selector.Sel.Name
+		if _, forbidden := forbiddenHandlerSelectors[qualified]; forbidden && found == "" {
+			found = qualified
+		}
+		return true
+	})
+	return found
 }
 
 func TestArtifactCommandsHaveNoByteLayerCompatibilityFallback(t *testing.T) {

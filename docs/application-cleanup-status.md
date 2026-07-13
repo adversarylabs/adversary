@@ -6,6 +6,14 @@ and OCI registry creation are strongly typed ports/factories; login, logout,
 search, whoami, push, pull, and default namespace selection do not construct or
 discover dependencies inside handlers.
 
+Interactive browser login crosses a high-level `BrowserAuth` port. The concrete
+composition adapter owns cryptographic entropy, exact IPv4-loopback listener
+creation, the bounded HTTP callback server, PKCE, callback claiming, shutdown,
+and browser launch. Command handlers cannot open listeners, construct callback
+servers, read ambient entropy, or create detached shutdown contexts. Alias-aware
+AST fixtures enforce those origins as well as the existing filesystem/process
+guard. OAuth failures return before credential persistence.
+
 Project creation, manifest/project validation, pack preflight, and package
 building are owned by the injected `Projects` port. Handlers do not call the
 filesystem, template renderer, manifest loader, or builder directly. Reference
@@ -72,11 +80,17 @@ Docker config opening rejects symlinks, FIFOs, devices, directories, and handle
 identity changes. Unix uses `O_NOFOLLOW|O_NONBLOCK`; Windows opens the reparse
 point itself with `FILE_FLAG_OPEN_REPARSE_POINT` and rejects non-regular handles.
 Credential helper and build-probe output are bounded, cancellation has a finite
-wait policy, and helper errors never include credential input or stderr.
+wait policy, and helper errors never include credential input or stderr. Browser
+callbacks have a ten-minute operation deadline, bounded server read timeouts,
+and a two-second injected shutdown deadline; state mismatch, token injection,
+and repeated callbacks fail closed, including concurrent repeats during code
+exchange.
 
 Rollback may restore the previous composition commit without changing repository
 formats, credential schemas, remote API contracts, or command output. Docker
 credential lookup would again discover the live process home and helpers, and
 build-state lookup would again follow live HOME/XDG cache changes. The rollback
-therefore re-opens CLI-007/CLI-024 without requiring data migration; existing
-build-state directories remain disposable coordination state.
+would also return listener, entropy, HTTP-server, and shutdown ownership to the
+login handler. It therefore re-opens CLI-003/CLI-007/CLI-024 without requiring
+data or credential migration; existing build-state directories remain
+disposable coordination state.

@@ -136,8 +136,14 @@ type AdversaryRunOptions struct {
 	RunTimeout, BuildTimeout                                  time.Duration
 	Stdout, Stderr                                            io.Writer
 }
-type Browser interface {
-	Open(context.Context, string) error
+type BrowserAuthRequest struct {
+	Client APIClient
+	Name   string
+	CI     bool
+	Output io.Writer
+}
+type BrowserAuth interface {
+	Login(context.Context, BrowserAuthRequest) (adversarylabs.TokenResponse, error)
 }
 type TTY interface {
 	Interactive(io.Reader) bool
@@ -159,7 +165,7 @@ type Dependencies struct {
 	Repository     Repository
 	Resolver       Resolver
 	Runtime        Runtime
-	Browser        Browser
+	BrowserAuth    BrowserAuth
 	TTY            TTY
 }
 
@@ -211,8 +217,8 @@ func New(deps Dependencies) (*App, error) {
 	if deps.Runtime == nil {
 		missing = append(missing, "runtime")
 	}
-	if deps.Browser == nil {
-		missing = append(missing, "browser")
+	if deps.BrowserAuth == nil {
+		missing = append(missing, "browser auth")
 	}
 	if deps.TTY == nil {
 		missing = append(missing, "tty")
@@ -242,7 +248,7 @@ func New(deps Dependencies) (*App, error) {
 	if v, ok := deps.Clock.(Validatable); ok {
 		validators = append(validators, v)
 	}
-	if v, ok := deps.Browser.(Validatable); ok {
+	if v, ok := deps.BrowserAuth.(Validatable); ok {
 		validators = append(validators, v)
 	}
 	if v, ok := deps.Auth.(Validatable); ok {

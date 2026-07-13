@@ -146,17 +146,62 @@ func TestInjectedClockStopsTimerOnDeviceCancellation(t *testing.T) {
 	}
 }
 
-func TestInjectedBrowserIsCalled(t *testing.T) {
-	called := false
-	ctx, cancel := context.WithCancel(context.Background())
-	browser := dependencies.Browser{OpenFunc: func(context.Context, string) error { called = true; cancel(); return nil }}
-	client := adversarylabs.Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: cmdRoundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unexpected request") })}}
-	_, err := loginWithBrowser(ctx, browser, &bytes.Buffer{}, client, &loginOptions{})
-	if !errors.Is(err, context.Canceled) {
+type recordingBrowserAuth struct {
+	called  bool
+	request application.BrowserAuthRequest
+	token   adversarylabs.TokenResponse
+	err     error
+}
+
+func (b *recordingBrowserAuth) Login(_ context.Context, request application.BrowserAuthRequest) (adversarylabs.TokenResponse, error) {
+	b.called = true
+	b.request = request
+	return b.token, b.err
+}
+
+func TestLoginCommandUsesInjectedBrowserAuthService(t *testing.T) {
+	repo := repository.Repository{Root: t.TempDir()}
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repo, &stdout, &stderr).Dependencies()
+	browser := &recordingBrowserAuth{token: adversarylabs.TokenResponse{Token: "browser-token"}}
+	base.BrowserAuth = browser
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := NewRootCommandWithApp(app)
+	command.SetArgs([]string{"login"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !browser.called || browser.request.Client == nil || browser.request.Output == nil {
+		t.Fatalf("browser request=%#v", browser.request)
+	}
+	store := base.Auth.(processAuthStore)
+	auth, ok, err := store.ExactAuthE(adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, "default"))
+	if err != nil || !ok || auth.Token != "browser-token" {
+		t.Fatalf("auth=%#v ok=%v err=%v", auth, ok, err)
+	}
+}
+
+func TestLoginCommandDoesNotPersistCredentialsWhenBrowserAuthFails(t *testing.T) {
+	repo := repository.Repository{Root: t.TempDir()}
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repo, &stdout, &stderr).Dependencies()
+	browser := &recordingBrowserAuth{err: errors.New("callback failed")}
+	base.BrowserAuth = browser
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := NewRootCommandWithApp(app)
+	command.SetArgs([]string{"login"})
+	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "callback failed") {
 		t.Fatalf("err=%v", err)
 	}
-	if !called {
-		t.Fatal("browser was not called")
+	store := base.Auth.(processAuthStore)
+	if _, ok, err := store.ExactAuthE(adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, "default")); err != nil || ok {
+		t.Fatalf("credential persisted after failure: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -224,7 +269,7 @@ func lifecycleTestApp(t *testing.T, repo repository.Repository, stdout, stderr *
 	docker := oci.DockerCredentialStore{HomeDir: t.TempDir()}
 	resolver := internaladversary.Resolver{Repository: repo}
 	references := processReferences{registry: adversarylabs.DefaultRegistry}
-	app, err := application.New(application.Dependencies{Stdin: &bytes.Buffer{}, Stdout: stdout, Stderr: stderr, Clock: dependencies.Clock{NowFunc: func() time.Time { return time.Unix(1, 0) }, TimerFunc: func(time.Duration) application.Timer { return processTimer{time.NewTimer(time.Hour)} }}, Projects: processProjects{references: references}, References: references, Auth: processAuthStore{store}, API: processAPIFactory{store: store, http: http.DefaultClient}, Registries: processRegistryFactory{store: store, docker: docker, host: adversarylabs.DefaultRegistry, identity: store.Path}, DefaultAPIURL: adversarylabs.DefaultAPIURL, RegistryHost: adversarylabs.DefaultRegistry, Repository: processRepository{repo}, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{resolver: resolver}, Browser: dependencies.Browser{OpenFunc: func(context.Context, string) error { return nil }}, TTY: processTTY{}})
+	app, err := application.New(application.Dependencies{Stdin: &bytes.Buffer{}, Stdout: stdout, Stderr: stderr, Clock: dependencies.Clock{NowFunc: func() time.Time { return time.Unix(1, 0) }, TimerFunc: func(time.Duration) application.Timer { return processTimer{time.NewTimer(time.Hour)} }}, Projects: processProjects{references: references}, References: references, Auth: processAuthStore{store}, API: processAPIFactory{store: store, http: http.DefaultClient}, Registries: processRegistryFactory{store: store, docker: docker, host: adversarylabs.DefaultRegistry, identity: store.Path}, DefaultAPIURL: adversarylabs.DefaultAPIURL, RegistryHost: adversarylabs.DefaultRegistry, Repository: processRepository{repo}, Resolver: processResolver{resolver: resolver}, Runtime: processRuntime{resolver: resolver}, BrowserAuth: &recordingBrowserAuth{}, TTY: processTTY{}})
 	if err != nil {
 		t.Fatal(err)
 	}
