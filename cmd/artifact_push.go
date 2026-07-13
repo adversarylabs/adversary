@@ -72,7 +72,12 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 	if err != nil {
 		return true, err
 	}
-	defer func() { retErr = errors.Join(retErr, lease.Close()) }()
+	leaseOpen := true
+	defer func() {
+		if leaseOpen {
+			retErr = errors.Join(retErr, lease.Close())
+		}
+	}()
 	manifest, err := readSmallSource(lease.Manifest, 4<<20)
 	if err != nil {
 		return true, err
@@ -105,6 +110,16 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 	digest, err := registry.PushSources(ctx, ref, manifest, lease.Blobs)
 	if err != nil {
 		return true, err
+	}
+	localManifestDigest := lease.Manifest.Digest()
+	if err := lease.Close(); err != nil {
+		return true, fmt.Errorf("release local payload after upload: %w", err)
+	}
+	leaseOpen = false
+	if digest != localManifestDigest {
+		if _, importErr := resolver.CommitEquivalentManifest(resolution.Record.Digest, digest, manifest); importErr != nil {
+			return true, fmt.Errorf("commit registry manifest digest %s: %w", digest, importErr)
+		}
 	}
 	artifactDigest, _, err := registry.PushAdversaryManifestReferrer(ctx, ref, digest, yaml)
 	if err != nil {

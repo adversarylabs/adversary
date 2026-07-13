@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,6 +71,7 @@ type Record struct {
 	ConfigDigest            string `json:"configDigest"`
 	LayerDigest             string `json:"layerDigest"`
 	AdversaryManifestDigest string `json:"adversaryManifestDigest"`
+	CanonicalAliasDigest    string `json:"canonicalAliasDigest,omitempty"`
 }
 type importMetadata struct {
 	Reference                                                          string
@@ -77,6 +79,7 @@ type importMetadata struct {
 	Version                                                            string
 	Manifest, Config, AdversaryManifest                                []byte
 	ManifestDigest, ConfigDigest, LayerDigest, AdversaryManifestDigest string
+	CanonicalAliasDigest                                               string
 }
 type VerifyResult struct{ Missing, Corrupt []string }
 type Checkpoint struct {
@@ -132,6 +135,15 @@ func (r Repository) importData(in importMetadata, lifecycleHeld bool) (_ Record,
 	}
 	if rec.Name != in.Name || rec.Version != in.Version {
 		return Record{}, fmt.Errorf("caller identity conflicts with artifact")
+	}
+	if in.CanonicalAliasDigest != "" {
+		if in.CanonicalAliasDigest == rec.Digest {
+			return Record{}, fmt.Errorf("canonical alias digest must differ from record digest")
+		}
+		if err := oci.VerifyDigest(in.Manifest, in.CanonicalAliasDigest); err != nil {
+			return Record{}, fmt.Errorf("canonical alias digest mismatch: %w", err)
+		}
+		rec.CanonicalAliasDigest = in.CanonicalAliasDigest
 	}
 	previousRef := ""
 	if ref != "" {
@@ -536,10 +548,69 @@ func (r Repository) Resolve(value string) (Record, error) {
 		visible = append(visible, d)
 	}
 	list = visible
-	if len(list) != 1 {
+	if len(list) == 0 {
 		return Record{}, ErrAmbiguous
 	}
-	return r.record(list[0])
+	if len(list) == 1 {
+		return r.record(list[0])
+	}
+	records := make([]Record, 0, len(list))
+	semanticKey := ""
+	preferenceRoot := ""
+	preferencesAgree := true
+	for _, digest := range list {
+		rec, loadErr := r.record(digest)
+		if loadErr != nil {
+			return Record{}, loadErr
+		}
+		candidateKey, keyErr := r.recordSemanticKey(rec)
+		if keyErr != nil {
+			return Record{}, keyErr
+		}
+		if semanticKey == "" {
+			semanticKey = candidateKey
+		} else if candidateKey != semanticKey {
+			return Record{}, ErrAmbiguous
+		}
+		candidateRoot := rec.CanonicalAliasDigest
+		if candidateRoot == "" {
+			candidateRoot = rec.Digest
+		}
+		if preferenceRoot == "" {
+			preferenceRoot = candidateRoot
+		} else if candidateRoot != preferenceRoot {
+			preferencesAgree = false
+		}
+		records = append(records, rec)
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].Digest < records[j].Digest })
+	if preferencesAgree {
+		for _, rec := range records {
+			if rec.Digest == preferenceRoot {
+				return rec, nil
+			}
+		}
+	}
+	return records[0], nil
+}
+
+func (r Repository) recordSemanticKey(rec Record) (string, error) {
+	manifest, err := r.readLimit("manifests/"+key(rec.ManifestDigest), 4<<20)
+	if err != nil {
+		return "", err
+	}
+	if err := oci.VerifyDigest(manifest, rec.ManifestDigest); err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(manifest)))
+	_, _ = h.Write(size[:])
+	_, _ = h.Write(manifest)
+	binary.BigEndian.PutUint64(size[:], uint64(len(rec.AdversaryManifestDigest)))
+	_, _ = h.Write(size[:])
+	_, _ = h.Write([]byte(rec.AdversaryManifestDigest))
+	return fmt.Sprintf("sha256:%x", h.Sum(nil)), nil
 }
 
 func isContentDigest(value string) bool {
@@ -627,6 +698,15 @@ func (r Repository) loadRecordMode(d string, requireCommit, allowPending bool) (
 	derived, err := deriveRecord(manifest, config, adversary, rec.ManifestDigest, rec.ConfigDigest, rec.AdversaryManifestDigest)
 	if err != nil {
 		return rec, err
+	}
+	if rec.CanonicalAliasDigest != "" {
+		if rec.CanonicalAliasDigest == rec.Digest {
+			return rec, fmt.Errorf("canonical alias digest is self-referential")
+		}
+		if err := oci.VerifyDigest(manifest, rec.CanonicalAliasDigest); err != nil {
+			return rec, fmt.Errorf("canonical alias digest mismatch: %w", err)
+		}
+		derived.CanonicalAliasDigest = rec.CanonicalAliasDigest
 	}
 	if derived != rec {
 		return rec, fmt.Errorf("persisted record conflicts with artifact content")

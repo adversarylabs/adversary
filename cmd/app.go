@@ -136,6 +136,9 @@ func (p processResolver) ImportPacked(a pack.Artifact, ref string) (repository.R
 func (p processResolver) ImportSources(in repository.SourceImport) (repository.Record, error) {
 	return p.resolver.Repository.ImportSources(in)
 }
+func (p processResolver) CommitEquivalentManifest(source, target string, manifest []byte) (repository.Record, error) {
+	return p.resolver.Repository.CommitEquivalentManifest(source, target, manifest)
+}
 func (p processResolver) UpdateRef(ref, oldDigest, newDigest string) error {
 	return p.resolver.Repository.UpdateRef(ref, oldDigest, newDigest)
 }

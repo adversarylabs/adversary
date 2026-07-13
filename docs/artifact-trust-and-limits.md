@@ -67,6 +67,25 @@ their records live across retry/reopen lifetimes. Every owner closes its readers
 before releasing the source or lease, including cancellation and error paths.
 Only bounded control-plane manifests and configs are materialized in memory.
 
+When a registry canonicalizes an uploaded manifest to another supported digest
+algorithm, push commits an equivalent local record under the verified
+registry-returned digest before registering the explicit remote reference. It
+reuses the already verified config, layer, and adversary-manifest sources and
+reverifies the identical manifest bytes against the returned digest. The
+upload lease is released before this lifecycle-first repository transaction,
+preventing GC and opposite-canonicalization lock cycles. The original generic
+reference and digest record remain unchanged.
+
+Equivalent records may persist a validated canonical-alias digest as a root
+preference, but equivalence is proven independently from the exact verified
+manifest bytes and attached adversary-manifest digest. Name and name-version
+aliases collapse only when every visible candidate has the same semantic key.
+An agreed, present preferred root wins; otherwise independently imported or
+GC-surviving equivalents resolve to their lexicographically smallest digest.
+A deleted preferred root is not required to create another verified algorithm
+identity. Records with different bytes or attached semantics remain ambiguous
+and fail closed.
+
 Packaging refuses non-regular inputs (including symlinks), streams hashing and
 tar writes, produces deterministic timestamps and ordering, and records the
 executable bits. Existing ignore-file matching remains intentionally unchanged;

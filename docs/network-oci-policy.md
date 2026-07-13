@@ -51,6 +51,23 @@ restartable chunk state needs durable transaction semantics; the 256 MiB layer
 limit bounds the current request. These choices fail closed and retain the
 fallback-tag interoperability path.
 
+Registries may return a canonical manifest digest using a different supported
+algorithm than the retained local record. Push verifies that identity against
+the uploaded manifest bytes, commits an equivalent unreferenced local record,
+and registers the explicit remote reference only after the adversary-manifest
+referrer succeeds. This prevents the expected missing-local-record failure
+after successful publication while preserving the original generic reference.
+The payload lease is closed before local mutation; referrer or reference-CAS
+failure may leave an unreferenced verified record for normal GC, but never
+retargets the remote reference locally.
+
+Digest equivalence does not merge explicit remote identities. A remote
+reference and its digest resolve the registry-returned record, while generic
+name aliases deterministically resolve equivalent local identities. Equivalence
+requires the same exact verified manifest bytes and attached adversary-manifest
+digest; the persisted canonical alias is only a root preference and need not
+remain live after GC. Ordinary same-name collisions remain errors.
+
 Live GHCR, Docker Hub, Harbor, and CNCF Distribution conformance runs are
 deferred because release CI has no approved external credentials or durable
 service fixtures. The deterministic fake registry suite instead exercises
