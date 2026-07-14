@@ -73,15 +73,23 @@ requires the same exact verified manifest bytes and attached adversary-manifest
 digest; the persisted canonical alias is only a root preference and need not
 remain live after GC. Ordinary same-name collisions remain errors.
 
+The required registry matrix is hermetic. Deterministic fake servers exercise
+Distribution authentication, redirects, rate limiting, digest mutation,
+supported digest algorithms, referrers and fallback tags, and Docker credential
+helpers. A loopback HTTP registry exercises the complete CLI
+pack/push/pull/run lifecycle and repository restart boundary. These two layers
+cover protocol failures and command composition without external credentials.
+
 Live GHCR, Docker Hub, Harbor, and CNCF Distribution conformance runs are
 deferred because release CI has no approved external credentials or durable
-service fixtures. The deterministic fake registry suite instead exercises
-Distribution authentication, redirects, rate limiting, digest mutation,
-referrers and fallback tags, and Docker credential helpers; the local-registry
-pack/push/pull/run lifecycle is a required gate. Adding credentialed live jobs
-requires a separate CI-secret and third-party availability decision so forks
-cannot exfiltrate registry credentials and releases are not blocked by an
-uncontrolled external outage.
+service fixtures. Required CI does not contact Docker Hub or require a
+privileged Docker daemon. Adding a credentialed live-registry job requires a
+separate CI-secret, fork-isolation, cleanup, bounded-quota, and third-party
+availability decision so forks cannot exfiltrate registry credentials and
+releases are not blocked by an uncontrolled external outage. A future live
+Docker build fixture has the independent runner and validation requirements in
+`docs/build-and-git-contract.md`; neither fixture may replace the deterministic
+matrix.
 
 Rollback is a revert of the client construction and registry policy changes.
 No credential or repository schema changes are made, and helper credentials are

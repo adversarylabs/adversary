@@ -15,6 +15,7 @@ import (
 )
 
 var actionRef = regexp.MustCompile(`^[^@[:space:]]+@[0-9a-f]{40}$`)
+var setupGoRef = regexp.MustCompile(`^actions/setup-go@[0-9a-f]{40}$`)
 
 func fail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "CI contract: "+format+"\n", args...)
@@ -181,6 +182,30 @@ func validatePinnedActions(path string, workflow *yaml.Node) {
 	}
 }
 
+func requireGoToolchain(job *yaml.Node, jobID string) {
+	setupCount := 0
+	for _, step := range steps(job) {
+		uses := scalar(value(step, "uses"))
+		if !strings.HasPrefix(uses, "actions/setup-go@") {
+			continue
+		}
+		setupCount++
+		if !setupGoRef.MatchString(uses) {
+			fail("job %s setup-go action is not pinned to a full checksum: %s", jobID, uses)
+		}
+		with := value(step, "with")
+		if got := scalar(value(with, "go-version-file")); got != "go.mod" {
+			fail("job %s setup-go go-version-file = %q; want go.mod", jobID, got)
+		}
+		if got := scalar(value(with, "go-version")); got != "" {
+			fail("job %s must not override the go.mod toolchain with go-version %q", jobID, got)
+		}
+	}
+	if setupCount != 1 {
+		fail("job %s must use exactly one checksum-pinned actions/setup-go step; found %d", jobID, setupCount)
+	}
+}
+
 func validateCI(workflow *yaml.Node) {
 	requirePermissions(workflow, "ci workflow", map[string]string{"contents": "read"})
 	concurrency := requiredValue(workflow, "concurrency")
@@ -194,6 +219,9 @@ func validateCI(workflow *yaml.Node) {
 		if value(jobs, id) == nil {
 			fail("ci workflow is missing required job %q", id)
 		}
+	}
+	for _, id := range requiredJobs[:len(requiredJobs)-1] {
+		requireGoToolchain(requiredValue(jobs, id), "ci "+id)
 	}
 
 	native := requiredValue(jobs, "native-test")
@@ -321,6 +349,7 @@ func validateRelease(workflow *yaml.Node) {
 			fail("release workflow is missing required job %q", id)
 		}
 	}
+	requireGoToolchain(requiredValue(jobs, "build-and-test"), "release build-and-test")
 
 	attest := requiredValue(jobs, "attest")
 	requireExactSet(value(attest, "needs"), "attest dependencies", "build-and-test")

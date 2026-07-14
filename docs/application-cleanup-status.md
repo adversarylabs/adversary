@@ -1,10 +1,14 @@
 # Application composition boundary (CLI-024)
 
-CLI-024 is complete. Every production command is constructed from an explicit
-`application.App`. Authentication persistence, Adversary Labs API operations,
-and OCI registry creation are strongly typed ports/factories; login, logout,
-search, whoami, push, pull, and default namespace selection do not construct or
-discover dependencies inside handlers.
+CLI-024 is complete. Every effectful production command receives an explicit
+`application.App`. The pure `version` and `completion` commands intentionally
+receive no App argument: they have no filesystem, process, network, credential,
+clock, or persistence authority to inject. They inherit stdin/stdout/stderr from
+the App-bound root command, so passing an otherwise unused App would obscure
+rather than strengthen the dependency boundary. Authentication persistence,
+Adversary Labs API operations, and OCI registry creation are strongly typed
+ports/factories; login, logout, search, whoami, push, pull, and default namespace
+selection do not construct or discover dependencies inside handlers.
 
 Interactive browser login crosses a high-level `BrowserAuth` port. The concrete
 composition adapter owns cryptographic entropy, exact IPv4-loopback listener
@@ -46,6 +50,14 @@ guard enforces that boundary across the business runtime-policy files. Tests
 can replace the process launcher, output runner, executor, clock, filesystem,
 build ports, paths, environment, and streams without launching a real process
 or touching the process home or temporary directory.
+
+The internal runtime port and values are named `RuntimeExecutor`, `RuntimeSpec`,
+and `RuntimeResult`, with `HostExecutor` as the concrete implementation. The
+former `Container*` names and `docker.go` filename incorrectly implied that the
+runtime provided container isolation even though host execution is the only
+implementation and unsupported container-image constraints fail closed. An AST
+regression rejects those old identifiers. This is internal terminology only;
+no command output, stored record, manifest, or public wire schema changed.
 
 Registry authorization decisions use `oci.RegistryError` status and distribution
 error codes. Handler behavior no longer depends on matching human-readable error
@@ -102,4 +114,6 @@ login handler. It therefore re-opens CLI-003/CLI-007/CLI-024 without requiring
 data or credential migration; existing build-state directories remain
 disposable coordination state. Reverting only the callback lifecycle ordering
 can restore a ten-minute hang after an unexpected listener/server close and is
-not a safe partial rollback.
+not a safe partial rollback. Reverting the internal runtime terminology is
+storage- and wire-compatible, but would restore the misleading container
+boundary and must include its structural guard and all internal callers.
