@@ -214,13 +214,21 @@ func validateCI(workflow *yaml.Node) {
 	}
 
 	jobs := requiredValue(workflow, "jobs")
-	requiredJobs := []string{"native-test", "quality", "race", "coverage", "cross-build", "template", "smoke", "tooling", "release-contract", "test"}
+	goJobs := []string{"native-test", "quality", "race", "coverage", "cross-build", "template", "smoke", "tooling", "release-contract"}
+	requiredJobs := append(append([]string{}, goJobs...), "test")
+	allowedJobs := make(map[string]bool, len(requiredJobs))
 	for _, id := range requiredJobs {
+		allowedJobs[id] = true
 		if value(jobs, id) == nil {
 			fail("ci workflow is missing required job %q", id)
 		}
 	}
-	for _, id := range requiredJobs[:len(requiredJobs)-1] {
+	for i := 0; i+1 < len(jobs.Content); i += 2 {
+		if id := jobs.Content[i].Value; !allowedJobs[id] {
+			fail("ci workflow contains unreviewed job %q; classify it explicitly as a Go job or aggregate", id)
+		}
+	}
+	for _, id := range goJobs {
 		requireGoToolchain(requiredValue(jobs, id), "ci "+id)
 	}
 

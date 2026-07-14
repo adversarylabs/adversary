@@ -20,7 +20,7 @@ import (
 func TestHostExecutorKillsTermIgnoringDescendantAfterLeaderExits(t *testing.T) {
 	dir := realTempDir(t)
 	script := filepath.Join(dir, "run.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\ntrap 'exit 0' TERM\nsh -c 'trap \"\" TERM; sleep 60' &\necho \"READY $!\"\nwait\n"), 0755); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ntrap 'exit 0' TERM\nsh -c 'trap \"\" TERM; printf \"ARMED %s\\n\" \"$$\"; sleep 60' &\nprintf 'PID %s\\n' \"$!\"\nwait\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	stdoutReader, stdoutWriter := io.Pipe()
@@ -32,18 +32,51 @@ func TestHostExecutorKillsTermIgnoringDescendantAfterLeaderExits(t *testing.T) {
 	}
 	readiness := make(chan readinessResult, 1)
 	go func() {
-		line, err := bufio.NewReader(stdoutReader).ReadString('\n')
-		if err != nil {
-			readiness <- readinessResult{err: fmt.Errorf("read readiness: %w", err)}
+		reader := bufio.NewReader(stdoutReader)
+		publishedPID, armedPID := 0, 0
+		for publishedPID == 0 || armedPID == 0 {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				readiness <- readinessResult{err: fmt.Errorf("read readiness: %w", err)}
+				return
+			}
+			fields := strings.Fields(line)
+			if len(fields) != 2 {
+				readiness <- readinessResult{err: fmt.Errorf("unexpected readiness line %q", strings.TrimSpace(line))}
+				return
+			}
+			pid, err := strconv.Atoi(fields[1])
+			if err != nil {
+				readiness <- readinessResult{err: fmt.Errorf("invalid readiness pid %q: %w", fields[1], err)}
+				return
+			}
+			if pid <= 0 {
+				readiness <- readinessResult{err: fmt.Errorf("invalid non-positive readiness pid %d", pid)}
+				return
+			}
+			switch fields[0] {
+			case "PID":
+				if publishedPID != 0 {
+					readiness <- readinessResult{err: fmt.Errorf("duplicate PID readiness line")}
+					return
+				}
+				publishedPID = pid
+			case "ARMED":
+				if armedPID != 0 {
+					readiness <- readinessResult{err: fmt.Errorf("duplicate ARMED readiness line")}
+					return
+				}
+				armedPID = pid
+			default:
+				readiness <- readinessResult{err: fmt.Errorf("unexpected readiness line %q", strings.TrimSpace(line))}
+				return
+			}
+		}
+		if publishedPID != armedPID {
+			readiness <- readinessResult{err: fmt.Errorf("published descendant pid %d does not match armed pid %d", publishedPID, armedPID)}
 			return
 		}
-		pidText, ok := strings.CutPrefix(strings.TrimSpace(line), "READY ")
-		if !ok {
-			readiness <- readinessResult{err: fmt.Errorf("unexpected readiness line %q", strings.TrimSpace(line))}
-			return
-		}
-		pid, err := strconv.Atoi(pidText)
-		readiness <- readinessResult{pid: pid, err: err}
+		readiness <- readinessResult{pid: armedPID}
 	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
