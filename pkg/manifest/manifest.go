@@ -478,7 +478,31 @@ func ValidateProjectName(name string) error {
 	if !nameRE.MatchString(name) || strings.Contains(name, "/") {
 		return fmt.Errorf("project name %q must be a normalized lowercase npm package name", name)
 	}
+	if len(name) > 214 {
+		return fmt.Errorf("project name %q exceeds npm's 214-byte package name limit", name)
+	}
+	if npmReservedProjectNames[name] {
+		return fmt.Errorf("project name %q is reserved by npm or Node.js", name)
+	}
 	return nil
+}
+
+// npmReservedProjectNames is the intersection of the existing unscoped
+// project-name grammar and npm/validate-npm-package-name v8's exclusion and
+// builtin-module lists. Names containing slash, colon, or a leading underscore
+// are already rejected by the stricter project-name grammar above.
+var npmReservedProjectNames = map[string]bool{
+	"assert": true, "async_hooks": true, "buffer": true, "child_process": true,
+	"cluster": true, "console": true, "constants": true, "crypto": true,
+	"dgram": true, "diagnostics_channel": true, "dns": true, "domain": true,
+	"events": true, "favicon.ico": true, "fs": true, "http": true,
+	"http2": true, "https": true, "inspector": true, "module": true,
+	"net": true, "node_modules": true, "os": true, "path": true,
+	"perf_hooks": true, "process": true, "punycode": true, "querystring": true,
+	"readline": true, "repl": true, "stream": true, "string_decoder": true,
+	"sys": true, "timers": true, "tls": true, "trace_events": true,
+	"tty": true, "url": true, "util": true, "v8": true, "vm": true,
+	"wasi": true, "worker_threads": true, "zlib": true,
 }
 
 func ShortName(name string) string {

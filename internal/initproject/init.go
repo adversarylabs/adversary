@@ -150,7 +150,7 @@ func SupportedSDKs() []string {
 	return sdks
 }
 
-func RenderSuccess(w io.Writer, result Result, _ string) {
+func RenderSuccess(w io.Writer, result Result, _ string, platform string) {
 	fmt.Fprintln(w, "Creating adversary...")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "✓ Generated project")
@@ -165,7 +165,11 @@ func RenderSuccess(w io.Writer, result Result, _ string) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Next steps")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  cd %s\n", shellQuote(result.Location))
+	if platform == "windows" {
+		fmt.Fprintf(w, "  Set-Location -LiteralPath %s\n", powershellQuote(result.Location))
+	} else {
+		fmt.Fprintf(w, "  cd %s\n", shellQuote(result.Location))
+	}
 	fmt.Fprintln(w, "  npm ci")
 	fmt.Fprintln(w, "  npm run build")
 	fmt.Fprintln(w, "  adversary run . --repo /path/to/repository")
@@ -173,6 +177,10 @@ func RenderSuccess(w io.Writer, result Result, _ string) {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func powershellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func applyPlaceholders(input string, values map[string]string) string {
