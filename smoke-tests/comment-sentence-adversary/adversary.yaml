@@ -24,11 +24,13 @@ runtime:
     - dist/run.js
 
 permissions:
+  enforcement: advisory
   filesystem:
     read:
       - "."
   network: false
-  env: []
+  environment:
+    allow: []
 
 findings:
   format: adversary.review.v1

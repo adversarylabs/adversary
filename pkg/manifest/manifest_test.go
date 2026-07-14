@@ -27,7 +27,8 @@ permissions:
     read: ["."]
     write: [.adversary/results]
   network: false
-  env: [CI]
+  environment:
+    allow: [CI]
 findings:
   format: adversary.review.v1
 `
@@ -39,6 +40,31 @@ func TestParseValid(t *testing.T) {
 	}
 	if m.Name != "adversarylabs/example" || len(m.Runtime.Command) != 1 || m.Permissions.Network == nil || *m.Permissions.Network {
 		t.Fatalf("unexpected manifest: %#v", m)
+	}
+}
+
+func TestParseEnvironmentAllowPermission(t *testing.T) {
+	input := strings.Replace(valid, "    allow: [CI]\n", "    allow: [CI, HOME]\n", 1)
+	m, err := Parse([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Permissions.Environment.Allow; len(got) != 2 || got[0] != "CI" || got[1] != "HOME" {
+		t.Fatalf("environment.allow=%#v", got)
+	}
+	if _, err := Parse([]byte(strings.Replace(input, "allow: [CI, HOME]", "allow: [BAD-NAME]", 1))); err == nil {
+		t.Fatal("invalid environment.allow was accepted")
+	}
+}
+
+func TestParsePermissionEnforcement(t *testing.T) {
+	input := strings.Replace(valid, "permissions:\n", "permissions:\n  enforcement: required\n", 1)
+	m, err := Parse([]byte(input))
+	if err != nil || m.Permissions.Enforcement != "required" {
+		t.Fatalf("enforcement=%q error=%v", m.Permissions.Enforcement, err)
+	}
+	if _, err := Parse([]byte(strings.Replace(input, "enforcement: required", "enforcement: best-effort", 1))); err == nil {
+		t.Fatal("unsupported enforcement mode was accepted")
 	}
 }
 
@@ -77,7 +103,7 @@ func TestParseRejectsUnsafeAndInvalidInput(t *testing.T) {
 		"runtime":            strings.Replace(valid, "name: node", "name: shell", 1),
 		"command":            strings.Replace(valid, "command: [dist/index.js]", "command: []", 1),
 		"findings":           strings.Replace(valid, "adversary.review.v1", "sarif", 1),
-		"env":                strings.Replace(valid, "env: [CI]", "env: [BAD-NAME]", 1),
+		"environment":        strings.Replace(valid, "allow: [CI]", "allow: [BAD-NAME]", 1),
 		"path":               strings.Replace(valid, `read: ["."]`, `read: [""]`, 1),
 		"absolute path":      strings.Replace(valid, `read: ["."]`, `read: ["/etc"]`, 1),
 		"escaping path":      strings.Replace(valid, `read: ["."]`, `read: ["../secret"]`, 1),

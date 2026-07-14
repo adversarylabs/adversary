@@ -20,7 +20,13 @@ type outputExecutor struct {
 	log    string
 }
 
+func (outputExecutor) Backend() ExecutorBackend           { return NativeSandboxExecutorBackend }
+func (outputExecutor) Capabilities() ExecutorCapabilities { return allTestExecutorCapabilities() }
+
 type cancelExecutor struct{}
+
+func (cancelExecutor) Backend() ExecutorBackend           { return NativeSandboxExecutorBackend }
+func (cancelExecutor) Capabilities() ExecutorCapabilities { return allTestExecutorCapabilities() }
 
 func (cancelExecutor) Run(ctx context.Context, _ RuntimeSpec) (RuntimeResult, error) {
 	<-ctx.Done()
@@ -103,29 +109,29 @@ func writeRunnerProject(t *testing.T, permissions string) string {
 }
 
 func TestRunFailsClosedForHostNetworkRestriction(t *testing.T) {
-	project := writeRunnerProject(t, "permissions:\n  network: false\n")
+	project := writeRunnerProject(t, "permissions:\n  enforcement: required\n  network: false\n")
 	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}.Run(context.Background(), RunOptions{AdversaryRef: project, RepoPath: t.TempDir()})
-	if err == nil || !strings.Contains(err.Error(), "cannot enforce disabled network") {
+	if err == nil || !strings.Contains(err.Error(), "cannot enforce requested network.none isolation") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestRunFailsClosedForHostManifestRestrictions(t *testing.T) {
-	project := writeRunnerProject(t, "permissions:\n  env:\n    - HOME\n")
+	project := writeRunnerProject(t, "permissions:\n  enforcement: required\n  environment:\n    allow:\n      - HOME\n")
 	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}.Run(context.Background(), RunOptions{AdversaryRef: project, RepoPath: t.TempDir()})
-	if err == nil || !strings.Contains(err.Error(), "cannot enforce manifest") {
+	if err == nil || !strings.Contains(err.Error(), "cannot enforce requested environment.allow isolation") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestEmptyPermissionListsDoNotRequestHostBoundary(t *testing.T) {
-	project := writeRunnerProject(t, "permissions:\n  filesystem:\n    read: []\n    write: []\n  env: []\n")
+	project := writeRunnerProject(t, "permissions:\n  filesystem:\n    read: []\n    write: []\n  environment:\n    allow: []\n")
 	resolved, err := ResolveReference(project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateHostExecution(resolved, true, RunOptions{}); err != nil {
-		t.Fatalf("empty lists should have current compatibility semantics: %v", err)
+	if err := validateExecutorCapabilities(permissionRequirements(resolved, RunOptions{}).Required, (HostExecutor{}).Capabilities(), HostExecutorBackend); err != nil {
+		t.Fatalf("empty lists should not request an isolation boundary: %v", err)
 	}
 }
 
@@ -269,24 +275,22 @@ func mustJSON(t *testing.T, value string) []byte {
 }
 
 func TestRunRequiresAcknowledgementForNonPathReference(t *testing.T) {
-	resolved := ResolvedAdversary{LocalDir: true}
-	err := validateHostExecution(resolved, false, RunOptions{})
+	trust := TrustDecision{Publisher: PublisherIdentity{Name: "unknown"}, Trust: UnknownPublisherTrust}
+	request := ExecutionPolicyRequest{Trust: trust, Backend: HostExecutorBackend}
+	_, err := DecideExecutionPolicy(request)
 	if err == nil || !strings.Contains(err.Error(), "--allow-unsafe-host-execution") {
 		t.Fatalf("error = %v", err)
 	}
-	if err := validateHostExecution(resolved, false, RunOptions{AllowUnsafeHostExecution: true}); err != nil {
+	request.AllowUnsafeHostExecution = true
+	if _, err := DecideExecutionPolicy(request); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestRunShellRequiresAcknowledgementAndRejectsJSON(t *testing.T) {
-	resolved := ResolvedAdversary{LocalDir: true}
-	if err := validateHostExecution(resolved, true, RunOptions{Shell: true}); err == nil {
-		t.Fatal("expected acknowledgement error")
-	}
-	err := validateHostExecution(resolved, true, RunOptions{Shell: true, Format: "json", AllowUnsafeHostExecution: true})
-	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
-		t.Fatalf("error = %v", err)
+func TestLocalHostPolicyDoesNotRequireUnsafeAcknowledgement(t *testing.T) {
+	trust := TrustDecision{Publisher: PublisherIdentity{Name: "local", Local: true}, Trust: LocalSourceTrust}
+	if _, err := DecideExecutionPolicy(ExecutionPolicyRequest{Trust: trust, Backend: HostExecutorBackend}); err != nil {
+		t.Fatalf("trusted local shell policy: %v", err)
 	}
 }
 

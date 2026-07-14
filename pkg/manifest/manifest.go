@@ -48,14 +48,19 @@ type Runtime struct {
 }
 
 type Permissions struct {
-	Filesystem FilesystemPermissions `yaml:"filesystem,omitempty" json:"filesystem,omitempty"`
-	Network    *bool                 `yaml:"network,omitempty" json:"network,omitempty"`
-	Env        []string              `yaml:"env,omitempty" json:"env,omitempty"`
+	Filesystem  FilesystemPermissions  `yaml:"filesystem,omitempty" json:"filesystem,omitempty"`
+	Network     *bool                  `yaml:"network,omitempty" json:"network,omitempty"`
+	Environment EnvironmentPermissions `yaml:"environment,omitempty" json:"environment,omitempty"`
+	Enforcement string                 `yaml:"enforcement,omitempty" json:"enforcement,omitempty"`
 }
 
 type FilesystemPermissions struct {
 	Read  []string `yaml:"read,omitempty" json:"read,omitempty"`
 	Write []string `yaml:"write,omitempty" json:"write,omitempty"`
+}
+
+type EnvironmentPermissions struct {
+	Allow []string `yaml:"allow,omitempty" json:"allow,omitempty"`
 }
 
 type Findings struct {
@@ -271,9 +276,12 @@ func (m Manifest) Validate() error {
 			permissionOwners[clean] = kind
 		}
 	}
-	for i, env := range m.Permissions.Env {
+	if m.Permissions.Enforcement != "" && m.Permissions.Enforcement != "advisory" && m.Permissions.Enforcement != "required" {
+		return fmt.Errorf("manifest permissions.enforcement %q is unsupported (supported: advisory, required)", m.Permissions.Enforcement)
+	}
+	for i, env := range m.Permissions.Environment.Allow {
 		if !envRE.MatchString(env) {
-			return fmt.Errorf("manifest permissions.env[%d] %q is not an environment variable name", i, env)
+			return fmt.Errorf("manifest environment permission[%d] %q is not an environment variable name", i, env)
 		}
 	}
 	if m.Findings.Format != "" && m.Findings.Format != "adversary.review.v1" {

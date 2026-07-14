@@ -10,6 +10,7 @@ permissions:
   filesystem:
     read: ["."]
   network: false
-  env: [CI]
+  environment:
+    allow: [CI]
 findings:
   format: adversary.review.v1

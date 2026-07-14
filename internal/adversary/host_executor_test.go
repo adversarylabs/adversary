@@ -39,7 +39,7 @@ func (r *recordingOutputRunner) RunOutput(_ context.Context, options ProcessOutp
 }
 
 func TestHostExecutorRejectsNetworkRestriction(t *testing.T) {
-	result, err := (HostExecutor{}).Run(context.Background(), RuntimeSpec{NetworkDisabled: true, Command: []string{"true"}})
+	result, err := (HostExecutor{}).Run(context.Background(), RuntimeSpec{Permissions: RuntimePermissions{Required: RequestedPermissions{NetworkIsolation: true}}, Command: []string{"true"}})
 	if err == nil || !strings.Contains(err.Error(), "cannot enforce disabled network") {
 		t.Fatalf("result = %#v, error = %v", result, err)
 	}

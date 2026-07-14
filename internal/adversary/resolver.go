@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
@@ -75,11 +76,17 @@ func (r Resolver) resolveRepository(value string) (Resolution, error) {
 	if err != nil {
 		return Resolution{}, err
 	}
-	canonical := value
-	if ref, refErr := r.Repository.CanonicalReference(rec.Digest); refErr == nil {
-		canonical = ref
-	} else if !errors.Is(refErr, fs.ErrNotExist) {
-		return Resolution{}, refErr
+	var canonical string
+	if _, digestErr := oci.ParseDigest(value); digestErr == nil {
+		canonical, err = r.Repository.CanonicalReference(rec.Digest)
+		if errors.Is(err, fs.ErrNotExist) {
+			canonical, err = value, nil
+		}
+	} else {
+		canonical, err = r.Repository.CanonicalReferenceFor(rec.Digest, value)
+	}
+	if err != nil {
+		return Resolution{}, err
 	}
 	return Resolution{Record: rec, CanonicalReference: canonical, Digest: rec.Digest, Path: path}, nil
 }

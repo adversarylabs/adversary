@@ -120,7 +120,7 @@ func newRunCommand(app *application.App) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "print detailed execution diagnostics")
 	cmd.Flags().BoolVar(&opts.includeSuppressed, "include-suppressed", false, "request suppressed review findings when supported by the runtime")
 	cmd.Flags().BoolVar(&opts.shell, "shell", false, "UNSAFE: launch an unrestricted host shell in the adversary working directory")
-	cmd.Flags().BoolVar(&opts.allowUnsafeHostExecution, "allow-unsafe-host-execution", false, "acknowledge unrestricted host execution of installed or pulled code and --shell")
+	cmd.Flags().BoolVar(&opts.allowUnsafeHostExecution, "allow-unsafe-host-execution", false, "explicitly allow unrestricted HostExecutor use for an unknown publisher")
 	cmd.Flags().BoolVar(&opts.allFiles, "all-files", false, "scan all files even when diff refs are provided")
 	cmd.Flags().BoolVar(&opts.build, "build", false, "build a local adversary before running (may update dist)")
 	cmd.Flags().BoolVar(&opts.noBuild, "no-build", false, "deprecated compatibility flag; local builds are skipped by default")

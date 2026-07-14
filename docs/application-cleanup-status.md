@@ -51,8 +51,11 @@ can replace the process launcher, output runner, executor, clock, filesystem,
 build ports, paths, environment, and streams without launching a real process
 or touching the process home or temporary directory.
 
-The internal runtime port and values are named `RuntimeExecutor`, `RuntimeSpec`,
-and `RuntimeResult`, with `HostExecutor` as the concrete implementation. The
+The internal execution port is `Executor`, alongside `RuntimeSpec` and
+`RuntimeResult`.
+`HostExecutor` is the concrete first-class development backend and reports its
+enforcement capabilities. Reserved backend identities allow independent native
+sandbox and container implementations without changing trust policy. The
 former `Container*` names and `docker.go` filename incorrectly implied that the
 runtime provided container isolation even though host execution is the only
 implementation and unsupported container-image constraints fail closed. An AST

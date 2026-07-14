@@ -53,8 +53,13 @@ Run `adversary help <command>` for the canonical command and flag reference.
 
 ## Safety and trust
 
-Local Node and process adversaries are not sandboxed. Installed or pulled code
-requires `--allow-unsafe-host-execution`; that acknowledgment is not isolation.
+Local source adversaries run directly with `HostExecutor` for a fast development
+loop. Installed adversaries from the trusted `adversarylabs` publisher on the
+official registry may also use the host backend.
+Unknown publishers require a sandbox backend or `--allow-unsafe-host-execution`; that explicit
+override is not isolation. Manifest permissions are advisory by default;
+`permissions.enforcement: required` and `--no-network` fail before launch when
+the selected executor cannot enforce them.
 The child can access the repository, credentials, network, processes, and any
 other resources available to your account. Restrictions the host runner cannot
 enforce fail closed. OCI digests provide integrity and identity, not publisher

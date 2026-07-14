@@ -20,6 +20,9 @@ type capturingExecutor struct {
 	files RuntimeFiles
 }
 
+func (*capturingExecutor) Backend() ExecutorBackend           { return NativeSandboxExecutorBackend }
+func (*capturingExecutor) Capabilities() ExecutorCapabilities { return allTestExecutorCapabilities() }
+
 type recordingFiles struct {
 	OSRuntimeFiles
 	writes map[string][]byte

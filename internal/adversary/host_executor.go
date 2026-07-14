@@ -15,8 +15,30 @@ import (
 	semver "github.com/Masterminds/semver/v3"
 )
 
-type RuntimeExecutor interface {
+type Executor interface {
 	Run(ctx context.Context, spec RuntimeSpec) (RuntimeResult, error)
+	Backend() ExecutorBackend
+	Capabilities() ExecutorCapabilities
+}
+
+type ExecutorBackend string
+
+const (
+	HostExecutorBackend          ExecutorBackend = "host"
+	NativeSandboxExecutorBackend ExecutorBackend = "native-sandbox"
+	ContainerExecutorBackend     ExecutorBackend = "container"
+)
+
+// ExecutorCapabilities are enforcement guarantees, not requested permissions.
+// A false value means policy requiring that boundary must fail before launch.
+type ExecutorCapabilities struct {
+	FilesystemReadIsolation  bool
+	FilesystemWriteIsolation bool
+	EnvironmentIsolation     bool
+	NetworkIsolation         bool
+	CPULimits                bool
+	MemoryLimits             bool
+	ProcessLimits            bool
 }
 
 type HostExecutor struct {
@@ -31,22 +53,38 @@ type HostExecutor struct {
 	Timer             func(time.Duration) RuntimeTimer
 }
 
+func (HostExecutor) Backend() ExecutorBackend { return HostExecutorBackend }
+
+func (HostExecutor) Capabilities() ExecutorCapabilities {
+	return ExecutorCapabilities{}
+}
+
 type RuntimeTimer interface {
 	C() <-chan time.Time
 	Stop() bool
 }
 
 type RuntimeSpec struct {
-	Image           string
-	RuntimeName     string
-	RuntimeVersion  string
-	Command         []string
-	RepoPath        string
-	RunDir          string
-	AdversaryPath   string
-	NetworkDisabled bool
-	Env             map[string]string
-	Shell           bool
+	Image          string
+	RuntimeName    string
+	RuntimeVersion string
+	Command        []string
+	RepoPath       string
+	RunDir         string
+	AdversaryPath  string
+	Env            map[string]string
+	Shell          bool
+	Publisher      string
+	Digest         string
+	Permissions    RuntimePermissions
+}
+
+type RuntimePermissions struct {
+	FilesystemRead   []string
+	FilesystemWrite  []string
+	EnvironmentAllow []string
+	NetworkNone      bool
+	Required         RequestedPermissions
 }
 
 type RuntimeResult struct {
@@ -78,7 +116,7 @@ func (e HostExecutor) Run(ctx context.Context, spec RuntimeSpec) (RuntimeResult,
 	if spec.RuntimeName == "" && spec.Image != "" && !strings.HasPrefix(spec.Image, "host:") {
 		return RuntimeResult{ExitCode: -1, Kind: "Process"}, &UnsupportedFeatureError{Platform: runtime.GOOS, Feature: "container image runtime execution"}
 	}
-	if spec.NetworkDisabled {
+	if spec.Permissions.Required.NetworkIsolation {
 		return RuntimeResult{ExitCode: -1, Kind: "Process"}, &UnsupportedFeatureError{Platform: runtime.GOOS, Feature: "disabled network access"}
 	}
 	command := spec.Command

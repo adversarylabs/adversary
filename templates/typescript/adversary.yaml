@@ -12,13 +12,15 @@ runtime:
     - dist/index.js
 
 permissions:
+  enforcement: advisory
   filesystem:
     read:
       - .
     write:
       - .adversary/results
   network: false
-  env: []
+  environment:
+    allow: []
 
 findings:
   format: adversary.review.v1

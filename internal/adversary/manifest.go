@@ -15,6 +15,7 @@ type Triggers = canonical.Triggers
 type Runtime = canonical.Runtime
 type Permissions = canonical.Permissions
 type FilesystemPermissions = canonical.FilesystemPermissions
+type EnvironmentPermissions = canonical.EnvironmentPermissions
 type Findings = canonical.Findings
 
 func parseManifest(data []byte) (Manifest, error) {
@@ -85,6 +86,8 @@ func resolveReference(ref string, resolver *Resolver, files RuntimeFiles) (Resol
 		}
 		resolved.StoreBacked = true
 		resolved.StoreRecord = resolution.Record
+		resolved.CanonicalReference = resolution.CanonicalReference
+		resolved.Digest = resolution.Digest
 		resolved.StorePath = resolution.Path
 		resolved.ExecutionPath = resolution.Path
 		if resolved.RuntimeName == "node" {
@@ -129,17 +132,20 @@ func typeScriptHostCommand(path, runtimeName string, command []string) []string 
 }
 
 type ResolvedAdversary struct {
-	Name           string
-	Image          string
-	RuntimeName    string
-	RuntimeVersion string
-	Command        []string
-	Manifest       *Manifest
-	NetworkOff     bool
-	LocalDir       bool
-	BuildContext   string
-	StoreBacked    bool
-	StoreRecord    repository.Record
-	StorePath      string
-	ExecutionPath  string
+	Name               string
+	Image              string
+	RuntimeName        string
+	RuntimeVersion     string
+	Command            []string
+	Manifest           *Manifest
+	NetworkOff         bool
+	LocalDir           bool
+	BuildContext       string
+	StoreBacked        bool
+	StoreRecord        repository.Record
+	CanonicalReference string
+	Digest             string
+	Publisher          string
+	StorePath          string
+	ExecutionPath      string
 }

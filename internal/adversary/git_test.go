@@ -197,8 +197,8 @@ func TestRunConfigHostExecutionSpec(t *testing.T) {
 	if spec.AdversaryPath != "/tmp/adversary" {
 		t.Fatalf("AdversaryPath = %q", spec.AdversaryPath)
 	}
-	if !spec.NetworkDisabled {
-		t.Fatal("NetworkDisabled is false")
+	if !spec.Permissions.Required.NetworkIsolation {
+		t.Fatal("required network isolation is false")
 	}
 }
 

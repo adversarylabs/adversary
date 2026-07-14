@@ -125,12 +125,22 @@
         "network": {
           "type": "boolean"
         },
-        "env": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allow": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              }
+            }
           }
+        },
+        "enforcement": {
+          "enum": ["advisory", "required"]
         }
       }
     },

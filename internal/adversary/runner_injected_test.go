@@ -15,6 +15,9 @@ import (
 
 type pathExecutor struct{ path string }
 
+func (*pathExecutor) Backend() ExecutorBackend           { return NativeSandboxExecutorBackend }
+func (*pathExecutor) Capabilities() ExecutorCapabilities { return allTestExecutorCapabilities() }
+
 func (e *pathExecutor) Run(_ context.Context, s RuntimeSpec) (RuntimeResult, error) {
 	e.path = s.AdversaryPath
 	if err := os.WriteFile(filepath.Join(s.RunDir, "output.json"), minimalEnvelope(), 0644); err != nil {
@@ -25,6 +28,13 @@ func (e *pathExecutor) Run(_ context.Context, s RuntimeSpec) (RuntimeResult, err
 
 type blockingPathExecutor struct{ started, release chan struct{} }
 type exitExecutor struct{ err error }
+
+func (*blockingPathExecutor) Backend() ExecutorBackend { return NativeSandboxExecutorBackend }
+func (*blockingPathExecutor) Capabilities() ExecutorCapabilities {
+	return allTestExecutorCapabilities()
+}
+func (exitExecutor) Backend() ExecutorBackend           { return NativeSandboxExecutorBackend }
+func (exitExecutor) Capabilities() ExecutorCapabilities { return allTestExecutorCapabilities() }
 
 func (e exitExecutor) Run(ctx context.Context, s RuntimeSpec) (RuntimeResult, error) {
 	if e.err != nil {

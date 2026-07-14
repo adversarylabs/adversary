@@ -35,7 +35,8 @@ permissions:
     write:
       - ".adversary/results"
   network: false
-  env: []
+  environment:
+    allow: []
 findings:
   format: adversary.review.v1
 `)
@@ -296,6 +297,21 @@ type recordingExecutor struct {
 	called bool
 	input  Input
 	spec   RuntimeSpec
+}
+
+func (*recordingExecutor) Backend() ExecutorBackend           { return NativeSandboxExecutorBackend }
+func (*recordingExecutor) Capabilities() ExecutorCapabilities { return allTestExecutorCapabilities() }
+
+func allTestExecutorCapabilities() ExecutorCapabilities {
+	return ExecutorCapabilities{
+		FilesystemReadIsolation:  true,
+		FilesystemWriteIsolation: true,
+		EnvironmentIsolation:     true,
+		NetworkIsolation:         true,
+		CPULimits:                true,
+		MemoryLimits:             true,
+		ProcessLimits:            true,
+	}
 }
 
 func (e *recordingExecutor) Run(ctx context.Context, spec RuntimeSpec) (RuntimeResult, error) {

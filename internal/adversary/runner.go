@@ -62,8 +62,9 @@ type Runner struct {
 	Stderr                  io.Writer
 	Stdin                   io.Reader
 	Git                     GitDiffer
-	Executor                RuntimeExecutor
-	HostExecution           bool
+	Executor                Executor
+	TrustPolicy             PublisherTrustPolicy
+	PermissionPolicy        PermissionPolicy
 	MkdirTemp               func(dir, pattern string) (string, error)
 	RemoveAll               func(string) error
 	TempDir                 string
@@ -138,10 +139,32 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		resolved.BuildContext = lease.Path
 		resolved.StorePath = lease.Path
 	}
-	if r.Executor == nil || r.HostExecution {
-		if err := validateHostExecution(resolved, explicitLocalPath, opts); err != nil {
-			return err
-		}
+	publisher, err := classifyPublisher(opts.AdversaryRef, resolved, explicitLocalPath)
+	if err != nil {
+		return err
+	}
+	trustPolicy := r.TrustPolicy
+	if trustPolicy == nil {
+		policy := DefaultPublisherTrustPolicy()
+		trustPolicy = policy
+	}
+	trust := trustPolicy.Evaluate(publisher)
+	resolved.Publisher = trust.Publisher.Name
+	permissionPolicy := r.PermissionPolicy
+	if permissionPolicy == nil {
+		permissionPolicy = AllowRequestedPermissionsPolicy{}
+	}
+	requirements := permissionRequirements(resolved, opts)
+	decision, err := DecideExecutionPolicy(ExecutionPolicyRequest{
+		Trust: trust, Requested: requirements.Requested, Required: requirements.Required, Allowed: permissionPolicy.Allowed(trust),
+		Backend: executor.Backend(), Capabilities: executor.Capabilities(),
+		AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
+	})
+	if err != nil {
+		return err
+	}
+	if opts.Shell && opts.Format == "json" {
+		return fmt.Errorf("--shell cannot be combined with JSON output")
 	}
 
 	repoPath := opts.RepoPath
@@ -229,7 +252,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		cancelBuild()
 		buildDuration = now().Sub(buildStarted)
 	}
-	if (r.Executor == nil || r.HostExecution) && resolved.LocalDir && !resolved.StoreBacked {
+	if executor.Backend() == HostExecutorBackend && resolved.LocalDir && !resolved.StoreBacked {
 		if err := validateLocalCommandFiles(files, resolved.Command); err != nil {
 			if !opts.Build {
 				return fmt.Errorf("local build output is unavailable or stale; rerun with --build: %w", err)
@@ -277,6 +300,15 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	if opts.Verbose {
 		printVerboseLaunch(stderr, config, files.ReadDir)
+	}
+	if !publisher.Local {
+		if resolved.Digest == "" {
+			return fmt.Errorf("remote adversary %q did not resolve to an immutable digest", opts.AdversaryRef)
+		}
+		fmt.Fprintf(stderr, "Publisher: %s\nDigest: %s\nExecution backend: %s\n", trust.Publisher.Name, resolved.Digest, backendDisplayName(executor.Backend()))
+		if decision.UnsafeOverride {
+			fmt.Fprintf(stderr, "WARNING: unknown publisher %q is executing as an unrestricted host process because --allow-unsafe-host-execution was explicitly provided.\n", trust.Publisher.Name)
+		}
 	}
 	runStarted := now()
 	runCtx := ctx
@@ -401,28 +433,6 @@ func pathWithin(path, root string) bool {
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
-func validateHostExecution(resolved ResolvedAdversary, explicitLocalPath bool, opts RunOptions) error {
-	if opts.Shell && !opts.AllowUnsafeHostExecution {
-		return fmt.Errorf("--shell runs an unrestricted host shell; pass --allow-unsafe-host-execution to acknowledge the risk")
-	}
-	if opts.Shell && opts.Format == "json" {
-		return fmt.Errorf("--shell cannot be combined with JSON output")
-	}
-	if !explicitLocalPath && !opts.AllowUnsafeHostExecution {
-		return fmt.Errorf("installed or pulled adversaries run as unrestricted host processes; pass --allow-unsafe-host-execution to execute trusted code")
-	}
-	if opts.NoNetwork || resolved.NetworkOff {
-		return fmt.Errorf("host execution cannot enforce disabled network access; use a future isolated executor instead of weakening the requested policy")
-	}
-	if resolved.Manifest != nil {
-		permissions := resolved.Manifest.Permissions
-		if len(permissions.Filesystem.Read) > 0 || len(permissions.Filesystem.Write) > 0 || len(permissions.Env) > 0 {
-			return fmt.Errorf("host execution cannot enforce manifest filesystem or environment restrictions; use a future isolated executor")
-		}
-	}
-	return nil
-}
-
 func readBoundedRunOutput(files RuntimeFiles, path string) ([]byte, error) {
 	file, err := files.Open(path)
 	if err != nil {
@@ -527,17 +537,27 @@ func NewRunConfig(resolved ResolvedAdversary, repoPath, runDir string, opts RunO
 }
 
 func (c RunConfig) RuntimeSpec() RuntimeSpec {
+	requirements := permissionRequirements(c.Resolved, c.Options)
+	permissions := RuntimePermissions{NetworkNone: requirements.Requested.NetworkIsolation, Required: requirements.Required}
+	if c.Resolved.Manifest != nil {
+		manifestPermissions := c.Resolved.Manifest.Permissions
+		permissions.FilesystemRead = append([]string(nil), manifestPermissions.Filesystem.Read...)
+		permissions.FilesystemWrite = append([]string(nil), manifestPermissions.Filesystem.Write...)
+		permissions.EnvironmentAllow = append([]string(nil), manifestPermissions.Environment.Allow...)
+	}
 	return RuntimeSpec{
-		Image:           c.Resolved.Image,
-		RuntimeName:     c.Resolved.RuntimeName,
-		RuntimeVersion:  c.Resolved.RuntimeVersion,
-		Command:         c.Resolved.Command,
-		RepoPath:        c.RepoPath,
-		RunDir:          c.RunDir,
-		AdversaryPath:   c.Resolved.ExecutionPath,
-		NetworkDisabled: c.Options.NoNetwork || c.Resolved.NetworkOff,
-		Env:             c.Env,
-		Shell:           c.Options.Shell,
+		Image:          c.Resolved.Image,
+		RuntimeName:    c.Resolved.RuntimeName,
+		RuntimeVersion: c.Resolved.RuntimeVersion,
+		Command:        c.Resolved.Command,
+		RepoPath:       c.RepoPath,
+		RunDir:         c.RunDir,
+		AdversaryPath:  c.Resolved.ExecutionPath,
+		Env:            c.Env,
+		Shell:          c.Options.Shell,
+		Publisher:      c.Resolved.Publisher,
+		Digest:         c.Resolved.Digest,
+		Permissions:    permissions,
 	}
 }
 
