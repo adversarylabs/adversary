@@ -1,5 +1,5 @@
-// Package application defines the process-global-free application boundary.
-// Command wiring is intentionally deferred to the migration phase.
+// Package application defines the explicit application boundary constructed at
+// the process edge and injected into every effectful command.
 package application
 
 import (
