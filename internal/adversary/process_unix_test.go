@@ -24,7 +24,7 @@ func TestHostExecutorKillsTermIgnoringDescendantAfterLeaderExits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := systemHostExecutorForTest(nil, nil, nil).Run(ctx, ContainerSpec{Command: []string{script, pidFile}, AdversaryPath: dir})
+		_, err := systemHostExecutorForTest(nil, nil, nil).Run(ctx, RuntimeSpec{Command: []string{script, pidFile}, AdversaryPath: dir})
 		done <- err
 	}()
 	var data []byte
@@ -69,11 +69,11 @@ func TestHostExecutorPreservesChildExitCode(t *testing.T) {
 	}
 	executor := systemHostExecutorForTest(nil, nil, nil)
 	if shell != "/bin/sh" {
-		if _, aliasErr := executor.Run(context.Background(), ContainerSpec{Command: []string{"/bin/sh", "-c", "exit 0"}, AdversaryPath: t.TempDir()}); aliasErr == nil || !strings.Contains(aliasErr.Error(), "symlink component") {
+		if _, aliasErr := executor.Run(context.Background(), RuntimeSpec{Command: []string{"/bin/sh", "-c", "exit 0"}, AdversaryPath: t.TempDir()}); aliasErr == nil || !strings.Contains(aliasErr.Error(), "symlink component") {
 			t.Fatalf("strict explicit-path policy accepted /bin/sh alias: %v", aliasErr)
 		}
 	}
-	_, err = executor.Run(context.Background(), ContainerSpec{Command: []string{shell, "-c", "exit 42"}, AdversaryPath: t.TempDir()})
+	_, err = executor.Run(context.Background(), RuntimeSpec{Command: []string{shell, "-c", "exit 42"}, AdversaryPath: t.TempDir()})
 	var processErr *ChildExitError
 	if !errors.As(err, &processErr) || processErr.ExitCode != 42 {
 		t.Fatalf("error = %#v", err)

@@ -39,7 +39,7 @@ func (r *recordingOutputRunner) RunOutput(_ context.Context, options ProcessOutp
 }
 
 func TestHostExecutorRejectsNetworkRestriction(t *testing.T) {
-	result, err := (HostExecutor{}).Run(context.Background(), ContainerSpec{NetworkDisabled: true, Command: []string{"true"}})
+	result, err := (HostExecutor{}).Run(context.Background(), RuntimeSpec{NetworkDisabled: true, Command: []string{"true"}})
 	if err == nil || !strings.Contains(err.Error(), "cannot enforce disabled network") {
 		t.Fatalf("result = %#v, error = %v", result, err)
 	}
@@ -50,7 +50,7 @@ func TestHostExecutorRejectsNetworkRestriction(t *testing.T) {
 }
 
 func TestHostExecutorRejectsImageRuntime(t *testing.T) {
-	_, err := (HostExecutor{}).Run(context.Background(), ContainerSpec{Image: "node:22", Command: []string{"node"}})
+	_, err := (HostExecutor{}).Run(context.Background(), RuntimeSpec{Image: "node:22", Command: []string{"node"}})
 	var unsupported *UnsupportedFeatureError
 	if !errors.As(err, &unsupported) || unsupported.Feature != "container image runtime execution" {
 		t.Fatalf("error = %v", err)
@@ -59,7 +59,7 @@ func TestHostExecutorRejectsImageRuntime(t *testing.T) {
 
 func TestHostExecutorArgsUseCommandAndEnvironment(t *testing.T) {
 	args := []string{"node", "/tmp/adversary/dist/index.js"}
-	spec := ContainerSpec{
+	spec := RuntimeSpec{
 		Command:       args,
 		AdversaryPath: "/tmp/adversary",
 		Env: map[string]string{
@@ -87,7 +87,7 @@ func TestHostExecutorResolvesNamedProcessFromCapturedEnvironment(t *testing.T) {
 		},
 		Launcher: launcher,
 	}
-	if _, err := executor.Run(context.Background(), ContainerSpec{RuntimeName: "process", Command: []string{"scanner", "--check"}, AdversaryPath: t.TempDir()}); err != nil {
+	if _, err := executor.Run(context.Background(), RuntimeSpec{RuntimeName: "process", Command: []string{"scanner", "--check"}, AdversaryPath: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
 	if launcher.options.Path != resolved || len(launcher.options.Args) != 1 || launcher.options.Args[0] != "--check" {
@@ -224,7 +224,7 @@ func TestNodeConstraintRanges(t *testing.T) {
 
 func TestPrintExecutionSummaryLabelsHostProcess(t *testing.T) {
 	var out bytes.Buffer
-	printExecutionSummary(&out, ContainerResult{ExitCode: 0, Kind: "Process"}, 0, time.Millisecond, time.Millisecond)
+	printExecutionSummary(&out, RuntimeResult{ExitCode: 0, Kind: "Process"}, 0, time.Millisecond, time.Millisecond)
 	if !strings.Contains(out.String(), "Process exit code: 0") {
 		t.Fatalf("summary = %q", out.String())
 	}

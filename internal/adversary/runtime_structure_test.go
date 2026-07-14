@@ -18,7 +18,7 @@ func TestRuntimePolicyHasNoAmbientProcessDependencies(t *testing.T) {
 		"runner.go":              true,
 		"manifest.go":            true,
 		"resolver.go":            true,
-		"docker.go":              true,
+		"host_executor.go":       true,
 		"git.go":                 true,
 		"process_environment.go": true,
 	}
@@ -38,17 +38,36 @@ func TestRuntimePolicyHasNoAmbientProcessDependencies(t *testing.T) {
 			"NewTicker": true, "After": true, "Tick": true, "AfterFunc": true, "Sleep": true,
 		},
 	}
+	legacyContainerIdentifiers := map[string]bool{
+		"ContainerExecutor": true,
+		"ContainerSpec":     true,
+		"ContainerResult":   true,
+	}
+	legacyContainerFiles := map[string]bool{
+		"docker.go":      true,
+		"docker_test.go": true,
+	}
 	productionFiles, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, file := range productionFiles {
-		if strings.HasSuffix(file, "_test.go") {
-			continue
+		if legacyContainerFiles[filepath.Base(file)] {
+			t.Errorf("%s restores the misleading Docker/container runtime boundary; use host_executor naming", file)
 		}
 		tree, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 		if err != nil {
 			t.Fatal(err)
+		}
+		ast.Inspect(tree, func(node ast.Node) bool {
+			identifier, ok := node.(*ast.Ident)
+			if ok && legacyContainerIdentifiers[identifier.Name] {
+				t.Errorf("%s restores legacy container identifier %s; host execution uses Runtime* terminology", file, identifier.Name)
+			}
+			return true
+		})
+		if strings.HasSuffix(file, "_test.go") {
+			continue
 		}
 		aliases := map[string]string{}
 		for _, spec := range tree.Imports {

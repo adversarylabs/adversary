@@ -15,22 +15,22 @@ import (
 
 type pathExecutor struct{ path string }
 
-func (e *pathExecutor) Run(_ context.Context, s ContainerSpec) (ContainerResult, error) {
+func (e *pathExecutor) Run(_ context.Context, s RuntimeSpec) (RuntimeResult, error) {
 	e.path = s.AdversaryPath
 	if err := os.WriteFile(filepath.Join(s.RunDir, "output.json"), minimalEnvelope(), 0644); err != nil {
-		return ContainerResult{}, err
+		return RuntimeResult{}, err
 	}
-	return ContainerResult{Kind: "Process"}, nil
+	return RuntimeResult{Kind: "Process"}, nil
 }
 
 type blockingPathExecutor struct{ started, release chan struct{} }
 type exitExecutor struct{ err error }
 
-func (e exitExecutor) Run(ctx context.Context, s ContainerSpec) (ContainerResult, error) {
+func (e exitExecutor) Run(ctx context.Context, s RuntimeSpec) (RuntimeResult, error) {
 	if e.err != nil {
-		return ContainerResult{}, e.err
+		return RuntimeResult{}, e.err
 	}
-	return ContainerResult{}, ctx.Err()
+	return RuntimeResult{}, ctx.Err()
 }
 
 func TestRunnerReleasesLeaseOnErrorAndCancellation(t *testing.T) {
@@ -72,13 +72,13 @@ func TestRunnerReleasesLeaseOnErrorAndCancellation(t *testing.T) {
 	}
 }
 
-func (e *blockingPathExecutor) Run(_ context.Context, s ContainerSpec) (ContainerResult, error) {
+func (e *blockingPathExecutor) Run(_ context.Context, s RuntimeSpec) (RuntimeResult, error) {
 	close(e.started)
 	<-e.release
 	if err := os.WriteFile(filepath.Join(s.RunDir, "output.json"), minimalEnvelope(), 0644); err != nil {
-		return ContainerResult{}, err
+		return RuntimeResult{}, err
 	}
-	return ContainerResult{Kind: "Process"}, nil
+	return RuntimeResult{Kind: "Process"}, nil
 }
 
 func TestRunnerLeaseBlocksGCUntilExecutorReturns(t *testing.T) {

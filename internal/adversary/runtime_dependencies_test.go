@@ -16,7 +16,7 @@ import (
 )
 
 type capturingExecutor struct {
-	spec  ContainerSpec
+	spec  RuntimeSpec
 	files RuntimeFiles
 }
 
@@ -40,12 +40,12 @@ func (f *recordingFiles) Open(path string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-func (e *capturingExecutor) Run(_ context.Context, spec ContainerSpec) (ContainerResult, error) {
+func (e *capturingExecutor) Run(_ context.Context, spec RuntimeSpec) (RuntimeResult, error) {
 	e.spec = spec
 	if err := e.files.WriteFile(filepath.Join(spec.RunDir, "output.json"), minimalEnvelope(), 0o600); err != nil {
-		return ContainerResult{}, err
+		return RuntimeResult{}, err
 	}
-	return ContainerResult{}, nil
+	return RuntimeResult{}, nil
 }
 
 func TestRunnerUsesInjectedRuntimeDependencies(t *testing.T) {
@@ -90,7 +90,7 @@ func TestRunnerUsesInjectedRuntimeDependencies(t *testing.T) {
 }
 
 func TestHostExecutorRequiresInjectedNodeResolverBeforeLaunching(t *testing.T) {
-	_, err := (HostExecutor{}).Run(context.Background(), ContainerSpec{RuntimeName: "node", Command: []string{"node", "does-not-run.js"}})
+	_, err := (HostExecutor{}).Run(context.Background(), RuntimeSpec{RuntimeName: "node", Command: []string{"node", "does-not-run.js"}})
 	if err == nil || err.Error() != "host execution Node.js resolver dependency is required" {
 		t.Fatalf("error = %v", err)
 	}

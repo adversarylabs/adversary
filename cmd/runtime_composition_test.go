@@ -106,7 +106,7 @@ func TestProcessRuntimeRoutesDistinctStreamsAndSnapshot(t *testing.T) {
 	if len(entries) != 2 || entries[0] != "ADVERSARY_REPO=owned" || entries[1] != "PATH="+bin {
 		t.Fatalf("merged environment = %#v", entries)
 	}
-	if _, err := executor.Run(context.Background(), internaladversary.ContainerSpec{RuntimeName: "process", Command: []string{"tool"}, AdversaryPath: t.TempDir()}); err != nil {
+	if _, err := executor.Run(context.Background(), internaladversary.RuntimeSpec{RuntimeName: "process", Command: []string{"tool"}, AdversaryPath: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
 	if stdout.Len() != 0 {
