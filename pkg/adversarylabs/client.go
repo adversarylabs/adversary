@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -399,20 +398,31 @@ func apiRetryAfterDelay(value string, now time.Time) (time.Duration, bool) {
 	if value == "" {
 		return 0, false
 	}
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
-		if seconds < 0 {
-			return 0, false
-		}
-		if seconds >= int64(apiRetryAfterLimit/time.Second) {
-			return apiRetryAfterLimit, true
-		}
-		return time.Duration(seconds) * time.Second, true
+	if value[0] >= '0' && value[0] <= '9' {
+		return apiRetryDeltaSeconds(value)
 	}
 	when, err := http.ParseTime(value)
 	if err != nil {
 		return 0, false
 	}
 	return min(max(when.Sub(now), 0), apiRetryAfterLimit), true
+}
+
+func apiRetryDeltaSeconds(value string) (time.Duration, bool) {
+	limit := uint64(apiRetryAfterLimit / time.Second)
+	var seconds uint64
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return 0, false
+		}
+		if seconds < limit {
+			seconds = seconds*10 + uint64(value[i]-'0')
+			if seconds > limit {
+				seconds = limit
+			}
+		}
+	}
+	return time.Duration(seconds) * time.Second, true
 }
 
 // boundedAPIRetryJitter returns a full-width random delay in the upper half of

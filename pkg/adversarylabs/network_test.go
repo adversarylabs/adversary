@@ -170,11 +170,14 @@ func TestAPIRetryAfterDelay(t *testing.T) {
 		{name: "delta seconds", value: "2", want: 2 * time.Second, ok: true},
 		{name: "delta cap", value: "30", want: apiRetryAfterLimit, ok: true},
 		{name: "delta overflow cap", value: "9223372036854775807", want: apiRetryAfterLimit, ok: true},
+		{name: "delta above int64 cap", value: "9223372036854775808", want: apiRetryAfterLimit, ok: true},
 		{name: "zero", value: "0", want: 0, ok: true},
 		{name: "HTTP date", value: now.Add(7 * time.Second).Format(http.TimeFormat), want: 7 * time.Second, ok: true},
 		{name: "past HTTP date", value: now.Add(-time.Second).Format(http.TimeFormat), want: 0, ok: true},
 		{name: "date cap", value: now.Add(time.Minute).Format(http.TimeFormat), want: apiRetryAfterLimit, ok: true},
 		{name: "negative", value: "-1"},
+		{name: "positive sign", value: "+1"},
+		{name: "mixed delta", value: "1x"},
 		{name: "invalid", value: "later"},
 		{name: "empty"},
 	}
@@ -185,6 +188,18 @@ func TestAPIRetryAfterDelay(t *testing.T) {
 				t.Fatalf("apiRetryAfterDelay(%q) = (%s, %t), want (%s, %t)", tc.value, got, ok, tc.want, tc.ok)
 			}
 		})
+	}
+}
+
+func TestAPIRetryAfterVeryLongDeltaCapsWithoutAllocating(t *testing.T) {
+	value := strings.Repeat("9", 64<<10)
+	if got, ok := apiRetryAfterDelay(value, time.Time{}); !ok || got != apiRetryAfterLimit {
+		t.Fatalf("apiRetryAfterDelay(long delta) = (%s, %t), want (%s, true)", got, ok, apiRetryAfterLimit)
+	}
+	if allocations := testing.AllocsPerRun(5, func() {
+		_, _ = apiRetryAfterDelay(value, time.Time{})
+	}); allocations != 0 {
+		t.Fatalf("apiRetryAfterDelay(long delta) allocated %.1f objects per call", allocations)
 	}
 }
 
