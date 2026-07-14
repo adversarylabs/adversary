@@ -3,8 +3,10 @@ package adversarylabs
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,6 +86,209 @@ func TestAPIClientRedirectStripsCredentialsAcrossOrigin(t *testing.T) {
 	if authorization != "" || cookie != "" {
 		t.Fatalf("cross-origin credentials leaked: authorization=%q cookie=%q", authorization, cookie)
 	}
+}
+
+func TestAPIRetryTransportUsesBoundedJitterAndClosesRetryBodies(t *testing.T) {
+	var attempts int
+	var bodies []*closeTrackingBody
+	var jitterInputs, waits []time.Duration
+	transport := apiRetryTransport{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			attempts++
+			body := &closeTrackingBody{Reader: strings.NewReader("retry")}
+			bodies = append(bodies, body)
+			status := http.StatusServiceUnavailable
+			if attempts == apiRetryAttempts {
+				status = http.StatusOK
+			}
+			return &http.Response{StatusCode: status, Body: body, Header: make(http.Header)}, nil
+		}),
+		jitter: func(delay time.Duration) time.Duration {
+			jitterInputs = append(jitterInputs, delay)
+			return delay * 3 / 4
+		},
+		wait: func(_ context.Context, delay time.Duration) error {
+			waits = append(waits, delay)
+			return nil
+		},
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://api.test/v1/search", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if attempts != apiRetryAttempts {
+		t.Fatalf("attempts = %d, want %d", attempts, apiRetryAttempts)
+	}
+	if got, want := jitterInputs, []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}; !equalDurations(got, want) {
+		t.Fatalf("jitter inputs = %v, want %v", got, want)
+	}
+	if got, want := waits, []time.Duration{75 * time.Millisecond, 150 * time.Millisecond}; !equalDurations(got, want) {
+		t.Fatalf("waits = %v, want %v", got, want)
+	}
+	if !bodies[0].closed || !bodies[1].closed || bodies[2].closed {
+		t.Fatalf("body closed states = [%t %t %t]", bodies[0].closed, bodies[1].closed, bodies[2].closed)
+	}
+}
+
+func TestAPIRetryTransportStopsAtAttemptLimit(t *testing.T) {
+	var attempts, waits int
+	transport := apiRetryTransport{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			attempts++
+			return &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader("retry")), Header: make(http.Header)}, nil
+		}),
+		jitter: func(delay time.Duration) time.Duration { return delay / 2 },
+		wait: func(context.Context, time.Duration) error {
+			waits++
+			return nil
+		},
+	}
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodHead, "https://api.test/v1/search", nil)
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if attempts != apiRetryAttempts || waits != apiRetryAttempts-1 {
+		t.Fatalf("attempts=%d waits=%d", attempts, waits)
+	}
+}
+
+func TestAPIRetryAfterDelay(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		value string
+		want  time.Duration
+		ok    bool
+	}{
+		{name: "delta seconds", value: "2", want: 2 * time.Second, ok: true},
+		{name: "delta cap", value: "30", want: apiRetryAfterLimit, ok: true},
+		{name: "delta overflow cap", value: "9223372036854775807", want: apiRetryAfterLimit, ok: true},
+		{name: "delta above int64 cap", value: "9223372036854775808", want: apiRetryAfterLimit, ok: true},
+		{name: "zero", value: "0", want: 0, ok: true},
+		{name: "HTTP date", value: now.Add(7 * time.Second).Format(http.TimeFormat), want: 7 * time.Second, ok: true},
+		{name: "past HTTP date", value: now.Add(-time.Second).Format(http.TimeFormat), want: 0, ok: true},
+		{name: "date cap", value: now.Add(time.Minute).Format(http.TimeFormat), want: apiRetryAfterLimit, ok: true},
+		{name: "negative", value: "-1"},
+		{name: "positive sign", value: "+1"},
+		{name: "mixed delta", value: "1x"},
+		{name: "invalid", value: "later"},
+		{name: "empty"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := apiRetryAfterDelay(tc.value, now)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("apiRetryAfterDelay(%q) = (%s, %t), want (%s, %t)", tc.value, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestAPIRetryAfterVeryLongDeltaCapsWithoutAllocating(t *testing.T) {
+	value := strings.Repeat("9", 64<<10)
+	if got, ok := apiRetryAfterDelay(value, time.Time{}); !ok || got != apiRetryAfterLimit {
+		t.Fatalf("apiRetryAfterDelay(long delta) = (%s, %t), want (%s, true)", got, ok, apiRetryAfterLimit)
+	}
+	if allocations := testing.AllocsPerRun(5, func() {
+		_, _ = apiRetryAfterDelay(value, time.Time{})
+	}); allocations != 0 {
+		t.Fatalf("apiRetryAfterDelay(long delta) allocated %.1f objects per call", allocations)
+	}
+}
+
+func TestAPIRetryAfterBypassesJitter(t *testing.T) {
+	transport := apiRetryTransport{
+		now: func() time.Time { return time.Unix(0, 0) },
+		jitter: func(time.Duration) time.Duration {
+			t.Fatal("jitter called for Retry-After")
+			return 0
+		},
+	}
+	if got := transport.retryDelay(0, "30"); got != apiRetryAfterLimit {
+		t.Fatalf("retry delay = %s, want %s", got, apiRetryAfterLimit)
+	}
+}
+
+func TestBoundedAPIRetryJitterStaysInUpperHalf(t *testing.T) {
+	const delay = 200 * time.Millisecond
+	for i := 0; i < 100; i++ {
+		if got := boundedAPIRetryJitter(delay); got < delay/2 || got > delay {
+			t.Fatalf("jitter = %s, want [%s, %s]", got, delay/2, delay)
+		}
+	}
+}
+
+func TestAPIRetryTransportDoesNotRetryMutation(t *testing.T) {
+	var attempts int
+	transport := apiRetryTransport{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			attempts++
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader("failed")), Header: make(http.Header)}, nil
+		}),
+		wait: func(context.Context, time.Duration) error {
+			t.Fatal("wait called for POST")
+			return nil
+		},
+	}
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://api.test/v1/auth/login", strings.NewReader("{}"))
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestAPIRetryTransportCancellationClosesBody(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	body := &closeTrackingBody{Reader: strings.NewReader("retry")}
+	transport := apiRetryTransport{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusTooManyRequests, Body: body, Header: make(http.Header)}, nil
+		}),
+		jitter: func(delay time.Duration) time.Duration { return delay / 2 },
+		wait:   waitForAPIRetry,
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.test/v1/search", nil)
+	resp, err := transport.RoundTrip(req)
+	if resp != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("response=%v error=%v, want context cancellation", resp, err)
+	}
+	if !body.closed {
+		t.Fatal("retry response body was not closed before cancellation")
+	}
+}
+
+type closeTrackingBody struct {
+	io.Reader
+	closed bool
+}
+
+func (b *closeTrackingBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func equalDurations(a, b []time.Duration) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func FuzzValidateBaseURL(f *testing.F) {

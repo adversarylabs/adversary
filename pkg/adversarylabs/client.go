@@ -3,14 +3,15 @@ package adversarylabs
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -338,7 +339,18 @@ func newHTTPClientWithTimeout(timeout time.Duration) *http.Client {
 	}}
 }
 
-type apiRetryTransport struct{ base http.RoundTripper }
+const (
+	apiRetryAttempts   = 3
+	apiRetryBaseDelay  = 100 * time.Millisecond
+	apiRetryAfterLimit = 10 * time.Second
+)
+
+type apiRetryTransport struct {
+	base   http.RoundTripper
+	wait   func(context.Context, time.Duration) error
+	jitter func(time.Duration) time.Duration
+	now    func() time.Time
+}
 
 func (t apiRetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Method != http.MethodGet && req.Method != http.MethodHead {
@@ -350,24 +362,90 @@ func (t apiRetryTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 			return nil, err
 		}
 		transient := resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504
-		if !transient || attempt == 2 {
+		if !transient || attempt == apiRetryAttempts-1 {
 			return resp, nil
 		}
 		resp.Body.Close()
-		delay := time.Duration(1<<uint(attempt)) * 100 * time.Millisecond
-		if seconds, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && seconds >= 0 {
-			delay = time.Duration(seconds) * time.Second
-			if delay > 10*time.Second {
-				delay = 10 * time.Second
+		delay := t.retryDelay(attempt, resp.Header.Get("Retry-After"))
+		wait := t.wait
+		if wait == nil {
+			wait = waitForAPIRetry
+		}
+		if err := wait(req.Context(), delay); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (t apiRetryTransport) retryDelay(attempt int, retryAfter string) time.Duration {
+	now := time.Now
+	if t.now != nil {
+		now = t.now
+	}
+	if delay, ok := apiRetryAfterDelay(retryAfter, now()); ok {
+		return delay
+	}
+	delay := time.Duration(1<<uint(attempt)) * apiRetryBaseDelay
+	jitter := t.jitter
+	if jitter == nil {
+		jitter = boundedAPIRetryJitter
+	}
+	return jitter(delay)
+}
+
+func apiRetryAfterDelay(value string, now time.Time) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	if value[0] >= '0' && value[0] <= '9' {
+		return apiRetryDeltaSeconds(value)
+	}
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	return min(max(when.Sub(now), 0), apiRetryAfterLimit), true
+}
+
+func apiRetryDeltaSeconds(value string) (time.Duration, bool) {
+	limit := uint64(apiRetryAfterLimit / time.Second)
+	var seconds uint64
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return 0, false
+		}
+		if seconds < limit {
+			seconds = seconds*10 + uint64(value[i]-'0')
+			if seconds > limit {
+				seconds = limit
 			}
 		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-req.Context().Done():
-			timer.Stop()
-			return nil, req.Context().Err()
-		case <-timer.C:
-		}
+	}
+	return time.Duration(seconds) * time.Second, true
+}
+
+// boundedAPIRetryJitter returns a full-width random delay in the upper half of
+// the exponential window. Entropy failure retains bounded jitter rather than
+// disabling the backoff policy.
+func boundedAPIRetryJitter(delay time.Duration) time.Duration {
+	lower := delay / 2
+	span := delay - lower
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(span)+1))
+	if err != nil {
+		return lower + span/2
+	}
+	return lower + time.Duration(n.Int64())
+}
+
+func waitForAPIRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

@@ -2,8 +2,13 @@
 
 API, registry, token, redirect, and nested artifact requests use explicit
 clients with bounded connect, TLS-handshake, response-header, idle, and total
-operation deadlines. Safe GET/HEAD requests retry transient gateway failures
-and rate limits at most twice with bounded backoff; mutating requests are not
+operation deadlines. The API client's safe GET/HEAD requests retry transient
+gateway failures and rate limits at most twice (three total attempts). Without
+`Retry-After`, the API waits use 100 ms and 200 ms exponential windows with
+random jitter bounded to the upper half of each window. A valid delta-seconds or
+HTTP-date `Retry-After` overrides that API jitter and is capped at ten seconds;
+past dates mean no wait. Every API wait observes request cancellation, and each
+discarded API response body is closed before waiting. Mutating requests are not
 retried because an interrupted monolithic upload is not provably resumable.
 Responses are bounded and registry failures use a typed, sanitized error.
 
@@ -91,7 +96,14 @@ Docker build fixture has the independent runner and validation requirements in
 `docs/build-and-git-contract.md`; neither fixture may replace the deterministic
 matrix.
 
-Rollback is a revert of the client construction and registry policy changes.
+The API retry-jitter closure can be rolled back without changing API, artifact,
+credential, or repository formats. Doing so restores synchronized deterministic
+retry waits across clients and therefore reopens the transient-load amplification
+part of CLI-008; the attempt bound, response-body cleanup, cancellation, and
+mutating-request policy should not be partially weakened during rollback.
+
+Rollback of the broader client construction and registry policy is a revert of
+the client construction and registry policy changes.
 No credential or repository schema changes are made, and helper credentials are
 never persisted. Reverting only context-aware credential lookup allows bounded
 helper attempts to delay cancellation for helper-backed registries;
