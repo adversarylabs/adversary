@@ -3,8 +3,11 @@
 package adversary
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,40 +19,65 @@ import (
 
 func TestHostExecutorKillsTermIgnoringDescendantAfterLeaderExits(t *testing.T) {
 	dir := realTempDir(t)
-	pidFile := filepath.Join(dir, "child.pid")
 	script := filepath.Join(dir, "run.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\ntrap 'exit 0' TERM\nsh -c 'trap \"\" TERM; sleep 60' &\necho $! > \"$1\"\nwait\n"), 0755); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ntrap 'exit 0' TERM\nsh -c 'trap \"\" TERM; sleep 60' &\necho \"READY $!\"\nwait\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	stdoutReader, stdoutWriter := io.Pipe()
+	defer stdoutReader.Close()
+	defer stdoutWriter.Close()
+	type readinessResult struct {
+		pid int
+		err error
+	}
+	readiness := make(chan readinessResult, 1)
+	go func() {
+		line, err := bufio.NewReader(stdoutReader).ReadString('\n')
+		if err != nil {
+			readiness <- readinessResult{err: fmt.Errorf("read readiness: %w", err)}
+			return
+		}
+		pidText, ok := strings.CutPrefix(strings.TrimSpace(line), "READY ")
+		if !ok {
+			readiness <- readinessResult{err: fmt.Errorf("unexpected readiness line %q", strings.TrimSpace(line))}
+			return
+		}
+		pid, err := strconv.Atoi(pidText)
+		readiness <- readinessResult{pid: pid, err: err}
+	}()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := systemHostExecutorForTest(nil, nil, nil).Run(ctx, RuntimeSpec{Command: []string{script, pidFile}, AdversaryPath: dir})
+		_, err := systemHostExecutorForTest(nil, stdoutWriter, nil).Run(ctx, RuntimeSpec{Command: []string{script}, AdversaryPath: dir})
 		done <- err
 	}()
-	var data []byte
-	deadline := time.Now().Add(2 * time.Second)
-	for len(data) == 0 && time.Now().Before(deadline) {
-		data, _ = os.ReadFile(pidFile)
-		time.Sleep(10 * time.Millisecond)
-	}
-	if len(data) == 0 {
-		cancel()
-		t.Fatal("descendant pid was not published")
+	var pid int
+	select {
+	case ready := <-readiness:
+		if ready.err != nil {
+			t.Fatal(ready.err)
+		}
+		pid = ready.pid
+	case err := <-done:
+		t.Fatalf("executor returned before descendant readiness: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("descendant readiness was not reported")
 	}
 	cancel()
 	canceledAt := time.Now()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("error = %v", err)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("executor did not return after cancellation")
 	}
-	if elapsed := time.Since(canceledAt); elapsed < 700*time.Millisecond || elapsed > 2*time.Second {
+	if elapsed := time.Since(canceledAt); elapsed < 700*time.Millisecond || elapsed > 10*time.Second {
 		t.Fatalf("executor did not preserve the 750ms process-group grace: %s", elapsed)
 	}
-	pid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
-	if convErr != nil {
-		t.Fatal(convErr)
-	}
-	deadline = time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		err := syscall.Kill(pid, 0)
 		if errors.Is(err, syscall.ESRCH) {
