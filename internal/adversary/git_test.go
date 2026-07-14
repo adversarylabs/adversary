@@ -187,7 +187,7 @@ func TestRunConfigHostExecutionSpec(t *testing.T) {
 		ExecutionPath: "/tmp/adversary",
 	}, "/repo", "/tmp/adversary-run", RunOptions{NoNetwork: true})
 
-	spec := config.ContainerSpec()
+	spec := config.RuntimeSpec()
 	if spec.Image != "adversary-local-typescript" {
 		t.Fatalf("Image = %q", spec.Image)
 	}
@@ -208,7 +208,7 @@ func TestRunConfigShellUsesHostShell(t *testing.T) {
 		ExecutionPath: "/tmp/adversary",
 	}, "/repo", "/tmp/adversary-run", RunOptions{Shell: true})
 
-	spec := config.ContainerSpec()
+	spec := config.RuntimeSpec()
 	if !spec.Shell {
 		t.Fatal("Shell is false")
 	}

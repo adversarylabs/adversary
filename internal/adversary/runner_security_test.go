@@ -22,22 +22,22 @@ type outputExecutor struct {
 
 type cancelExecutor struct{}
 
-func (cancelExecutor) Run(ctx context.Context, _ ContainerSpec) (ContainerResult, error) {
+func (cancelExecutor) Run(ctx context.Context, _ RuntimeSpec) (RuntimeResult, error) {
 	<-ctx.Done()
-	return ContainerResult{ExitCode: -1, Kind: "Process"}, ctx.Err()
+	return RuntimeResult{ExitCode: -1, Kind: "Process"}, ctx.Err()
 }
 
-func (e outputExecutor) Run(_ context.Context, spec ContainerSpec) (ContainerResult, error) {
+func (e outputExecutor) Run(_ context.Context, spec RuntimeSpec) (RuntimeResult, error) {
 	if e.log != "" {
 		// Custom executors do not own Runner's streams; protocol tests use the
 		// production HostExecutor below for stream routing.
 	}
 	if e.output != nil {
 		if err := os.WriteFile(filepath.Join(spec.RunDir, "output.json"), e.output, 0644); err != nil {
-			return ContainerResult{}, err
+			return RuntimeResult{}, err
 		}
 	}
-	return ContainerResult{Kind: "Process"}, nil
+	return RuntimeResult{Kind: "Process"}, nil
 }
 
 func minimalEnvelope() []byte {

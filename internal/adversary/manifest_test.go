@@ -295,26 +295,26 @@ func (f fakeGitDiffer) ChangedFiles(ctx context.Context, repoPath, baseRef, head
 type recordingExecutor struct {
 	called bool
 	input  Input
-	spec   ContainerSpec
+	spec   RuntimeSpec
 }
 
-func (e *recordingExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
+func (e *recordingExecutor) Run(ctx context.Context, spec RuntimeSpec) (RuntimeResult, error) {
 	e.called = true
 	e.spec = spec
 
 	data, err := os.ReadFile(filepath.Join(spec.RunDir, "input.json"))
 	if err != nil {
-		return ContainerResult{}, err
+		return RuntimeResult{}, err
 	}
 	if err := json.Unmarshal(data, &e.input); err != nil {
-		return ContainerResult{}, err
+		return RuntimeResult{}, err
 	}
 
 	output := `{"protocolVersion":1,"result":{"adversary":{"name":"local/adversary"},"target":{},"positives":[],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0}}}`
 	if err := os.WriteFile(filepath.Join(spec.RunDir, "output.json"), []byte(output), 0644); err != nil {
-		return ContainerResult{}, err
+		return RuntimeResult{}, err
 	}
-	return ContainerResult{ExitCode: 0}, nil
+	return RuntimeResult{ExitCode: 0}, nil
 }
 
 func TestRunBuildsLocalTypeScriptAdversaryBeforeExecution(t *testing.T) {

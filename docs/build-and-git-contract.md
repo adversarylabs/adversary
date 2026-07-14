@@ -97,6 +97,47 @@ output. Reverting the isolated builder does not change artifact or manifest
 formats. The pinned image may be advanced by reviewing both its Node version and
 index digest together.
 
+## CI toolchain and build matrix (CLI-021)
+
+The `go` directive in `go.mod` is the single source of truth for the supported
+release Go toolchain. Every Go CI job and the release build use the
+checksum-pinned `actions/setup-go` action with `go-version-file: go.mod`; no
+workflow carries a competing Go version literal. `scripts/verify-ci-contract.go`
+enforces that relationship. A toolchain upgrade is one reviewed `go.mod`
+change accompanied by module verification and the complete CI matrix, rather
+than independent workflow edits that can drift.
+
+Node 22 is the supported generated-project and local-build major. Native tests
+install it on Ubuntu 24.04, macOS 14, and Windows 2022; the Ubuntu race,
+coverage, and freshly generated TypeScript template jobs also install Node 22.
+Go native tests run on those same three operating systems. Cross-builds cover
+Linux amd64/arm64, Darwin amd64/arm64, and Windows amd64. Formatting, module
+verification, vet, race, coverage, template, CLI smoke, security tooling, and
+release-contract jobs all feed the single required `ci / test` aggregate.
+
+Required CI intentionally does not depend on a privileged Docker daemon or a
+Docker Hub pull. Docker-build behavior is covered hermetically: tests execute a
+fake Docker command through the real argument/output boundary, verify the exact
+generated Dockerfile uses the reviewed digest and `npm ci`, and exercise staged
+output publication, cancellation, locking, recovery, and rollback. This keeps
+fork CI credential-free and avoids making releases depend on daemon privilege,
+Hub rate limits, or an external outage.
+
+An opt-in live Docker fixture becomes appropriate when the repository has an
+isolated, maintained BuildKit/Docker runner, bounded cleanup and resource
+quotas, a reviewed base-image mirror or pull policy, and a non-secret fork
+policy. The fixture must build a representative locked TypeScript project with
+the reviewed image on each supported Linux architecture, validate the produced
+`dist`, prove the source tree is unchanged, and report separately until its
+availability is reliable enough for required CI. This is an explicit coverage
+boundary, not an assertion that fake execution proves daemon behavior.
+
+Rollback: removing the verifier or matrix decision does not migrate code or
+artifacts, but permits workflow/toolchain drift and reopens CLI-021. Replacing
+the hermetic decision with required live Docker coverage requires the runner,
+availability, credential, and cleanup controls above before it can be a safe
+required gate.
+
 ## Lossless Git changes (CLI-015)
 
 `CommandGitDiffer.Changes` defines comparison as Git `base...head`: changes

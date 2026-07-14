@@ -15,30 +15,31 @@ import (
 
 type pathExecutor struct{ path string }
 
-func (e *pathExecutor) Run(_ context.Context, s ContainerSpec) (ContainerResult, error) {
+func (e *pathExecutor) Run(_ context.Context, s RuntimeSpec) (RuntimeResult, error) {
 	e.path = s.AdversaryPath
 	if err := os.WriteFile(filepath.Join(s.RunDir, "output.json"), minimalEnvelope(), 0644); err != nil {
-		return ContainerResult{}, err
+		return RuntimeResult{}, err
 	}
-	return ContainerResult{Kind: "Process"}, nil
+	return RuntimeResult{Kind: "Process"}, nil
 }
 
 type blockingPathExecutor struct{ started, release chan struct{} }
 type exitExecutor struct{ err error }
 
-func (e exitExecutor) Run(ctx context.Context, s ContainerSpec) (ContainerResult, error) {
+func (e exitExecutor) Run(ctx context.Context, s RuntimeSpec) (RuntimeResult, error) {
 	if e.err != nil {
-		return ContainerResult{}, e.err
+		return RuntimeResult{}, e.err
 	}
-	return ContainerResult{}, ctx.Err()
+	return RuntimeResult{}, ctx.Err()
 }
 
 func TestRunnerReleasesLeaseOnErrorAndCancellation(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		cancel bool
-		err    error
-	}{{"error", false, errors.New("runtime failed")}, {"cancel", true, nil}} {
+		name      string
+		cancel    bool
+		err       error
+		wantError string
+	}{{"error", false, errors.New("runtime failed"), "adversary execution failed: runtime failed"}, {"cancel", true, nil, context.Canceled.Error()}} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := repository.Repository{Root: t.TempDir()}
 			t.Cleanup(func() { makeResolverWritable(repo.Root) })
@@ -53,32 +54,52 @@ func TestRunnerReleasesLeaseOnErrorAndCancellation(t *testing.T) {
 			} else {
 				defer cancel()
 			}
-			_ = Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: exitExecutor{err: tc.err}, Repository: &repo, Resolver: &resolver}.Run(ctx, RunOptions{AdversaryRef: rec.Digest, RepoPath: t.TempDir(), Format: "json"})
-			plan, err := repo.PlanGC()
-			if err != nil {
-				t.Fatal(err)
+			runErr := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: exitExecutor{err: tc.err}, Repository: &repo, Resolver: &resolver}.Run(ctx, RunOptions{AdversaryRef: rec.Digest, RepoPath: t.TempDir(), Format: "json"})
+			if runErr == nil || runErr.Error() != tc.wantError {
+				t.Fatalf("Runner error = %v; want %q", runErr, tc.wantError)
 			}
-			done := make(chan error, 1)
-			go func() { _, err := repo.ApplyGC(plan, false); done <- err }()
+			if tc.cancel {
+				if runErr != context.Canceled {
+					t.Fatalf("Runner cancellation error = %#v; want context.Canceled", runErr)
+				}
+			} else {
+				var executionErr *ExecutionError
+				if !errors.As(runErr, &executionErr) || !errors.Is(runErr, tc.err) {
+					t.Fatalf("Runner error = %#v; want ExecutionError wrapping %v", runErr, tc.err)
+				}
+			}
+
+			type leaseResult struct {
+				lease *repository.MaterializationLease
+				err   error
+			}
+			reacquired := make(chan leaseResult, 1)
+			go func() {
+				lease, err := repo.LeaseMaterialized(rec)
+				reacquired <- leaseResult{lease: lease, err: err}
+			}()
 			select {
-			case err := <-done:
-				if err != nil {
+			case result := <-reacquired:
+				if result.err != nil {
+					t.Fatal(result.err)
+				}
+				if err := result.lease.Close(); err != nil {
 					t.Fatal(err)
 				}
-			case <-time.After(time.Second):
-				t.Fatal("GC blocked after runner exit")
+			case <-time.After(10 * time.Second):
+				t.Fatal("materialization lease remained locked after Runner returned")
 			}
 		})
 	}
 }
 
-func (e *blockingPathExecutor) Run(_ context.Context, s ContainerSpec) (ContainerResult, error) {
+func (e *blockingPathExecutor) Run(_ context.Context, s RuntimeSpec) (RuntimeResult, error) {
 	close(e.started)
 	<-e.release
 	if err := os.WriteFile(filepath.Join(s.RunDir, "output.json"), minimalEnvelope(), 0644); err != nil {
-		return ContainerResult{}, err
+		return RuntimeResult{}, err
 	}
-	return ContainerResult{Kind: "Process"}, nil
+	return RuntimeResult{Kind: "Process"}, nil
 }
 
 func TestRunnerLeaseBlocksGCUntilExecutorReturns(t *testing.T) {

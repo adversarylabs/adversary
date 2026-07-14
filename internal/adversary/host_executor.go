@@ -15,8 +15,8 @@ import (
 	semver "github.com/Masterminds/semver/v3"
 )
 
-type ContainerExecutor interface {
-	Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error)
+type RuntimeExecutor interface {
+	Run(ctx context.Context, spec RuntimeSpec) (RuntimeResult, error)
 }
 
 type HostExecutor struct {
@@ -36,7 +36,7 @@ type RuntimeTimer interface {
 	Stop() bool
 }
 
-type ContainerSpec struct {
+type RuntimeSpec struct {
 	Image           string
 	RuntimeName     string
 	RuntimeVersion  string
@@ -49,7 +49,7 @@ type ContainerSpec struct {
 	Shell           bool
 }
 
-type ContainerResult struct {
+type RuntimeResult struct {
 	ExitCode int
 	Kind     string
 }
@@ -74,41 +74,41 @@ func (e *ChildExitError) Error() string {
 }
 func (e *ChildExitError) Unwrap() error { return e.Err }
 
-func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerResult, error) {
+func (e HostExecutor) Run(ctx context.Context, spec RuntimeSpec) (RuntimeResult, error) {
 	if spec.RuntimeName == "" && spec.Image != "" && !strings.HasPrefix(spec.Image, "host:") {
-		return ContainerResult{ExitCode: -1, Kind: "Process"}, &UnsupportedFeatureError{Platform: runtime.GOOS, Feature: "container image runtime execution"}
+		return RuntimeResult{ExitCode: -1, Kind: "Process"}, &UnsupportedFeatureError{Platform: runtime.GOOS, Feature: "container image runtime execution"}
 	}
 	if spec.NetworkDisabled {
-		return ContainerResult{ExitCode: -1, Kind: "Process"}, &UnsupportedFeatureError{Platform: runtime.GOOS, Feature: "disabled network access"}
+		return RuntimeResult{ExitCode: -1, Kind: "Process"}, &UnsupportedFeatureError{Platform: runtime.GOOS, Feature: "disabled network access"}
 	}
 	command := spec.Command
 	if spec.Shell {
 		var err error
 		if e.Shell == nil {
-			return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host shell dependency is required")
+			return RuntimeResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host shell dependency is required")
 		}
 		command, err = e.Shell()
 		if err != nil {
-			return ContainerResult{ExitCode: -1, Kind: "Process"}, err
+			return RuntimeResult{ExitCode: -1, Kind: "Process"}, err
 		}
 	}
 	if len(command) == 0 {
-		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution command is empty")
+		return RuntimeResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution command is empty")
 	}
 	if command[0] == "node" {
 		find := e.FindNode
 		if find == nil {
-			return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution Node.js resolver dependency is required")
+			return RuntimeResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution Node.js resolver dependency is required")
 		}
 		node, err := find(ctx, spec.RuntimeVersion)
 		if err != nil {
-			return ContainerResult{ExitCode: -1, Kind: "Process"}, err
+			return RuntimeResult{ExitCode: -1, Kind: "Process"}, err
 		}
 		command = append([]string{node}, command[1:]...)
 	}
 	resolve := e.ResolveExecutable
 	if resolve == nil {
-		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution executable resolver dependency is required")
+		return RuntimeResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution executable resolver dependency is required")
 	}
 	executable := command[0]
 	if !filepath.IsAbs(executable) && strings.ContainsAny(executable, `/\\`) {
@@ -116,20 +116,20 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 	}
 	executable, err := resolve(executable)
 	if err != nil {
-		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("resolve host executable %q: %w", command[0], err)
+		return RuntimeResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("resolve host executable %q: %w", command[0], err)
 	}
 	if !filepath.IsAbs(executable) {
-		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("resolved host executable %q is not absolute", executable)
+		return RuntimeResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("resolved host executable %q is not absolute", executable)
 	}
 	if e.Launcher == nil {
-		return ContainerResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution process launcher dependency is required")
+		return RuntimeResult{ExitCode: -1, Kind: "Process"}, fmt.Errorf("host execution process launcher dependency is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return ContainerResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
+		return RuntimeResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
 	}
 	process, err := e.Launcher.Start(ProcessLaunchOptions{Path: executable, Args: command[1:], Dir: spec.AdversaryPath, Stdout: e.Stdout, Stderr: e.Stderr, Stdin: e.Stdin, Env: e.Environment.Entries(spec.Env)})
 	if err != nil {
-		return ContainerResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
+		return RuntimeResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
 	}
 	group := supervisedProcessGroup(process)
 	done := make(chan error, 1)
@@ -138,9 +138,9 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 	case err := <-done:
 		if err != nil {
 			code := exitCode(err)
-			return ContainerResult{ExitCode: code, Kind: "Process"}, &ChildExitError{ExitCode: code, Err: err}
+			return RuntimeResult{ExitCode: code, Kind: "Process"}, &ChildExitError{ExitCode: code, Err: err}
 		}
-		return ContainerResult{ExitCode: 0, Kind: "Process"}, nil
+		return RuntimeResult{ExitCode: 0, Kind: "Process"}, nil
 	case <-ctx.Done():
 		requestProcessTermination(process, group)
 		var waitErr error
@@ -149,7 +149,7 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 			if e.Timer == nil {
 				killProcessTree(process, group)
 				waitErr = <-done
-				return ContainerResult{ExitCode: exitCode(waitErr), Kind: "Process"}, fmt.Errorf("host execution grace timer dependency is required")
+				return RuntimeResult{ExitCode: exitCode(waitErr), Kind: "Process"}, fmt.Errorf("host execution grace timer dependency is required")
 			}
 			timer := e.Timer(750 * time.Millisecond)
 			for timer != nil {
@@ -170,7 +170,7 @@ func (e HostExecutor) Run(ctx context.Context, spec ContainerSpec) (ContainerRes
 			waitErr = <-done
 		}
 		code := exitCode(waitErr)
-		return ContainerResult{ExitCode: code, Kind: "Process"}, &ChildExitError{ExitCode: code, Err: ctx.Err()}
+		return RuntimeResult{ExitCode: code, Kind: "Process"}, &ChildExitError{ExitCode: code, Err: ctx.Err()}
 	}
 }
 

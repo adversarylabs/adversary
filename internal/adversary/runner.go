@@ -62,7 +62,7 @@ type Runner struct {
 	Stderr                  io.Writer
 	Stdin                   io.Reader
 	Git                     GitDiffer
-	Executor                ContainerExecutor
+	Executor                RuntimeExecutor
 	HostExecution           bool
 	MkdirTemp               func(dir, pattern string) (string, error)
 	RemoveAll               func(string) error
@@ -284,7 +284,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	if opts.RunTimeout > 0 {
 		runCtx, cancelRun = context.WithTimeout(ctx, opts.RunTimeout)
 	}
-	result, err := executor.Run(runCtx, config.ContainerSpec())
+	result, err := executor.Run(runCtx, config.RuntimeSpec())
 	cancelRun()
 	scanDuration := now().Sub(runStarted)
 	totalDuration := now().Sub(started)
@@ -526,8 +526,8 @@ func NewRunConfig(resolved ResolvedAdversary, repoPath, runDir string, opts RunO
 	}
 }
 
-func (c RunConfig) ContainerSpec() ContainerSpec {
-	return ContainerSpec{
+func (c RunConfig) RuntimeSpec() RuntimeSpec {
+	return RuntimeSpec{
 		Image:           c.Resolved.Image,
 		RuntimeName:     c.Resolved.RuntimeName,
 		RuntimeVersion:  c.Resolved.RuntimeVersion,
@@ -568,7 +568,7 @@ func printVerboseLaunch(w io.Writer, config RunConfig, readDir func(string) ([]f
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Command:")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, FormatShellCommand(config.ContainerSpec().Command))
+	fmt.Fprintln(w, FormatShellCommand(config.RuntimeSpec().Command))
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Paths")
 	fmt.Fprintln(w)
@@ -732,7 +732,7 @@ func shellQuote(s string) string {
 	return s
 }
 
-func printExecutionSummary(w io.Writer, result ContainerResult, build, scan, total time.Duration) {
+func printExecutionSummary(w io.Writer, result RuntimeResult, build, scan, total time.Duration) {
 	kind := result.Kind
 	if kind == "" {
 		kind = "Process"
