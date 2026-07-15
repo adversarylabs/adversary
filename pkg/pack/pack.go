@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -61,6 +62,7 @@ const nodeBuilderAMD64Manifest = "sha256:01393fe5a51489b63da0ab51aa8e0a7ff999013
 const nodeBuilderARM64Manifest = "sha256:4a78eedb5c49d58c0c0b610ebc48f4ac397358604daac64e8dec1baecde2a31b"
 const maxBuildSnapshotFiles = 250000
 const maxBuildSnapshotBytes int64 = 4 << 30
+const maxBuildSnapshotSymlinkMetadataBytes int64 = 64 << 20
 
 type Artifact struct {
 	Name                    string
@@ -834,7 +836,7 @@ func buildWithLocalNPM(ctx context.Context, state, root *os.Root, dir string, st
 	if err := validateNodeRuntime(ctx, npm, environment); err != nil {
 		return err
 	}
-	stage, err := stageProject(ctx, root, dir, false)
+	stage, err := stageProject(ctx, root, dir, buildSnapshotPolicy{allowDependencySymlinks: true})
 	if err != nil {
 		return err
 	}
@@ -892,7 +894,7 @@ func buildWithDocker(ctx context.Context, state, root *os.Root, dir string, stdo
 		return err
 	}
 	defer os.RemoveAll(tmp)
-	contextDir, err := stageProject(ctx, root, dir, true)
+	contextDir, err := stageProject(ctx, root, dir, buildSnapshotPolicy{excludeNodeModules: true})
 	if err != nil {
 		return err
 	}
@@ -928,7 +930,17 @@ COPY --from=build /workspace/dist /dist
 `
 }
 
-func stageProject(ctx context.Context, source *os.Root, dir string, excludeNodeModules bool) (string, error) {
+type buildSnapshotPolicy struct {
+	excludeNodeModules      bool
+	allowDependencySymlinks bool
+}
+
+type buildSnapshotSymlink struct {
+	path   string
+	target string
+}
+
+func stageProject(ctx context.Context, source *os.Root, dir string, policy buildSnapshotPolicy) (string, error) {
 	stage, err := os.MkdirTemp(filepath.Dir(dir), ".adversary-build-*")
 	if err != nil {
 		return "", fmt.Errorf("create build staging directory: %w", err)
@@ -946,6 +958,8 @@ func stageProject(ctx context.Context, source *os.Root, dir string, excludeNodeM
 	defer destination.Close()
 	var snapshotFiles int
 	var snapshotBytes int64
+	var symlinkMetadataBytes int64
+	var symlinks []buildSnapshotSymlink
 	err = fs.WalkDir(source.FS(), ".", func(rel string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -957,7 +971,7 @@ func stageProject(ctx context.Context, source *os.Root, dir string, excludeNodeM
 			return nil
 		}
 		top := strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
-		if top == "dist" || top == ".git" || top == ".publication-locks" || (excludeNodeModules && top == "node_modules") {
+		if top == "dist" || top == ".git" || top == ".publication-locks" || (policy.excludeNodeModules && top == "node_modules") {
 			return filepath.SkipDir
 		}
 		rel = filepath.ToSlash(rel)
@@ -966,7 +980,28 @@ func stageProject(ctx context.Context, source *os.Root, dir string, excludeNodeM
 			return err
 		}
 		if before.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("build source contains unsupported symlink %q", rel)
+			if !policy.allowDependencySymlinks || !strings.HasPrefix(rel, "node_modules/") {
+				return fmt.Errorf("build source contains unsupported symlink %q", rel)
+			}
+			target, err := stableBuildSnapshotSymlink(source, rel, before)
+			if err != nil {
+				return err
+			}
+			if err := validateBuildSnapshotSymlink(rel, target); err != nil {
+				return err
+			}
+			snapshotFiles++
+			if snapshotFiles > maxBuildSnapshotFiles || int64(len(target)) > maxBuildSnapshotBytes-snapshotBytes {
+				return fmt.Errorf("build source exceeds snapshot limit (%d files, %d bytes)", maxBuildSnapshotFiles, maxBuildSnapshotBytes)
+			}
+			snapshotBytes += int64(len(target))
+			metadataBytes := int64(len(rel) + len(target))
+			if metadataBytes > maxBuildSnapshotSymlinkMetadataBytes-symlinkMetadataBytes {
+				return fmt.Errorf("build source exceeds dependency symlink metadata limit (%d bytes)", maxBuildSnapshotSymlinkMetadataBytes)
+			}
+			symlinkMetadataBytes += metadataBytes
+			symlinks = append(symlinks, buildSnapshotSymlink{path: rel, target: target})
+			return nil
 		}
 		if entry.IsDir() {
 			return destination.Mkdir(rel, before.Mode().Perm())
@@ -1013,13 +1048,64 @@ func stageProject(ctx context.Context, source *os.Root, dir string, excludeNodeM
 	if err != nil {
 		return "", fmt.Errorf("stage build source: %w", err)
 	}
+	for _, link := range symlinks {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if err := destination.Symlink(link.target, link.path); err != nil {
+			return "", fmt.Errorf("stage build source: create dependency symlink %q: %w", link.path, err)
+		}
+	}
+	for _, link := range symlinks {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		info, err := destination.Stat(link.path)
+		if err != nil {
+			return "", fmt.Errorf("stage build source: dependency symlink %q has an unavailable or unsafe target: %w", link.path, err)
+		}
+		if !info.Mode().IsRegular() && !info.IsDir() {
+			return "", fmt.Errorf("stage build source: dependency symlink %q resolves to an unsupported file", link.path)
+		}
+	}
 	ok = true
 	return stage, nil
+}
+
+func validateBuildSnapshotSymlink(rel, target string) error {
+	if target == "" || strings.ContainsAny(target, "\\:\x00") || path.IsAbs(target) || filepath.IsAbs(target) || filepath.VolumeName(target) != "" {
+		return fmt.Errorf("build source dependency symlink %q has an unsafe target", rel)
+	}
+	resolved := path.Clean(path.Join(path.Dir(rel), target))
+	if resolved == ".." || strings.HasPrefix(resolved, "../") || path.IsAbs(resolved) {
+		return fmt.Errorf("build source dependency symlink %q escapes the project", rel)
+	}
+	return nil
+}
+
+func stableBuildSnapshotSymlink(source *os.Root, rel string, before os.FileInfo) (string, error) {
+	target, err := source.Readlink(rel)
+	if err != nil {
+		return "", fmt.Errorf("read build source dependency symlink %q: %w", rel, err)
+	}
+	if beforeBuildSnapshotReadlink != nil {
+		beforeBuildSnapshotReadlink(rel)
+	}
+	after, err := source.Lstat(rel)
+	if err != nil || after.Mode()&os.ModeSymlink == 0 || !os.SameFile(before, after) {
+		return "", fmt.Errorf("build source changed while reading dependency symlink %q", rel)
+	}
+	confirmed, err := source.Readlink(rel)
+	if err != nil || confirmed != target {
+		return "", fmt.Errorf("build source changed while reading dependency symlink %q", rel)
+	}
+	return confirmed, nil
 }
 
 var beforeDistPublish func()
 var afterDistRename func(string) error
 var beforeBuildSnapshotOpen func(string)
+var beforeBuildSnapshotReadlink func(string)
 var directorySyncHook func(string, int) error
 
 type PublicationDurabilityError struct {

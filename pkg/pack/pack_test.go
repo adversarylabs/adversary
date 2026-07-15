@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -962,6 +963,181 @@ func TestBuildSnapshotDoesNotExposeSourceNodeModules(t *testing.T) {
 	}
 	if string(got) != "original" {
 		t.Fatalf("source dependency mutated: %q", got)
+	}
+}
+
+func TestLocalBuildSnapshotPreservesContainedDependencySymlinks(t *testing.T) {
+	dir := testProject(t)
+	targets := map[string]string{
+		"node_modules/.bin/esbuild":  "../esbuild/bin/esbuild",
+		"node_modules/.bin/tsc":      "../typescript/bin/tsc",
+		"node_modules/.bin/tsserver": "../typescript/bin/tsserver",
+		"node_modules/.bin/tsx":      "../tsx/dist/cli.mjs",
+		"node_modules/.bin/yaml":     "../yaml/bin.mjs",
+	}
+	for link, target := range targets {
+		resolved := filepath.Clean(filepath.Join(filepath.Dir(link), filepath.FromSlash(target)))
+		writeFile(t, dir, filepath.ToSlash(resolved), "#!/usr/bin/env node\n")
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(link)), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.FromSlash(target), filepath.Join(dir, filepath.FromSlash(link))); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+	}
+
+	environment := BuildEnvironment{
+		NPM:         filepath.Join(t.TempDir(), "npm"),
+		Node:        filepath.Join(t.TempDir(), "node"),
+		Environment: []string{"PATH=/usr/bin"},
+		Run: func(_ context.Context, _ string, args []string, workingDir string, _ []string, _, _ io.Writer, _ bool) ([]byte, error) {
+			if len(args) == 1 && args[0] == "--version" {
+				return []byte("v22.14.0\n"), nil
+			}
+			for link, target := range targets {
+				staged := filepath.Join(workingDir, filepath.FromSlash(link))
+				info, err := os.Lstat(staged)
+				if err != nil || info.Mode()&os.ModeSymlink == 0 {
+					return nil, fmt.Errorf("staged dependency link %q is not a symlink: %v", link, err)
+				}
+				got, err := os.Readlink(staged)
+				if err != nil || filepath.ToSlash(got) != target {
+					return nil, fmt.Errorf("staged dependency link %q target=%q err=%v", link, got, err)
+				}
+			}
+			if err := os.MkdirAll(filepath.Join(workingDir, "dist"), 0755); err != nil {
+				return nil, err
+			}
+			return nil, os.WriteFile(filepath.Join(workingDir, "dist", "index.js"), []byte("built"), 0644)
+		},
+	}
+	if err := BuildProjectWithEnvironment(context.Background(), BuildOptions{Dir: dir, BuildStateDir: filepath.Join(t.TempDir(), "state")}, environment); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "dist", "index.js")); err != nil || string(got) != "built" {
+		t.Fatalf("published dist=%q err=%v", got, err)
+	}
+}
+
+func TestBuildSnapshotDependencySymlinkPolicy(t *testing.T) {
+	tests := []struct {
+		name   string
+		links  map[string]string
+		files  []string
+		wanted string
+	}{
+		{name: "absolute", links: map[string]string{"node_modules/.bin/tool": "/tmp/tool"}, wanted: "unsafe target"},
+		{name: "windows volume", links: map[string]string{"node_modules/.bin/tool": `C:\\tool.exe`}, wanted: "unsafe target"},
+		{name: "relative escape", links: map[string]string{"node_modules/.bin/tool": "../../../outside"}, wanted: "escapes the project"},
+		{name: "dangling", links: map[string]string{"node_modules/.bin/tool": "../pkg/missing"}, wanted: "unavailable or unsafe target"},
+		{name: "cycle", links: map[string]string{"node_modules/.bin/one": "two", "node_modules/.bin/two": "one"}, wanted: "unavailable or unsafe target"},
+		{name: "source link", links: map[string]string{"src/tool": "real-tool"}, files: []string{"real-tool"}, wanted: "unsupported symlink"},
+		{
+			name: "lexical chained escape",
+			links: map[string]string{
+				"node_modules/a": "..",
+				"node_modules/b": "a/../outside",
+			},
+			wanted: "unavailable or unsafe target",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := testProject(t)
+			for _, file := range tt.files {
+				writeFile(t, dir, file, "data")
+			}
+			for link, target := range tt.links {
+				if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(filepath.FromSlash(link))), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.FromSlash(target), filepath.Join(dir, filepath.FromSlash(link))); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+			}
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			stage, err := stageProject(context.Background(), root, dir, buildSnapshotPolicy{allowDependencySymlinks: true})
+			if stage != "" {
+				defer os.RemoveAll(stage)
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wanted) {
+				t.Fatalf("stage error=%v want substring %q", err, tt.wanted)
+			}
+		})
+	}
+}
+
+func TestBuildSnapshotAllowsContainedDependencySymlinkChain(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "node_modules/pkg/bin/tool", "tool")
+	writeFile(t, dir, "packages/workspace/index.js", "workspace")
+	links := map[string]string{
+		"node_modules/.bin/tool":      "tool-link",
+		"node_modules/.bin/tool-link": "../pkg/bin/tool",
+		"node_modules/workspace":      "../packages/workspace",
+	}
+	for link, target := range links {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(filepath.FromSlash(link))), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.FromSlash(target), filepath.Join(dir, filepath.FromSlash(link))); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	stage, err := stageProject(context.Background(), root, dir, buildSnapshotPolicy{allowDependencySymlinks: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(stage)
+	if got, err := os.ReadFile(filepath.Join(stage, "node_modules", ".bin", "tool")); err != nil || string(got) != "tool" {
+		t.Fatalf("resolved staged chain=%q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(stage, "node_modules", "workspace", "index.js")); err != nil || string(got) != "workspace" {
+		t.Fatalf("resolved staged workspace=%q err=%v", got, err)
+	}
+}
+
+func TestBuildSnapshotRejectsDependencySymlinkSwap(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "node_modules/pkg/bin/tool", "inside")
+	link := filepath.Join(dir, "node_modules", ".bin", "tool")
+	if err := os.MkdirAll(filepath.Dir(link), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../pkg/bin/tool", link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("outside"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	beforeBuildSnapshotReadlink = func(rel string) {
+		if rel == "node_modules/.bin/tool" {
+			_ = os.Remove(link)
+			_ = os.Symlink(outside, link)
+		}
+	}
+	t.Cleanup(func() { beforeBuildSnapshotReadlink = nil })
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	stage, err := stageProject(context.Background(), root, dir, buildSnapshotPolicy{allowDependencySymlinks: true})
+	if stage != "" {
+		defer os.RemoveAll(stage)
+	}
+	if err == nil || !strings.Contains(err.Error(), "changed while reading dependency symlink") {
+		t.Fatalf("stage error=%v", err)
 	}
 }
 

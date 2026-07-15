@@ -14,11 +14,16 @@ its caller requests `Build`; the injected production operation backed by
 Builder selection and cancellation are validated before project filesystem
 access. Local builds require Node 22-compatible npm and an existing
 `node_modules`; they run from a descriptor-relative, no-follow snapshot in a
-sibling staging tree, including an isolated copy of dependencies, and reject
-local Node versions other than the supported v22.x execution major. Docker
+sibling staging tree, including an isolated copy of dependencies. The snapshot
+preserves only relative symlinks below `node_modules` whose complete target chain
+resolves inside the staged project; it rejects absolute, escaping, dangling,
+cyclic, raced, source-tree, and special-file links. Published output and artifact
+inputs continue to reject every symlink. Local builds reject Node versions other
+than the supported v22.x execution major. Docker
 builds use a similarly isolated source snapshot and do not require host
 `node_modules`.
-Snapshots are limited to 250,000 regular files and 4 GiB and are copied with
+Snapshots are limited to 250,000 entries and 4 GiB, with retained dependency
+symlink path/target metadata separately capped at 64 MiB, and are copied with
 context checks. They prevent ordinary relative build output and dependency
 mutation from reaching the source tree; the invoked npm script remains a
 cooperative host process, not a security sandbox against a script that
