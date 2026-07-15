@@ -1029,15 +1029,17 @@ func TestBuildSnapshotDependencySymlinkPolicy(t *testing.T) {
 		{name: "absolute", links: map[string]string{"node_modules/.bin/tool": "/tmp/tool"}, wanted: "unsafe target"},
 		{name: "windows volume", links: map[string]string{"node_modules/.bin/tool": `C:\\tool.exe`}, wanted: "unsafe target"},
 		{name: "relative escape", links: map[string]string{"node_modules/.bin/tool": "../../../outside"}, wanted: "escapes the project"},
+		{name: "project root alias", links: map[string]string{"node_modules/root": ".."}, wanted: "escapes the project"},
 		{name: "dangling", links: map[string]string{"node_modules/.bin/tool": "../pkg/missing"}, wanted: "unavailable or unsafe target"},
 		{name: "cycle", links: map[string]string{"node_modules/.bin/one": "two", "node_modules/.bin/two": "one"}, wanted: "unavailable or unsafe target"},
 		{name: "source link", links: map[string]string{"src/tool": "real-tool"}, files: []string{"real-tool"}, wanted: "unsupported symlink"},
 		{
 			name: "lexical chained escape",
 			links: map[string]string{
-				"node_modules/a": "..",
-				"node_modules/b": "a/../outside",
+				"node_modules/a": "../x",
+				"node_modules/b": "a/../../outside",
 			},
+			files:  []string{"x/keep"},
 			wanted: "unavailable or unsafe target",
 		},
 	}
