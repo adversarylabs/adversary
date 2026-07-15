@@ -991,10 +991,9 @@ func stageProject(ctx context.Context, source *os.Root, dir string, policy build
 				return err
 			}
 			snapshotFiles++
-			if snapshotFiles > maxBuildSnapshotFiles || int64(len(target)) > maxBuildSnapshotBytes-snapshotBytes {
+			if snapshotFiles > maxBuildSnapshotFiles {
 				return fmt.Errorf("build source exceeds snapshot limit (%d files, %d bytes)", maxBuildSnapshotFiles, maxBuildSnapshotBytes)
 			}
-			snapshotBytes += int64(len(target))
 			metadataBytes := int64(len(rel) + len(target))
 			if metadataBytes > maxBuildSnapshotSymlinkMetadataBytes-symlinkMetadataBytes {
 				return fmt.Errorf("build source exceeds dependency symlink metadata limit (%d bytes)", maxBuildSnapshotSymlinkMetadataBytes)
@@ -1077,7 +1076,7 @@ func validateBuildSnapshotSymlink(rel, target string) error {
 		return fmt.Errorf("build source dependency symlink %q has an unsafe target", rel)
 	}
 	resolved := path.Clean(path.Join(path.Dir(rel), target))
-	if resolved == ".." || strings.HasPrefix(resolved, "../") || path.IsAbs(resolved) {
+	if resolved == "." || resolved == ".." || strings.HasPrefix(resolved, "../") || path.IsAbs(resolved) {
 		return fmt.Errorf("build source dependency symlink %q escapes the project", rel)
 	}
 	return nil
