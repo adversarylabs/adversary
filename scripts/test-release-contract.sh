@@ -22,6 +22,8 @@ grep -Fq 'install -m 0644 "${DIST_DIR}/${FORMULA_NAME}"' scripts/publish-homebre
 grep -Fq 'staged formula differs from verified bundle' scripts/publish-homebrew.sh || fail 'staged formula digest invariant missing'
 grep -Fq 'GNU tar is required' scripts/publish-homebrew.sh || fail 'GNU tar preflight missing'
 grep -Fq 'test ! -s /tmp/untracked-files' .depot/workflows/release.yml || fail 'pre-secret nonignored-file check missing'
+grep -Fq 'uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0' .depot/workflows/release.yml || fail 'release Node.js setup missing or unpinned'
+grep -Fq 'node-version: 22' .depot/workflows/release.yml || fail 'release Node.js version drift'
 grep -Fq 'publish-github mode rejects HOMEBREW_TAP_TOKEN' scripts/publish-homebrew.sh || fail 'GitHub publication channel guard missing'
 grep -Fq 'publish-homebrew mode rejects GITHUB_TOKEN' scripts/publish-homebrew.sh || fail 'Homebrew publication channel guard missing'
 grep -Fq 'adversary completion bash' README.md || fail 'README command surface drift'
