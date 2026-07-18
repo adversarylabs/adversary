@@ -370,6 +370,9 @@ func countNodeText(node *yaml.Node, text string) int {
 }
 
 func hasCredentialReferenceBeyondEmptyOverride(job *yaml.Node, key string) bool {
+	if nodeContains(value(job, "env"), key) {
+		return true
+	}
 	for _, step := range steps(job) {
 		allowedReferences := 0
 		if entry := value(value(step, "env"), key); entry != nil && scalar(entry) == "" {
