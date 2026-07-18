@@ -345,6 +345,46 @@ func validatePublicationOrder(job *yaml.Node, jobID, finalStep string) {
 	}
 }
 
+func requireNoPublicationCredentials(step *yaml.Node, label string) {
+	environment := value(step, "env")
+	for _, key := range []string{"GITHUB_TOKEN", "GH_TOKEN", "HOMEBREW_TAP_TOKEN"} {
+		entry := value(environment, key)
+		if entry == nil || scalar(entry) != "" {
+			fail("%s must explicitly clear %s", label, key)
+		}
+	}
+}
+
+func countNodeText(node *yaml.Node, text string) int {
+	if node == nil {
+		return 0
+	}
+	count := 0
+	if strings.Contains(node.Value, text) {
+		count++
+	}
+	for _, child := range node.Content {
+		count += countNodeText(child, text)
+	}
+	return count
+}
+
+func hasCredentialReferenceBeyondEmptyOverride(job *yaml.Node, key string) bool {
+	if nodeContains(value(job, "env"), key) {
+		return true
+	}
+	for _, step := range steps(job) {
+		allowedReferences := 0
+		if entry := value(value(step, "env"), key); entry != nil && scalar(entry) == "" {
+			allowedReferences = 1
+		}
+		if countNodeText(step, key) > allowedReferences {
+			return true
+		}
+	}
+	return false
+}
+
 func validateRelease(workflow *yaml.Node) {
 	requirePermissions(workflow, "release workflow", map[string]string{"contents": "read"})
 	concurrency := requiredValue(workflow, "concurrency")
@@ -358,16 +398,18 @@ func validateRelease(workflow *yaml.Node) {
 		}
 	}
 	requireGoToolchain(requiredValue(jobs, "build-and-test"), "release build-and-test")
+	requireNoPublicationCredentials(findStep(requiredValue(jobs, "build-and-test"), "Build deterministic release bundle"), "release build step")
 
 	attest := requiredValue(jobs, "attest")
 	requireExactSet(value(attest, "needs"), "attest dependencies", "build-and-test")
 	requirePermissions(attest, "attest job", map[string]string{"contents": "read", "id-token": "write", "attestations": "write"})
+	requireNoPublicationCredentials(findStep(attest, "Verify release bundle"), "attestation verification step")
 
 	github := requiredValue(jobs, "publish-github")
 	requireExactSet(value(github, "needs"), "publish-github dependencies", "attest")
 	requirePermissions(github, "publish-github job", map[string]string{"contents": "write"})
 	requireJobEnvironment(github, "publish-github")
-	if nodeContains(github, "HOMEBREW_TAP_TOKEN") {
+	if hasCredentialReferenceBeyondEmptyOverride(github, "HOMEBREW_TAP_TOKEN") {
 		fail("GitHub publication job must never receive the tap token")
 	}
 	if !nodeContains(findStep(github, "Publish GitHub release"), "publish-github") || !nodeContains(findStep(github, "Publish GitHub release"), "github.token") {
@@ -380,12 +422,13 @@ func validateRelease(workflow *yaml.Node) {
 	}
 	validatePublicationOrder(github, "publish-github", "Publish GitHub release")
 	validateTokenReferenceBoundary(github, "publish-github", "github.token", "Publish GitHub release")
+	requireNoPublicationCredentials(findStep(github, "Verify exact GitHub publication state"), "GitHub pre-publication verification step")
 
 	homebrew := requiredValue(jobs, "publish-homebrew")
 	requireExactSet(value(homebrew, "needs"), "publish-homebrew dependencies", "publish-github")
 	requirePermissions(homebrew, "publish-homebrew job", map[string]string{"contents": "read"})
 	requireJobEnvironment(homebrew, "publish-homebrew")
-	if nodeContains(homebrew, "GITHUB_TOKEN") || nodeContains(homebrew, "github.token") || nodeContains(homebrew, "contents: write") {
+	if hasCredentialReferenceBeyondEmptyOverride(homebrew, "GITHUB_TOKEN") || hasCredentialReferenceBeyondEmptyOverride(homebrew, "GH_TOKEN") || nodeContains(homebrew, "github.token") || nodeContains(homebrew, "contents: write") {
 		fail("Homebrew publication job must not receive GitHub publication authority")
 	}
 	finalName := "Publish Homebrew formula"
@@ -394,6 +437,7 @@ func validateRelease(workflow *yaml.Node) {
 	}
 	validatePublicationOrder(homebrew, "publish-homebrew", finalName)
 	validateSecretBoundary(homebrew, "publish-homebrew", "HOMEBREW_TAP_TOKEN", finalName)
+	requireNoPublicationCredentials(findStep(homebrew, "Verify exact Homebrew publication state"), "Homebrew pre-publication verification step")
 }
 
 func main() {

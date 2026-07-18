@@ -43,6 +43,9 @@ jobs:
         env:
           RELEASE_MODE: build
           GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+          HOMEBREW_TAP_TOKEN: ""
         run: scripts/publish-homebrew.sh
       - name: Upload release bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -78,6 +81,9 @@ jobs:
       - name: Verify release bundle
         env:
           RELEASE_MODE: verify
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+          HOMEBREW_TAP_TOKEN: ""
         run: scripts/publish-homebrew.sh
       - name: Recheck tracked checkout before attestation
         run: |
@@ -120,6 +126,9 @@ jobs:
       - name: Verify exact GitHub publication state
         env:
           RELEASE_MODE: verify
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+          HOMEBREW_TAP_TOKEN: ""
         run: |
           git diff --exit-code --ignore-submodules --
           git diff --cached --exit-code --ignore-submodules --
@@ -160,6 +169,9 @@ jobs:
       - name: Verify exact Homebrew publication state
         env:
           RELEASE_MODE: verify
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+          HOMEBREW_TAP_TOKEN: ""
         run: |
           git diff --exit-code --ignore-submodules --
           git diff --cached --exit-code --ignore-submodules --
