@@ -345,14 +345,18 @@ func validatePublicationOrder(job *yaml.Node, jobID, finalStep string) {
 	}
 }
 
-func requireNoPublicationCredentials(step *yaml.Node, label string) {
+func requireEmptyPublicationCredentials(step *yaml.Node, label string, keys ...string) {
 	environment := value(step, "env")
-	for _, key := range []string{"GITHUB_TOKEN", "GH_TOKEN", "HOMEBREW_TAP_TOKEN"} {
+	for _, key := range keys {
 		entry := value(environment, key)
 		if entry == nil || scalar(entry) != "" {
 			fail("%s must explicitly clear %s", label, key)
 		}
 	}
+}
+
+func requireNoPublicationCredentials(step *yaml.Node, label string) {
+	requireEmptyPublicationCredentials(step, label, "GITHUB_TOKEN", "GH_TOKEN", "HOMEBREW_TAP_TOKEN")
 }
 
 func countNodeText(node *yaml.Node, text string) int {
@@ -410,9 +414,11 @@ func validateRelease(workflow *yaml.Node) {
 	if hasCredentialReferenceBeyondEmptyOverride(github, "HOMEBREW_TAP_TOKEN") {
 		fail("GitHub publication job must never receive the tap token")
 	}
-	if !nodeContains(findStep(github, "Publish GitHub release"), "publish-github") || !nodeContains(findStep(github, "Publish GitHub release"), "github.token") {
+	githubPublish := findStep(github, "Publish GitHub release")
+	if !nodeContains(githubPublish, "publish-github") || !nodeContains(githubPublish, "github.token") {
 		fail("GitHub publication step is not locked to its explicit channel and token")
 	}
+	requireEmptyPublicationCredentials(githubPublish, "GitHub publication step", "GH_TOKEN", "HOMEBREW_TAP_TOKEN")
 	// github.token is job-scoped by the platform, so it is not modeled as a
 	// repository secret here; the protected job still verifies before use.
 	if !nodeContains(github, "RELEASE_MODE") || !nodeContains(github, "verify") {
@@ -430,9 +436,11 @@ func validateRelease(workflow *yaml.Node) {
 		fail("Homebrew publication job must not receive GitHub publication authority")
 	}
 	finalName := "Publish Homebrew formula"
-	if !nodeContains(findStep(homebrew, finalName), "publish-homebrew") {
+	homebrewPublish := findStep(homebrew, finalName)
+	if !nodeContains(homebrewPublish, "publish-homebrew") {
 		fail("Homebrew publication step is not locked to its explicit channel")
 	}
+	requireEmptyPublicationCredentials(homebrewPublish, "Homebrew publication step", "GITHUB_TOKEN", "GH_TOKEN")
 	validatePublicationOrder(homebrew, "publish-homebrew", finalName)
 	validateSecretBoundary(homebrew, "publish-homebrew", "HOMEBREW_TAP_TOKEN", finalName)
 	requireNoPublicationCredentials(findStep(homebrew, "Verify exact Homebrew publication state"), "Homebrew pre-publication verification step")
