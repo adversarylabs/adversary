@@ -1305,6 +1305,16 @@ func TestReadPasswordLine(t *testing.T) {
 	}
 }
 
+func TestReadTokenLine(t *testing.T) {
+	got, err := readSecretLine(strings.NewReader("adv_sa_secret\r\n"), "token")
+	if err != nil || got != "adv_sa_secret" {
+		t.Fatalf("token = %q, err = %v", got, err)
+	}
+	if _, err := readSecretLine(strings.NewReader("\n"), "token"); err == nil || !strings.Contains(err.Error(), "token") {
+		t.Fatalf("empty token error=%v", err)
+	}
+}
+
 func TestScopedAuthNeverCrossesServiceOrProfile(t *testing.T) {
 	store := adversarylabs.ConfigStore{Path: filepath.Join(t.TempDir(), "config.json")}
 	for _, tc := range []struct{ api, profile, token string }{{"https://one.example/api", "default", "one"}, {"https://two.example/api", "work", "two"}} {

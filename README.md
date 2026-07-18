@@ -85,6 +85,7 @@ and are not general CLI configuration.
 | review suppression | command behavior | `ADVERSARY_INCLUDE_SUPPRESSED` (injected into adversary) | suppressed details omitted |
 | adversary protocol paths | — | `ADVERSARY_INPUT`, `ADVERSARY_OUTPUT`, `ADVERSARY_REPO` (injected) | per-run temporary paths |
 | adversary diagnostics | `--verbose` | `ADVERSARY_VERBOSE` (injected) | disabled |
+| service-account login | `--token-stdin --registry-namespace <slug>` | service token only in the caller's shell/secret store | selected profile in OS config dir |
 | password login | `--password-stdin` | `ADVERSARY_PASSWORD` only in shell examples | secure prompt; variable is not read directly by the CLI |
 
 `ADVERSARY_BUILD_HELPER` is a test seam, not a supported user setting. Standard
@@ -92,7 +93,8 @@ and are not general CLI configuration.
 honored by Go networking. Registry credentials come from Docker credential
 configuration or the selected Adversary profile as documented in
 [network policy](docs/network-oci-policy.md). Never put passwords in URLs or
-command history.
+command history. Pass service-account tokens through `--token-stdin`; the CLI
+does not accept them as command-line values.
 
 ## Output and exits
 
