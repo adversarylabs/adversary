@@ -55,54 +55,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  attest:
-    needs: build-and-test
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    env:
-      GITHUB_REF_NAME: ${{ github.ref_name }}
-    steps:
-      - name: Check out release metadata
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Verify immutable clean tag checkout
-        run: scripts/verify-release-ref.sh
-      - name: Download verified build bundle
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: release-${{ github.ref_name }}
-          path: dist
-      - name: Verify release bundle
-        env:
-          RELEASE_MODE: verify
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          HOMEBREW_TAP_TOKEN: ""
-        run: scripts/publish-homebrew.sh
-      - name: Recheck tracked checkout before attestation
-        run: |
-          git diff --quiet --ignore-submodules --
-          git diff --cached --quiet --ignore-submodules --
-      - name: Attest release artifacts
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
-        with:
-          subject-path: |
-            dist/*.tar.gz
-            dist/*.spdx.json
-            dist/*.rb
-            dist/checksums.txt
-            dist/release-manifest.json
-
   # GitHub permissions are job-scoped. This is the smallest isolated protected
-  # job that can independently re-verify and publish the attested bytes.
+  # job that can independently re-verify and publish the built bytes.
   publish-github:
-    needs: attest
+    needs: build-and-test
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: release
@@ -118,7 +74,7 @@ jobs:
           persist-credentials: false
       - name: Verify immutable clean tag checkout
         run: scripts/verify-release-ref.sh
-      - name: Download attested release bundle
+      - name: Download verified build bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-${{ github.ref_name }}
@@ -161,7 +117,7 @@ jobs:
           persist-credentials: false
       - name: Verify immutable clean tag checkout
         run: scripts/verify-release-ref.sh
-      - name: Download GitHub-published attested bundle
+      - name: Download GitHub-published verified bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-${{ github.ref_name }}

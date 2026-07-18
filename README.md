@@ -15,9 +15,9 @@ brew install adversarylabs/tap/adversary
 make build VERSION=dev
 ```
 
-Release archives, checksums, SPDX SBOMs, and GitHub build attestations are on
-the corresponding GitHub Release. Verify checksums before installation and
-verify the attestation with GitHub CLI as described in [the release guide](docs/release.md).
+Release archives, checksums, and SPDX SBOMs are on the corresponding GitHub
+Release. Verify checksums before installation and review the current provenance
+limitation in [the release guide](docs/release.md).
 Because the project has not selected a license, source publication grants no
 reuse rights; see [the license decision](docs/license-decision.md).
 
