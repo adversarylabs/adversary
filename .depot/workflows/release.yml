@@ -95,6 +95,8 @@ jobs:
         env:
           RELEASE_MODE: publish-github
           GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ""
+          HOMEBREW_TAP_TOKEN: ""
         run: scripts/publish-homebrew.sh
 
   # Tap publication has no contents:write permission and cannot publish a
@@ -137,5 +139,7 @@ jobs:
       - name: Publish Homebrew formula
         env:
           RELEASE_MODE: publish-homebrew
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: scripts/publish-homebrew.sh
