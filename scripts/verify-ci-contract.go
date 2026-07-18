@@ -392,21 +392,19 @@ func validateRelease(workflow *yaml.Node) {
 		fail("release workflow requires non-canceling tag-scoped concurrency")
 	}
 	jobs := requiredValue(workflow, "jobs")
-	for _, id := range []string{"build-and-test", "attest", "publish-github", "publish-homebrew"} {
+	for _, id := range []string{"build-and-test", "publish-github", "publish-homebrew"} {
 		if value(jobs, id) == nil {
 			fail("release workflow is missing required job %q", id)
 		}
 	}
+	if value(jobs, "attest") != nil || nodeContains(workflow, "attest-build-provenance") {
+		fail("release workflow must not use GitHub-native attestation from Depot CI")
+	}
 	requireGoToolchain(requiredValue(jobs, "build-and-test"), "release build-and-test")
 	requireNoPublicationCredentials(findStep(requiredValue(jobs, "build-and-test"), "Build deterministic release bundle"), "release build step")
 
-	attest := requiredValue(jobs, "attest")
-	requireExactSet(value(attest, "needs"), "attest dependencies", "build-and-test")
-	requirePermissions(attest, "attest job", map[string]string{"contents": "read", "id-token": "write", "attestations": "write"})
-	requireNoPublicationCredentials(findStep(attest, "Verify release bundle"), "attestation verification step")
-
 	github := requiredValue(jobs, "publish-github")
-	requireExactSet(value(github, "needs"), "publish-github dependencies", "attest")
+	requireExactSet(value(github, "needs"), "publish-github dependencies", "build-and-test")
 	requirePermissions(github, "publish-github job", map[string]string{"contents": "write"})
 	requireJobEnvironment(github, "publish-github")
 	if hasCredentialReferenceBeyondEmptyOverride(github, "HOMEBREW_TAP_TOKEN") {
