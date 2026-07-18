@@ -65,13 +65,17 @@ func loginWithDevice(ctx context.Context, clock application.Clock, stdout io.Wri
 }
 
 func readPasswordLine(r io.Reader) (string, error) {
+	return readSecretLine(r, "password")
+}
+
+func readSecretLine(r io.Reader, kind string) (string, error) {
 	data, err := io.ReadAll(io.LimitReader(r, 64*1024))
 	if err != nil {
 		return "", err
 	}
-	password := strings.TrimRight(string(data), "\r\n")
-	if password == "" {
-		return "", fmt.Errorf("password from standard input is empty")
+	secret := strings.TrimRight(string(data), "\r\n")
+	if secret == "" {
+		return "", fmt.Errorf("%s from standard input is empty", kind)
 	}
-	return password, nil
+	return secret, nil
 }

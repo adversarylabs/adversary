@@ -205,6 +205,41 @@ func TestLoginCommandDoesNotPersistCredentialsWhenBrowserAuthFails(t *testing.T)
 	}
 }
 
+func TestLoginCommandStoresServiceAccountTokenFromStdin(t *testing.T) {
+	repo := repository.Repository{Root: t.TempDir()}
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repo, &stdout, &stderr).Dependencies()
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := NewRootCommandWithApp(app)
+	command.SetIn(strings.NewReader("adv_sa_test-secret\n"))
+	command.SetArgs([]string{"--profile", "release", "login", "--token-stdin", "--registry-namespace", "adversarylabs"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	store := base.Auth.(processAuthStore)
+	auth, ok, err := store.ExactAuthE(adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, "release"))
+	if err != nil || !ok {
+		t.Fatalf("auth missing: ok=%v err=%v", ok, err)
+	}
+	if auth.Token != "adv_sa_test-secret" || auth.RegistryNamespace != "adversarylabs" || auth.RegistryHost != adversarylabs.DefaultRegistry {
+		t.Fatalf("auth=%#v", auth)
+	}
+}
+
+func TestLoginCommandRejectsMixedTokenAuthentication(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr)
+	command := NewRootCommandWithApp(app)
+	command.SetIn(strings.NewReader("adv_sa_test-secret\n"))
+	command.SetArgs([]string{"login", "--token-stdin", "--ci"})
+	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestProcessAppResolverRepositoryBindingAccepted(t *testing.T) {
 	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
 	app, err := newProcessApp(&bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{})
