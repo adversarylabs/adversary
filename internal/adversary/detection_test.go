@@ -67,3 +67,25 @@ func TestForcedShortNameMustResolveUniquely(t *testing.T) {
 		t.Fatalf("qualified selection = %#v", got)
 	}
 }
+
+func TestExcludedShortNameMustResolveUniquely(t *testing.T) {
+	selections := []DetectionSelection{
+		{Candidate: DetectionCandidate{Name: "adversarylabs/security", Reference: "registry.test/adversarylabs/security:1"}, Result: detection.Result{Applicable: true, Confidence: detection.ConfidenceHigh}},
+		{Candidate: DetectionCandidate{Name: "randomperson/security", Reference: "registry.test/randomperson/security:1"}, Result: detection.Result{Applicable: true, Confidence: detection.ConfidenceHigh}},
+	}
+	if _, err := FilterAndOrderSelections(selections, detection.ConfidenceMedium, nil, []string{"security"}, false); err == nil {
+		t.Fatal("ambiguous short exclusion was accepted")
+	}
+	got, err := FilterAndOrderSelections(selections, detection.ConfidenceMedium, nil, []string{"randomperson/security"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, selection := range got {
+		if selection.Candidate.Name == "randomperson/security" && !selection.Excluded {
+			t.Fatalf("qualified exclusion was not applied: %#v", got)
+		}
+		if selection.Candidate.Name == "adversarylabs/security" && !selection.Selected {
+			t.Fatalf("unrelated publisher was excluded: %#v", got)
+		}
+	}
+}
