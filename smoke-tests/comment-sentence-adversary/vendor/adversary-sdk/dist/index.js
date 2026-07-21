@@ -3,7 +3,10 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 export const DEFAULT_INPUT_PATH = "/adversary/input.json";
 export const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
 export const DEFAULT_REPO_PATH = "/workspace";
+export const DEFAULT_DETECTION_INPUT_PATH = "/adversary/detection-input.json";
+export const DEFAULT_DETECTION_OUTPUT_PATH = "/adversary/detection-output.json";
 export const INPUT_SCHEMA_VERSION = "adversary.input.v1";
+export const DETECTION_SCHEMA_VERSION = "adversary.detection.v1";
 export const REVIEW_SCHEMA_VERSION = "adversary.review.v1";
 export const ERROR_PROTOCOL_VERSION = 1;
 const verboseValues = new Set(["1", "true", "TRUE", "yes", "YES"]);
@@ -141,6 +144,21 @@ export async function parseInput(path = process.env.ADVERSARY_INPUT ?? DEFAULT_I
     catch (error) {
         throw new Error(`Invalid input at ${path}: ${error.message}`);
     }
+}
+export async function parseDetectionContext(path = process.env.ADVERSARY_DETECTION_INPUT ?? DEFAULT_DETECTION_INPUT_PATH) {
+    const raw = await readFile(path, "utf8");
+    const parsed = JSON.parse(raw);
+    try {
+        return validateDetectionContext(parsed);
+    }
+    catch (error) {
+        throw new Error(`Invalid detection context at ${path}: ${error.message}`);
+    }
+}
+export async function writeDetectionResult(result, path = process.env.ADVERSARY_DETECTION_OUTPUT ?? DEFAULT_DETECTION_OUTPUT_PATH) {
+    validateDetectionResult(result);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${JSON.stringify(result, null, 2)}\n`, "utf8");
 }
 export async function writeOutput(output, path = process.env.ADVERSARY_OUTPUT ?? DEFAULT_OUTPUT_PATH) {
     validateReviewEnvelope(output);
@@ -426,6 +444,34 @@ function validateRuntimeInput(value) {
         }
     }
     return value;
+}
+function validateDetectionContext(value) {
+    validateObject(value, ["schemaVersion", "repositoryRoot", "mode", "baseRef", "headRef", "mergeBase", "changedFiles", "repositoryFiles"], ["schemaVersion", "repositoryRoot", "mode", "changedFiles"], "detection context");
+    if (value.schemaVersion !== DETECTION_SCHEMA_VERSION) throw new Error(`detection context schemaVersion must be "${DETECTION_SCHEMA_VERSION}".`);
+    requireString(value.repositoryRoot, "detection context.repositoryRoot");
+    if (!["dirty-worktree", "branch-comparison", "explicit-range", "pull-request"].includes(value.mode)) throw new Error("detection context.mode is unsupported.");
+    for (const field of ["baseRef", "headRef", "mergeBase"]) optionalString(value[field], `detection context.${field}`);
+    if (!Array.isArray(value.changedFiles)) throw new Error("detection context.changedFiles must be an array.");
+    value.changedFiles.forEach((changed, index) => {
+        const field = `detection context.changedFiles[${index}]`;
+        validateObject(changed, ["path", "previousPath", "status", "additions", "deletions"], ["path", "status"], field);
+        requireString(changed.path, `${field}.path`);
+        optionalString(changed.previousPath, `${field}.previousPath`);
+        if (!["added", "modified", "deleted", "renamed", "copied", "untracked"].includes(changed.status)) throw new Error(`${field}.status is unsupported.`);
+        optionalNonNegativeInteger(changed.additions, `${field}.additions`);
+        optionalNonNegativeInteger(changed.deletions, `${field}.deletions`);
+    });
+    if (value.repositoryFiles !== undefined && (!Array.isArray(value.repositoryFiles) || value.repositoryFiles.some((path) => typeof path !== "string" || path.trim().length === 0))) throw new Error("detection context.repositoryFiles must contain only non-empty strings.");
+    return value;
+}
+export function validateDetectionResult(value) {
+    validateObject(value, ["schemaVersion", "applicable", "confidence", "reasons", "relevantFiles", "repositoryMatch", "changeMatch"], ["schemaVersion", "applicable", "confidence", "reasons"], "detection result");
+    if (value.schemaVersion !== DETECTION_SCHEMA_VERSION) throw new Error(`detection result schemaVersion must be "${DETECTION_SCHEMA_VERSION}".`);
+    if (typeof value.applicable !== "boolean") throw new Error("detection result.applicable must be a boolean.");
+    if (!["low", "medium", "high"].includes(value.confidence)) throw new Error("detection result.confidence is unsupported.");
+    if (!Array.isArray(value.reasons) || value.reasons.length === 0 || value.reasons.some((reason) => typeof reason !== "string" || reason.trim().length === 0)) throw new Error("detection result.reasons must contain non-empty strings.");
+    if (value.relevantFiles !== undefined && (!Array.isArray(value.relevantFiles) || value.relevantFiles.some((path) => typeof path !== "string" || path.trim().length === 0))) throw new Error("detection result.relevantFiles must contain only non-empty strings.");
+    for (const field of ["repositoryMatch", "changeMatch"]) if (value[field] !== undefined && typeof value[field] !== "boolean") throw new Error(`detection result.${field} must be a boolean.`);
 }
 function requireExactKeys(value, keys, field) {
     if (!isRecord(value)) {

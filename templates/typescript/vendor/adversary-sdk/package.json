@@ -13,7 +13,9 @@
     },
     "./schemas/adversary.input.v1": "./schemas/adversary.input.v1.schema.json",
     "./schemas/adversary.review.v1": "./schemas/adversary.review.v1.schema.json",
-    "./schemas/adversary.error.v1": "./schemas/adversary.error.v1.schema.json"
+    "./schemas/adversary.error.v1": "./schemas/adversary.error.v1.schema.json",
+    "./schemas/adversary.detection-context.v1": "./schemas/adversary.detection-context.v1.schema.json",
+    "./schemas/adversary.detection.v1": "./schemas/adversary.detection.v1.schema.json"
   },
   "files": ["dist", "schemas", "templates", "README.md"],
   "engines": {

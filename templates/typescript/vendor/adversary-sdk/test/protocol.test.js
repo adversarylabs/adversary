@@ -10,10 +10,13 @@ import {
   Severity,
   createReviewEnvelope,
   encodeErrorEnvelope,
+  parseDetectionContext,
   parseInput,
   sortLegacyFindings,
   validateErrorEnvelope,
   validateReviewEnvelope,
+  validateDetectionResult,
+  writeDetectionResult,
   writeOutput,
 } from "../dist/index.js";
 
@@ -342,6 +345,37 @@ test("parseInput accepts the shared input fixture and rejects extensions", async
     const path = join(directory, "input.json");
     await writeFile(path, JSON.stringify({ ...input, extension: true }));
     await assert.rejects(parseInput(path), /unknown field/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("detection context and result use the strict shared contract", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "adversary-sdk-detection-"));
+  try {
+    const inputPath = join(directory, "input.json");
+    const outputPath = join(directory, "output.json");
+    const context = {
+      schemaVersion: "adversary.detection.v1",
+      repositoryRoot: "/workspace",
+      mode: "dirty-worktree",
+      changedFiles: [{ path: "Dockerfile", status: "modified" }],
+    };
+    await writeFile(inputPath, JSON.stringify(context));
+    assert.deepEqual(await parseDetectionContext(inputPath), context);
+    const result = {
+      schemaVersion: "adversary.detection.v1",
+      applicable: true,
+      confidence: "high",
+      reasons: ["Dockerfile changed"],
+      relevantFiles: ["Dockerfile"],
+    };
+    validateDetectionResult(result);
+    await writeDetectionResult(result, outputPath);
+    assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), result);
+    await writeFile(inputPath, JSON.stringify({ ...context, findings: [] }));
+    await assert.rejects(parseDetectionContext(inputPath), /unknown field/);
+    assert.throws(() => validateDetectionResult({ ...result, findings: [] }), /unknown field/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

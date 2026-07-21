@@ -1,7 +1,10 @@
 export declare const DEFAULT_INPUT_PATH = "/adversary/input.json";
 export declare const DEFAULT_OUTPUT_PATH = "/adversary/output.json";
 export declare const DEFAULT_REPO_PATH = "/workspace";
+export declare const DEFAULT_DETECTION_INPUT_PATH = "/adversary/detection-input.json";
+export declare const DEFAULT_DETECTION_OUTPUT_PATH = "/adversary/detection-output.json";
 export declare const INPUT_SCHEMA_VERSION = "adversary.input.v1";
+export declare const DETECTION_SCHEMA_VERSION = "adversary.detection.v1";
 export declare const REVIEW_SCHEMA_VERSION = "adversary.review.v1";
 export declare const ERROR_PROTOCOL_VERSION = 1;
 export interface ErrorEnvelope {
@@ -28,6 +31,34 @@ export interface RuntimeInput {
         scan_mode: "changed" | "all";
         changed_files: string[];
     } | null;
+}
+export type DetectionConfidence = "low" | "medium" | "high";
+export type ChangedFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "untracked";
+export interface ChangedFile {
+    path: string;
+    previousPath?: string;
+    status: ChangedFileStatus;
+    additions?: number;
+    deletions?: number;
+}
+export interface AdversaryDetectionContext {
+    schemaVersion: typeof DETECTION_SCHEMA_VERSION;
+    repositoryRoot: string;
+    mode: "dirty-worktree" | "branch-comparison" | "explicit-range" | "pull-request";
+    baseRef?: string;
+    headRef?: string;
+    mergeBase?: string;
+    changedFiles: ChangedFile[];
+    repositoryFiles?: string[];
+}
+export interface AdversaryDetectionResult {
+    schemaVersion: typeof DETECTION_SCHEMA_VERSION;
+    applicable: boolean;
+    confidence: DetectionConfidence;
+    reasons: string[];
+    relevantFiles?: string[];
+    repositoryMatch?: boolean;
+    changeMatch?: boolean;
 }
 export interface Summary {
     files_scanned?: number;
@@ -176,6 +207,9 @@ export declare class Adversary {
     runLegacy(options?: RunOptions): Promise<LegacyRunResult>;
 }
 export declare function parseInput(path?: string): Promise<RuntimeInput>;
+export declare function parseDetectionContext(path?: string): Promise<AdversaryDetectionContext>;
+export declare function writeDetectionResult(result: AdversaryDetectionResult, path?: string): Promise<void>;
+export declare function validateDetectionResult(value: unknown): asserts value is AdversaryDetectionResult;
 export declare function writeOutput(output: AdversaryRunEnvelope, path?: string): Promise<void>;
 export declare function createReviewEnvelope(output: LegacyRunResult, options?: ReviewEnvelopeOptions): AdversaryRunEnvelope;
 export declare function sortLegacyFindings(findings: SerializedFinding[]): SerializedFinding[];
