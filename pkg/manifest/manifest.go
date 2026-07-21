@@ -274,18 +274,28 @@ func (m Manifest) Validate() error {
 		name   string
 		values []string
 	}{{"files", m.Detection.Files}, {"repository_files", m.Detection.RepositoryFiles}} {
+		seen := make(map[string]struct{}, len(group.values))
 		for i, value := range group.values {
 			if !normalizedNonEmpty(value) {
 				return fmt.Errorf("manifest detection.%s[%d] must be non-empty", group.name, i)
 			}
+			if _, duplicate := seen[value]; duplicate {
+				return fmt.Errorf("manifest detection.%s[%d] duplicates %q", group.name, i, value)
+			}
+			seen[value] = struct{}{}
 		}
 	}
+	seenChangeTypes := make(map[string]struct{}, len(m.Detection.ChangeTypes))
 	for i, changeType := range m.Detection.ChangeTypes {
 		switch changeType {
 		case "added", "modified", "deleted", "renamed", "copied", "untracked":
 		default:
 			return fmt.Errorf("manifest detection.change_types[%d] %q is unsupported", i, changeType)
 		}
+		if _, duplicate := seenChangeTypes[changeType]; duplicate {
+			return fmt.Errorf("manifest detection.change_types[%d] duplicates %q", i, changeType)
+		}
+		seenChangeTypes[changeType] = struct{}{}
 	}
 	if m.Detection.Entrypoint != "" {
 		if err := validateNodeEntrypoint(m.Detection.Entrypoint); err != nil {
@@ -504,12 +514,26 @@ func (m Manifest) ValidateProject(root string) error {
 		return err
 	}
 	if m.Runtime.Image != "" {
-		return nil
+		return validateDetectionProjectFile(root, m.Detection.Entrypoint)
 	}
 	if m.Runtime.Name == "node" {
 		if _, err := os.Stat(filepath.Join(root, "package.json")); err != nil {
 			return fmt.Errorf("node runtime requires package.json: %w", err)
 		}
+	}
+	return validateDetectionProjectFile(root, m.Detection.Entrypoint)
+}
+
+func validateDetectionProjectFile(root, entrypoint string) error {
+	if entrypoint == "" {
+		return nil
+	}
+	info, err := os.Stat(filepath.Join(root, filepath.FromSlash(entrypoint)))
+	if err != nil {
+		return fmt.Errorf("detection entrypoint %q is unavailable: %w", entrypoint, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("detection entrypoint %q must be a regular file", entrypoint)
 	}
 	return nil
 }

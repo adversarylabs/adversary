@@ -265,6 +265,15 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 			return Artifact{}, err
 		}
 	}
+	if entrypoint := m.Detection.Entrypoint; entrypoint != "" {
+		info, err := root.Stat(filepath.FromSlash(entrypoint))
+		if err != nil {
+			return Artifact{}, fmt.Errorf("detection entrypoint %q is unavailable after build: %w", entrypoint, err)
+		}
+		if !info.Mode().IsRegular() {
+			return Artifact{}, fmt.Errorf("detection entrypoint %q must be a regular file", entrypoint)
+		}
+	}
 	var files []File
 	var layerSource blobsource.SourceCloser
 	var layerSize int64
