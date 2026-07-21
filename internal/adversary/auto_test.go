@@ -109,6 +109,22 @@ func TestAutoUntrustedProgramDetectorFallsBackToSafeDeclaration(t *testing.T) {
 	}
 }
 
+func TestAutoPolicyDeniedProgramDetectorFallsBackToSafeDeclaration(t *testing.T) {
+	repo, resolver := autoRepository(t, map[string]string{
+		"adversarylabs/dockerfile:1.0.0": "name: adversarylabs/dockerfile\ndetection:\n  files: [Dockerfile]\n  entrypoint: dist/detect.js\npermissions:\n  enforcement: required\n  network: false\n",
+	})
+	changes := &fakeChangeResolver{context: detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "Dockerfile", Status: detection.StatusModified}}}}
+	caps := ExecutorCapabilities{}
+	executor := &detectorExecutor{backend: NativeSandboxExecutorBackend, caps: &caps}
+	result, err := (AutoRunner{Runner: Runner{Resolver: &resolver, Repository: &repo, Executor: executor}, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{DryRun: true, MinimumConfidence: detection.ConfidenceMedium})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.called || len(result.Selections) != 1 || !result.Selections[0].Selected || result.Selections[0].Error == nil {
+		t.Fatalf("executor called=%t selection=%#v", executor.called, result.Selections)
+	}
+}
+
 func TestAutoTrustedDetectorFailureSkipsUnlessForced(t *testing.T) {
 	repo, resolver := autoRepository(t, map[string]string{
 		"adversarylabs/dockerfile:1.0.0": "name: adversarylabs/dockerfile\ndetection:\n  files: [Dockerfile]\n  entrypoint: dist/detect.js\n",

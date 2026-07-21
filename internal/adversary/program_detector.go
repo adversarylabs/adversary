@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/adversarylabs/adversary/pkg/detection"
@@ -99,8 +98,9 @@ func (r Runner) Detect(ctx context.Context, opts DetectOptions) (detection.Resul
 	}
 	requirements := permissionRequirements(resolved, RunOptions{})
 	if _, err := DecideExecutionPolicy(ExecutionPolicyRequest{Trust: trust, Requested: requirements.Requested, Required: requirements.Required, Allowed: permissionPolicy.Allowed(trust), Backend: executor.Backend(), Capabilities: executor.Capabilities(), AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution}); err != nil {
-		fallback := trust.Trust == UnknownPublisherTrust && executor.Backend() == HostExecutorBackend && !opts.AllowUnsafeHostExecution && strings.Contains(err.Error(), "cannot execute with HostExecutor")
-		return detection.Result{}, &DetectorPolicyError{Err: err, DeclarativeFallback: fallback}
+		// Policy denial happens before adversary code executes. Declarative
+		// detection is side-effect-free and remains safe for every denial.
+		return detection.Result{}, &DetectorPolicyError{Err: err, DeclarativeFallback: true}
 	}
 
 	repoPath := opts.RepoPath
@@ -122,7 +122,11 @@ func (r Runner) Detect(ctx context.Context, opts DetectOptions) (detection.Resul
 	defer removeAll(runDir)
 
 	detectorContext := opts.ReviewContext
-	detectorContext.RepositoryRoot = "/workspace"
+	if executor.Backend() == HostExecutorBackend {
+		detectorContext.RepositoryRoot = repoPath
+	} else {
+		detectorContext.RepositoryRoot = "/workspace"
+	}
 	inputData, err := json.MarshalIndent(detectorContext, "", "  ")
 	if err != nil {
 		return detection.Result{}, err

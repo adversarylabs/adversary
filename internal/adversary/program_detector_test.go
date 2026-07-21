@@ -13,13 +13,19 @@ import (
 
 type detectorExecutor struct {
 	backend ExecutorBackend
+	caps    *ExecutorCapabilities
 	called  bool
 	context detection.Context
 	result  string
 }
 
-func (e *detectorExecutor) Backend() ExecutorBackend         { return e.backend }
-func (*detectorExecutor) Capabilities() ExecutorCapabilities { return allTestExecutorCapabilities() }
+func (e *detectorExecutor) Backend() ExecutorBackend { return e.backend }
+func (e *detectorExecutor) Capabilities() ExecutorCapabilities {
+	if e.caps != nil {
+		return *e.caps
+	}
+	return allTestExecutorCapabilities()
+}
 func (e *detectorExecutor) Run(_ context.Context, spec RuntimeSpec) (RuntimeResult, error) {
 	e.called = true
 	data, err := os.ReadFile(spec.Env["ADVERSARY_DETECTION_INPUT"])
@@ -40,8 +46,21 @@ func TestProgrammaticDetectorReceivesCanonicalContextAndResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !executor.called || executor.context.RepositoryRoot != "/workspace" || !result.Applicable || result.Confidence != detection.ConfidenceMedium {
+	if !executor.called || executor.context.RepositoryRoot != resolved.RepositoryRoot || !result.Applicable || result.Confidence != detection.ConfidenceMedium {
 		t.Fatalf("execution context=%#v result=%#v", executor.context, result)
+	}
+}
+
+func TestSandboxedProgrammaticDetectorReceivesSandboxRepositoryPath(t *testing.T) {
+	project := detectorProject(t)
+	executor := &detectorExecutor{backend: NativeSandboxExecutorBackend, result: `{"schemaVersion":"adversary.detection.v1","applicable":true,"confidence":"medium","reasons":["match"]}`}
+	repositoryRoot := t.TempDir()
+	_, err := (Runner{Executor: executor}).Detect(context.Background(), DetectOptions{AdversaryRef: project, RepoPath: repositoryRoot, ReviewContext: detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: repositoryRoot, Mode: detection.ModeDirtyWorktree}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.context.RepositoryRoot != "/workspace" {
+		t.Fatalf("repositoryRoot = %q", executor.context.RepositoryRoot)
 	}
 }
 

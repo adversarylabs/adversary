@@ -85,10 +85,7 @@ func (r Repository) Entries(limit int) ([]Entry, error) {
 // aliases by digest. Publisher trust is reference-scoped, so automatic
 // selection must not treat two publishers pointing at identical bytes as one
 // identity.
-func (r Repository) ReferenceEntries(limit int) ([]Entry, error) {
-	if limit <= 0 {
-		limit = 10000
-	}
+func (r Repository) ReferenceEntries() ([]Entry, error) {
 	snapshot, err := r.referenceSnapshot()
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -101,9 +98,6 @@ func (r Repository) ReferenceEntries(limit int) ([]Entry, error) {
 		refs = append(refs, ref)
 	}
 	sort.Strings(refs)
-	if len(refs) > limit {
-		refs = refs[:limit]
-	}
 	entries := make([]Entry, 0, len(refs))
 	for _, ref := range refs {
 		digest := snapshot[ref]

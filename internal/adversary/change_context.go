@@ -195,7 +195,7 @@ func (g CommandGitDiffer) dirtyChanges(ctx context.Context, repo string) ([]dete
 		}
 		tracked = changes
 	} else {
-		out, stderr, err := g.run(ctx, repo, "diff", "--cached", "--name-status", "-z", "--find-renames", "--find-copies", "--find-copies-harder", "--")
+		out, stderr, err := g.run(ctx, repo, "diff", "--no-ext-diff", "--ignore-submodules=none", "--cached", "--name-status", "-z", "--find-renames", "--find-copies", "--find-copies-harder", "--")
 		if err != nil {
 			if message := strings.TrimSpace(string(stderr)); message != "" {
 				return nil, fmt.Errorf("git diff --cached failed: %s", message)

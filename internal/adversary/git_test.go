@@ -189,6 +189,22 @@ func TestResolveDirtyChangesSupportsUnbornRepository(t *testing.T) {
 	}
 }
 
+func TestResolveDirtyChangesDisablesExternalDiffForUnbornRepository(t *testing.T) {
+	repo := newGitRepository(t)
+	runGit(t, repo, "config", "diff.external", "adversary-test-missing-external-diff")
+	writeFile(t, filepath.Join(repo, "staged"), "new\n")
+	runGit(t, repo, "add", "staged")
+
+	got, err := systemGitDiffer(t).ResolveChanges(context.Background(), ChangeRequest{RepoPath: repo, Mode: detection.ModeDirtyWorktree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []detection.ChangedFile{{Path: "staged", Status: detection.StatusAdded}}
+	if !reflect.DeepEqual(got.ChangedFiles, want) {
+		t.Fatalf("changes = %#v, want %#v", got.ChangedFiles, want)
+	}
+}
+
 func TestParseNULPathsRejectsMalformedOutput(t *testing.T) {
 	for _, value := range [][]byte{[]byte("path"), []byte("path\x00\x00")} {
 		if _, err := parseNULPaths(value); err == nil {

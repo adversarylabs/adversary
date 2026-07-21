@@ -147,7 +147,7 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 }
 
 func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate, error) {
-	entries, err := a.Resolver.Repository.ReferenceEntries(10000)
+	entries, err := a.Resolver.Repository.ReferenceEntries()
 	if err != nil {
 		return nil, err
 	}
