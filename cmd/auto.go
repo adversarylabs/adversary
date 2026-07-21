@@ -2,9 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/detection"
@@ -76,6 +79,7 @@ func newAutoCommand(app *application.App) *cobra.Command {
 }
 
 func renderAutoSelections(cmd *cobra.Command, result application.AdversaryAutoResult, explain bool) error {
+	var output strings.Builder
 	selected := 0
 	for _, selection := range result.Selections {
 		if selection.Selected {
@@ -83,9 +87,9 @@ func renderAutoSelections(cmd *cobra.Command, result application.AdversaryAutoRe
 		}
 	}
 	if selected == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No relevant adversaries detected for this change.")
+		fmt.Fprintln(&output, "No relevant adversaries detected for this change.")
 	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "Detected %d relevant adversaries\n", selected)
+		fmt.Fprintf(&output, "Detected %d relevant adversaries\n", selected)
 	}
 	for _, selection := range result.Selections {
 		if !selection.Selected && !explain {
@@ -95,27 +99,38 @@ func renderAutoSelections(cmd *cobra.Command, result application.AdversaryAutoRe
 		if !selection.Selected {
 			status = " (skipped)"
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "\n%s%s\n", selection.Candidate.Name, status)
-		fmt.Fprintf(cmd.OutOrStdout(), "  %s confidence\n", selection.Result.Confidence)
+		fmt.Fprintf(&output, "\n%s%s\n", selection.Candidate.Name, status)
+		fmt.Fprintf(&output, "  %s confidence\n", selection.Result.Confidence)
 		if selection.Excluded {
-			fmt.Fprintln(cmd.OutOrStdout(), "  excluded by --exclude")
+			fmt.Fprintln(&output, "  excluded by --exclude")
 		} else if selection.Forced {
-			fmt.Fprintln(cmd.OutOrStdout(), "  forced by --include")
+			fmt.Fprintln(&output, "  forced by --include")
 		}
 		for _, reason := range selection.Result.Reasons {
-			fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", reason)
+			fmt.Fprintf(&output, "  %s\n", terminalSafeText(reason))
 		}
 		if explain && len(selection.Result.RelevantFiles) > 0 {
 			files := append([]string(nil), selection.Result.RelevantFiles...)
 			sort.Strings(files)
-			fmt.Fprintf(cmd.OutOrStdout(), "  relevant files: %s\n", strings.Join(files, ", "))
+			for i := range files {
+				files[i] = terminalSafeText(files[i])
+			}
+			fmt.Fprintf(&output, "  relevant files: %s\n", strings.Join(files, ", "))
 		}
 		if explain && selection.Error != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "  detector failure: %v\n", selection.Error)
+			fmt.Fprintf(&output, "  detector failure: %s\n", terminalSafeText(selection.Error.Error()))
 		}
 	}
 	if selected > 0 {
-		fmt.Fprintln(cmd.OutOrStdout())
+		fmt.Fprintln(&output)
 	}
-	return nil
+	_, err := io.WriteString(cmd.OutOrStdout(), output.String())
+	return err
+}
+
+func terminalSafeText(value string) string {
+	if strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return strconv.QuoteToASCII(value)
+	}
+	return value
 }

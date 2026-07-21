@@ -3,12 +3,19 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/spf13/cobra"
 )
+
+type failingAutoWriter struct{}
+
+func (failingAutoWriter) Write([]byte) (int, error) { return 0, errors.New("closed output") }
 
 type autoStubRuntime struct {
 	inner  application.Runtime
@@ -78,5 +85,25 @@ func TestAutoCommandNoMatchIsSuccessfulAndConcise(t *testing.T) {
 	}
 	if got := stdout.String(); got != "No relevant adversaries detected for this change.\n" {
 		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestRenderAutoSelectionsReturnsOutputFailureAndEscapesHostilePath(t *testing.T) {
+	result := application.AdversaryAutoResult{Selections: []application.AdversaryAutoSelection{{
+		Candidate: application.AdversaryAutoCandidate{Name: "security"}, Selected: true,
+		Result: detection.Result{Confidence: detection.ConfidenceHigh, Reasons: []string{"matched"}, RelevantFiles: []string{"safe.go\nforged heading"}},
+	}}}
+	command := &cobra.Command{}
+	var output bytes.Buffer
+	command.SetOut(&output)
+	if err := renderAutoSelections(command, result, true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "safe.go\nforged heading") || !strings.Contains(output.String(), `"safe.go\nforged heading"`) {
+		t.Fatalf("unsafe output = %q", output.String())
+	}
+	command.SetOut(failingAutoWriter{})
+	if err := renderAutoSelections(command, result, true); err == nil || !strings.Contains(err.Error(), "closed output") {
+		t.Fatalf("output error = %v", err)
 	}
 }

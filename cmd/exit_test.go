@@ -27,6 +27,7 @@ func TestExitCodeContract(t *testing.T) {
 		{"auth deadline", &application.Error{Operation: "login", Kind: "auth", Err: context.DeadlineExceeded}, 4},
 		{"network cancellation", &application.Error{Operation: "pull", Kind: "network", Err: context.Canceled}, 130},
 		{"child", &internaladversary.ChildExitError{ExitCode: 42, Err: errors.New("exit")}, 3},
+		{"automatic execution", &internaladversary.AutoExecutionError{Errors: []error{errors.New("sandbox unavailable")}}, 3},
 		{"misleading protocol text", errors.New("network authentication protocol unauthorized"), 2},
 	}
 	for _, tc := range tests {
