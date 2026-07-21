@@ -122,11 +122,7 @@ func (r Runner) Detect(ctx context.Context, opts DetectOptions) (detection.Resul
 	defer removeAll(runDir)
 
 	detectorContext := opts.ReviewContext
-	if executor.Backend() == HostExecutorBackend {
-		detectorContext.RepositoryRoot = repoPath
-	} else {
-		detectorContext.RepositoryRoot = "/workspace"
-	}
+	detectorContext.RepositoryRoot = executorRepositoryRoot(executor.Backend(), repoPath)
 	inputData, err := json.MarshalIndent(detectorContext, "", "  ")
 	if err != nil {
 		return detection.Result{}, err

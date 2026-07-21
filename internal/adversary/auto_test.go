@@ -70,7 +70,7 @@ func TestAutoSelectsAvailableAdversariesAndSharesOneContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changes.calls != 1 || len(executor.contexts) != 2 || !reflect.DeepEqual(executor.contexts[0], executor.contexts[1]) || !reflect.DeepEqual(executor.contexts[0], result.Context) {
+	if changes.calls != 1 || len(executor.contexts) != 2 || !reflect.DeepEqual(executor.contexts[0], executor.contexts[1]) || !reflect.DeepEqual(executor.contexts[0].ChangedFiles, result.Context.ChangedFiles) || executor.contexts[0].RepositoryRoot != "/workspace" || result.Context.RepositoryRoot != changes.context.RepositoryRoot {
 		t.Fatalf("calls=%d contexts=%#v result=%#v", changes.calls, executor.contexts, result.Context)
 	}
 	if len(result.Selections) != 2 || !result.Selections[0].Selected || !result.Selections[1].Selected {

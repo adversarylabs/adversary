@@ -78,11 +78,6 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 			return AutoResult{}, err
 		}
 	}
-	// The portable context describes the executor-visible repository path. The
-	// host path remains an execution parameter and is never exposed as detector
-	// protocol data.
-	reviewContext.RepositoryRoot = "/workspace"
-
 	selections := make([]DetectionSelection, 0, len(candidates))
 	for _, candidate := range candidates {
 		result := EvaluateDeclarativeDetection(candidate.Manifest, reviewContext)

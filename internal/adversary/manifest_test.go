@@ -297,12 +297,18 @@ func (f fakeGitDiffer) ChangedFiles(ctx context.Context, repoPath, baseRef, head
 
 type recordingExecutor struct {
 	called  bool
+	backend ExecutorBackend
 	input   Input
 	spec    RuntimeSpec
 	context detection.Context
 }
 
-func (*recordingExecutor) Backend() ExecutorBackend           { return NativeSandboxExecutorBackend }
+func (e *recordingExecutor) Backend() ExecutorBackend {
+	if e.backend != "" {
+		return e.backend
+	}
+	return NativeSandboxExecutorBackend
+}
 func (*recordingExecutor) Capabilities() ExecutorCapabilities { return allTestExecutorCapabilities() }
 
 func allTestExecutorCapabilities() ExecutorCapabilities {
@@ -371,6 +377,21 @@ runtime:
 	}
 	if executor.input.Change == nil || !reflect.DeepEqual(executor.input.Change.ChangedFiles, []string{"Dockerfile"}) {
 		t.Fatalf("legacy input did not receive resolved paths: %#v", executor.input)
+	}
+}
+
+func TestHostRunTranslatesReviewContextToHostRepositoryPath(t *testing.T) {
+	adversaryDir := t.TempDir()
+	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), "name: local/adversary\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writeFile(t, filepath.Join(adversaryDir, "dist", "index.js"), "")
+	executor := &recordingExecutor{backend: HostExecutorBackend}
+	repositoryRoot := t.TempDir()
+	resolved := &detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: "/workspace", Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "main.go", Status: detection.StatusModified}}}
+	if err := (Runner{Stdout: &strings.Builder{}, Stderr: &strings.Builder{}, Executor: executor}).Run(context.Background(), RunOptions{AdversaryRef: adversaryDir, RepoPath: repositoryRoot, ReviewContext: resolved}); err != nil {
+		t.Fatal(err)
+	}
+	if executor.context.RepositoryRoot != repositoryRoot {
+		t.Fatalf("repositoryRoot = %q, want %q", executor.context.RepositoryRoot, repositoryRoot)
 	}
 }
 

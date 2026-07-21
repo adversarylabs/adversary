@@ -293,9 +293,15 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	}
 	config.RunDir = runDir
 
-	input := NewInput(baseRef, headRef, changedFiles, opts.AllFiles)
+	var executionReviewContext *detection.Context
 	if opts.ReviewContext != nil {
-		input = NewInputFromReviewContext(*opts.ReviewContext, opts.AllFiles)
+		translated := *opts.ReviewContext
+		translated.RepositoryRoot = executorRepositoryRoot(executor.Backend(), repoPath)
+		executionReviewContext = &translated
+	}
+	input := NewInput(baseRef, headRef, changedFiles, opts.AllFiles)
+	if executionReviewContext != nil {
+		input = NewInputFromReviewContext(*executionReviewContext, opts.AllFiles)
 	}
 	inputData, err := MarshalInput(input)
 	if err != nil {
@@ -306,8 +312,8 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	var reviewContextPath string
-	if opts.ReviewContext != nil {
-		contextData, err := json.MarshalIndent(opts.ReviewContext, "", "  ")
+	if executionReviewContext != nil {
+		contextData, err := json.MarshalIndent(executionReviewContext, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshal resolved review context: %w", err)
 		}
@@ -408,6 +414,13 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		return &FindingsError{Count: len(envelope.Result.Findings)}
 	}
 	return nil
+}
+
+func executorRepositoryRoot(backend ExecutorBackend, hostPath string) string {
+	if backend == HostExecutorBackend {
+		return hostPath
+	}
+	return "/workspace"
 }
 
 func (r Runner) isExplicitLocalAdversaryPath(ref string) (bool, error) {
