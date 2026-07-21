@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/adversarylabs/adversary/pkg/review"
@@ -35,6 +36,7 @@ type RunOptions struct {
 	Build                    bool
 	RunTimeout               time.Duration
 	BuildTimeout             time.Duration
+	ReviewContext            *detection.Context
 }
 
 const maxRunOutputBytes int64 = 16 << 20
@@ -181,8 +183,15 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		PrintVerboseLoad(stderr, opts.AdversaryRef, resolved)
 	}
 
+	baseRef, headRef := opts.BaseRef, opts.HeadRef
 	var changedFiles []string
-	if opts.BaseRef != "" || opts.HeadRef != "" {
+	if opts.ReviewContext != nil {
+		baseRef, headRef = opts.ReviewContext.BaseRef, opts.ReviewContext.HeadRef
+		changedFiles = make([]string, 0, len(opts.ReviewContext.ChangedFiles))
+		for _, change := range opts.ReviewContext.ChangedFiles {
+			changedFiles = append(changedFiles, change.Path)
+		}
+	} else if opts.BaseRef != "" || opts.HeadRef != "" {
 		if opts.BaseRef == "" || opts.HeadRef == "" {
 			return fmt.Errorf("--base and --head must be provided together")
 		}
@@ -195,7 +204,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		}
 	}
 
-	if resolved.Manifest != nil && len(resolved.Manifest.Triggers.FilesChanged) > 0 && (opts.BaseRef != "" || opts.HeadRef != "") {
+	if resolved.Manifest != nil && len(resolved.Manifest.Triggers.FilesChanged) > 0 && (opts.ReviewContext != nil || opts.BaseRef != "" || opts.HeadRef != "") {
 		if !ShouldRunForChangedFiles(resolved.Manifest.Triggers.FilesChanged, changedFiles, opts.Force || opts.AllFiles) {
 			if opts.Format == "json" {
 				skipped := review.RunEnvelope{
@@ -278,7 +287,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	}
 	config.RunDir = runDir
 
-	input := NewInput(opts.BaseRef, opts.HeadRef, changedFiles, opts.AllFiles)
+	input := NewInput(baseRef, headRef, changedFiles, opts.AllFiles)
 	inputData, err := MarshalInput(input)
 	if err != nil {
 		return err
@@ -286,6 +295,17 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	inputPath := filepath.Join(runDir, "input.json")
 	if err := files.WriteFile(inputPath, inputData, 0644); err != nil {
 		return err
+	}
+	var reviewContextPath string
+	if opts.ReviewContext != nil {
+		contextData, err := json.MarshalIndent(opts.ReviewContext, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal resolved review context: %w", err)
+		}
+		reviewContextPath = filepath.Join(runDir, "change-context.json")
+		if err := files.WriteFile(reviewContextPath, contextData, 0644); err != nil {
+			return err
+		}
 	}
 
 	outputPath := filepath.Join(runDir, "output.json")
@@ -296,6 +316,9 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		config.Env["ADVERSARY_REPO"] = repoPath
 		config.Env["ADVERSARY_INPUT"] = inputPath
 		config.Env["ADVERSARY_OUTPUT"] = outputPath
+		if reviewContextPath != "" {
+			config.Env["ADVERSARY_CHANGE_CONTEXT"] = reviewContextPath
+		}
 	}
 
 	if opts.Verbose {
