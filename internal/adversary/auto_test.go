@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/adversarylabs/adversary/pkg/detection"
@@ -95,16 +96,59 @@ func TestAutoDryRunIncludeExcludeAndNoMatch(t *testing.T) {
 }
 
 func TestAutoUntrustedProgramDetectorFallsBackToSafeDeclaration(t *testing.T) {
-	_, resolver := autoRepository(t, map[string]string{
+	repo, resolver := autoRepository(t, map[string]string{
 		"randomperson/dockerfile:1.0.0": "name: randomperson/dockerfile\ndetection:\n  files: [Dockerfile]\n  entrypoint: dist/detect.js\n",
 	})
 	changes := &fakeChangeResolver{context: detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "Dockerfile", Status: detection.StatusModified}}}}
-	result, err := (AutoRunner{Runner: Runner{Resolver: &resolver, Executor: &detectorExecutor{backend: HostExecutorBackend}}, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{DryRun: true, MinimumConfidence: detection.ConfidenceMedium})
+	result, err := (AutoRunner{Runner: Runner{Resolver: &resolver, Repository: &repo, Executor: &detectorExecutor{backend: HostExecutorBackend}}, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{DryRun: true, MinimumConfidence: detection.ConfidenceMedium})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Selections) != 1 || !result.Selections[0].Selected || result.Selections[0].Error == nil {
 		t.Fatalf("selection = %#v", result.Selections)
+	}
+}
+
+func TestAutoTrustedDetectorFailureSkipsUnlessForced(t *testing.T) {
+	repo, resolver := autoRepository(t, map[string]string{
+		"adversarylabs/dockerfile:1.0.0": "name: adversarylabs/dockerfile\ndetection:\n  files: [Dockerfile]\n  entrypoint: dist/detect.js\n",
+	})
+	changes := &fakeChangeResolver{context: detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "Dockerfile", Status: detection.StatusModified}}}}
+	executor := &detectorExecutor{backend: HostExecutorBackend, result: `{}`}
+	result, err := (AutoRunner{Runner: Runner{Resolver: &resolver, Repository: &repo, Executor: executor}, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{DryRun: true, MinimumConfidence: detection.ConfidenceMedium})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Selections) != 1 || result.Selections[0].Selected || result.Selections[0].Error == nil {
+		t.Fatalf("failed detector selection = %#v", result.Selections)
+	}
+	forced, err := (AutoRunner{Runner: Runner{Resolver: &resolver, Repository: &repo, Executor: executor}, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{DryRun: true, Includes: []string{"adversarylabs/dockerfile"}, MinimumConfidence: detection.ConfidenceMedium})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !forced.Selections[0].Selected || !forced.Selections[0].Forced {
+		t.Fatalf("forced detector selection = %#v", forced.Selections)
+	}
+}
+
+func TestAvailableCandidatesDoNotCollapseAcrossPublishers(t *testing.T) {
+	_, resolver := autoRepository(t, map[string]string{
+		"adversarylabs/security:1.0.0": "name: shared/security\n",
+		"randomperson/security:2.0.0":  "name: shared/security\n",
+	})
+	candidates, err := (AutoRunner{Runner: Runner{Resolver: &resolver}, Resolver: &resolver}).availableCandidates(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+}
+
+func TestAutoExecutionErrorIncludesNamedCauses(t *testing.T) {
+	err := (&AutoExecutionError{Errors: []error{errors.New("security: sandbox unavailable"), errors.New("docs: protocol failed")}}).Error()
+	if !strings.Contains(err, "security: sandbox unavailable") || !strings.Contains(err, "docs: protocol failed") {
+		t.Fatalf("error = %q", err)
 	}
 }
 

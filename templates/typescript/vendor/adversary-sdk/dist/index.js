@@ -469,8 +469,9 @@ export function validateDetectionResult(value) {
     if (value.schemaVersion !== DETECTION_SCHEMA_VERSION) throw new Error(`detection result schemaVersion must be "${DETECTION_SCHEMA_VERSION}".`);
     if (typeof value.applicable !== "boolean") throw new Error("detection result.applicable must be a boolean.");
     if (!["low", "medium", "high"].includes(value.confidence)) throw new Error("detection result.confidence is unsupported.");
-    if (!Array.isArray(value.reasons) || value.reasons.length === 0 || value.reasons.some((reason) => typeof reason !== "string" || reason.trim().length === 0)) throw new Error("detection result.reasons must contain non-empty strings.");
-    if (value.relevantFiles !== undefined && (!Array.isArray(value.relevantFiles) || value.relevantFiles.some((path) => typeof path !== "string" || path.trim().length === 0))) throw new Error("detection result.relevantFiles must contain only non-empty strings.");
+    const hasControl = (text) => /[\u0000-\u001f\u007f-\u009f]/u.test(text);
+    if (!Array.isArray(value.reasons) || value.reasons.length === 0 || value.reasons.some((reason) => typeof reason !== "string" || reason.trim().length === 0 || hasControl(reason))) throw new Error("detection result.reasons must contain non-empty strings without control characters.");
+    if (value.relevantFiles !== undefined && (!Array.isArray(value.relevantFiles) || value.relevantFiles.some((path) => typeof path !== "string" || path.trim().length === 0 || hasControl(path)))) throw new Error("detection result.relevantFiles must contain only non-empty strings without control characters.");
     for (const field of ["repositoryMatch", "changeMatch"]) if (value[field] !== undefined && typeof value[field] !== "boolean") throw new Error(`detection result.${field} must be a boolean.`);
 }
 function requireExactKeys(value, keys, field) {

@@ -12,11 +12,11 @@
     "reasons": {
       "type": "array",
       "minItems": 1,
-      "items": { "type": "string", "minLength": 1 }
+      "items": { "type": "string", "minLength": 1, "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]+$" }
     },
     "relevantFiles": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 }
+      "items": { "type": "string", "minLength": 1, "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]+$" }
     },
     "repositoryMatch": { "type": "boolean" },
     "changeMatch": { "type": "boolean" }

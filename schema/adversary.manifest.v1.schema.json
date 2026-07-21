@@ -74,7 +74,13 @@
         },
         "entrypoint": {
           "type": "string",
-          "pattern": "^[^\\x00\\s].*\\.(?:js|mjs|cjs)$"
+          "allOf": [
+            { "pattern": "^[^/\\\\\\x00\\s][^\\\\\\x00]*\\.(?:js|mjs|cjs)$" },
+            { "not": { "pattern": "(?:^|/)\\.\\.(?:/|$)" } },
+            { "not": { "pattern": "(?:^|/)\\.(?:/|$)" } },
+            { "not": { "pattern": "//" } },
+            { "not": { "pattern": "^[A-Za-z]:" } }
+          ]
         }
       }
     },
