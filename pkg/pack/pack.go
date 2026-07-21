@@ -198,6 +198,9 @@ func validatePackageEntrypoint(m manifest.Manifest, files []File) error {
 	if required && !inventoryContains(files, entrypoint) {
 		return fmt.Errorf("runtime entrypoint %q is missing from packed files; build output is not ready", entrypoint)
 	}
+	if detectionEntrypoint := m.Detection.Entrypoint; detectionEntrypoint != "" && !inventoryContains(files, detectionEntrypoint) {
+		return fmt.Errorf("detection entrypoint %q is missing from packed files; check build output and .adversaryignore", detectionEntrypoint)
+	}
 	return nil
 }
 

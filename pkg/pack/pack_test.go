@@ -87,6 +87,10 @@ func TestCreateRequiresDeclaredDetectionEntrypoint(t *testing.T) {
 	if _, err := Create(context.Background(), Options{Dir: dir}); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, dir, ".adversaryignore", "dist/detect.js\n")
+	if _, err := Create(context.Background(), Options{Dir: dir}); err == nil || !strings.Contains(err.Error(), "missing from packed files") {
+		t.Fatalf("ignored detector error = %v", err)
+	}
 }
 
 func TestCreatePreservesExecutableMode(t *testing.T) {
