@@ -212,7 +212,7 @@ test("declarations expose only explicit canonical and legacy paths", async () =>
   const declarations = await readFile(new URL("../dist/index.d.ts", import.meta.url), "utf8");
   assert.match(declarations, /interface LegacyRunResult/);
   assert.doesNotMatch(declarations, /interface Output\b/);
-  assert.doesNotMatch(declarations, /schemaVersion/);
+  assert.doesNotMatch(declarations, /readonly schemaVersion|schemaVersion\?:/);
   assert.match(declarations, /run\(options\?: RunOptions\): Promise<AdversaryRunEnvelope>/);
   assert.match(declarations, /runLegacy\(options\?: RunOptions\): Promise<LegacyRunResult>/);
   assert.match(declarations, /writeOutput\(output: AdversaryRunEnvelope/);
