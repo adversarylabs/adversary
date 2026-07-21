@@ -90,15 +90,17 @@ func FilterAndOrderSelections(selections []DetectionSelection, minimum detection
 	if !minimum.Valid() {
 		return nil, fmt.Errorf("invalid minimum confidence %q", minimum)
 	}
-	excludeSet := normalizedNameSet(excludes)
 	forced, err := resolveForcedSelections(selections, includes)
+	if err != nil {
+		return nil, err
+	}
+	excluded, err := resolveNamedSelections(selections, excludes, "excluded")
 	if err != nil {
 		return nil, err
 	}
 	for i := range selections {
 		selection := &selections[i]
-		names := candidateNames(selection.Candidate)
-		selection.Excluded = setMatchesAny(excludeSet, names)
+		selection.Excluded = excluded[i]
 		selection.Forced = forced[i]
 		switch {
 		case selection.Excluded:
@@ -125,8 +127,12 @@ func FilterAndOrderSelections(selections []DetectionSelection, minimum detection
 }
 
 func resolveForcedSelections(selections []DetectionSelection, includes []string) (map[int]bool, error) {
-	forced := make(map[int]bool, len(includes))
-	for _, raw := range includes {
+	return resolveNamedSelections(selections, includes, "forced")
+}
+
+func resolveNamedSelections(selections []DetectionSelection, values []string, operation string) (map[int]bool, error) {
+	resolved := make(map[int]bool, len(values))
+	for _, raw := range values {
 		value := strings.ToLower(strings.TrimSpace(raw))
 		exact := make([]int, 0, 1)
 		short := make([]int, 0, 1)
@@ -145,7 +151,7 @@ func resolveForcedSelections(selections []DetectionSelection, includes []string)
 			matches = short
 		}
 		if len(matches) == 0 {
-			return nil, fmt.Errorf("forced adversary %q did not resolve to an available candidate", raw)
+			return nil, fmt.Errorf("%s adversary %q did not resolve to an available candidate", operation, raw)
 		}
 		if len(matches) > 1 {
 			qualified := make([]string, 0, len(matches))
@@ -153,30 +159,13 @@ func resolveForcedSelections(selections []DetectionSelection, includes []string)
 				qualified = append(qualified, selections[index].Candidate.Name)
 			}
 			sort.Strings(qualified)
-			return nil, fmt.Errorf("forced adversary %q is ambiguous; use one of: %s", raw, strings.Join(qualified, ", "))
+			return nil, fmt.Errorf("%s adversary %q is ambiguous; use one of: %s", operation, raw, strings.Join(qualified, ", "))
 		}
-		forced[matches[0]] = true
+		resolved[matches[0]] = true
 	}
-	return forced, nil
-}
-
-func normalizedNameSet(values []string) map[string]struct{} {
-	result := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		result[strings.ToLower(strings.TrimSpace(value))] = struct{}{}
-	}
-	return result
+	return resolved, nil
 }
 
 func candidateNames(candidate DetectionCandidate) []string {
 	return []string{strings.ToLower(candidate.Name), strings.ToLower(candidate.Reference), strings.ToLower(manifest.ShortName(candidate.Name))}
-}
-
-func setMatchesAny(set map[string]struct{}, values []string) bool {
-	for _, value := range values {
-		if _, ok := set[value]; ok {
-			return true
-		}
-	}
-	return false
 }
