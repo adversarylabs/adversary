@@ -298,6 +298,10 @@ func (r *countingRuntime) Inspect(ctx context.Context, o application.AdversaryRu
 	r.calls++
 	return r.inner.Inspect(ctx, o)
 }
+func (r *countingRuntime) Auto(ctx context.Context, o application.AdversaryAutoOptions) (application.AdversaryAutoResult, error) {
+	r.calls++
+	return r.inner.Auto(ctx, o)
+}
 
 func TestInvalidRunFlagsDoNoRuntimeWorkOrOutput(t *testing.T) {
 	for name, args := range map[string][]string{

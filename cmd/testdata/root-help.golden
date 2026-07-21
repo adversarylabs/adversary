@@ -5,6 +5,7 @@ Usage:
   adversary [command]
 
 Available Commands:
+  auto        Detect and run adversaries relevant to a Git change
   completion  Generate shell completion code
   help        Help about any command
   init        Create a new adversary project

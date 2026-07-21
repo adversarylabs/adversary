@@ -128,6 +128,7 @@ type Runtime interface {
 	BindingIdentity() string
 	Run(context.Context, AdversaryRunOptions) error
 	Inspect(context.Context, AdversaryRunOptions) error
+	Auto(context.Context, AdversaryAutoOptions) (AdversaryAutoResult, error)
 }
 type AdversaryRunOptions struct {
 	AdversaryRef, RepoPath, BaseRef, HeadRef, Builder, Format string
@@ -137,6 +138,31 @@ type AdversaryRunOptions struct {
 	RunTimeout, BuildTimeout                                  time.Duration
 	Stdout, Stderr                                            io.Writer
 	ReviewContext                                             *detection.Context
+}
+type AdversaryAutoOptions struct {
+	ChangeArgument, RepoPath                       string
+	MinimumConfidence                              detection.Confidence
+	Includes, Excludes                             []string
+	All, DryRun, Explain, AllowUnsafeHostExecution bool
+	IncludeSuppressed                              bool
+	RunTimeout, DetectionTimeout                   time.Duration
+	Stdout, Stderr                                 io.Writer
+	ReportSelections                               func(AdversaryAutoResult) error
+}
+type AdversaryAutoCandidate struct {
+	Name, Reference, Digest string
+}
+type AdversaryAutoSelection struct {
+	Candidate                  AdversaryAutoCandidate
+	Result                     detection.Result
+	Selected, Forced, Excluded bool
+	Error                      error
+}
+type AdversaryAutoResult struct {
+	Context    detection.Context
+	Selections []AdversaryAutoSelection
+	Findings   int
+	RunErrors  []error
 }
 type BrowserAuthRequest struct {
 	Client APIClient
