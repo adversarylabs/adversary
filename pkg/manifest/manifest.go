@@ -514,26 +514,12 @@ func (m Manifest) ValidateProject(root string) error {
 		return err
 	}
 	if m.Runtime.Image != "" {
-		return validateDetectionProjectFile(root, m.Detection.Entrypoint)
+		return nil
 	}
 	if m.Runtime.Name == "node" {
 		if _, err := os.Stat(filepath.Join(root, "package.json")); err != nil {
 			return fmt.Errorf("node runtime requires package.json: %w", err)
 		}
-	}
-	return validateDetectionProjectFile(root, m.Detection.Entrypoint)
-}
-
-func validateDetectionProjectFile(root, entrypoint string) error {
-	if entrypoint == "" {
-		return nil
-	}
-	info, err := os.Stat(filepath.Join(root, filepath.FromSlash(entrypoint)))
-	if err != nil {
-		return fmt.Errorf("detection entrypoint %q is unavailable: %w", entrypoint, err)
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("detection entrypoint %q must be a regular file", entrypoint)
 	}
 	return nil
 }

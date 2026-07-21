@@ -91,7 +91,7 @@ func TestDetectionEntrypointRequiresNodeRuntime(t *testing.T) {
 	}
 }
 
-func TestValidateProjectRequiresDetectionEntrypointFile(t *testing.T) {
+func TestValidateProjectAllowsBuildGeneratedDetectionEntrypoint(t *testing.T) {
 	input := strings.Replace(valid, "runtime:\n", "detection:\n  entrypoint: dist/detect.js\nruntime:\n", 1)
 	m, err := Parse([]byte(input))
 	if err != nil {
@@ -101,17 +101,8 @@ func TestValidateProjectRequiresDetectionEntrypointFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.ValidateProject(root); err == nil || !strings.Contains(err.Error(), "detection entrypoint") {
-		t.Fatalf("missing entrypoint error = %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "dist"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "dist", "detect.js"), nil, 0644); err != nil {
-		t.Fatal(err)
-	}
 	if err := m.ValidateProject(root); err != nil {
-		t.Fatal(err)
+		t.Fatalf("ValidateProject rejected build-generated detector: %v", err)
 	}
 }
 
