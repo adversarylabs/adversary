@@ -140,6 +140,17 @@ func TestMutableRemoteReferenceIsPinnedBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestPinnedDigestRetainsSelectedPublisherIdentity(t *testing.T) {
+	repo, resolver, record := importPolicyArtifact(t, "adversarylabs/security:1.2.0")
+	host := &policyExecutor{backend: HostExecutorBackend}
+	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: host, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
+		AdversaryRef: record.Digest, ReferenceIdentity: "registry.adversarylabs.ai/randomperson/security:1.2.0", RepoPath: t.TempDir(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown publisher") || host.called != 0 {
+		t.Fatalf("error=%v calls=%d", err, host.called)
+	}
+}
+
 func TestRequestedPermissionsAreComparedWithExecutorCapabilities(t *testing.T) {
 	requested := RequestedPermissions{FilesystemReadIsolation: true, FilesystemWriteIsolation: true, EnvironmentIsolation: true, NetworkIsolation: true}
 	if err := validateExecutorCapabilities(requested, ExecutorCapabilities{}, HostExecutorBackend); err == nil || !strings.Contains(err.Error(), "filesystem.read") {

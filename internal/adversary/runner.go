@@ -37,6 +37,7 @@ type RunOptions struct {
 	RunTimeout               time.Duration
 	BuildTimeout             time.Duration
 	ReviewContext            *detection.Context
+	ReferenceIdentity        string
 }
 
 const maxRunOutputBytes int64 = 16 << 20
@@ -141,7 +142,12 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		resolved.BuildContext = lease.Path
 		resolved.StorePath = lease.Path
 	}
-	publisher, err := classifyPublisher(opts.AdversaryRef, resolved, explicitLocalPath)
+	publisherRef := opts.AdversaryRef
+	if opts.ReferenceIdentity != "" {
+		resolved.CanonicalReference = opts.ReferenceIdentity
+		publisherRef = opts.ReferenceIdentity
+	}
+	publisher, err := classifyPublisher(publisherRef, resolved, explicitLocalPath)
 	if err != nil {
 		return err
 	}

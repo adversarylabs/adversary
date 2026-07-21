@@ -376,6 +376,7 @@ test("detection context and result use the strict shared contract", async () => 
     await writeFile(inputPath, JSON.stringify({ ...context, findings: [] }));
     await assert.rejects(parseDetectionContext(inputPath), /unknown field/);
     assert.throws(() => validateDetectionResult({ ...result, findings: [] }), /unknown field/);
+    assert.throws(() => validateDetectionResult({ ...result, reasons: ["match\nforged"] }), /control/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

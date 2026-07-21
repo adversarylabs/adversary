@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/adversarylabs/adversary/pkg/detection"
@@ -21,7 +22,18 @@ type DetectOptions struct {
 	ReviewContext            detection.Context
 	AllowUnsafeHostExecution bool
 	Timeout                  time.Duration
+	ReferenceIdentity        string
 }
+
+type DetectorPolicyError struct {
+	Err                 error
+	DeclarativeFallback bool
+}
+
+func (e *DetectorPolicyError) Error() string {
+	return fmt.Sprintf("programmatic detector policy: %v", e.Err)
+}
+func (e *DetectorPolicyError) Unwrap() error { return e.Err }
 
 // Detect executes a programmatic detector through the same executor, trust
 // policy, permissions, capabilities, immutable artifact, and materialization
@@ -65,7 +77,12 @@ func (r Runner) Detect(ctx context.Context, opts DetectOptions) (detection.Resul
 		defer lease.Close()
 		resolved.ExecutionPath, resolved.BuildContext, resolved.StorePath = lease.Path, lease.Path, lease.Path
 	}
-	publisher, err := classifyPublisher(opts.AdversaryRef, resolved, explicitLocal)
+	publisherRef := opts.AdversaryRef
+	if opts.ReferenceIdentity != "" {
+		resolved.CanonicalReference = opts.ReferenceIdentity
+		publisherRef = opts.ReferenceIdentity
+	}
+	publisher, err := classifyPublisher(publisherRef, resolved, explicitLocal)
 	if err != nil {
 		return detection.Result{}, err
 	}
@@ -82,7 +99,8 @@ func (r Runner) Detect(ctx context.Context, opts DetectOptions) (detection.Resul
 	}
 	requirements := permissionRequirements(resolved, RunOptions{})
 	if _, err := DecideExecutionPolicy(ExecutionPolicyRequest{Trust: trust, Requested: requirements.Requested, Required: requirements.Required, Allowed: permissionPolicy.Allowed(trust), Backend: executor.Backend(), Capabilities: executor.Capabilities(), AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution}); err != nil {
-		return detection.Result{}, fmt.Errorf("programmatic detector policy: %w", err)
+		fallback := trust.Trust == UnknownPublisherTrust && executor.Backend() == HostExecutorBackend && !opts.AllowUnsafeHostExecution && strings.Contains(err.Error(), "cannot execute with HostExecutor")
+		return detection.Result{}, &DetectorPolicyError{Err: err, DeclarativeFallback: fallback}
 	}
 
 	repoPath := opts.RepoPath

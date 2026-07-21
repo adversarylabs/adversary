@@ -10,6 +10,7 @@ import (
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/oci"
 )
 
 type AutoOptions struct {
@@ -91,11 +92,15 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 			if candidate.Digest != "" {
 				ref = candidate.Digest
 			}
-			programResult, err := a.Runner.Detect(ctx, DetectOptions{AdversaryRef: ref, RepoPath: repositoryRoot, ReviewContext: reviewContext, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Timeout: opts.DetectionTimeout})
+			programResult, err := a.Runner.Detect(ctx, DetectOptions{AdversaryRef: ref, ReferenceIdentity: candidate.Reference, RepoPath: repositoryRoot, ReviewContext: reviewContext, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Timeout: opts.DetectionTimeout})
 			if err == nil {
 				result = programResult
 			} else {
 				detectorErr = err
+				var policyErr *DetectorPolicyError
+				if !errors.As(err, &policyErr) || !policyErr.DeclarativeFallback {
+					result = detection.Result{SchemaVersion: detection.SchemaVersion, Applicable: false, Confidence: detection.ConfidenceLow, Reasons: []string{"programmatic detector failed"}}
+				}
 			}
 		}
 		selections = append(selections, DetectionSelection{Candidate: candidate, Result: result, Error: detectorErr})
@@ -121,7 +126,7 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 		if selection.Candidate.Digest != "" {
 			ref = selection.Candidate.Digest
 		}
-		err := a.Runner.Run(ctx, RunOptions{AdversaryRef: ref, RepoPath: repositoryRoot, ReviewContext: &reviewContext, Force: true, Format: opts.Format, IncludeSuppressed: opts.IncludeSuppressed, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, RunTimeout: opts.RunTimeout})
+		err := a.Runner.Run(ctx, RunOptions{AdversaryRef: ref, ReferenceIdentity: selection.Candidate.Reference, RepoPath: repositoryRoot, ReviewContext: &reviewContext, Force: true, Format: opts.Format, IncludeSuppressed: opts.IncludeSuppressed, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, RunTimeout: opts.RunTimeout})
 		if err == nil {
 			continue
 		}
@@ -142,38 +147,31 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 }
 
 func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate, error) {
-	entries, err := a.Resolver.Repository.Entries(10000)
+	entries, err := a.Resolver.Repository.ReferenceEntries(10000)
 	if err != nil {
 		return nil, err
 	}
 	candidates := make([]DetectionCandidate, 0, len(entries)+len(includes))
-	processedDigest := make(map[string]struct{}, len(entries))
-	byName := make(map[string]int, len(entries))
+	byIdentity := make(map[string]int, len(entries))
 	for _, entry := range entries {
-		if _, seen := processedDigest[entry.Digest]; seen {
-			continue
-		}
 		resolved, err := ResolveReferenceWithRuntime(entry.Digest, *a.Resolver, a.Runner.runtimeFiles())
 		if err != nil || resolved.Manifest == nil {
 			continue
 		}
-		processedDigest[entry.Digest] = struct{}{}
 		candidate := DetectionCandidate{Name: resolved.Manifest.Name, Reference: entry.CanonicalReference, Digest: entry.Digest, Manifest: *resolved.Manifest}
-		key := strings.ToLower(candidate.Name)
-		if index, exists := byName[key]; exists {
+		key := candidateIdentityKey(candidate)
+		if index, exists := byIdentity[key]; exists {
 			if newerManifestVersion(candidate.Manifest.Version, candidates[index].Manifest.Version) {
 				candidates[index] = candidate
 			}
 			continue
 		}
-		byName[key] = len(candidates)
+		byIdentity[key] = len(candidates)
 		candidates = append(candidates, candidate)
 	}
-	selectedDigest := make(map[string]struct{}, len(candidates))
+	selectedIdentity := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.Digest != "" {
-			selectedDigest[candidate.Digest] = struct{}{}
-		}
+		selectedIdentity[candidateIdentityKey(candidate)+"@"+candidate.Digest] = struct{}{}
 	}
 	for _, include := range includes {
 		if candidateSliceMatches(candidates, include) {
@@ -187,10 +185,12 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 			return nil, fmt.Errorf("forced adversary %q is unavailable: %w", include, err)
 		}
 		if resolved.Digest != "" {
-			if _, seen := selectedDigest[resolved.Digest]; seen {
+			candidate := DetectionCandidate{Name: resolved.Manifest.Name, Reference: include, Digest: resolved.Digest, Manifest: *resolved.Manifest}
+			key := candidateIdentityKey(candidate) + "@" + resolved.Digest
+			if _, seen := selectedIdentity[key]; seen {
 				continue
 			}
-			selectedDigest[resolved.Digest] = struct{}{}
+			selectedIdentity[key] = struct{}{}
 		}
 		candidates = append(candidates, DetectionCandidate{Name: resolved.Manifest.Name, Reference: include, Digest: resolved.Digest, Manifest: *resolved.Manifest})
 	}
@@ -198,6 +198,13 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 		return strings.ToLower(candidates[i].Name) < strings.ToLower(candidates[j].Name)
 	})
 	return candidates, nil
+}
+
+func candidateIdentityKey(candidate DetectionCandidate) string {
+	if parsed, err := oci.ParseReference(candidate.Reference); err == nil {
+		return strings.ToLower(parsed.Registry + "/" + parsed.Repository)
+	}
+	return strings.ToLower(candidate.Reference)
 }
 
 func newerManifestVersion(candidate, current string) bool {
@@ -224,7 +231,11 @@ func candidateSliceMatches(candidates []DetectionCandidate, value string) bool {
 type AutoExecutionError struct{ Errors []error }
 
 func (e *AutoExecutionError) Error() string {
-	return fmt.Sprintf("%d selected adversary execution(s) failed", len(e.Errors))
+	parts := make([]string, 0, len(e.Errors))
+	for _, err := range e.Errors {
+		parts = append(parts, err.Error())
+	}
+	return fmt.Sprintf("%d selected adversary execution(s) failed: %s", len(e.Errors), strings.Join(parts, "; "))
 }
 
 func (e *AutoExecutionError) Unwrap() []error { return e.Errors }

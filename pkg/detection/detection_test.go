@@ -103,3 +103,14 @@ func TestResultRequiresVersionConfidenceAndReason(t *testing.T) {
 		}
 	}
 }
+
+func TestResultRejectsTerminalControlCharacters(t *testing.T) {
+	for _, result := range []Result{
+		{SchemaVersion: SchemaVersion, Applicable: true, Confidence: ConfidenceHigh, Reasons: []string{"match\nforged"}},
+		{SchemaVersion: SchemaVersion, Applicable: true, Confidence: ConfidenceHigh, Reasons: []string{"match"}, RelevantFiles: []string{"safe\x1b[31m"}},
+	} {
+		if err := result.Validate(); err == nil {
+			t.Fatalf("Validate accepted controls in %#v", result)
+		}
+	}
+}
