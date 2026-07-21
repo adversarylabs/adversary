@@ -48,7 +48,7 @@ func TestCommandGitDifferChangedFiles(t *testing.T) {
 	}
 
 	repo := t.TempDir()
-	runGit(t, repo, "init")
+	runGit(t, repo, "init", "-b", "main")
 	runGit(t, repo, "config", "user.email", "test@example.com")
 	runGit(t, repo, "config", "user.name", "Test User")
 	writeFile(t, filepath.Join(repo, "a.txt"), "one\n")
@@ -385,7 +385,7 @@ func newGitRepository(t *testing.T) string {
 		t.Skip("git not installed")
 	}
 	repo := t.TempDir()
-	runGit(t, repo, "init")
+	runGit(t, repo, "init", "-b", "main")
 	runGit(t, repo, "config", "user.email", "test@example.com")
 	runGit(t, repo, "config", "user.name", "Test User")
 	return repo
