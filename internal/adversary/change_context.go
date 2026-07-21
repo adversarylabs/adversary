@@ -22,6 +22,30 @@ type ChangeResolver interface {
 	ResolveChanges(context.Context, ChangeRequest) (detection.Context, error)
 }
 
+type RepositoryFileResolver interface {
+	RepositoryFiles(context.Context, string) ([]string, error)
+}
+
+func (g CommandGitDiffer) RepositoryFiles(ctx context.Context, repoPath string) ([]string, error) {
+	root, err := g.repositoryRoot(ctx, repoPath)
+	if err != nil {
+		return nil, err
+	}
+	out, stderr, err := g.run(ctx, root, "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--")
+	if err != nil {
+		if message := strings.TrimSpace(string(stderr)); message != "" {
+			return nil, fmt.Errorf("list repository files: %s", message)
+		}
+		return nil, fmt.Errorf("list repository files: %w", err)
+	}
+	paths, err := parseNULPaths(out)
+	if err != nil {
+		return nil, fmt.Errorf("parse repository files: %w", err)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
 // ChangeRequestForArgument interprets the optional positional syntax accepted
 // by `adversary auto`. A single revision compares it with HEAD; an explicit
 // three-dot range retains its two endpoints and merge-base semantics.

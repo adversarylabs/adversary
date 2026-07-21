@@ -60,6 +60,27 @@ func TestPublishedSchemasAcceptCanonicalContracts(t *testing.T) {
 	}
 }
 
+func TestVendoredTypeScriptSchemasMatchCanonical(t *testing.T) {
+	for _, name := range []string{"adversary.detection-context.v1.schema.json", "adversary.detection.v1.schema.json"} {
+		canonical, err := os.ReadFile(filepath.Join("..", "..", "schema", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, root := range []string{
+			filepath.Join("..", "..", "templates", "typescript", "vendor", "adversary-sdk", "schemas"),
+			filepath.Join("..", "..", "smoke-tests", "comment-sentence-adversary", "vendor", "adversary-sdk", "schemas"),
+		} {
+			vendored, err := os.ReadFile(filepath.Join(root, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(vendored, canonical) {
+				t.Fatalf("%s is not synchronized with %s", filepath.Join(root, name), name)
+			}
+		}
+	}
+}
+
 func TestResultValidationAndNormalization(t *testing.T) {
 	result := Result{SchemaVersion: SchemaVersion, Applicable: true, Confidence: ConfidenceHigh, Reasons: []string{"Dockerfile changed", "Dockerfile changed"}, RelevantFiles: []string{"z", "a", "a"}}
 	if err := result.Validate(); err != nil {
@@ -79,6 +100,17 @@ func TestResultRequiresVersionConfidenceAndReason(t *testing.T) {
 	} {
 		if err := result.Validate(); err == nil {
 			t.Fatalf("Validate accepted %#v", result)
+		}
+	}
+}
+
+func TestResultRejectsTerminalControlCharacters(t *testing.T) {
+	for _, result := range []Result{
+		{SchemaVersion: SchemaVersion, Applicable: true, Confidence: ConfidenceHigh, Reasons: []string{"match\nforged"}},
+		{SchemaVersion: SchemaVersion, Applicable: true, Confidence: ConfidenceHigh, Reasons: []string{"match"}, RelevantFiles: []string{"safe\x1b[31m"}},
+	} {
+		if err := result.Validate(); err == nil {
+			t.Fatalf("Validate accepted controls in %#v", result)
 		}
 	}
 }

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adversary.dev/schemas/adversary.detection-context.v1.schema.json",
+  "title": "Adversary Detection Context v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "repositoryRoot", "mode", "changedFiles"],
+  "properties": {
+    "schemaVersion": { "const": "adversary.detection.v1" },
+    "repositoryRoot": { "type": "string", "minLength": 1 },
+    "mode": { "enum": ["dirty-worktree", "branch-comparison", "explicit-range", "pull-request"] },
+    "baseRef": { "type": "string", "minLength": 1 },
+    "headRef": { "type": "string", "minLength": 1 },
+    "mergeBase": { "type": "string", "minLength": 1 },
+    "changedFiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "status"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "previousPath": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["added", "modified", "deleted", "renamed", "copied", "untracked"] },
+          "additions": { "type": "integer", "minimum": 0 },
+          "deletions": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "repositoryFiles": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}
