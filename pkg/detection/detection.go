@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 const SchemaVersion = "adversary.detection.v1"
@@ -107,10 +108,16 @@ func (r Result) Validate() error {
 		if strings.TrimSpace(reason) == "" || reason != strings.TrimSpace(reason) {
 			return fmt.Errorf("detection result reasons[%d] must be non-empty and normalized", i)
 		}
+		if strings.IndexFunc(reason, unicode.IsControl) >= 0 {
+			return fmt.Errorf("detection result reasons[%d] must not contain control characters", i)
+		}
 	}
 	for i, path := range r.RelevantFiles {
 		if strings.TrimSpace(path) == "" || path != strings.TrimSpace(path) {
 			return fmt.Errorf("detection result relevantFiles[%d] must be non-empty and normalized", i)
+		}
+		if strings.IndexFunc(path, unicode.IsControl) >= 0 {
+			return fmt.Errorf("detection result relevantFiles[%d] must not contain control characters", i)
 		}
 	}
 	return nil

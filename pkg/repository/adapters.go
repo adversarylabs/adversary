@@ -80,6 +80,35 @@ func (r Repository) Entries(limit int) ([]Entry, error) {
 	}
 	return out, nil
 }
+
+// ReferenceEntries enumerates every runnable reference instead of collapsing
+// aliases by digest. Publisher trust is reference-scoped, so automatic
+// selection must not treat two publishers pointing at identical bytes as one
+// identity.
+func (r Repository) ReferenceEntries() ([]Entry, error) {
+	snapshot, err := r.referenceSnapshot()
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]string, 0, len(snapshot))
+	for ref := range snapshot {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	entries := make([]Entry, 0, len(refs))
+	for _, ref := range refs {
+		digest := snapshot[ref]
+		record, err := r.record(digest)
+		if err != nil {
+			return nil, fmt.Errorf("read record for reference %q: %w", ref, err)
+		}
+		entries = append(entries, Entry{Record: record, CanonicalReference: ref, Digest: digest})
+	}
+	return entries, nil
+}
 func (r Repository) HasExact(value string) (bool, error) {
 	if isContentDigest(value) {
 		_, err := r.record(value)

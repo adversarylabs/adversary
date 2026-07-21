@@ -8,9 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/pack"
 )
 
@@ -294,12 +296,19 @@ func (f fakeGitDiffer) ChangedFiles(ctx context.Context, repoPath, baseRef, head
 }
 
 type recordingExecutor struct {
-	called bool
-	input  Input
-	spec   RuntimeSpec
+	called  bool
+	backend ExecutorBackend
+	input   Input
+	spec    RuntimeSpec
+	context detection.Context
 }
 
-func (*recordingExecutor) Backend() ExecutorBackend           { return NativeSandboxExecutorBackend }
+func (e *recordingExecutor) Backend() ExecutorBackend {
+	if e.backend != "" {
+		return e.backend
+	}
+	return NativeSandboxExecutorBackend
+}
 func (*recordingExecutor) Capabilities() ExecutorCapabilities { return allTestExecutorCapabilities() }
 
 func allTestExecutorCapabilities() ExecutorCapabilities {
@@ -325,12 +334,65 @@ func (e *recordingExecutor) Run(ctx context.Context, spec RuntimeSpec) (RuntimeR
 	if err := json.Unmarshal(data, &e.input); err != nil {
 		return RuntimeResult{}, err
 	}
+	if path := spec.Env["ADVERSARY_CHANGE_CONTEXT"]; path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return RuntimeResult{}, err
+		}
+		if err := json.Unmarshal(data, &e.context); err != nil {
+			return RuntimeResult{}, err
+		}
+	}
 
 	output := `{"protocolVersion":1,"result":{"adversary":{"name":"local/adversary"},"target":{},"positives":[],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0}}}`
 	if err := os.WriteFile(filepath.Join(spec.RunDir, "output.json"), []byte(output), 0644); err != nil {
 		return RuntimeResult{}, err
 	}
 	return RuntimeResult{ExitCode: 0}, nil
+}
+
+type failingGitDiffer struct{}
+
+func (failingGitDiffer) ChangedFiles(context.Context, string, string, string) ([]string, error) {
+	return nil, errors.New("Git must not be recalculated")
+}
+
+func TestRunUsesPreResolvedReviewContextWithoutRecalculatingGit(t *testing.T) {
+	adversaryDir := t.TempDir()
+	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), `name: local/adversary
+runtime:
+  name: node
+  version: "22"
+  command: [dist/index.js]
+`)
+	writeFile(t, filepath.Join(adversaryDir, "dist", "index.js"), "")
+	executor := &recordingExecutor{}
+	resolved := &detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: "/workspace", Mode: detection.ModeBranchComparison, BaseRef: "main", HeadRef: "HEAD", MergeBase: "abc", ChangedFiles: []detection.ChangedFile{{Path: "Dockerfile", Status: detection.StatusModified}}}
+	err := Runner{Stdout: &strings.Builder{}, Stderr: &strings.Builder{}, Git: failingGitDiffer{}, Executor: executor}.Run(context.Background(), RunOptions{AdversaryRef: adversaryDir, RepoPath: t.TempDir(), ReviewContext: resolved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(executor.context, *resolved) {
+		t.Fatalf("executor context = %#v, want %#v", executor.context, *resolved)
+	}
+	if executor.input.Change == nil || !reflect.DeepEqual(executor.input.Change.ChangedFiles, []string{"Dockerfile"}) {
+		t.Fatalf("legacy input did not receive resolved paths: %#v", executor.input)
+	}
+}
+
+func TestHostRunTranslatesReviewContextToHostRepositoryPath(t *testing.T) {
+	adversaryDir := t.TempDir()
+	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), "name: local/adversary\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writeFile(t, filepath.Join(adversaryDir, "dist", "index.js"), "")
+	executor := &recordingExecutor{backend: HostExecutorBackend}
+	repositoryRoot := t.TempDir()
+	resolved := &detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: "/workspace", Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "main.go", Status: detection.StatusModified}}}
+	if err := (Runner{Stdout: &strings.Builder{}, Stderr: &strings.Builder{}, Executor: executor}).Run(context.Background(), RunOptions{AdversaryRef: adversaryDir, RepoPath: repositoryRoot, ReviewContext: resolved}); err != nil {
+		t.Fatal(err)
+	}
+	if executor.context.RepositoryRoot != repositoryRoot {
+		t.Fatalf("repositoryRoot = %q, want %q", executor.context.RepositoryRoot, repositoryRoot)
+	}
 }
 
 func TestRunBuildsLocalTypeScriptAdversaryBeforeExecution(t *testing.T) {
