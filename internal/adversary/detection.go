@@ -90,13 +90,16 @@ func FilterAndOrderSelections(selections []DetectionSelection, minimum detection
 	if !minimum.Valid() {
 		return nil, fmt.Errorf("invalid minimum confidence %q", minimum)
 	}
-	includeSet := normalizedNameSet(includes)
 	excludeSet := normalizedNameSet(excludes)
+	forced, err := resolveForcedSelections(selections, includes)
+	if err != nil {
+		return nil, err
+	}
 	for i := range selections {
 		selection := &selections[i]
 		names := candidateNames(selection.Candidate)
 		selection.Excluded = setMatchesAny(excludeSet, names)
-		selection.Forced = setMatchesAny(includeSet, names)
+		selection.Forced = forced[i]
 		switch {
 		case selection.Excluded:
 			selection.Selected = false
@@ -119,6 +122,42 @@ func FilterAndOrderSelections(selections []DetectionSelection, minimum detection
 		return strings.ToLower(left.Candidate.Name) < strings.ToLower(right.Candidate.Name)
 	})
 	return selections, nil
+}
+
+func resolveForcedSelections(selections []DetectionSelection, includes []string) (map[int]bool, error) {
+	forced := make(map[int]bool, len(includes))
+	for _, raw := range includes {
+		value := strings.ToLower(strings.TrimSpace(raw))
+		exact := make([]int, 0, 1)
+		short := make([]int, 0, 1)
+		for i, selection := range selections {
+			candidate := selection.Candidate
+			if value == strings.ToLower(candidate.Name) || value == strings.ToLower(candidate.Reference) {
+				exact = append(exact, i)
+				continue
+			}
+			if value == strings.ToLower(manifest.ShortName(candidate.Name)) {
+				short = append(short, i)
+			}
+		}
+		matches := exact
+		if len(matches) == 0 {
+			matches = short
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("forced adversary %q did not resolve to an available candidate", raw)
+		}
+		if len(matches) > 1 {
+			qualified := make([]string, 0, len(matches))
+			for _, index := range matches {
+				qualified = append(qualified, selections[index].Candidate.Name)
+			}
+			sort.Strings(qualified)
+			return nil, fmt.Errorf("forced adversary %q is ambiguous; use one of: %s", raw, strings.Join(qualified, ", "))
+		}
+		forced[matches[0]] = true
+	}
+	return forced, nil
 }
 
 func normalizedNameSet(values []string) map[string]struct{} {

@@ -50,3 +50,20 @@ func TestFilterAndOrderSelections(t *testing.T) {
 		t.Fatalf("ordered selections = %#v", got)
 	}
 }
+
+func TestForcedShortNameMustResolveUniquely(t *testing.T) {
+	selections := []DetectionSelection{
+		{Candidate: DetectionCandidate{Name: "adversarylabs/security", Reference: "registry.test/adversarylabs/security:1"}, Result: detection.Result{Confidence: detection.ConfidenceLow}},
+		{Candidate: DetectionCandidate{Name: "randomperson/security", Reference: "registry.test/randomperson/security:1"}, Result: detection.Result{Confidence: detection.ConfidenceLow}},
+	}
+	if _, err := FilterAndOrderSelections(selections, detection.ConfidenceMedium, []string{"security"}, nil, false); err == nil {
+		t.Fatal("ambiguous short include was accepted")
+	}
+	got, err := FilterAndOrderSelections(selections, detection.ConfidenceMedium, []string{"adversarylabs/security"}, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got[0].Selected || got[0].Candidate.Name != "adversarylabs/security" || got[1].Selected {
+		t.Fatalf("qualified selection = %#v", got)
+	}
+}
