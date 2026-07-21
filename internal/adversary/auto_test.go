@@ -3,6 +3,7 @@ package adversary
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,7 +29,8 @@ func (r *fakeChangeResolver) RepositoryFiles(context.Context, string) ([]string,
 }
 
 type autoRecordingExecutor struct {
-	contexts []detection.Context
+	contexts       []detection.Context
+	reportedBefore *bool
 }
 
 func (*autoRecordingExecutor) Backend() ExecutorBackend { return NativeSandboxExecutorBackend }
@@ -36,6 +38,9 @@ func (*autoRecordingExecutor) Capabilities() ExecutorCapabilities {
 	return allTestExecutorCapabilities()
 }
 func (e *autoRecordingExecutor) Run(_ context.Context, spec RuntimeSpec) (RuntimeResult, error) {
+	if e.reportedBefore != nil && !*e.reportedBefore {
+		return RuntimeResult{}, errors.New("selections were not reported before execution")
+	}
 	if path := spec.Env["ADVERSARY_CHANGE_CONTEXT"]; path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -57,9 +62,10 @@ func TestAutoSelectsAvailableAdversariesAndSharesOneContext(t *testing.T) {
 		"adversarylabs/general:1.0.0":    "name: adversarylabs/general\ndetection:\n  files: ['**/*.go']\n",
 	})
 	changes := &fakeChangeResolver{context: detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "Dockerfile", Status: detection.StatusModified}, {Path: "cmd/main.go", Status: detection.StatusModified}}}}
-	executor := &autoRecordingExecutor{}
+	reported := false
+	executor := &autoRecordingExecutor{reportedBefore: &reported}
 	runner := Runner{Resolver: &resolver, Repository: &repo, RequireInjectedResolver: true, Executor: executor, Stdout: os.Stdout, Stderr: os.Stderr}
-	result, err := (AutoRunner{Runner: runner, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{MinimumConfidence: detection.ConfidenceMedium})
+	result, err := (AutoRunner{Runner: runner, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{MinimumConfidence: detection.ConfidenceMedium, ReportSelections: func(AutoResult) error { reported = true; return nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

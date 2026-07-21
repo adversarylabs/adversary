@@ -59,6 +59,7 @@ func newRootCommand(app *application.App) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&profile, "profile", "default", "credential profile")
 
 	cmd.AddCommand(newRunCommand(app))
+	cmd.AddCommand(newAutoCommand(app))
 	cmd.AddCommand(newInspectCommand(app))
 	cmd.AddCommand(newValidateCommand(app))
 	cmd.AddCommand(newInitCommand(app))
@@ -118,5 +119,6 @@ func isTypedCommandError(err error) bool {
 	var child *internaladversary.ChildExitError
 	var protocol *internaladversary.ProtocolError
 	var execution *internaladversary.ExecutionError
-	return errors.As(err, &appErr) || errors.As(err, &findings) || errors.As(err, &child) || errors.As(err, &protocol) || errors.As(err, &execution)
+	var autoExecution *internaladversary.AutoExecutionError
+	return errors.As(err, &appErr) || errors.As(err, &findings) || errors.As(err, &child) || errors.As(err, &protocol) || errors.As(err, &execution) || errors.As(err, &autoExecution)
 }
