@@ -101,7 +101,14 @@ func (g CommandGitDiffer) Changes(ctx context.Context, repoPath, baseRef, headRe
 }
 
 func gitDiffNameStatusArgs(baseRef, headRef string) []string {
-	return []string{"diff", "--name-status", "-z", "--find-renames", "--find-copies", "--find-copies-harder", baseRef, headRef, "--"}
+	args := []string{"diff", "--no-ext-diff", "--ignore-submodules=none", "--name-status", "-z", "--find-renames", "--find-copies", "--find-copies-harder"}
+	if baseRef != "" {
+		args = append(args, baseRef)
+	}
+	if headRef != "" {
+		args = append(args, headRef)
+	}
+	return append(args, "--")
 }
 
 func parseGitChanges(output []byte) ([]GitChange, error) {

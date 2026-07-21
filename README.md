@@ -41,6 +41,7 @@ Only TypeScript project generation is currently supported. Useful commands:
 
 ```sh
 adversary run . --repo . --format json
+adversary auto --dry-run --explain
 adversary inspect . --repo .
 adversary pack . --name ghcr.io/acme/reviewer
 adversary push ghcr.io/acme/reviewer:0.1.0
@@ -50,6 +51,8 @@ adversary completion bash
 ```
 
 Run `adversary help <command>` for the canonical command and flag reference.
+See [automatic detection](docs/automatic-detection.md) for change resolution,
+manifest detection declarations, selection policy, and CI behavior.
 
 ## Safety and trust
 
@@ -84,6 +87,7 @@ and are not general CLI configuration.
 | OCI diagnostics | `--verbose` | `ADVERSARY_OCI_DEBUG` (internal transport toggle) | disabled; secrets redacted |
 | review suppression | command behavior | `ADVERSARY_INCLUDE_SUPPRESSED` (injected into adversary) | suppressed details omitted |
 | adversary protocol paths | — | `ADVERSARY_INPUT`, `ADVERSARY_OUTPUT`, `ADVERSARY_REPO` (injected) | per-run temporary paths |
+| automatic change context | — | `ADVERSARY_CHANGE_CONTEXT` (injected) | one versioned context shared by selected runs |
 | adversary diagnostics | `--verbose` | `ADVERSARY_VERBOSE` (injected) | disabled |
 | service-account login | `--token-stdin --registry-namespace <slug>` | service token only in the caller's shell/secret store | selected profile in OS config dir |
 | password login | `--password-stdin` | `ADVERSARY_PASSWORD` only in shell examples | secure prompt; variable is not read directly by the CLI |

@@ -183,12 +183,53 @@ func (p processRuntime) Inspect(ctx context.Context, opts application.AdversaryR
 	r := p.runner(opts)
 	return r.Inspect(toInternalRunOptions(opts))
 }
+func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAutoOptions) (application.AdversaryAutoResult, error) {
+	request, err := internaladversary.ChangeRequestForArgument(opts.RepoPath, opts.ChangeArgument)
+	if err != nil {
+		return application.AdversaryAutoResult{}, err
+	}
+	if opts.ChangeArgument == "" {
+		if ciRequest, ok := internaladversary.ChangeRequestFromCI(opts.RepoPath, p.environment.Lookup); ok {
+			request = ciRequest
+		}
+	}
+	runner := p.runner(application.AdversaryRunOptions{Stdout: opts.Stdout, Stderr: opts.Stderr})
+	internalOptions := internaladversary.AutoOptions{
+		ChangeRequest: request, MinimumConfidence: opts.MinimumConfidence,
+		Includes: opts.Includes, Excludes: opts.Excludes,
+		All: opts.All, DryRun: opts.DryRun,
+		AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
+		RunTimeout:               opts.RunTimeout, DetectionTimeout: opts.DetectionTimeout,
+		IncludeSuppressed: opts.IncludeSuppressed,
+	}
+	if opts.ReportSelections != nil {
+		internalOptions.ReportSelections = func(result internaladversary.AutoResult) error {
+			return opts.ReportSelections(toApplicationAutoResult(result))
+		}
+	}
+	changeResolver, ok := p.git.(internaladversary.ChangeResolver)
+	if !ok {
+		return application.AdversaryAutoResult{}, fmt.Errorf("runtime Git dependency does not support automatic change resolution")
+	}
+	result, runErr := (internaladversary.AutoRunner{Runner: runner, Changes: changeResolver, Resolver: &p.resolver}).Auto(ctx, internalOptions)
+	return toApplicationAutoResult(result), runErr
+}
+func toApplicationAutoResult(result internaladversary.AutoResult) application.AdversaryAutoResult {
+	converted := application.AdversaryAutoResult{Context: result.Context, Findings: result.Findings, RunErrors: result.RunErrors}
+	for _, selection := range result.Selections {
+		converted.Selections = append(converted.Selections, application.AdversaryAutoSelection{
+			Candidate: application.AdversaryAutoCandidate{Name: selection.Candidate.Name, Reference: selection.Candidate.Reference, Digest: selection.Candidate.Digest},
+			Result:    selection.Result, Selected: selection.Selected, Forced: selection.Forced, Excluded: selection.Excluded, Error: selection.Error,
+		})
+	}
+	return converted
+}
 func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladversary.Runner {
 	shell := func() ([]string, error) { return internaladversary.PlatformShell(p.node.LookPath) }
 	return internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: p.stdin, Git: p.git, TempDir: p.tempDir, HomeDir: p.homeDir, DataRoot: p.dataRoot, BuildStateDir: p.buildStateDir, Now: p.now, Files: p.files, BuildProject: p.buildProject, Shell: shell, Executor: internaladversary.HostExecutor{Stdout: opts.Stderr, Stderr: opts.Stderr, Stdin: p.stdin, Environment: p.environment, ResolveExecutable: p.resolveExecutable, FindNode: p.node.Find, Shell: shell, Launcher: p.launcher, Timer: p.timer}, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
 }
 func toInternalRunOptions(opts application.AdversaryRunOptions) internaladversary.RunOptions {
-	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout}
+	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout, ReviewContext: opts.ReviewContext}
 }
 
 type processTTY struct{}

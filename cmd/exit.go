@@ -39,6 +39,10 @@ func ExitCode(err error) int {
 	if errors.As(err, &executionErr) {
 		return 3
 	}
+	var autoExecutionErr *internaladversary.AutoExecutionError
+	if errors.As(err, &autoExecutionErr) {
+		return 3
+	}
 	if application.IsKind(err, "usage") || application.IsKind(err, "configuration") || application.IsKind(err, "confirmation") {
 		return 2
 	}

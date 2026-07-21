@@ -175,6 +175,9 @@ type fakeRuntime struct{}
 func (fakeRuntime) BindingIdentity() string                            { return "artifacts" }
 func (fakeRuntime) Run(context.Context, AdversaryRunOptions) error     { return nil }
 func (fakeRuntime) Inspect(context.Context, AdversaryRunOptions) error { return nil }
+func (fakeRuntime) Auto(context.Context, AdversaryAutoOptions) (AdversaryAutoResult, error) {
+	return AdversaryAutoResult{}, nil
+}
 
 type mismatchedResolver struct{ fakeResolver }
 
