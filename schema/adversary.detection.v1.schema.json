@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adversary.dev/schemas/adversary.detection.v1.schema.json",
+  "title": "Adversary Detection Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "applicable", "confidence", "reasons"],
+  "properties": {
+    "schemaVersion": { "const": "adversary.detection.v1" },
+    "applicable": { "type": "boolean" },
+    "confidence": { "enum": ["low", "medium", "high"] },
+    "reasons": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "relevantFiles": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "repositoryMatch": { "type": "boolean" },
+    "changeMatch": { "type": "boolean" }
+  }
+}

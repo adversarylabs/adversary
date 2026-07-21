@@ -198,6 +198,9 @@ func validatePackageEntrypoint(m manifest.Manifest, files []File) error {
 	if required && !inventoryContains(files, entrypoint) {
 		return fmt.Errorf("runtime entrypoint %q is missing from packed files; build output is not ready", entrypoint)
 	}
+	if detectionEntrypoint := m.Detection.Entrypoint; detectionEntrypoint != "" && !inventoryContains(files, detectionEntrypoint) {
+		return fmt.Errorf("detection entrypoint %q is missing from packed files; check build output and .adversaryignore", detectionEntrypoint)
+	}
 	return nil
 }
 
@@ -263,6 +266,15 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 		}
 		if err := opts.BuildProject(ctx, BuildOptions{Dir: dir, Builder: opts.Builder, Stdout: opts.Stdout, Stderr: opts.Stderr}); err != nil {
 			return Artifact{}, err
+		}
+	}
+	if entrypoint := m.Detection.Entrypoint; entrypoint != "" {
+		info, err := root.Stat(filepath.FromSlash(entrypoint))
+		if err != nil {
+			return Artifact{}, fmt.Errorf("detection entrypoint %q is unavailable after build: %w", entrypoint, err)
+		}
+		if !info.Mode().IsRegular() {
+			return Artifact{}, fmt.Errorf("detection entrypoint %q must be a regular file", entrypoint)
 		}
 	}
 	var files []File

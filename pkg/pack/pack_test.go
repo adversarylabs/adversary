@@ -69,6 +69,51 @@ func TestCreateRejectsManifestSymlinkSwap(t *testing.T) {
 	}
 }
 
+func TestCreateRequiresDeclaredDetectionEntrypoint(t *testing.T) {
+	dir := testProject(t)
+	manifestPath := filepath.Join(dir, "adversary.yaml")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("runtime:\n"), []byte("detection:\n  entrypoint: dist/detect.js\nruntime:\n"), 1)
+	if err := os.WriteFile(manifestPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Create(context.Background(), Options{Dir: dir}); err == nil || !strings.Contains(err.Error(), "detection entrypoint") {
+		t.Fatalf("missing detector error = %v", err)
+	}
+	writeFile(t, dir, "dist/detect.js", "export default function detect() {}\n")
+	if _, err := Create(context.Background(), Options{Dir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, ".adversaryignore", "dist/detect.js\n")
+	if _, err := Create(context.Background(), Options{Dir: dir}); err == nil || !strings.Contains(err.Error(), "missing from packed files") {
+		t.Fatalf("ignored detector error = %v", err)
+	}
+}
+
+func TestCreateAllowsBuildGeneratedDetectionEntrypoint(t *testing.T) {
+	dir := testProject(t)
+	manifestPath := filepath.Join(dir, "adversary.yaml")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("runtime:\n"), []byte("detection:\n  entrypoint: dist/detect.js\nruntime:\n"), 1)
+	if err := os.WriteFile(manifestPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	build := func(_ context.Context, opts BuildOptions) error {
+		writeFile(t, opts.Dir, "dist/detect.js", "export default function detect() {}\n")
+		return nil
+	}
+	if _, err := Create(context.Background(), Options{Dir: dir, Build: true, BuildProject: build}); err != nil {
+		t.Fatalf("pack rejected build-generated detector: %v", err)
+	}
+}
+
 func TestCreatePreservesExecutableMode(t *testing.T) {
 	dir := testProject(t)
 	path := filepath.Join(dir, "run.sh")

@@ -43,6 +43,69 @@ func TestParseValid(t *testing.T) {
 	}
 }
 
+func TestParseDetectionContract(t *testing.T) {
+	input := strings.Replace(valid, "runtime:\n", `detection:
+  files: [Dockerfile, "**/Dockerfile"]
+  repository_files: [package.json]
+  change_types: [added, modified, renamed]
+  entrypoint: dist/detect.js
+runtime:
+`, 1)
+	m, err := Parse([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Detection.Files) != 2 || m.Detection.Entrypoint != "dist/detect.js" {
+		t.Fatalf("detection = %#v", m.Detection)
+	}
+}
+
+func TestParseDetectionRejectsInvalidContract(t *testing.T) {
+	for _, detection := range []string{
+		"  files: ['  ']\n",
+		"  change_types: [conflicted]\n",
+		"  entrypoint: ../detect.js\n",
+		"  entrypoint: dist/detect.ts\n",
+	} {
+		input := strings.Replace(valid, "runtime:\n", "detection:\n"+detection+"runtime:\n", 1)
+		if _, err := Parse([]byte(input)); err == nil {
+			t.Fatalf("accepted detection declaration:\n%s", detection)
+		}
+	}
+	for _, duplicate := range []string{
+		"  files: [Dockerfile, Dockerfile]\n",
+		"  repository_files: [package.json, package.json]\n",
+		"  change_types: [modified, modified]\n",
+	} {
+		input := strings.Replace(valid, "runtime:\n", "detection:\n"+duplicate+"runtime:\n", 1)
+		if _, err := Parse([]byte(input)); err == nil || !strings.Contains(err.Error(), "duplicates") {
+			t.Fatalf("duplicate accepted or produced wrong error: %v", err)
+		}
+	}
+}
+
+func TestDetectionEntrypointRequiresNodeRuntime(t *testing.T) {
+	input := strings.Replace(valid, "runtime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n", "detection:\n  entrypoint: dist/detect.js\nruntime:\n  name: process\n  version: \"1\"\n  command: [bin/review]\n", 1)
+	if _, err := Parse([]byte(input)); err == nil || !strings.Contains(err.Error(), "requires runtime.name node") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateProjectAllowsBuildGeneratedDetectionEntrypoint(t *testing.T) {
+	input := strings.Replace(valid, "runtime:\n", "detection:\n  entrypoint: dist/detect.js\nruntime:\n", 1)
+	m, err := Parse([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ValidateProject(root); err != nil {
+		t.Fatalf("ValidateProject rejected build-generated detector: %v", err)
+	}
+}
+
 func TestParseEnvironmentAllowPermission(t *testing.T) {
 	input := strings.Replace(valid, "    allow: [CI]\n", "    allow: [CI, HOME]\n", 1)
 	m, err := Parse([]byte(input))

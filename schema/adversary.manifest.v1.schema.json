@@ -45,6 +45,45 @@
         }
       }
     },
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
+          }
+        },
+        "repository_files": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$"
+          }
+        },
+        "change_types": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["added", "modified", "deleted", "renamed", "copied", "untracked"]
+          }
+        },
+        "entrypoint": {
+          "type": "string",
+          "allOf": [
+            { "pattern": "^[^/\\\\\\x00\\s][^\\\\\\x00]*\\.(?:js|mjs|cjs)$" },
+            { "not": { "pattern": "(?:^|/)\\.\\.(?:/|$)" } },
+            { "not": { "pattern": "(?:^|/)\\.(?:/|$)" } },
+            { "not": { "pattern": "//" } },
+            { "not": { "pattern": "^[A-Za-z]:" } }
+          ]
+        }
+      }
+    },
     "runtime": {
       "type": "object",
       "additionalProperties": false,

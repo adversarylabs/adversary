@@ -30,6 +30,7 @@ type Manifest struct {
 	Version     string      `yaml:"version" json:"version"`
 	Description string      `yaml:"description,omitempty" json:"description,omitempty"`
 	Triggers    Triggers    `yaml:"triggers,omitempty" json:"triggers,omitempty"`
+	Detection   Detection   `yaml:"detection,omitempty" json:"detection,omitempty"`
 	Runtime     Runtime     `yaml:"runtime" json:"runtime"`
 	Permissions Permissions `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	Findings    Findings    `yaml:"findings,omitempty" json:"findings,omitempty"`
@@ -38,6 +39,16 @@ type Manifest struct {
 type Triggers struct {
 	Manual       bool     `yaml:"manual,omitempty" json:"manual,omitempty"`
 	FilesChanged []string `yaml:"files_changed,omitempty" json:"files_changed,omitempty"`
+}
+
+// Detection is the portable, side-effect-free applicability declaration.
+// Entrypoint is optional and is executed only after publisher trust policy has
+// selected an appropriate executor.
+type Detection struct {
+	Files           []string `yaml:"files,omitempty" json:"files,omitempty"`
+	RepositoryFiles []string `yaml:"repository_files,omitempty" json:"repository_files,omitempty"`
+	ChangeTypes     []string `yaml:"change_types,omitempty" json:"change_types,omitempty"`
+	Entrypoint      string   `yaml:"entrypoint,omitempty" json:"entrypoint,omitempty"`
 }
 
 type Runtime struct {
@@ -257,6 +268,41 @@ func (m Manifest) Validate() error {
 	for i, glob := range m.Triggers.FilesChanged {
 		if !normalizedNonEmpty(glob) {
 			return fmt.Errorf("manifest triggers.files_changed[%d] must be non-empty", i)
+		}
+	}
+	for _, group := range []struct {
+		name   string
+		values []string
+	}{{"files", m.Detection.Files}, {"repository_files", m.Detection.RepositoryFiles}} {
+		seen := make(map[string]struct{}, len(group.values))
+		for i, value := range group.values {
+			if !normalizedNonEmpty(value) {
+				return fmt.Errorf("manifest detection.%s[%d] must be non-empty", group.name, i)
+			}
+			if _, duplicate := seen[value]; duplicate {
+				return fmt.Errorf("manifest detection.%s[%d] duplicates %q", group.name, i, value)
+			}
+			seen[value] = struct{}{}
+		}
+	}
+	seenChangeTypes := make(map[string]struct{}, len(m.Detection.ChangeTypes))
+	for i, changeType := range m.Detection.ChangeTypes {
+		switch changeType {
+		case "added", "modified", "deleted", "renamed", "copied", "untracked":
+		default:
+			return fmt.Errorf("manifest detection.change_types[%d] %q is unsupported", i, changeType)
+		}
+		if _, duplicate := seenChangeTypes[changeType]; duplicate {
+			return fmt.Errorf("manifest detection.change_types[%d] duplicates %q", i, changeType)
+		}
+		seenChangeTypes[changeType] = struct{}{}
+	}
+	if m.Detection.Entrypoint != "" {
+		if err := validateNodeEntrypoint(m.Detection.Entrypoint); err != nil {
+			return fmt.Errorf("manifest detection.entrypoint: %w", err)
+		}
+		if m.Runtime.Name != "node" {
+			return errors.New("manifest detection.entrypoint currently requires runtime.name node")
 		}
 	}
 	permissionOwners := map[string]string{}
