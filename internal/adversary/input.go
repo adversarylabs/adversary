@@ -1,8 +1,17 @@
 package adversary
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/adversarylabs/adversary/pkg/detection"
+)
 
 const InputSchemaVersion = "adversary.input.v1"
+
+const (
+	WorktreeInputBaseRef = "HEAD"
+	WorktreeInputHeadRef = "WORKTREE"
+)
 
 type Input struct {
 	SchemaVersion string       `json:"schema_version"`
@@ -43,6 +52,22 @@ func NewInput(baseRef, headRef string, changedFiles []string, allFiles bool) Inp
 		}
 	}
 	return input
+}
+
+// NewInputFromReviewContext preserves the v1 runtime input for existing
+// adversaries while also representing dirty-worktree paths. WORKTREE is a
+// stable sentinel, not a Git revision; the authoritative structured context is
+// provided separately through ADVERSARY_CHANGE_CONTEXT.
+func NewInputFromReviewContext(context detection.Context, allFiles bool) Input {
+	baseRef, headRef := context.BaseRef, context.HeadRef
+	if context.Mode == detection.ModeDirtyWorktree {
+		baseRef, headRef = WorktreeInputBaseRef, WorktreeInputHeadRef
+	}
+	changedFiles := make([]string, 0, len(context.ChangedFiles))
+	for _, changed := range context.ChangedFiles {
+		changedFiles = append(changedFiles, changed.Path)
+	}
+	return NewInput(baseRef, headRef, changedFiles, allFiles)
 }
 
 func MarshalInput(input Input) ([]byte, error) {
