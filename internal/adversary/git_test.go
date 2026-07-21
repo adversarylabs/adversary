@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/adversarylabs/adversary/pkg/detection"
 )
 
 func TestParseChangedFiles(t *testing.T) {
@@ -69,9 +71,163 @@ func TestCommandGitDifferChangedFiles(t *testing.T) {
 
 func TestGitDiffNameOnlyCommandConstruction(t *testing.T) {
 	got := gitDiffNameStatusArgs("main", "HEAD")
-	want := []string{"diff", "--name-status", "-z", "--find-renames", "--find-copies", "--find-copies-harder", "main", "HEAD", "--"}
+	want := []string{"diff", "--no-ext-diff", "--ignore-submodules=none", "--name-status", "-z", "--find-renames", "--find-copies", "--find-copies-harder", "main", "HEAD", "--"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Args = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveDirtyChangesIncludesStagedUnstagedAndUntracked(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "staged.txt"), "base\n")
+	writeFile(t, filepath.Join(repo, "unstaged.txt"), "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	writeFile(t, filepath.Join(repo, "staged.txt"), "staged\n")
+	runGit(t, repo, "add", "staged.txt")
+	writeFile(t, filepath.Join(repo, "staged.txt"), "staged and unstaged\n")
+	writeFile(t, filepath.Join(repo, "unstaged.txt"), "unstaged\n")
+	writeFile(t, filepath.Join(repo, "untracked.txt"), "new\n")
+
+	context, err := systemGitDiffer(t).ResolveChanges(context.Background(), ChangeRequest{RepoPath: repo, Mode: detection.ModeDirtyWorktree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []detection.ChangedFile{
+		{Path: "staged.txt", Status: detection.StatusModified},
+		{Path: "unstaged.txt", Status: detection.StatusModified},
+		{Path: "untracked.txt", Status: detection.StatusUntracked},
+	}
+	if !reflect.DeepEqual(context.ChangedFiles, want) {
+		t.Fatalf("changes = %#v, want %#v", context.ChangedFiles, want)
+	}
+}
+
+func TestResolveDirtyChangesPreservesRenameDeleteAndOddUntrackedPath(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "rename-me"), strings.Repeat("same\n", 20))
+	writeFile(t, filepath.Join(repo, "delete-me"), "gone\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	runGit(t, repo, "mv", "rename-me", "renamed")
+	runGit(t, repo, "rm", "delete-me")
+	writeFile(t, filepath.Join(repo, "odd\nname"), "new\n")
+
+	got, err := systemGitDiffer(t).ResolveChanges(context.Background(), ChangeRequest{RepoPath: repo, Mode: detection.ModeDirtyWorktree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []detection.ChangedFile{
+		{Path: "delete-me", Status: detection.StatusDeleted},
+		{Path: "odd\nname", Status: detection.StatusUntracked},
+		{Path: "renamed", PreviousPath: "rename-me", Status: detection.StatusRenamed},
+	}
+	if !reflect.DeepEqual(got.ChangedFiles, want) {
+		t.Fatalf("changes = %#v, want %#v", got.ChangedFiles, want)
+	}
+}
+
+func TestResolveBranchComparisonUsesMergeBase(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "base"), "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	runGit(t, repo, "switch", "-c", "feature-branch")
+	writeFile(t, filepath.Join(repo, "feature"), "feature\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "feature")
+	featureCommit := strings.TrimSpace(runGitOutput(t, repo, "rev-parse", "HEAD"))
+	runGit(t, repo, "switch", "main")
+	writeFile(t, filepath.Join(repo, "main-only"), "main\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "main")
+	runGit(t, repo, "switch", "--detach", featureCommit)
+
+	got, err := systemGitDiffer(t).ResolveChanges(context.Background(), ChangeRequest{RepoPath: repo, Mode: detection.ModeBranchComparison, BaseRef: "main", HeadRef: "HEAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ChangedFiles) != 1 || got.ChangedFiles[0].Path != "feature" {
+		t.Fatalf("merge-base changes = %#v", got.ChangedFiles)
+	}
+	if got.MergeBase == "" || got.BaseRef != "main" || got.HeadRef != "HEAD" {
+		t.Fatalf("context = %#v", got)
+	}
+}
+
+func TestResolveChangesUsesRepositoryRootFromSubdirectory(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "tracked"), "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	subdir := filepath.Join(repo, "nested")
+	if err := os.Mkdir(subdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := systemGitDiffer(t).ResolveChanges(context.Background(), ChangeRequest{RepoPath: subdir, Mode: detection.ModeDirtyWorktree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot := strings.TrimSpace(runGitOutput(t, repo, "rev-parse", "--show-toplevel"))
+	if got.RepositoryRoot != wantRoot {
+		t.Fatalf("repository root = %q, want %q", got.RepositoryRoot, wantRoot)
+	}
+}
+
+func TestResolveDirtyChangesSupportsUnbornRepository(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "staged"), "new\n")
+	runGit(t, repo, "add", "staged")
+	writeFile(t, filepath.Join(repo, "untracked"), "new\n")
+	got, err := systemGitDiffer(t).ResolveChanges(context.Background(), ChangeRequest{RepoPath: repo, Mode: detection.ModeDirtyWorktree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []detection.ChangedFile{{Path: "staged", Status: detection.StatusAdded}, {Path: "untracked", Status: detection.StatusUntracked}}
+	if !reflect.DeepEqual(got.ChangedFiles, want) {
+		t.Fatalf("changes = %#v, want %#v", got.ChangedFiles, want)
+	}
+}
+
+func TestParseNULPathsRejectsMalformedOutput(t *testing.T) {
+	for _, value := range [][]byte{[]byte("path"), []byte("path\x00\x00")} {
+		if _, err := parseNULPaths(value); err == nil {
+			t.Fatalf("accepted %q", value)
+		}
+	}
+}
+
+func TestChangeRequestForArgument(t *testing.T) {
+	for _, tc := range []struct {
+		argument string
+		mode     detection.ChangeMode
+		base     string
+		head     string
+	}{
+		{"", detection.ModeDirtyWorktree, "", ""},
+		{"main", detection.ModeBranchComparison, "main", "HEAD"},
+		{"main...feature", detection.ModeExplicitRange, "main", "feature"},
+	} {
+		got, err := ChangeRequestForArgument(".", tc.argument)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Mode != tc.mode || got.BaseRef != tc.base || got.HeadRef != tc.head {
+			t.Fatalf("ChangeRequestForArgument(%q) = %#v", tc.argument, got)
+		}
+	}
+	for _, invalid := range []string{"main..HEAD", "main....HEAD", "...HEAD", "main...", "--output=x"} {
+		if _, err := ChangeRequestForArgument(".", invalid); err == nil {
+			t.Fatalf("accepted invalid argument %q", invalid)
+		}
+	}
+}
+
+func TestChangeRequestFromCI(t *testing.T) {
+	values := map[string]string{"GITHUB_BASE_REF": "main", "GITHUB_SHA": "abc123"}
+	got, ok := ChangeRequestFromCI(".", func(name string) (string, bool) { value, exists := values[name]; return value, exists })
+	if !ok || got.Mode != detection.ModePullRequest || got.BaseRef != "main" || got.HeadRef != "abc123" {
+		t.Fatalf("CI request = %#v, %t", got, ok)
 	}
 }
 
@@ -221,4 +377,27 @@ func runGit(t *testing.T, dir string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
+}
+
+func newGitRepository(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test User")
+	return repo
+}
+
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+	return string(out)
 }

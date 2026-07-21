@@ -12,6 +12,7 @@ import (
 
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
+	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -135,6 +136,7 @@ type AdversaryRunOptions struct {
 	Build                                                     bool
 	RunTimeout, BuildTimeout                                  time.Duration
 	Stdout, Stderr                                            io.Writer
+	ReviewContext                                             *detection.Context
 }
 type BrowserAuthRequest struct {
 	Client APIClient
