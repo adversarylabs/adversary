@@ -288,6 +288,9 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	config.RunDir = runDir
 
 	input := NewInput(baseRef, headRef, changedFiles, opts.AllFiles)
+	if opts.ReviewContext != nil {
+		input = NewInputFromReviewContext(*opts.ReviewContext, opts.AllFiles)
+	}
 	inputData, err := MarshalInput(input)
 	if err != nil {
 		return err
