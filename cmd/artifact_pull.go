@@ -35,32 +35,15 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
 			}
 
-			// Delegate to shared pullAdversary helper (AMB-11 enables auto-pull in run command).
-			if err := pullAdversary(cmd.Context(), args[0], valueOf(apiURL), valueOf(profile), app, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
-				return err
-			}
-
-			resolver := app.Dependencies().Resolver
-			ref, err := app.Dependencies().References.Parse(args[0])
+			pulled, err := pullAdversary(cmd.Context(), args[0], valueOf(apiURL), valueOf(profile), app, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
-			registry, err := app.Dependencies().Registries.New(valueOf(apiURL), valueOf(profile))
-			if err != nil {
-				return err
-			}
-			digest, err := registry.Resolve(cmd.Context(), ref)
-			if err != nil {
-				return err
-			}
-			rec, err := resolver.ResolveRecord(digest)
-			if err != nil {
-				return err
-			}
+			result := pullDTO{Name: pulled.Record.Name, Version: pulled.Record.Version, Tag: pulled.Reference.Tag, CanonicalReference: pulled.Reference.Locator(), Digest: pulled.Record.Digest}
 			if resolved == "json" {
-				return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{Name: rec.Name, Version: rec.Version, Tag: ref.Tag, CanonicalReference: ref.Locator(), Digest: rec.Digest})
+				return writeJSON(cmd.OutOrStdout(), "pull", result)
 			}
-			return writePullText(cmd.OutOrStdout(), pullDTO{Name: rec.Name, Version: rec.Version, Tag: ref.Tag, CanonicalReference: ref.Locator(), Digest: rec.Digest})
+			return writePullText(cmd.OutOrStdout(), result)
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
@@ -122,19 +105,23 @@ func registerExactRef(resolver application.Resolver, ref, digest string) error {
 	return resolver.UpdateRef(ref, "", digest)
 }
 
-// pullAdversary performs the core pull/install for a reference.
-// Shared between `adversary pull` and auto-pull inside `adversary run` (see AMB-11).
-// Status is printed to stderr; on success for auto-pull we return silently after import.
-// The caller (pull cmd) can still emit the final Installed text.
-func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *application.App, stdout, stderr io.Writer) error {
+type pullResult struct {
+	Record    repository.Record
+	Reference oci.Reference
+}
+
+// pullAdversary resolves a mutable reference once and returns the exact record
+// installed for that digest. Both explicit pulls and run's auto-pull use this
+// result without performing a second network resolution.
+func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *application.App, stderr io.Writer) (pullResult, error) {
 	resolver := app.Dependencies().Resolver
 	ref, err := app.Dependencies().References.Parse(refStr)
 	if err != nil {
-		return err
+		return pullResult{}, err
 	}
 	registry, err := app.Dependencies().Registries.New(apiURL, profile)
 	if err != nil {
-		return err
+		return pullResult{}, err
 	}
 	if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
 		registry.SetPlainHTTP(true)
@@ -143,31 +130,29 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	fmt.Fprintln(stderr)
 	digest, err := registry.Resolve(ctx, ref)
 	if err != nil {
-		return err
+		return pullResult{}, err
 	}
 	if existing, resolveErr := resolver.ResolveRecord(digest); resolveErr == nil {
 		if err := registerExactRef(resolver, ref.Locator(), existing.Digest); err != nil {
-			return err
+			return pullResult{}, err
 		}
-		// success early (already present or registered); explicit pull caller will print result
-		return nil
+		return pullResult{Record: existing, Reference: ref}, nil
 	} else if !os.IsNotExist(resolveErr) {
-		return resolveErr
+		return pullResult{}, resolveErr
 	}
 
 	fmt.Fprintln(stderr, "Downloading layers...")
 	artifact, err := registry.PullSources(ctx, ref)
 	if err != nil {
-		return err
+		return pullResult{}, err
 	}
 	manifestSource, adversarySource, sourceErr := pulledMetadataSources(artifact)
 	if sourceErr != nil {
-		return errors.Join(sourceErr, artifact.Close())
+		return pullResult{}, errors.Join(sourceErr, artifact.Close())
 	}
 	unified, importErr := resolver.ImportSources(repository.SourceImport{Reference: ref.Locator(), Name: artifact.Manifest.Annotations["ai.adversary.full_name"], Version: artifact.Manifest.Annotations["ai.adversary.version"], Manifest: manifestSource, Blobs: artifact.Blobs, AdversaryManifest: adversarySource})
 	if err := errors.Join(importErr, artifact.Close()); err != nil {
-		return err
+		return pullResult{}, err
 	}
-	_ = unified // explicit pull path uses it for output DTO
-	return nil
+	return pullResult{Record: unified, Reference: ref}, nil
 }
