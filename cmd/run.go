@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
+	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/spf13/cobra"
-	"time"
 )
 
 type runOptions struct {
@@ -102,6 +104,39 @@ func newRunCommand(app *application.App) *cobra.Command {
 			})
 			if errors.Is(err, context.Canceled) {
 				return err
+			}
+			if err != nil && errors.Is(err, internaladversary.ErrNotInstalledLocally) {
+				// AMB-11: auto-pull if not present locally, then retry once.
+				fmt.Fprintln(cmd.ErrOrStderr(), "Adversary not present locally; attempting pull...")
+				_, pullErr := pullAdversary(cmd.Context(), args[0], app.Dependencies().DefaultAPIURL, "default", app, cmd.ErrOrStderr())
+				if pullErr != nil {
+					return fmt.Errorf("auto-pull for %s failed: %w (original error: %v)", args[0], pullErr, err)
+				}
+				// retry
+				err = app.Dependencies().Runtime.Run(cmd.Context(), application.AdversaryRunOptions{
+					AdversaryRef:             args[0],
+					RepoPath:                 opts.repo,
+					BaseRef:                  opts.base,
+					HeadRef:                  opts.head,
+					Builder:                  opts.builder,
+					Force:                    opts.force,
+					Format:                   opts.format,
+					KeepTemp:                 opts.keepTemp,
+					NoNetwork:                opts.noNetwork,
+					Verbose:                  opts.verbose,
+					IncludeSuppressed:        opts.includeSuppressed,
+					Shell:                    opts.shell,
+					AllFiles:                 opts.allFiles,
+					AllowUnsafeHostExecution: opts.allowUnsafeHostExecution,
+					Build:                    opts.build,
+					RunTimeout:               opts.runTimeout,
+					BuildTimeout:             opts.buildTimeout,
+					Stdout:                   cmd.OutOrStdout(),
+					Stderr:                   cmd.ErrOrStderr(),
+				})
+				if errors.Is(err, context.Canceled) {
+					return err
+				}
 			}
 			return err
 		},

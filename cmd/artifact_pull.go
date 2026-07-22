@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -33,52 +34,16 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 			if legacyJSON {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
 			}
-			resolver := app.Dependencies().Resolver
-			ref, err := app.Dependencies().References.Parse(args[0])
+
+			pulled, err := pullAdversary(cmd.Context(), args[0], valueOf(apiURL), valueOf(profile), app, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
-			registry, err := app.Dependencies().Registries.New(valueOf(apiURL), valueOf(profile))
-			if err != nil {
-				return err
-			}
-			if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
-				registry.SetPlainHTTP(true)
-			}
-			fmt.Fprintln(cmd.ErrOrStderr(), "Pulling manifest...")
-			fmt.Fprintln(cmd.ErrOrStderr())
-			digest, err := registry.Resolve(cmd.Context(), ref)
-			if err != nil {
-				return err
-			}
-			if existing, resolveErr := resolver.ResolveRecord(digest); resolveErr == nil {
-				if err := registerExactRef(resolver, ref.Locator(), existing.Digest); err != nil {
-					return err
-				}
-				if resolved == "json" {
-					return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{Name: existing.Name, Version: existing.Version, Tag: ref.Tag, CanonicalReference: ref.Locator(), Digest: existing.Digest})
-				}
-				return writePullText(cmd.OutOrStdout(), pullDTO{Name: existing.Name, Version: existing.Version, Tag: ref.Tag, CanonicalReference: ref.Locator(), Digest: existing.Digest})
-			} else if !os.IsNotExist(resolveErr) {
-				return resolveErr
-			}
-			fmt.Fprintln(cmd.ErrOrStderr(), "Downloading layers...")
-			artifact, err := registry.PullSources(cmd.Context(), ref)
-			if err != nil {
-				return err
-			}
-			manifestSource, adversarySource, sourceErr := pulledMetadataSources(artifact)
-			if sourceErr != nil {
-				return errors.Join(sourceErr, artifact.Close())
-			}
-			unified, importErr := resolver.ImportSources(repository.SourceImport{Reference: ref.Locator(), Name: artifact.Manifest.Annotations["ai.adversary.full_name"], Version: artifact.Manifest.Annotations["ai.adversary.version"], Manifest: manifestSource, Blobs: artifact.Blobs, AdversaryManifest: adversarySource})
-			if err := errors.Join(importErr, artifact.Close()); err != nil {
-				return err
-			}
+			result := pullDTO{Name: pulled.Record.Name, Version: pulled.Record.Version, Tag: pulled.Reference.Tag, CanonicalReference: pulled.Reference.Locator(), Digest: pulled.Record.Digest}
 			if resolved == "json" {
-				return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{Name: unified.Name, Version: unified.Version, Tag: ref.Tag, CanonicalReference: ref.Locator(), Digest: unified.Digest})
+				return writeJSON(cmd.OutOrStdout(), "pull", result)
 			}
-			return writePullText(cmd.OutOrStdout(), pullDTO{Name: unified.Name, Version: unified.Version, Tag: ref.Tag, CanonicalReference: ref.Locator(), Digest: unified.Digest})
+			return writePullText(cmd.OutOrStdout(), result)
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
@@ -138,4 +103,56 @@ func registerExactRef(resolver application.Resolver, ref, digest string) error {
 		return err
 	}
 	return resolver.UpdateRef(ref, "", digest)
+}
+
+type pullResult struct {
+	Record    repository.Record
+	Reference oci.Reference
+}
+
+// pullAdversary resolves a mutable reference once and returns the exact record
+// installed for that digest. Both explicit pulls and run's auto-pull use this
+// result without performing a second network resolution.
+func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *application.App, stderr io.Writer) (pullResult, error) {
+	resolver := app.Dependencies().Resolver
+	ref, err := app.Dependencies().References.Parse(refStr)
+	if err != nil {
+		return pullResult{}, err
+	}
+	registry, err := app.Dependencies().Registries.New(apiURL, profile)
+	if err != nil {
+		return pullResult{}, err
+	}
+	if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
+		registry.SetPlainHTTP(true)
+	}
+	fmt.Fprintln(stderr, "Pulling manifest...")
+	fmt.Fprintln(stderr)
+	digest, err := registry.Resolve(ctx, ref)
+	if err != nil {
+		return pullResult{}, err
+	}
+	if existing, resolveErr := resolver.ResolveRecord(digest); resolveErr == nil {
+		if err := registerExactRef(resolver, ref.Locator(), existing.Digest); err != nil {
+			return pullResult{}, err
+		}
+		return pullResult{Record: existing, Reference: ref}, nil
+	} else if !os.IsNotExist(resolveErr) {
+		return pullResult{}, resolveErr
+	}
+
+	fmt.Fprintln(stderr, "Downloading layers...")
+	artifact, err := registry.PullSources(ctx, ref)
+	if err != nil {
+		return pullResult{}, err
+	}
+	manifestSource, adversarySource, sourceErr := pulledMetadataSources(artifact)
+	if sourceErr != nil {
+		return pullResult{}, errors.Join(sourceErr, artifact.Close())
+	}
+	unified, importErr := resolver.ImportSources(repository.SourceImport{Reference: ref.Locator(), Name: artifact.Manifest.Annotations["ai.adversary.full_name"], Version: artifact.Manifest.Annotations["ai.adversary.version"], Manifest: manifestSource, Blobs: artifact.Blobs, AdversaryManifest: adversarySource})
+	if err := errors.Join(importErr, artifact.Close()); err != nil {
+		return pullResult{}, err
+	}
+	return pullResult{Record: unified, Reference: ref}, nil
 }
