@@ -56,9 +56,9 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 					return err
 				}
 				if resolved == "json" {
-					return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{existing.Name, existing.Version, ref.Locator(), existing.Digest})
+					return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{existing.Name, existing.Version, ref.Tag, ref.Locator(), existing.Digest})
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Installed: %s\nVersion: %s\nCanonical reference: %s\nDigest: %s\n", existing.Name, existing.Version, ref.Locator(), existing.Digest)
+				fmt.Fprintf(cmd.OutOrStdout(), "Installed: %s\nVersion: %s\nTag: %s\nCanonical reference: %s\nDigest: %s\n", existing.Name, existing.Version, ref.Tag, ref.Locator(), existing.Digest)
 				return nil
 			} else if !os.IsNotExist(resolveErr) {
 				return resolveErr
@@ -77,9 +77,9 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 				return err
 			}
 			if resolved == "json" {
-				return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{unified.Name, unified.Version, ref.Locator(), unified.Digest})
+				return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{unified.Name, unified.Version, ref.Tag, ref.Locator(), unified.Digest})
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Installed: %s\nVersion: %s\nCanonical reference: %s\nDigest: %s\n", unified.Name, unified.Version, ref.Locator(), unified.Digest)
+			fmt.Fprintf(cmd.OutOrStdout(), "Installed: %s\nVersion: %s\nTag: %s\nCanonical reference: %s\nDigest: %s\n", unified.Name, unified.Version, ref.Tag, ref.Locator(), unified.Digest)
 			return nil
 		},
 	}

@@ -200,6 +200,7 @@ type pushDTO struct {
 type pullDTO struct {
 	Name               string `json:"name"`
 	Version            string `json:"version"`
+	Tag                string `json:"tag,omitempty"`
 	CanonicalReference string `json:"canonicalReference"`
 	Digest             string `json:"digest"`
 }
