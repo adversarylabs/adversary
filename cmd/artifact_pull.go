@@ -56,10 +56,9 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 					return err
 				}
 				if resolved == "json" {
-					return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{existing.Name, existing.Version, ref.Locator(), existing.Digest})
+					return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{Name: existing.Name, Version: existing.Version, Tag: ref.Tag, CanonicalReference: ref.Locator(), Digest: existing.Digest})
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Installed: %s\nVersion: %s\nCanonical reference: %s\nDigest: %s\n", existing.Name, existing.Version, ref.Locator(), existing.Digest)
-				return nil
+				return writePullText(cmd.OutOrStdout(), pullDTO{Name: existing.Name, Version: existing.Version, Tag: ref.Tag, CanonicalReference: ref.Locator(), Digest: existing.Digest})
 			} else if !os.IsNotExist(resolveErr) {
 				return resolveErr
 			}
@@ -77,15 +76,27 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 				return err
 			}
 			if resolved == "json" {
-				return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{unified.Name, unified.Version, ref.Locator(), unified.Digest})
+				return writeJSON(cmd.OutOrStdout(), "pull", pullDTO{Name: unified.Name, Version: unified.Version, Tag: ref.Tag, CanonicalReference: ref.Locator(), Digest: unified.Digest})
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Installed: %s\nVersion: %s\nCanonical reference: %s\nDigest: %s\n", unified.Name, unified.Version, ref.Locator(), unified.Digest)
-			return nil
+			return writePullText(cmd.OutOrStdout(), pullDTO{Name: unified.Name, Version: unified.Version, Tag: ref.Tag, CanonicalReference: ref.Locator(), Digest: unified.Digest})
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&legacyJSON, "json", false, "deprecated alias for --format json")
 	return cmd
+}
+
+func writePullText(w io.Writer, result pullDTO) error {
+	if _, err := fmt.Fprintf(w, "Installed: %s\nVersion: %s\n", result.Name, result.Version); err != nil {
+		return err
+	}
+	if result.Tag != "" {
+		if _, err := fmt.Fprintf(w, "Tag: %s\n", result.Tag); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(w, "Canonical reference: %s\nDigest: %s\n", result.CanonicalReference, result.Digest)
+	return err
 }
 
 func pulledMetadataSources(artifact *oci.PulledSources) (blobsource.Source, blobsource.Source, error) {

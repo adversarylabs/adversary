@@ -748,7 +748,7 @@ runtime:
 	if err := pull.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Installed:", "local/security-reviewer", "Version:", "1.4.2"} {
+	for _, want := range []string{"Installed:", "local/security-reviewer", "Version:", "1.4.2", "Tag:", "v1"} {
 		if !strings.Contains(pullStdout.String(), want) {
 			t.Fatalf("pull output missing %q:\n%s", want, pullStdout.String())
 		}
