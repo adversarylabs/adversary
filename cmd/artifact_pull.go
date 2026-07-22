@@ -110,9 +110,10 @@ type pullResult struct {
 	Reference oci.Reference
 }
 
-// pullAdversary resolves a mutable reference once and returns the exact record
-// installed for that digest. Both explicit pulls and run's auto-pull use this
-// result without performing a second network resolution.
+// pullAdversary resolves a mutable reference once (to its current digest) and
+// returns the exact record installed for that digest. The resolved digest is
+// pinned for any download so PullSources does not re-resolve a mutable tag.
+// Both explicit pulls and run's auto-pull use this result.
 func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *application.App, stderr io.Writer) (pullResult, error) {
 	resolver := app.Dependencies().Resolver
 	ref, err := app.Dependencies().References.Parse(refStr)
@@ -132,6 +133,12 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	if err != nil {
 		return pullResult{}, err
 	}
+	// Pin the resolved digest so PullSources uses exactly this digest for a mutable
+	// tag (resolves the mutable reference once, avoiding a second tag resolution
+	// that could see yet another digest).
+	pinned := ref
+	pinned.Tag = ""
+	pinned.Digest = digest
 	if existing, resolveErr := resolver.ResolveRecord(digest); resolveErr == nil {
 		if err := registerExactRef(resolver, ref.Locator(), existing.Digest); err != nil {
 			return pullResult{}, err
@@ -142,7 +149,7 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	}
 
 	fmt.Fprintln(stderr, "Downloading layers...")
-	artifact, err := registry.PullSources(ctx, ref)
+	artifact, err := registry.PullSources(ctx, pinned)
 	if err != nil {
 		return pullResult{}, err
 	}
