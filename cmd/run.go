@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/spf13/cobra"
-	"time"
 )
 
 type runOptions struct {
@@ -106,7 +106,7 @@ func newRunCommand(app *application.App) *cobra.Command {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
-			if err != nil && errors.Is(err, internaladversary.ErrNotInstalledLocally) || strings.Contains(err.Error(), "not installed locally") {
+			if err != nil && (errors.Is(err, internaladversary.ErrNotInstalledLocally) || strings.Contains(err.Error(), "not installed locally")) {
 				// AMB-11: auto-pull if not present locally, then retry once.
 				fmt.Fprintln(cmd.ErrOrStderr(), "Adversary not present locally; attempting pull...")
 				pullErr := pullAdversary(cmd.Context(), args[0], app.Dependencies().DefaultAPIURL, "default", app, cmd.OutOrStdout(), cmd.ErrOrStderr())

@@ -65,6 +65,18 @@ func (e *ExecutionError) Unwrap() error { return e.Err }
 // uses this to auto-pull for AMB-11.
 var ErrNotInstalledLocally = errors.New("adversary not installed locally")
 
+// notInstalledError preserves the exact historical error message for compatibility
+// while allowing errors.Is(err, ErrNotInstalledLocally) to succeed.
+type notInstalledError struct {
+	ref   string
+	cause error
+}
+
+func (e *notInstalledError) Error() string {
+	return fmt.Sprintf("adversary %q is not installed locally; run `adversary pull %s` first", e.ref, e.ref)
+}
+func (e *notInstalledError) Unwrap() error { return e.cause }
+
 type Runner struct {
 	Stdout                  io.Writer
 	Stderr                  io.Writer
@@ -127,7 +139,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	if !resolved.LocalDir {
-		return fmt.Errorf("adversary %q is not installed locally; run `adversary pull %s` first: %w", opts.AdversaryRef, opts.AdversaryRef, ErrNotInstalledLocally)
+		return &notInstalledError{ref: opts.AdversaryRef, cause: ErrNotInstalledLocally}
 	}
 	if resolved.StoreBacked {
 		repo := r.Repository
