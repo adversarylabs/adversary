@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
@@ -168,7 +169,11 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	return pullResult{Record: unified, Reference: ref}, nil
 }
 
-// reportPull records a pull metric best-effort. Errors are swallowed so they never break pull.
+const pullMetricTimeout = 2 * time.Second
+
+// reportPull records a pull metric best-effort. It returns immediately and
+// bounds the asynchronous request so telemetry can never delay or outlive a
+// pull indefinitely.
 func reportPull(ctx context.Context, app *application.App, apiURL, profile, reference, digest string) {
 	if reference == "" {
 		return
@@ -179,5 +184,9 @@ func reportPull(ctx context.Context, app *application.App, apiURL, profile, refe
 		return
 	}
 	client := deps.API.New(apiURL)
-	_ = client.RecordPull(ctx, auth.Token, reference, digest)
+	go func() {
+		metricCtx, cancel := context.WithTimeout(ctx, pullMetricTimeout)
+		defer cancel()
+		_ = client.RecordPull(metricCtx, auth.Token, reference, digest)
+	}()
 }
