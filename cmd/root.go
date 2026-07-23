@@ -24,12 +24,16 @@ func Execute() error {
 	}
 	root := NewRootCommandWithApp(app)
 	root.SetContext(ctx)
-	if err := root.Execute(); err != nil {
+	runErr := root.Execute()
+	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), pullMetricTimeout)
+	app.WaitBackground(drainCtx)
+	cancelDrain()
+	if runErr != nil {
 		var findings *internaladversary.FindingsError
-		if !errors.As(err, &findings) {
-			fmt.Fprintln(os.Stderr, err)
+		if !errors.As(runErr, &findings) {
+			fmt.Fprintln(os.Stderr, runErr)
 		}
-		return err
+		return runErr
 	}
 	return nil
 }

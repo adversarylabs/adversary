@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
@@ -198,7 +199,10 @@ type Dependencies struct {
 	TTY            TTY
 }
 
-type App struct{ deps Dependencies }
+type App struct {
+	deps       Dependencies
+	background sync.WaitGroup
+}
 type Validatable interface{ Validate() error }
 type BindingIdentity interface{ BindingIdentity() string }
 
@@ -298,6 +302,30 @@ func New(deps Dependencies) (*App, error) {
 }
 
 func (a *App) Dependencies() Dependencies { return a.deps }
+
+// StartBackground registers work that must be given a bounded opportunity to
+// finish before the CLI process exits.
+func (a *App) StartBackground(task func()) {
+	a.background.Add(1)
+	go func() {
+		defer a.background.Done()
+		task()
+	}()
+}
+
+// WaitBackground waits for registered work or until ctx expires. Callers use a
+// bounded context because background work must never hold the CLI open forever.
+func (a *App) WaitBackground(ctx context.Context) {
+	done := make(chan struct{})
+	go func() {
+		a.background.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
 
 type Error struct {
 	Operation, Kind, Resource string

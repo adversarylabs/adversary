@@ -126,10 +126,27 @@ func TestReportPullDoesNotWaitForMetricRequest(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("reportPull waited for the metric request")
 	}
+	drained := make(chan struct{})
+	go func() {
+		drainCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		app.WaitBackground(drainCtx)
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		t.Fatal("background work drained before the metric request finished")
+	case <-time.After(20 * time.Millisecond):
+	}
 	close(release)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("metric request did not finish after release")
+	}
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("background work was not drained after the metric request finished")
 	}
 }

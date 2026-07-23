@@ -184,9 +184,9 @@ func reportPull(ctx context.Context, app *application.App, apiURL, profile, refe
 		return
 	}
 	client := deps.API.New(apiURL)
-	go func() {
+	app.StartBackground(func() {
 		metricCtx, cancel := context.WithTimeout(ctx, pullMetricTimeout)
 		defer cancel()
 		_ = client.RecordPull(metricCtx, auth.Token, reference, digest)
-	}()
+	})
 }
