@@ -294,6 +294,10 @@ func (c classifiedAPIClient) Whoami(ctx context.Context, token string) (adversar
 	return v, authError("whoami API", e)
 }
 
+func (c classifiedAPIClient) RecordPull(ctx context.Context, token, reference, digest string) error {
+	return authError("record pull", c.inner.RecordPull(ctx, token, reference, digest))
+}
+
 type processOCIRegistry struct{ *oci.HTTPRegistry }
 
 func (r processOCIRegistry) SetPlainHTTP(v bool) { r.PlainHTTP = v }

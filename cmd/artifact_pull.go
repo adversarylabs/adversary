@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
@@ -143,6 +144,8 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 		if err := registerExactRef(resolver, ref.Locator(), existing.Digest); err != nil {
 			return pullResult{}, err
 		}
+		// best-effort pull metric (AMB-8)
+		reportPull(ctx, app, apiURL, profile, ref.Locator(), existing.Digest)
 		return pullResult{Record: existing, Reference: ref}, nil
 	} else if !os.IsNotExist(resolveErr) {
 		return pullResult{}, resolveErr
@@ -161,5 +164,29 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	if err := errors.Join(importErr, artifact.Close()); err != nil {
 		return pullResult{}, err
 	}
+	// best-effort pull metric (AMB-8)
+	reportPull(ctx, app, apiURL, profile, ref.Locator(), unified.Digest)
 	return pullResult{Record: unified, Reference: ref}, nil
+}
+
+const pullMetricTimeout = 2 * time.Second
+
+// reportPull records a pull metric best-effort. It returns immediately and
+// bounds the asynchronous request so telemetry can never delay or outlive a
+// pull indefinitely.
+func reportPull(ctx context.Context, app *application.App, apiURL, profile, reference, digest string) {
+	if reference == "" {
+		return
+	}
+	deps := app.Dependencies()
+	auth, ok, err := scopedAuth(deps.Auth, apiURL, profile, deps.RegistryHost)
+	if err != nil || !ok || auth.Token == "" {
+		return
+	}
+	client := deps.API.New(apiURL)
+	app.StartBackground(func() {
+		metricCtx, cancel := context.WithTimeout(ctx, pullMetricTimeout)
+		defer cancel()
+		_ = client.RecordPull(metricCtx, auth.Token, reference, digest)
+	})
 }
