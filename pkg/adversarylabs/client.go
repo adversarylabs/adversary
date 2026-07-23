@@ -261,6 +261,17 @@ func (c Client) Whoami(ctx context.Context, token string) (WhoamiResponse, error
 	return out, nil
 }
 
+func (c Client) RecordPull(ctx context.Context, token, reference, digest string) error {
+	payload := map[string]string{}
+	if ref := strings.TrimSpace(reference); ref != "" {
+		payload["repository"] = ref
+	}
+	if digest != "" {
+		payload["digest"] = digest
+	}
+	return c.postJSON(ctx, "/v1/registry/pull", payload, token, nil)
+}
+
 func (c Client) postJSON(ctx context.Context, path string, payload any, token string, out any) error {
 	if _, err := validateBaseURL(c.BaseURL); err != nil {
 		return err
