@@ -338,6 +338,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		if err := files.WriteFile(reviewContextPath, contextData, 0644); err != nil {
 			return err
 		}
+		config.Env["ADVERSARY_CHANGE_CONTEXT"] = reviewContextPath
 	}
 
 	outputPath := filepath.Join(runDir, "output.json")
@@ -348,9 +349,6 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		config.Env["ADVERSARY_REPO"] = repoPath
 		config.Env["ADVERSARY_INPUT"] = inputPath
 		config.Env["ADVERSARY_OUTPUT"] = outputPath
-		if reviewContextPath != "" {
-			config.Env["ADVERSARY_CHANGE_CONTEXT"] = reviewContextPath
-		}
 	}
 
 	if opts.Verbose {
@@ -586,6 +584,7 @@ func NewRunConfig(resolved ResolvedAdversary, repoPath, runDir string, opts RunO
 		"ADVERSARY_REPO":               repoPath,
 		"ADVERSARY_INPUT":              inputPath,
 		"ADVERSARY_OUTPUT":             outputPath,
+		"ADVERSARY_CHANGE_CONTEXT":     "",
 		"ADVERSARY_VERBOSE":            boolEnv(opts.Verbose),
 		"ADVERSARY_INCLUDE_SUPPRESSED": boolEnv(opts.IncludeSuppressed),
 	}

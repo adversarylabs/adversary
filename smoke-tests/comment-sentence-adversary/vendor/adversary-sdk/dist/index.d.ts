@@ -51,6 +51,7 @@ export interface AdversaryDetectionContext {
     changedFiles: ChangedFile[];
     repositoryFiles?: string[];
 }
+export type AdversaryReviewContext = AdversaryDetectionContext;
 export interface AdversaryDetectionResult {
     schemaVersion: typeof DETECTION_SCHEMA_VERSION;
     applicable: boolean;
@@ -150,6 +151,8 @@ export interface ReviewResult {
 }
 export interface RuleContext {
     repoPath: string;
+    input: RuntimeInput;
+    review: AdversaryReviewContext | null;
     summary: Summary;
     cache: Map<string, unknown>;
     relpath: (path: string) => string;
@@ -164,6 +167,8 @@ export interface AdversaryOptions {
 export interface RunOptions {
     input?: RuntimeInput | { source: { path: string }; schema_version?: typeof INPUT_SCHEMA_VERSION; change?: RuntimeInput["change"] };
     inputPath?: string;
+    review?: AdversaryReviewContext | null;
+    reviewContextPath?: string;
     outputPath?: string;
     write?: boolean;
 }
@@ -208,6 +213,7 @@ export declare class Adversary {
 }
 export declare function parseInput(path?: string): Promise<RuntimeInput>;
 export declare function parseDetectionContext(path?: string): Promise<AdversaryDetectionContext>;
+export declare function parseReviewContext(path?: string): Promise<AdversaryReviewContext | null>;
 export declare function writeDetectionResult(result: AdversaryDetectionResult, path?: string): Promise<void>;
 export declare function validateDetectionResult(value: unknown): asserts value is AdversaryDetectionResult;
 export declare function writeOutput(output: AdversaryRunEnvelope, path?: string): Promise<void>;

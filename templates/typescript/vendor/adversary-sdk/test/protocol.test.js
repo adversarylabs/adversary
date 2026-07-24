@@ -12,6 +12,7 @@ import {
   encodeErrorEnvelope,
   parseDetectionContext,
   parseInput,
+  parseReviewContext,
   sortLegacyFindings,
   validateErrorEnvelope,
   validateReviewEnvelope,
@@ -53,6 +54,60 @@ test("run returns and writes the same canonical envelope after one rule executio
     assert.doesNotThrow(() => validateReviewEnvelope(notWritten));
     await assert.rejects(readFile(noWritePath), /ENOENT/);
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("run automatically exposes input and resolved review context to every rule", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "adversary-sdk-review-context-"));
+  const inputPath = join(directory, "input.json");
+  const reviewContextPath = join(directory, "change-context.json");
+  const previousReviewContext = process.env.ADVERSARY_CHANGE_CONTEXT;
+  const input = {
+    schema_version: "adversary.input.v1",
+    source: { path: directory },
+    change: {
+      type: "diff",
+      base_ref: "main",
+      head_ref: "HEAD",
+      scan_mode: "changed",
+      changed_files: ["src/index.ts"],
+    },
+  };
+  const review = {
+    schemaVersion: "adversary.detection.v1",
+    repositoryRoot: directory,
+    mode: "branch-comparison",
+    baseRef: "main",
+    headRef: "HEAD",
+    mergeBase: "abc123",
+    changedFiles: [
+      {
+        path: "src/index.ts",
+        previousPath: "src/old.ts",
+        status: "renamed",
+        additions: 4,
+        deletions: 1,
+      },
+    ],
+  };
+  let received;
+  const app = new Adversary({ name: "local/review-context-test" });
+  app.rule("context.rule", (context) => {
+    received = { input: context.input, review: context.review };
+  });
+  try {
+    await writeFile(inputPath, JSON.stringify(input));
+    await writeFile(reviewContextPath, JSON.stringify(review));
+    process.env.ADVERSARY_CHANGE_CONTEXT = reviewContextPath;
+    await app.run({ inputPath, write: false });
+
+    assert.deepEqual(received, { input, review });
+    assert.deepEqual(await parseReviewContext(reviewContextPath), review);
+    assert.equal(await parseReviewContext(""), null);
+  } finally {
+    if (previousReviewContext === undefined) delete process.env.ADVERSARY_CHANGE_CONTEXT;
+    else process.env.ADVERSARY_CHANGE_CONTEXT = previousReviewContext;
     await rm(directory, { recursive: true, force: true });
   }
 });
