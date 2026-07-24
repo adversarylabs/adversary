@@ -281,13 +281,17 @@ func TestResolveRunScopeUsesPullRequestContextBeforeDirtyWorktree(t *testing.T) 
 	writeFile(t, filepath.Join(repo, "base.txt"), "base\n")
 	runGit(t, repo, "add", ".")
 	runGit(t, repo, "commit", "-m", "base")
+	staleLocalBase := strings.TrimSpace(runGitOutput(t, repo, "rev-parse", "HEAD"))
+	writeFile(t, filepath.Join(repo, "current-base.txt"), "current base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "current base")
 	runGit(t, repo, "switch", "-c", "feature")
 	writeFile(t, filepath.Join(repo, "committed.txt"), "feature\n")
 	runGit(t, repo, "add", ".")
 	runGit(t, repo, "commit", "-m", "feature")
 	writeFile(t, filepath.Join(repo, "local-only.txt"), "dirty\n")
 	runGit(t, repo, "update-ref", "refs/remotes/origin/main", "main")
-	runGit(t, repo, "branch", "-D", "main")
+	runGit(t, repo, "update-ref", "refs/heads/main", staleLocalBase)
 	values := map[string]string{"ADVERSARY_BASE_REF": "main", "ADVERSARY_HEAD_REF": "HEAD"}
 
 	got, err := systemGitDiffer(t).ResolveRunScope(context.Background(), RunScopeRequest{

@@ -291,12 +291,7 @@ func (g CommandGitDiffer) ResolveChanges(ctx context.Context, request ChangeRequ
 		if !validRevisionArgument(request.BaseRef) || !validRevisionArgument(request.HeadRef) {
 			return detection.Context{}, fmt.Errorf("base and head refs must be revision names, not command options or NUL-containing values")
 		}
-		base, err := g.resolveCommit(ctx, root, request.BaseRef)
-		if err != nil && request.Mode == detection.ModePullRequest {
-			if remoteBase := pullRequestRemoteRef(request.BaseRef); remoteBase != "" {
-				base, err = g.resolveCommit(ctx, root, remoteBase)
-			}
-		}
+		base, err := g.resolveBaseCommit(ctx, root, request.Mode, request.BaseRef)
 		if err != nil {
 			return detection.Context{}, fmt.Errorf("base revision %q is unavailable: %w", request.BaseRef, err)
 		}
@@ -324,6 +319,17 @@ func (g CommandGitDiffer) ResolveChanges(ctx context.Context, request ChangeRequ
 		return result.ChangedFiles[i].Path < result.ChangedFiles[j].Path
 	})
 	return result, nil
+}
+
+func (g CommandGitDiffer) resolveBaseCommit(ctx context.Context, root string, mode detection.ChangeMode, ref string) (string, error) {
+	if mode == detection.ModePullRequest {
+		if remoteBase := pullRequestRemoteRef(ref); remoteBase != "" {
+			if base, err := g.resolveCommit(ctx, root, remoteBase); err == nil {
+				return base, nil
+			}
+		}
+	}
+	return g.resolveCommit(ctx, root, ref)
 }
 
 func pullRequestRemoteRef(ref string) string {
