@@ -323,7 +323,7 @@ func (g CommandGitDiffer) ResolveChanges(ctx context.Context, request ChangeRequ
 
 func (g CommandGitDiffer) resolveBaseCommit(ctx context.Context, root string, mode detection.ChangeMode, ref string) (string, error) {
 	if mode == detection.ModePullRequest {
-		if remoteBase := pullRequestRemoteRef(ref); remoteBase != "" {
+		for _, remoteBase := range g.pullRequestRemoteRefs(ctx, root, ref) {
 			if base, err := g.resolveCommit(ctx, root, remoteBase); err == nil {
 				return base, nil
 			}
@@ -332,12 +332,67 @@ func (g CommandGitDiffer) resolveBaseCommit(ctx context.Context, root string, mo
 	return g.resolveCommit(ctx, root, ref)
 }
 
-func pullRequestRemoteRef(ref string) string {
-	ref = strings.TrimPrefix(ref, "refs/heads/")
-	if ref == "" || ref == "HEAD" || strings.HasPrefix(ref, "refs/") || strings.HasPrefix(ref, "origin/") {
-		return ""
+func (g CommandGitDiffer) pullRequestRemoteRefs(ctx context.Context, root, ref string) []string {
+	if strings.HasPrefix(ref, "refs/remotes/") {
+		return []string{strings.TrimPrefix(ref, "refs/remotes/")}
 	}
-	return "origin/" + ref
+	branch := strings.TrimPrefix(ref, "refs/heads/")
+	if branch == "" || branch == "HEAD" || strings.HasPrefix(branch, "refs/") {
+		return nil
+	}
+
+	remotes := g.remoteNames(ctx, root)
+	for _, remote := range remotes {
+		if strings.HasPrefix(branch, remote+"/") {
+			return []string{branch}
+		}
+	}
+
+	var candidates []string
+	if out, _, err := g.run(ctx, root, "config", "--get", "branch."+branch+".remote"); err == nil {
+		configured := strings.TrimSpace(string(out))
+		if configured != "" && configured != "." {
+			for _, remote := range remotes {
+				if configured == remote {
+					candidates = append(candidates, remote+"/"+branch)
+					break
+				}
+			}
+		}
+	}
+	for _, remote := range remotes {
+		out, _, err := g.run(ctx, root, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remote+"/HEAD")
+		if err == nil && strings.TrimSpace(string(out)) == remote+"/"+branch {
+			candidates = append(candidates, remote+"/"+branch)
+		}
+	}
+	candidates = append(candidates, "origin/"+branch)
+
+	seen := make(map[string]struct{}, len(candidates))
+	unique := candidates[:0]
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		unique = append(unique, candidate)
+	}
+	return unique
+}
+
+func (g CommandGitDiffer) remoteNames(ctx context.Context, root string) []string {
+	out, _, err := g.run(ctx, root, "remote")
+	if err != nil {
+		return nil
+	}
+	var remotes []string
+	for _, remote := range strings.Fields(string(out)) {
+		if validRevisionArgument(remote) {
+			remotes = append(remotes, remote)
+		}
+	}
+	sort.Strings(remotes)
+	return remotes
 }
 
 func (g CommandGitDiffer) repositoryRoot(ctx context.Context, repo string) (string, error) {

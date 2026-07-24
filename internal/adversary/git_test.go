@@ -309,6 +309,40 @@ func TestResolveRunScopeUsesPullRequestContextBeforeDirtyWorktree(t *testing.T) 
 	}
 }
 
+func TestResolveRunScopeUsesConfiguredNonOriginPullRequestBase(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "old-base.txt"), "old base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "old base")
+	staleBase := strings.TrimSpace(runGitOutput(t, repo, "rev-parse", "HEAD"))
+	writeFile(t, filepath.Join(repo, "current-base.txt"), "current base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "current base")
+	currentBase := strings.TrimSpace(runGitOutput(t, repo, "rev-parse", "HEAD"))
+	runGit(t, repo, "switch", "-c", "feature")
+	writeFile(t, filepath.Join(repo, "feature.txt"), "feature\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "feature")
+	runGit(t, repo, "remote", "add", "origin", repo)
+	runGit(t, repo, "remote", "add", "upstream", repo)
+	runGit(t, repo, "update-ref", "refs/remotes/origin/main", staleBase)
+	runGit(t, repo, "update-ref", "refs/remotes/upstream/main", currentBase)
+	runGit(t, repo, "config", "branch.main.remote", "upstream")
+	runGit(t, repo, "update-ref", "refs/heads/main", staleBase)
+	values := map[string]string{"ADVERSARY_BASE_REF": "main", "ADVERSARY_HEAD_REF": "HEAD"}
+
+	got, err := systemGitDiffer(t).ResolveRunScope(context.Background(), RunScopeRequest{
+		RepoPath: repo,
+		Lookup:   func(name string) (string, bool) { value, ok := values[name]; return value, ok },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReviewContext == nil || len(got.ReviewContext.ChangedFiles) != 1 || got.ReviewContext.ChangedFiles[0].Path != "feature.txt" {
+		t.Fatalf("PR scope = %#v", got)
+	}
+}
+
 func TestResolveRunScopeUsesMergeBaseForCleanFeatureBranch(t *testing.T) {
 	repo := newGitRepository(t)
 	writeFile(t, filepath.Join(repo, "base.txt"), "base\n")
