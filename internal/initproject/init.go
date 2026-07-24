@@ -172,7 +172,7 @@ func RenderSuccess(w io.Writer, result Result, _ string, platform string) {
 	}
 	fmt.Fprintln(w, "  npm ci")
 	fmt.Fprintln(w, "  npm run build")
-	fmt.Fprintln(w, "  adversary run . --repo /path/to/repository")
+	fmt.Fprintln(w, "  adversary run . --path /path/to/repository")
 }
 
 func shellQuote(value string) string {

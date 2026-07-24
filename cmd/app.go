@@ -176,8 +176,51 @@ type processRuntime struct {
 
 func (p processRuntime) BindingIdentity() string { return p.resolver.Repository.RootPath() }
 func (p processRuntime) Run(ctx context.Context, opts application.AdversaryRunOptions) error {
+	opts, resolved, err := p.resolveRunScope(ctx, opts)
+	if err != nil {
+		return err
+	}
+	if resolved != nil && opts.Stderr != nil {
+		renderRunScope(opts.Stderr, *resolved)
+	}
 	r := p.runner(opts)
 	return r.Run(ctx, toInternalRunOptions(opts))
+}
+
+func (p processRuntime) resolveRunScope(ctx context.Context, opts application.AdversaryRunOptions) (application.AdversaryRunOptions, *internaladversary.RunScopeResolution, error) {
+	if opts.ReviewContext == nil {
+		if scopes, ok := p.git.(internaladversary.RunScopeResolver); ok {
+			resolved, err := scopes.ResolveRunScope(ctx, internaladversary.RunScopeRequest{
+				RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef,
+				AllFiles: opts.AllFiles, Lookup: p.environment.Lookup,
+			})
+			if err != nil {
+				return opts, nil, err
+			}
+			opts.ReviewContext = resolved.ReviewContext
+			opts.AllFiles = resolved.AllFiles
+			opts.BaseRef, opts.HeadRef = "", ""
+			return opts, &resolved, nil
+		}
+	}
+	return opts, nil, nil
+}
+
+func renderRunScope(w io.Writer, scope internaladversary.RunScopeResolution) {
+	if scope.ReviewContext == nil {
+		fmt.Fprintf(w, "Review scope: entire target (%s)\n", terminalSafeText(scope.Reason))
+		return
+	}
+	context := scope.ReviewContext
+	count := len(context.ChangedFiles)
+	switch scope.Kind {
+	case internaladversary.RunScopeWorktree:
+		fmt.Fprintf(w, "Review scope: uncommitted changes (HEAD -> worktree, %d files)\n", count)
+	case internaladversary.RunScopePR:
+		fmt.Fprintf(w, "Review scope: pull request (%s...%s, %d files)\n", terminalSafeText(context.BaseRef), terminalSafeText(context.HeadRef), count)
+	default:
+		fmt.Fprintf(w, "Review scope: branch changes (%s...%s, %d files)\n", terminalSafeText(context.BaseRef), terminalSafeText(context.HeadRef), count)
+	}
 }
 func (p processRuntime) Inspect(ctx context.Context, opts application.AdversaryRunOptions) error {
 	r := p.runner(opts)

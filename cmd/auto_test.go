@@ -54,7 +54,7 @@ func TestAutoCommandForwardsControlsAndExplainsSelections(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := NewRootCommandWithApp(app)
-	cmd.SetArgs([]string{"auto", "main...HEAD", "--repo", "/repo", "--dry-run", "--explain", "--min-confidence", "high", "--include", "security", "--include", "complexity", "--exclude", "repository"})
+	cmd.SetArgs([]string{"auto", "main...HEAD", "--path", "/repo", "--dry-run", "--explain", "--min-confidence", "high", "--include", "security", "--include", "complexity", "--exclude", "repository"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}

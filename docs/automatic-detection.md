@@ -12,7 +12,7 @@ plus local or installed references explicitly supplied with `--include`.
 adversary auto                         # staged, unstaged, and untracked files
 adversary auto main                    # merge-base(main, HEAD) through HEAD
 adversary auto main...HEAD             # explicit merge-base range
-adversary auto --repo ../project
+adversary auto --path ../project
 ```
 
 With no positional argument in CI, the CLI uses captured base/head pairs when

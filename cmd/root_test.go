@@ -774,7 +774,7 @@ runtime:
 		}
 		var runOut, runErr bytes.Buffer
 		run := NewRootCommand(&runOut, &runErr)
-		run.SetArgs([]string{"run", imageDigest, "--repo", pullDir, "--all-files", "--allow-unsafe-host-execution", "--format", "json"})
+		run.SetArgs([]string{"run", imageDigest, "--path", pullDir, "--all-files", "--allow-unsafe-host-execution", "--format", "json"})
 		if err := run.Execute(); err != nil {
 			t.Fatalf("run pulled digest: %v stderr=%s", err, runErr.String())
 		}

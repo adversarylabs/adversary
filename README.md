@@ -34,15 +34,15 @@ by the user, not downloaded by this CLI.
 ```sh
 adversary init my-adversary --sdk typescript
 cd my-adversary && npm ci && npm test && npm run build
-adversary run . --repo /path/to/repository
+adversary run . --path /path/to/repository
 ```
 
 Only TypeScript project generation is currently supported. Useful commands:
 
 ```sh
-adversary run . --repo . --format json
+adversary run . --path . --format json
 adversary auto --dry-run --explain
-adversary inspect . --repo .
+adversary inspect . --path .
 adversary pack . --name ghcr.io/acme/reviewer
 adversary push ghcr.io/acme/reviewer:0.1.0
 adversary pull ghcr.io/acme/reviewer:0.1.0
@@ -53,6 +53,35 @@ adversary completion bash
 Run `adversary help <command>` for the canonical command and flag reference.
 See [automatic detection](docs/automatic-detection.md) for change resolution,
 manifest detection declarations, selection policy, and CI behavior.
+
+## Automatic review scope
+
+`adversary run` chooses an obvious review scope when no scope flags are given.
+The precedence is:
+
+1. explicit `--base`, `--head`, or `--all-files`;
+2. pull-request base/head references captured from CI;
+3. staged, unstaged, and untracked worktree changes;
+4. a clean feature branch compared with the detected default branch using its
+   merge base; then
+5. the entire target for a clean default branch, a non-Git target, or when the
+   default branch cannot be determined.
+
+`--base main` implies `--head HEAD`. `--head feature` detects the default base.
+Use `--path` to choose the repository and `--all-files` to bypass inference.
+The selected scope is printed to stderr before execution.
+Default-branch detection checks `git config adversary.defaultBase`, the tracked
+remote's `HEAD`, `origin/HEAD`, and then conventional `main`, `master`, or
+`trunk` refs. Set `git config adversary.defaultBase <ref>` for repositories
+whose default branch cannot be inferred.
+
+The CLI resolves Git once and passes the same versioned context to the
+adversary. In the TypeScript SDK, every rule receives the portable
+`context.input` and the structured `context.review`. The latter contains the
+mode, refs, merge base, and added, modified, deleted, renamed, copied, or
+untracked files. It is `null` for an intentional whole-target scan. These
+changed files describe the review focus; they do not restrict an adversary from
+reading other repository files through its normal SDK APIs.
 
 ## Safety and trust
 

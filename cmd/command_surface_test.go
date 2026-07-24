@@ -287,6 +287,25 @@ type countingRuntime struct {
 	calls int
 }
 
+type recordingRunRuntime struct {
+	inner application.Runtime
+	opts  application.AdversaryRunOptions
+}
+
+func (r *recordingRunRuntime) BindingIdentity() string {
+	return r.inner.(application.BindingIdentity).BindingIdentity()
+}
+func (r *recordingRunRuntime) Run(_ context.Context, opts application.AdversaryRunOptions) error {
+	r.opts = opts
+	return nil
+}
+func (r *recordingRunRuntime) Inspect(ctx context.Context, opts application.AdversaryRunOptions) error {
+	return r.inner.Inspect(ctx, opts)
+}
+func (r *recordingRunRuntime) Auto(ctx context.Context, opts application.AdversaryAutoOptions) (application.AdversaryAutoResult, error) {
+	return r.inner.Auto(ctx, opts)
+}
+
 func (r *countingRuntime) BindingIdentity() string {
 	return r.inner.(application.BindingIdentity).BindingIdentity()
 }
@@ -305,10 +324,10 @@ func (r *countingRuntime) Auto(ctx context.Context, o application.AdversaryAutoO
 
 func TestInvalidRunFlagsDoNoRuntimeWorkOrOutput(t *testing.T) {
 	for name, args := range map[string][]string{
-		"unpaired refs": {"run", "example", "--base", "main"},
-		"builder":       {"run", "example", "--builder", "remote"},
-		"shell json":    {"run", "example", "--shell", "--format", "json"},
-		"debug verbose": {"run", "example", "--debug", "--verbose"},
+		"all files with refs": {"run", "example", "--all-files", "--base", "main"},
+		"builder":             {"run", "example", "--builder", "remote"},
+		"shell json":          {"run", "example", "--shell", "--format", "json"},
+		"debug verbose":       {"run", "example", "--debug", "--verbose"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
@@ -329,6 +348,26 @@ func TestInvalidRunFlagsDoNoRuntimeWorkOrOutput(t *testing.T) {
 				t.Fatalf("calls=%d stdout=%q stderr=%q", spy.calls, out.String(), errOut.String())
 			}
 		})
+	}
+}
+
+func TestRunCommandForwardsPathAndPartialRefsForAutomaticCompletion(t *testing.T) {
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut)
+	deps := base.Dependencies()
+	spy := &recordingRunRuntime{inner: deps.Runtime}
+	deps.Runtime = spy
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"run", "example", "--path", "/repo", "--base", "main"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if spy.opts.RepoPath != "/repo" || spy.opts.BaseRef != "main" || spy.opts.HeadRef != "" || spy.opts.AllFiles {
+		t.Fatalf("options = %#v", spy.opts)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/pack"
 )
 
@@ -60,6 +61,20 @@ type compositionGit struct{}
 
 func (compositionGit) ChangedFiles(context.Context, string, string, string) ([]string, error) {
 	return nil, nil
+}
+
+type compositionScopeGit struct {
+	request    internaladversary.RunScopeRequest
+	resolution internaladversary.RunScopeResolution
+}
+
+func (*compositionScopeGit) ChangedFiles(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
+func (g *compositionScopeGit) ResolveRunScope(_ context.Context, request internaladversary.RunScopeRequest) (internaladversary.RunScopeResolution, error) {
+	g.request = request
+	return g.resolution, nil
 }
 
 type compositionOutput struct {
@@ -117,6 +132,44 @@ func TestProcessRuntimeRoutesDistinctStreamsAndSnapshot(t *testing.T) {
 	}
 	if launcher.options.Path != executable || launcher.options.Stdout != stderr || launcher.options.Stderr != stderr {
 		t.Fatalf("launch options = %#v", launcher.options)
+	}
+}
+
+func TestProcessRuntimeResolvesRunScopeOnceAndForwardsImmutableContext(t *testing.T) {
+	review := &detection.Context{
+		SchemaVersion:  detection.SchemaVersion,
+		RepositoryRoot: "/repo",
+		Mode:           detection.ModeBranchComparison,
+		BaseRef:        "main",
+		HeadRef:        "HEAD",
+		MergeBase:      "abc123",
+		ChangedFiles:   []detection.ChangedFile{{Path: "main.go", Status: detection.StatusModified}},
+	}
+	git := &compositionScopeGit{resolution: internaladversary.RunScopeResolution{
+		Kind: internaladversary.RunScopeBranch, ReviewContext: review,
+	}}
+	environment := internaladversary.NewProcessEnvironment([]string{
+		"ADVERSARY_BASE_REF=ci-base",
+		"ADVERSARY_HEAD_REF=ci-head",
+	}, false)
+	runtimeService := processRuntime{git: git, environment: environment}
+	got, scope, err := runtimeService.resolveRunScope(context.Background(), application.AdversaryRunOptions{
+		RepoPath: "/repo",
+		BaseRef:  "main",
+		HeadRef:  "HEAD",
+		AllFiles: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope == nil || got.ReviewContext != review || got.BaseRef != "" || got.HeadRef != "" || got.AllFiles {
+		t.Fatalf("resolved options = %#v, scope = %#v", got, scope)
+	}
+	if git.request.RepoPath != "/repo" || git.request.BaseRef != "main" || git.request.HeadRef != "HEAD" || git.request.Lookup == nil {
+		t.Fatalf("scope request = %#v", git.request)
+	}
+	if value, ok := git.request.Lookup("ADVERSARY_BASE_REF"); !ok || value != "ci-base" {
+		t.Fatalf("captured environment lookup = %q, %t", value, ok)
 	}
 }
 

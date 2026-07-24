@@ -12,7 +12,7 @@ import (
 )
 
 type runOptions struct {
-	repo                     string
+	path                     string
 	base                     string
 	head                     string
 	builder                  string
@@ -39,12 +39,11 @@ func newRunCommand(app *application.App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run <adversary-ref>",
 		Short: "Run an Adversary against a local source repository",
-		Example: `  adversary run ./smoke-tests/comment-sentence-adversary --repo .
-  adversary run ./smoke-tests/comment-sentence-adversary --repo . --verbose
-  adversary run ./smoke-tests/comment-sentence-adversary --repo . --format json
-  adversary run ./smoke-tests/comment-sentence-adversary --repo . --base main --head HEAD
-  adversary run ./smoke-tests/comment-sentence-adversary --repo . --base main --head HEAD --all-files
-  adversary run ./smoke-tests/comment-sentence-adversary --repo . --shell`,
+		Example: `  adversary run adversarylabs/dockerfile
+  adversary run ./local-adversary --path ../project
+  adversary run adversarylabs/dockerfile --base main
+  adversary run adversarylabs/dockerfile --base main --head feature
+  adversary run adversarylabs/dockerfile --all-files`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, opts.format, opts.json)
@@ -54,8 +53,8 @@ func newRunCommand(app *application.App) *cobra.Command {
 			if opts.debug && cmd.Flags().Changed("verbose") {
 				return fmt.Errorf("--debug and --verbose cannot be combined")
 			}
-			if (opts.base == "") != (opts.head == "") {
-				return fmt.Errorf("--base and --head must be provided together")
+			if opts.allFiles && (opts.base != "" || opts.head != "") {
+				return fmt.Errorf("--all-files cannot be combined with --base or --head")
 			}
 			if opts.builder != "local" && opts.builder != "docker" {
 				return fmt.Errorf("--builder must be local or docker")
@@ -83,7 +82,7 @@ func newRunCommand(app *application.App) *cobra.Command {
 
 			err = app.Dependencies().Runtime.Run(cmd.Context(), application.AdversaryRunOptions{
 				AdversaryRef:             args[0],
-				RepoPath:                 opts.repo,
+				RepoPath:                 opts.path,
 				BaseRef:                  opts.base,
 				HeadRef:                  opts.head,
 				Builder:                  opts.builder,
@@ -115,7 +114,7 @@ func newRunCommand(app *application.App) *cobra.Command {
 				// retry
 				err = app.Dependencies().Runtime.Run(cmd.Context(), application.AdversaryRunOptions{
 					AdversaryRef:             args[0],
-					RepoPath:                 opts.repo,
+					RepoPath:                 opts.path,
 					BaseRef:                  opts.base,
 					HeadRef:                  opts.head,
 					Builder:                  opts.builder,
@@ -142,9 +141,9 @@ func newRunCommand(app *application.App) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.repo, "repo", ".", "path to the local source repository")
-	cmd.Flags().StringVar(&opts.base, "base", "", "git base ref for change context")
-	cmd.Flags().StringVar(&opts.head, "head", "", "git head ref for change context")
+	cmd.Flags().StringVar(&opts.path, "path", ".", "path to the source directory to review")
+	cmd.Flags().StringVar(&opts.base, "base", "", "git base ref (defaults to the detected default branch when --head is set)")
+	cmd.Flags().StringVar(&opts.head, "head", "", "git head ref (defaults to HEAD when --base is set)")
 	cmd.Flags().StringVar(&opts.builder, "builder", "local", "build mechanism for local adversaries: local or docker")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "run even when triggers.files_changed does not match")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
@@ -156,7 +155,7 @@ func newRunCommand(app *application.App) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.includeSuppressed, "include-suppressed", false, "request suppressed review findings when supported by the runtime")
 	cmd.Flags().BoolVar(&opts.shell, "shell", false, "UNSAFE: launch an unrestricted host shell in the adversary working directory")
 	cmd.Flags().BoolVar(&opts.allowUnsafeHostExecution, "allow-unsafe-host-execution", false, "explicitly allow unrestricted HostExecutor use for an unknown publisher")
-	cmd.Flags().BoolVar(&opts.allFiles, "all-files", false, "scan all files even when diff refs are provided")
+	cmd.Flags().BoolVar(&opts.allFiles, "all-files", false, "scan the entire target instead of inferring a change")
 	cmd.Flags().BoolVar(&opts.build, "build", false, "build a local adversary before running (may update dist)")
 	cmd.Flags().BoolVar(&opts.noBuild, "no-build", false, "deprecated compatibility flag; local builds are skipped by default")
 	_ = cmd.Flags().MarkDeprecated("no-build", "local builds are skipped by default; omit this flag")

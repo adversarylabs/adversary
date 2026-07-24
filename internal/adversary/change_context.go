@@ -18,6 +18,35 @@ type ChangeRequest struct {
 	HeadRef  string
 }
 
+type RunScopeKind string
+
+const (
+	RunScopeAllFiles RunScopeKind = "all-files"
+	RunScopeWorktree RunScopeKind = "worktree"
+	RunScopeBranch   RunScopeKind = "branch"
+	RunScopePR       RunScopeKind = "pull-request"
+)
+
+type RunScopeRequest struct {
+	RepoPath string
+	BaseRef  string
+	HeadRef  string
+	AllFiles bool
+	Lookup   EnvironmentLookup
+}
+
+type RunScopeResolution struct {
+	Kind          RunScopeKind
+	Reason        string
+	DefaultBase   string
+	ReviewContext *detection.Context
+	AllFiles      bool
+}
+
+type RunScopeResolver interface {
+	ResolveRunScope(context.Context, RunScopeRequest) (RunScopeResolution, error)
+}
+
 type ChangeResolver interface {
 	ResolveChanges(context.Context, ChangeRequest) (detection.Context, error)
 }
@@ -72,6 +101,144 @@ func ChangeRequestForArgument(repoPath, argument string) (ChangeRequest, error) 
 
 type EnvironmentLookup func(string) (string, bool)
 
+// ResolveRunScope selects the narrowest useful scope for an explicit run.
+// Explicit flags win, followed by pull-request CI context, local worktree
+// changes, and a clean branch comparison. A clean default branch, a non-Git
+// path, or unavailable Git falls back to the full target so `run` remains a
+// useful explicit repository audit.
+func (g CommandGitDiffer) ResolveRunScope(ctx context.Context, request RunScopeRequest) (RunScopeResolution, error) {
+	if request.AllFiles {
+		return RunScopeResolution{Kind: RunScopeAllFiles, Reason: "requested by --all-files", AllFiles: true}, nil
+	}
+	explicit := request.BaseRef != "" || request.HeadRef != ""
+	ciRequest, inCI := ChangeRequestFromCI(request.RepoPath, request.Lookup)
+	if err := g.validate(); err != nil {
+		if explicit || inCI {
+			return RunScopeResolution{}, err
+		}
+		return RunScopeResolution{Kind: RunScopeAllFiles, Reason: "Git is unavailable", AllFiles: true}, nil
+	}
+	repo := request.RepoPath
+	if repo == "" {
+		repo = "."
+	}
+	root, err := g.repositoryRoot(ctx, repo)
+	if err != nil {
+		if explicit || inCI {
+			return RunScopeResolution{}, err
+		}
+		return RunScopeResolution{Kind: RunScopeAllFiles, Reason: "target is not a Git work tree", AllFiles: true}, nil
+	}
+
+	if explicit {
+		base, head := request.BaseRef, request.HeadRef
+		if head == "" {
+			head = "HEAD"
+		}
+		if base == "" {
+			base, _, err = g.defaultBaseRef(ctx, root)
+			if err != nil {
+				return RunScopeResolution{}, fmt.Errorf("infer --base for explicit --head: %w", err)
+			}
+		}
+		resolved, err := g.ResolveChanges(ctx, ChangeRequest{RepoPath: repo, Mode: detection.ModeExplicitRange, BaseRef: base, HeadRef: head})
+		if err != nil {
+			return RunScopeResolution{}, err
+		}
+		return RunScopeResolution{Kind: RunScopeBranch, Reason: "explicit base/head", DefaultBase: base, ReviewContext: &resolved}, nil
+	}
+
+	if inCI {
+		resolved, err := g.ResolveChanges(ctx, ciRequest)
+		if err != nil {
+			return RunScopeResolution{}, err
+		}
+		return RunScopeResolution{Kind: RunScopePR, Reason: "pull-request CI environment", DefaultBase: ciRequest.BaseRef, ReviewContext: &resolved}, nil
+	}
+
+	dirty, err := g.ResolveChanges(ctx, ChangeRequest{RepoPath: repo, Mode: detection.ModeDirtyWorktree})
+	if err != nil {
+		return RunScopeResolution{}, err
+	}
+	if len(dirty.ChangedFiles) > 0 {
+		return RunScopeResolution{Kind: RunScopeWorktree, Reason: "uncommitted changes", ReviewContext: &dirty}, nil
+	}
+
+	base, source, err := g.defaultBaseRef(ctx, root)
+	if err != nil {
+		return RunScopeResolution{Kind: RunScopeAllFiles, Reason: "default branch could not be determined", AllFiles: true}, nil
+	}
+	current, attached := g.currentBranch(ctx, root)
+	if attached && sameBranchRef(base, current) {
+		return RunScopeResolution{Kind: RunScopeAllFiles, Reason: "clean default branch", DefaultBase: base, AllFiles: true}, nil
+	}
+	if !attached {
+		baseCommit, baseErr := g.resolveCommit(ctx, root, base)
+		headCommit, headErr := g.resolveCommit(ctx, root, "HEAD")
+		if baseErr == nil && headErr == nil && baseCommit == headCommit {
+			return RunScopeResolution{Kind: RunScopeAllFiles, Reason: "clean default-branch commit", DefaultBase: base, AllFiles: true}, nil
+		}
+	}
+	head := "HEAD"
+	if attached {
+		head = current
+	}
+	resolved, err := g.ResolveChanges(ctx, ChangeRequest{RepoPath: repo, Mode: detection.ModeBranchComparison, BaseRef: base, HeadRef: head})
+	if err != nil {
+		return RunScopeResolution{}, err
+	}
+	return RunScopeResolution{Kind: RunScopeBranch, Reason: "clean branch compared with default branch via " + source, DefaultBase: base, ReviewContext: &resolved}, nil
+}
+
+func (g CommandGitDiffer) defaultBaseRef(ctx context.Context, root string) (string, string, error) {
+	if out, _, err := g.run(ctx, root, "config", "--get", "adversary.defaultBase"); err == nil {
+		if candidate := strings.TrimSpace(string(out)); validRevisionArgument(candidate) {
+			if _, err := g.resolveCommit(ctx, root, candidate); err == nil {
+				return candidate, "git config adversary.defaultBase", nil
+			}
+		}
+	}
+	remote := "origin"
+	if out, _, err := g.run(ctx, root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err == nil {
+		if upstream := strings.TrimSpace(string(out)); strings.Contains(upstream, "/") {
+			remote = strings.SplitN(upstream, "/", 2)[0]
+		}
+	}
+	for _, ref := range []string{"refs/remotes/" + remote + "/HEAD", "refs/remotes/origin/HEAD"} {
+		if out, _, err := g.run(ctx, root, "symbolic-ref", "--quiet", "--short", ref); err == nil {
+			candidate := strings.TrimSpace(string(out))
+			if validRevisionArgument(candidate) {
+				if _, err := g.resolveCommit(ctx, root, candidate); err == nil {
+					return candidate, ref, nil
+				}
+			}
+		}
+	}
+	for _, candidates := range [][]string{{"origin/main", "main"}, {"origin/master", "master"}, {"origin/trunk", "trunk"}} {
+		for _, candidate := range candidates {
+			if _, err := g.resolveCommit(ctx, root, candidate); err == nil {
+				return candidate, "conventional branch fallback", nil
+			}
+		}
+	}
+	return "", "", fmt.Errorf("no configured, remote HEAD, or conventional default branch ref is available")
+}
+
+func (g CommandGitDiffer) currentBranch(ctx context.Context, root string) (string, bool) {
+	out, _, err := g.run(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return "", false
+	}
+	branch := strings.TrimSpace(string(out))
+	return branch, branch != ""
+}
+
+func sameBranchRef(base, current string) bool {
+	base = strings.TrimPrefix(base, "refs/remotes/")
+	current = strings.TrimPrefix(current, "refs/heads/")
+	return base == current || strings.HasSuffix(base, "/"+current)
+}
+
 // ChangeRequestFromCI recognizes explicit and common pull-request references.
 // It is intentionally pure: environment is captured by process composition and
 // Git is still resolved exactly once by ResolveChanges.
@@ -125,6 +292,11 @@ func (g CommandGitDiffer) ResolveChanges(ctx context.Context, request ChangeRequ
 			return detection.Context{}, fmt.Errorf("base and head refs must be revision names, not command options or NUL-containing values")
 		}
 		base, err := g.resolveCommit(ctx, root, request.BaseRef)
+		if err != nil && request.Mode == detection.ModePullRequest {
+			if remoteBase := pullRequestRemoteRef(request.BaseRef); remoteBase != "" {
+				base, err = g.resolveCommit(ctx, root, remoteBase)
+			}
+		}
 		if err != nil {
 			return detection.Context{}, fmt.Errorf("base revision %q is unavailable: %w", request.BaseRef, err)
 		}
@@ -152,6 +324,14 @@ func (g CommandGitDiffer) ResolveChanges(ctx context.Context, request ChangeRequ
 		return result.ChangedFiles[i].Path < result.ChangedFiles[j].Path
 	})
 	return result, nil
+}
+
+func pullRequestRemoteRef(ref string) string {
+	ref = strings.TrimPrefix(ref, "refs/heads/")
+	if ref == "" || ref == "HEAD" || strings.HasPrefix(ref, "refs/") || strings.HasPrefix(ref, "origin/") {
+		return ""
+	}
+	return "origin/" + ref
 }
 
 func (g CommandGitDiffer) repositoryRoot(ctx context.Context, repo string) (string, error) {
