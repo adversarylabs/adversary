@@ -3,6 +3,7 @@ package review
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,11 +108,14 @@ func TestRenderTerminalReviewResult(t *testing.T) {
 	got := b.String()
 	for _, want := range []string{
 		"Adversary: dockerfile",
+		"Repository: adversarylabs/adversarylabs",
+		"Files scanned: 1",
 		"Overall assessment",
+		"Findings (1)",
+		"- [low] Base images are not pinned by digest (3 sites)",
 		"Positive signals",
 		"Overall opinion",
-		"Review complete",
-		"Files scanned: 1",
+		"Findings: 1",
 		"Category: supply-chain",
 		"Confidence: high",
 		"Why it matters",
@@ -125,12 +129,89 @@ func TestRenderTerminalReviewResult(t *testing.T) {
 			t.Fatalf("terminal output missing %q in:\n%s", want, got)
 		}
 	}
-	for _, notWant := range []string{`"image"`, "lockfilePresent", "Evidence:"} {
+	for _, notWant := range []string{`"image"`, "lockfilePresent", "Evidence:", "Review complete"} {
 		if strings.Contains(got, notWant) {
 			t.Fatalf("terminal output contains raw/legacy text %q in:\n%s", notWant, got)
 		}
 	}
+	// Index and assessment come before finding detail; opinion and positives after detail.
+	order := []string{
+		"Overall assessment",
+		"Findings (1)",
+		"- [low] Base images are not pinned by digest (3 sites)",
+		"Category: supply-chain",
+		"Positive signals",
+		"Overall opinion",
+		"Findings: 1",
+	}
+	position := -1
+	for _, want := range order {
+		next := strings.Index(got, want)
+		if next <= position {
+			t.Fatalf("%q is out of report order in:\n%s", want, got)
+		}
+		position = next
+	}
 }
+
+func TestRenderTerminalDemotesContextObservationsAndCapsEvidence(t *testing.T) {
+	evidence := make([]Evidence, 0, 7)
+	for i := 1; i <= 7; i++ {
+		n := i
+		evidence = append(evidence, Evidence{File: "cmd/root.go", Line: &n, Message: fmt.Sprintf("site %d", i), Snippet: "os.Exit(1)"})
+	}
+	result := ReviewResult{
+		Adversary: ReviewAdversary{Name: "go-cli"},
+		Target:    ReviewTarget{Repository: "/Users/marc/go/src/github.com/replicatedhq/replicated", FilesScanned: intPtr(436)},
+		Observations: []Note{
+			{Key: "go-cli.analysis", Summary: "Prepared 436 Go CLI files in repository review mode."},
+			{Key: "stage-layout", Summary: "Commands share a root error mapper."},
+			{Key: "prep", Summary: "Prepared context", Metadata: json.RawMessage(`{"role":"context"}`)},
+		},
+		Findings: []Finding{{
+			ID: "exit", Title: "Command code terminates the process directly", Category: "correctness",
+			Severity: "high", Confidence: "high", Summary: "Several paths call os.Exit.",
+			Evidence: evidence, Recommendation: "Map errors in main.",
+		}},
+		Suppressed: Suppressed{},
+	}
+
+	var out strings.Builder
+	if err := RenderTerminal(&out, result); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"Repository: replicatedhq/replicated",
+		"Files scanned: 436",
+		"Findings (1)",
+		"- [high] Command code terminates the process directly (7 sites)",
+		"- … and 2 more",
+		"Commands share a root error mapper.",
+		"Findings: 1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	for _, notWant := range []string{
+		"Prepared 436 Go CLI files",
+		"Prepared context",
+		"Review complete",
+		"site 6",
+		"site 7",
+	} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("unexpected %q in:\n%s", notWant, got)
+		}
+	}
+	// Evidence sites 1-5 remain visible.
+	if !strings.Contains(got, "site 5") || !strings.Contains(got, "site 1") {
+		t.Fatalf("expected capped evidence retained in:\n%s", got)
+	}
+}
+
+func intPtr(v int) *int { return &v }
 
 func TestRenderTerminalSuppressionContract(t *testing.T) {
 	finding := func(id, title string) Finding {

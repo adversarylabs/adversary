@@ -9,21 +9,9 @@ first OVER [2J
 
 second tail
 
-Positive signals
+Findings (1)
 
-- positive INJECT
-
-Observations
-
-- observe INJECT
-
-Overall opinion
-
-ship bell
-
-Review complete
-
-Findings: 1
+- [low [31m] title OVER (1 site)
 
 [low [31m] title OVER
 file OVER
@@ -49,3 +37,17 @@ recommend 31m
 Estimated remediation
 
 soon OVER
+
+Positive signals
+
+- positive INJECT
+
+Observations
+
+- observe INJECT
+
+Overall opinion
+
+ship bell
+
+Findings: 1
