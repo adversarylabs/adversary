@@ -109,6 +109,15 @@ func TestRunnerFailsBeforeLaunchWhenModelBrokerIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestRuntimeSpecAlwaysDeniesCLIModelProviderCredentials(t *testing.T) {
+	spec := NewRunConfig(ResolvedAdversary{}, t.TempDir(), t.TempDir(), RunOptions{}).RuntimeSpec()
+	for _, key := range []string{modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv} {
+		if !slices.Contains(spec.EnvironmentDeny, key) {
+			t.Fatalf("provider credential %s is not denied without permissions.model", key)
+		}
+	}
+}
+
 type fixtureRunnerProvider struct {
 	requests []modelreview.Request
 }

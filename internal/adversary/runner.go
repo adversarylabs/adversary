@@ -417,7 +417,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		return &ExecutionError{Err: err}
 	}
 	if modelCloseErr != nil {
-		return &ExecutionError{Err: fmt.Errorf("close model broker: %w", modelCloseErr)}
+		fmt.Fprintf(stderr, "WARNING: model broker cleanup failed after execution: %v\n", modelCloseErr)
 	}
 
 	if opts.Shell {
@@ -648,13 +648,14 @@ func (c RunConfig) RuntimeSpec() RuntimeSpec {
 		RunDir:         c.RunDir,
 		AdversaryPath:  c.Resolved.ExecutionPath,
 		Env:            c.Env,
-		Shell:          c.Options.Shell,
-		Publisher:      c.Resolved.Publisher,
-		Digest:         c.Resolved.Digest,
-		Permissions:    permissions,
-	}
-	if c.Resolved.Manifest != nil && c.Resolved.Manifest.Permissions.Model {
-		spec.EnvironmentDeny = []string{modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv}
+		EnvironmentDeny: []string{
+			modelreview.OpenAIKeyEnv,
+			modelreview.AnthropicKeyEnv,
+		},
+		Shell:       c.Options.Shell,
+		Publisher:   c.Resolved.Publisher,
+		Digest:      c.Resolved.Digest,
+		Permissions: permissions,
 	}
 	return spec
 }
