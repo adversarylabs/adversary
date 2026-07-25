@@ -43,6 +43,9 @@ func (e ProcessEnvironment) Lookup(key string) (string, bool) {
 	return v, ok
 }
 func (e ProcessEnvironment) Entries(overrides map[string]string) []string {
+	return e.EntriesWithout(overrides, nil)
+}
+func (e ProcessEnvironment) EntriesWithout(overrides map[string]string, denied []string) []string {
 	values := make(map[string]string, len(e.values)+len(overrides))
 	keys := make(map[string]string, len(e.keys)+len(overrides))
 	for key, value := range e.values {
@@ -51,6 +54,11 @@ func (e ProcessEnvironment) Entries(overrides map[string]string) []string {
 	for key, value := range overrides {
 		normalized := e.normalize(key)
 		values[normalized], keys[normalized] = value, key
+	}
+	for _, key := range denied {
+		normalized := e.normalize(key)
+		delete(values, normalized)
+		delete(keys, normalized)
 	}
 	normalized := make([]string, 0, len(values))
 	for key := range values {

@@ -11,6 +11,8 @@ existing one.
 
 ## Unreleased
 
+- Model-backed adversaries can request a CLI-owned, authenticated review broker
+  with OpenAI or Anthropic credentials kept out of the adversary process.
 - CLI audit remediation is being delivered as dependency-ordered pull requests.
 - Release artifacts now include deterministic archives, checksums, SPDX SBOM,
   and GitHub build provenance attestations.

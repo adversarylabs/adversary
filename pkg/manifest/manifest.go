@@ -61,6 +61,7 @@ type Runtime struct {
 type Permissions struct {
 	Filesystem  FilesystemPermissions  `yaml:"filesystem,omitempty" json:"filesystem,omitempty"`
 	Network     *bool                  `yaml:"network,omitempty" json:"network,omitempty"`
+	Model       bool                   `yaml:"model,omitempty" json:"model,omitempty"`
 	Environment EnvironmentPermissions `yaml:"environment,omitempty" json:"environment,omitempty"`
 	Enforcement string                 `yaml:"enforcement,omitempty" json:"enforcement,omitempty"`
 }

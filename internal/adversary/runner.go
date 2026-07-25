@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -93,6 +94,7 @@ type Runner struct {
 	Now                     func() time.Time
 	Files                   RuntimeFiles
 	BuildProject            func(context.Context, pack.BuildOptions) error
+	ModelBrokerFactory      func() (modelreview.Broker, error)
 	BuildStateDir           string
 	Shell                   func() ([]string, error)
 	Repository              *repository.Repository
@@ -351,9 +353,6 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		config.Env["ADVERSARY_OUTPUT"] = outputPath
 	}
 
-	if opts.Verbose {
-		printVerboseLaunch(stderr, config, files.ReadDir)
-	}
 	if !publisher.Local {
 		if resolved.Digest == "" {
 			return fmt.Errorf("remote adversary %q did not resolve to an immutable digest", opts.AdversaryRef)
@@ -369,8 +368,39 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	if opts.RunTimeout > 0 {
 		runCtx, cancelRun = context.WithTimeout(ctx, opts.RunTimeout)
 	}
+	var modelSession *modelreview.Session
+	if resolved.Manifest != nil && resolved.Manifest.Permissions.Model && !opts.Shell {
+		if executor.Backend() != HostExecutorBackend {
+			cancelRun()
+			return &UnsupportedFeatureError{Platform: string(executor.Backend()), Feature: "model broker access"}
+		}
+		if r.ModelBrokerFactory == nil {
+			cancelRun()
+			return fmt.Errorf("model broker dependency is required by this adversary")
+		}
+		broker, brokerErr := r.ModelBrokerFactory()
+		if brokerErr != nil {
+			cancelRun()
+			return fmt.Errorf("configure model broker: %w", brokerErr)
+		}
+		modelSession, brokerErr = broker.Start(runCtx)
+		if brokerErr != nil {
+			cancelRun()
+			return fmt.Errorf("start model broker: %w", brokerErr)
+		}
+		defer modelSession.Close()
+		config.Env["ADVERSARY_MODEL_ENDPOINT"] = modelSession.Endpoint
+		config.Env["ADVERSARY_MODEL_TOKEN"] = modelSession.Token
+	}
+	if opts.Verbose {
+		printVerboseLaunch(stderr, config, files.ReadDir)
+	}
 	result, err := executor.Run(runCtx, config.RuntimeSpec())
 	cancelRun()
+	var modelCloseErr error
+	if modelSession != nil {
+		modelCloseErr = modelSession.Close()
+	}
 	scanDuration := now().Sub(runStarted)
 	totalDuration := now().Sub(started)
 	if opts.Verbose {
@@ -385,6 +415,9 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			return err
 		}
 		return &ExecutionError{Err: err}
+	}
+	if modelCloseErr != nil {
+		return &ExecutionError{Err: fmt.Errorf("close model broker: %w", modelCloseErr)}
 	}
 
 	if opts.Shell {
@@ -606,7 +639,7 @@ func (c RunConfig) RuntimeSpec() RuntimeSpec {
 		permissions.FilesystemWrite = append([]string(nil), manifestPermissions.Filesystem.Write...)
 		permissions.EnvironmentAllow = append([]string(nil), manifestPermissions.Environment.Allow...)
 	}
-	return RuntimeSpec{
+	spec := RuntimeSpec{
 		Image:          c.Resolved.Image,
 		RuntimeName:    c.Resolved.RuntimeName,
 		RuntimeVersion: c.Resolved.RuntimeVersion,
@@ -620,6 +653,10 @@ func (c RunConfig) RuntimeSpec() RuntimeSpec {
 		Digest:         c.Resolved.Digest,
 		Permissions:    permissions,
 	}
+	if c.Resolved.Manifest != nil && c.Resolved.Manifest.Permissions.Model {
+		spec.EnvironmentDeny = []string{modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv}
+	}
+	return spec
 }
 
 func boolEnv(v bool) string {
@@ -726,7 +763,11 @@ func PrintEnvironment(w io.Writer, env map[string]string) {
 	fmt.Fprintln(w, "Environment")
 	fmt.Fprintln(w)
 	for _, key := range sortedEnvKeys(env) {
-		fmt.Fprintf(w, "  %s=%s\n", key, env[key])
+		value := env[key]
+		if key == "ADVERSARY_MODEL_TOKEN" {
+			value = "<redacted>"
+		}
+		fmt.Fprintf(w, "  %s=%s\n", key, value)
 	}
 }
 
