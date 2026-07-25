@@ -247,6 +247,210 @@ func TestChangeRequestFromCI(t *testing.T) {
 	}
 }
 
+func TestResolveRunScopeUsesDirtyWorktreeBeforeBranchComparison(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "tracked.txt"), "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	runGit(t, repo, "config", "adversary.defaultBase", "main")
+	runGit(t, repo, "switch", "-c", "feature")
+	writeFile(t, filepath.Join(repo, "tracked.txt"), "dirty\n")
+	writeFile(t, filepath.Join(repo, "untracked.txt"), "new\n")
+
+	got, err := systemGitDiffer(t).ResolveRunScope(context.Background(), RunScopeRequest{RepoPath: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != RunScopeWorktree || got.AllFiles || got.ReviewContext == nil {
+		t.Fatalf("scope = %#v", got)
+	}
+	want := []detection.ChangedFile{
+		{Path: "tracked.txt", Status: detection.StatusModified},
+		{Path: "untracked.txt", Status: detection.StatusUntracked},
+	}
+	if !reflect.DeepEqual(got.ReviewContext.ChangedFiles, want) {
+		t.Fatalf("changes = %#v, want %#v", got.ReviewContext.ChangedFiles, want)
+	}
+	if got.ReviewContext.Mode != detection.ModeDirtyWorktree {
+		t.Fatalf("mode = %q", got.ReviewContext.Mode)
+	}
+}
+
+func TestResolveRunScopeUsesPullRequestContextBeforeDirtyWorktree(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "base.txt"), "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	staleLocalBase := strings.TrimSpace(runGitOutput(t, repo, "rev-parse", "HEAD"))
+	writeFile(t, filepath.Join(repo, "current-base.txt"), "current base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "current base")
+	runGit(t, repo, "switch", "-c", "feature")
+	writeFile(t, filepath.Join(repo, "committed.txt"), "feature\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "feature")
+	writeFile(t, filepath.Join(repo, "local-only.txt"), "dirty\n")
+	runGit(t, repo, "update-ref", "refs/remotes/origin/main", "main")
+	runGit(t, repo, "update-ref", "refs/heads/main", staleLocalBase)
+	values := map[string]string{"ADVERSARY_BASE_REF": "main", "ADVERSARY_HEAD_REF": "HEAD"}
+
+	got, err := systemGitDiffer(t).ResolveRunScope(context.Background(), RunScopeRequest{
+		RepoPath: repo,
+		Lookup:   func(name string) (string, bool) { value, ok := values[name]; return value, ok },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != RunScopePR || got.ReviewContext == nil || got.ReviewContext.Mode != detection.ModePullRequest {
+		t.Fatalf("scope = %#v", got)
+	}
+	if len(got.ReviewContext.ChangedFiles) != 1 || got.ReviewContext.ChangedFiles[0].Path != "committed.txt" {
+		t.Fatalf("PR changes = %#v", got.ReviewContext.ChangedFiles)
+	}
+}
+
+func TestResolveRunScopeUsesConfiguredNonOriginPullRequestBase(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "old-base.txt"), "old base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "old base")
+	staleBase := strings.TrimSpace(runGitOutput(t, repo, "rev-parse", "HEAD"))
+	writeFile(t, filepath.Join(repo, "current-base.txt"), "current base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "current base")
+	currentBase := strings.TrimSpace(runGitOutput(t, repo, "rev-parse", "HEAD"))
+	runGit(t, repo, "switch", "-c", "feature")
+	writeFile(t, filepath.Join(repo, "feature.txt"), "feature\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "feature")
+	runGit(t, repo, "remote", "add", "origin", repo)
+	runGit(t, repo, "remote", "add", "upstream", repo)
+	runGit(t, repo, "update-ref", "refs/remotes/origin/main", staleBase)
+	runGit(t, repo, "update-ref", "refs/remotes/upstream/main", currentBase)
+	runGit(t, repo, "config", "branch.main.remote", "upstream")
+	runGit(t, repo, "update-ref", "refs/heads/main", staleBase)
+	values := map[string]string{"ADVERSARY_BASE_REF": "main", "ADVERSARY_HEAD_REF": "HEAD"}
+
+	got, err := systemGitDiffer(t).ResolveRunScope(context.Background(), RunScopeRequest{
+		RepoPath: repo,
+		Lookup:   func(name string) (string, bool) { value, ok := values[name]; return value, ok },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReviewContext == nil || len(got.ReviewContext.ChangedFiles) != 1 || got.ReviewContext.ChangedFiles[0].Path != "feature.txt" {
+		t.Fatalf("PR scope = %#v", got)
+	}
+}
+
+func TestResolveRunScopeUsesMergeBaseForCleanFeatureBranch(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "base.txt"), "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	runGit(t, repo, "config", "adversary.defaultBase", "main")
+	runGit(t, repo, "switch", "-c", "feature")
+	writeFile(t, filepath.Join(repo, "feature.txt"), "feature\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "feature")
+
+	got, err := systemGitDiffer(t).ResolveRunScope(context.Background(), RunScopeRequest{RepoPath: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != RunScopeBranch || got.DefaultBase != "main" || got.ReviewContext == nil {
+		t.Fatalf("scope = %#v", got)
+	}
+	if got.ReviewContext.Mode != detection.ModeBranchComparison || got.ReviewContext.MergeBase == "" {
+		t.Fatalf("review context = %#v", got.ReviewContext)
+	}
+	if got.ReviewContext.BaseRef != "main" || got.ReviewContext.HeadRef != "feature" {
+		t.Fatalf("refs = %s...%s", got.ReviewContext.BaseRef, got.ReviewContext.HeadRef)
+	}
+	if len(got.ReviewContext.ChangedFiles) != 1 || got.ReviewContext.ChangedFiles[0].Path != "feature.txt" {
+		t.Fatalf("branch changes = %#v", got.ReviewContext.ChangedFiles)
+	}
+}
+
+func TestResolveRunScopeFallsBackToAllFilesOnCleanDefaultOrNonGitTarget(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "base.txt"), "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	runGit(t, repo, "config", "adversary.defaultBase", "main")
+
+	clean, err := systemGitDiffer(t).ResolveRunScope(context.Background(), RunScopeRequest{RepoPath: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clean.Kind != RunScopeAllFiles || !clean.AllFiles || clean.ReviewContext != nil || clean.Reason != "clean default branch" {
+		t.Fatalf("clean default scope = %#v", clean)
+	}
+
+	nonGit, err := systemGitDiffer(t).ResolveRunScope(context.Background(), RunScopeRequest{RepoPath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nonGit.Kind != RunScopeAllFiles || !nonGit.AllFiles || nonGit.ReviewContext != nil {
+		t.Fatalf("non-Git scope = %#v", nonGit)
+	}
+}
+
+func TestResolveRunScopeCompletesPartialExplicitRefs(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "base.txt"), "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	runGit(t, repo, "config", "adversary.defaultBase", "main")
+	runGit(t, repo, "switch", "-c", "feature")
+	writeFile(t, filepath.Join(repo, "feature.txt"), "feature\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "feature")
+
+	baseOnly, err := systemGitDiffer(t).ResolveRunScope(context.Background(), RunScopeRequest{RepoPath: repo, BaseRef: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseOnly.ReviewContext == nil || baseOnly.ReviewContext.BaseRef != "main" || baseOnly.ReviewContext.HeadRef != "HEAD" {
+		t.Fatalf("base-only scope = %#v", baseOnly)
+	}
+
+	headOnly, err := systemGitDiffer(t).ResolveRunScope(context.Background(), RunScopeRequest{RepoPath: repo, HeadRef: "HEAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if headOnly.ReviewContext == nil || headOnly.ReviewContext.BaseRef != "main" || headOnly.ReviewContext.HeadRef != "HEAD" {
+		t.Fatalf("head-only scope = %#v", headOnly)
+	}
+}
+
+func TestResolveRunScopeExplicitAllFilesDoesNotRequireGit(t *testing.T) {
+	got, err := (CommandGitDiffer{}).ResolveRunScope(context.Background(), RunScopeRequest{RepoPath: t.TempDir(), AllFiles: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != RunScopeAllFiles || !got.AllFiles || got.Reason != "requested by --all-files" {
+		t.Fatalf("scope = %#v", got)
+	}
+}
+
+func TestDefaultBaseRefUsesRemoteHEADWithoutNetworkAccess(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "base.txt"), "base\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	runGit(t, repo, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+	runGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+
+	got, source, err := systemGitDiffer(t).defaultBaseRef(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "origin/trunk" || source != "refs/remotes/origin/HEAD" {
+		t.Fatalf("default base = %q via %q", got, source)
+	}
+}
+
 func TestCommandGitDifferModelsRenameAndDelete(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -371,6 +575,9 @@ func TestRunConfigHostExecutionSpec(t *testing.T) {
 	}
 	if !spec.Permissions.Required.NetworkIsolation {
 		t.Fatal("required network isolation is false")
+	}
+	if value, ok := spec.Env["ADVERSARY_CHANGE_CONTEXT"]; !ok || value != "" {
+		t.Fatalf("all-files review context environment = %q, %t", value, ok)
 	}
 }
 

@@ -23,8 +23,8 @@ func newInspectCommand(app *application.App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inspect <name|digest|adversary-ref>",
 		Short: "Inspect a locally stored adversary or local runtime configuration",
-		Example: `  adversary inspect ./smoke-tests/comment-sentence-adversary --repo .
-  adversary inspect security-reviewer --repo .
+		Example: `  adversary inspect ./smoke-tests/comment-sentence-adversary --path .
+  adversary inspect security-reviewer --path .
   adversary inspect security-reviewer
   adversary inspect security-reviewer:0.1.0
   adversary inspect sha256:abc123`,
@@ -77,7 +77,7 @@ func newInspectCommand(app *application.App) *cobra.Command {
 			}
 			return deps.Runtime.Inspect(cmd.Context(), application.AdversaryRunOptions{
 				AdversaryRef: args[0],
-				RepoPath:     opts.repo,
+				RepoPath:     opts.path,
 				NoNetwork:    opts.noNetwork,
 				Stdout:       cmd.OutOrStdout(),
 				Stderr:       cmd.ErrOrStderr(),
@@ -85,7 +85,7 @@ func newInspectCommand(app *application.App) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.repo, "repo", ".", "path to the local source repository")
+	cmd.Flags().StringVar(&opts.path, "path", ".", "path to the source directory to inspect against")
 	cmd.Flags().BoolVar(&opts.noNetwork, "no-network", false, "disable network access when supported by the runtime")
 	cmd.Flags().BoolVar(&inspectOpts.json, "json", false, "print local store metadata as JSON")
 	cmd.Flags().StringVar(&inspectOpts.format, "format", "text", "output format: text or json")

@@ -15,7 +15,7 @@ import (
 )
 
 type autoOptions struct {
-	repo                     string
+	path                     string
 	minimumConfidence        string
 	includes                 []string
 	excludes                 []string
@@ -52,7 +52,7 @@ func newAutoCommand(app *application.App) *cobra.Command {
 				argument = args[0]
 			}
 			_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
-				ChangeArgument: argument, RepoPath: opts.repo, MinimumConfidence: minimum,
+				ChangeArgument: argument, RepoPath: opts.path, MinimumConfidence: minimum,
 				Includes: opts.includes, Excludes: opts.excludes, All: opts.all, DryRun: opts.dryRun, Explain: opts.explain,
 				AllowUnsafeHostExecution: opts.allowUnsafeHostExecution, IncludeSuppressed: opts.includeSuppressed,
 				RunTimeout: opts.runTimeout, DetectionTimeout: opts.detectionTimeout,
@@ -64,7 +64,7 @@ func newAutoCommand(app *application.App) *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&opts.repo, "repo", ".", "path to the Git repository")
+	cmd.Flags().StringVar(&opts.path, "path", ".", "path to the Git source directory")
 	cmd.Flags().StringVar(&opts.minimumConfidence, "min-confidence", "medium", "minimum confidence to run: low, medium, or high")
 	cmd.Flags().StringArrayVar(&opts.includes, "include", nil, "force an available adversary to run (repeatable)")
 	cmd.Flags().StringArrayVar(&opts.excludes, "exclude", nil, "exclude an adversary from the run (repeatable; wins over include)")

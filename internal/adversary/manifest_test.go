@@ -614,10 +614,10 @@ runtime:
 	if strings.Contains(stderr.String(), "Running ") || strings.Contains(stderr.String(), "exit code") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Review complete") {
+	if !strings.Contains(stdout.String(), "Findings:") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
-	if strings.Contains(stdout.String(), "Scan complete") {
+	if strings.Contains(stdout.String(), "Review complete") || strings.Contains(stdout.String(), "Scan complete") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

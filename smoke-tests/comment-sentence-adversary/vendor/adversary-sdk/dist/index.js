@@ -111,10 +111,15 @@ export class Adversary {
 }
 async function executeRules(adversary, options) {
     const input = options.input === undefined ? await parseInput(options.inputPath) : normalizeRuntimeInput(options.input);
+    const review = options.review === undefined
+        ? await parseReviewContext(options.reviewContextPath)
+        : options.review === null
+            ? null
+            : validateDetectionContext(options.review);
     const repoPath = process.env.ADVERSARY_REPO ?? input.source.path ?? DEFAULT_REPO_PATH;
     const summary = {};
     const cache = new Map();
-    const context = createRuleContext(repoPath, summary, cache);
+    const context = createRuleContext(repoPath, summary, cache, input, review);
     const findings = [];
     for (const rule of adversary.rules) {
         log.debug(`running rule ${rule.id}`);
@@ -153,6 +158,19 @@ export async function parseDetectionContext(path = process.env.ADVERSARY_DETECTI
     }
     catch (error) {
         throw new Error(`Invalid detection context at ${path}: ${error.message}`);
+    }
+}
+export async function parseReviewContext(path = process.env.ADVERSARY_CHANGE_CONTEXT) {
+    if (path === undefined || path === "") {
+        return null;
+    }
+    const raw = await readFile(path, "utf8");
+    const parsed = JSON.parse(raw);
+    try {
+        return validateDetectionContext(parsed);
+    }
+    catch (error) {
+        throw new Error(`Invalid review context at ${path}: ${error.message}`);
     }
 }
 export async function writeDetectionResult(result, path = process.env.ADVERSARY_DETECTION_OUTPUT ?? DEFAULT_DETECTION_OUTPUT_PATH) {
@@ -203,10 +221,12 @@ export function sortLegacyFindings(findings) {
         return compareStrings(left.rule_id, right.rule_id);
     });
 }
-function createRuleContext(repoPath, summary, cache) {
+function createRuleContext(repoPath, summary, cache, input, review) {
     const absoluteRepoPath = resolve(repoPath);
     return {
         repoPath: absoluteRepoPath,
+        input,
+        review,
         summary,
         cache,
         relpath(path) {

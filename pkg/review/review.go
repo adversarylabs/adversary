@@ -290,13 +290,23 @@ func validateMetadata(field string, metadata json.RawMessage) error {
 	return nil
 }
 
+// terminalMaxEvidence is the maximum number of evidence items shown per finding
+// in text mode. JSON output retains the full list.
+const terminalMaxEvidence = 5
+
 func RenderTerminal(w io.Writer, result ReviewResult) error {
+	// Layout (product text report, not a dump of the wire object):
+	// header → assessment → finding index → finding detail → positives →
+	// observations → opinion → stats footer.
 	var lines []string
 	if result.Adversary.Name != "" {
 		lines = append(lines, "Adversary: "+sanitizeTerminalInline(result.Adversary.Name))
 	}
 	if result.Target.Repository != "" {
-		lines = append(lines, "Repository: "+sanitizeTerminalInline(result.Target.Repository))
+		lines = append(lines, "Repository: "+sanitizeTerminalInline(shortenRepositoryPath(result.Target.Repository)))
+	}
+	if result.Target.FilesScanned != nil {
+		lines = append(lines, fmt.Sprintf("Files scanned: %d", *result.Target.FilesScanned))
 	}
 	if len(lines) > 0 {
 		lines = append(lines, "")
@@ -312,6 +322,28 @@ func RenderTerminal(w io.Writer, result ReviewResult) error {
 		}
 	}
 
+	if len(result.Findings) > 0 {
+		lines = append(lines, fmt.Sprintf("Findings (%d)", len(result.Findings)), "")
+		for _, finding := range result.Findings {
+			title := sanitizeTerminalInline(finding.Title)
+			severity := sanitizeTerminalInline(finding.Severity)
+			if n := len(finding.Evidence); n > 0 {
+				lines = append(lines, fmt.Sprintf("- [%s] %s (%s)", severity, title, evidenceCountLabel(n)))
+			} else {
+				lines = append(lines, fmt.Sprintf("- [%s] %s", severity, title))
+			}
+		}
+		lines = append(lines, "")
+	}
+
+	for _, finding := range result.Findings {
+		appendTerminalFinding(&lines, finding, "")
+	}
+
+	for _, finding := range result.SuppressedFindings {
+		appendTerminalFinding(&lines, finding, "suppressed; reason unavailable")
+	}
+
 	if len(result.Positives) > 0 {
 		lines = append(lines, "Positive signals", "")
 		for _, note := range result.Positives {
@@ -320,9 +352,9 @@ func RenderTerminal(w io.Writer, result ReviewResult) error {
 		lines = append(lines, "")
 	}
 
-	if len(result.Observations) > 0 {
+	if observations := reviewObservationsForTerminal(result.Observations); len(observations) > 0 {
 		lines = append(lines, "Observations", "")
-		for _, note := range result.Observations {
+		for _, note := range observations {
 			lines = append(lines, "- "+sanitizeTerminalInline(note.Summary))
 		}
 		lines = append(lines, "")
@@ -333,27 +365,13 @@ func RenderTerminal(w io.Writer, result ReviewResult) error {
 		appendParagraphs(&lines, result.Opinion.Summary)
 	}
 
-	lines = append(lines, "Review complete", "")
-	if result.Target.FilesScanned != nil {
-		lines = append(lines, fmt.Sprintf("Files scanned: %d", *result.Target.FilesScanned))
-	}
-	lines = append(lines, fmt.Sprintf("Findings: %d", len(result.Findings)), "")
+	// Stats footer: counts only. Do not announce "complete" before findings detail.
+	lines = append(lines, fmt.Sprintf("Findings: %d", len(result.Findings)))
 	if result.Suppressed.Observations > 0 {
 		lines = append(lines, fmt.Sprintf("Suppressed observations: %d", result.Suppressed.Observations))
 	}
 	if result.Suppressed.Findings > 0 {
 		lines = append(lines, fmt.Sprintf("Suppressed findings: %d", result.Suppressed.Findings))
-	}
-	if result.Suppressed.Observations > 0 || result.Suppressed.Findings > 0 {
-		lines = append(lines, "")
-	}
-
-	for _, finding := range result.Findings {
-		appendTerminalFinding(&lines, finding, "")
-	}
-
-	for _, finding := range result.SuppressedFindings {
-		appendTerminalFinding(&lines, finding, "suppressed; reason unavailable")
 	}
 
 	_, err := fmt.Fprintln(w, strings.TrimRight(strings.Join(lines, "\n"), "\n"))
@@ -384,11 +402,20 @@ func appendTerminalFinding(lines *[]string, finding Finding, qualifier string) {
 	appendSection(lines, "Impact", finding.Impact)
 	if len(finding.Evidence) > 0 {
 		*lines = append(*lines, "Evidence", "")
-		for _, evidence := range finding.Evidence {
+		shown := finding.Evidence
+		remaining := 0
+		if len(shown) > terminalMaxEvidence {
+			remaining = len(shown) - terminalMaxEvidence
+			shown = shown[:terminalMaxEvidence]
+		}
+		for _, evidence := range shown {
 			*lines = append(*lines, "- "+formatEvidence(evidence))
 			if evidence.Snippet != "" {
 				*lines = append(*lines, "  "+sanitizeTerminalInline(evidence.Snippet))
 			}
+		}
+		if remaining > 0 {
+			*lines = append(*lines, fmt.Sprintf("- … and %d more", remaining))
 		}
 		*lines = append(*lines, "")
 	}
@@ -396,6 +423,85 @@ func appendTerminalFinding(lines *[]string, finding Finding, qualifier string) {
 	if finding.Remediation != nil {
 		appendSection(lines, "Estimated remediation", finding.Remediation.Estimate)
 	}
+}
+
+// reviewObservationsForTerminal drops prep/context notes that belong in
+// header stats (files scanned, analysis mode), not a peer review section.
+func reviewObservationsForTerminal(notes []Note) []Note {
+	if len(notes) == 0 {
+		return nil
+	}
+	out := make([]Note, 0, len(notes))
+	for _, note := range notes {
+		if isContextObservation(note) {
+			continue
+		}
+		out = append(out, note)
+	}
+	return out
+}
+
+func isContextObservation(note Note) bool {
+	key := strings.ToLower(strings.TrimSpace(note.Key))
+	if strings.HasSuffix(key, ".analysis") || key == "analysis" {
+		return true
+	}
+	if role, ok := noteMetadataString(note.Metadata, "role"); ok && strings.EqualFold(role, "context") {
+		return true
+	}
+	summary := strings.TrimSpace(strings.ToLower(note.Summary))
+	if strings.HasPrefix(summary, "prepared ") && strings.Contains(summary, " file") {
+		return true
+	}
+	return false
+}
+
+func noteMetadataString(raw json.RawMessage, field string) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return "", false
+	}
+	value, ok := object[field]
+	if !ok {
+		return "", false
+	}
+	var text string
+	if err := json.Unmarshal(value, &text); err != nil {
+		return "", false
+	}
+	return text, true
+}
+
+func shortenRepositoryPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return path
+	}
+	// Keep the last two segments when the path is deep absolute/home style.
+	// JSON still carries the full repository path from the protocol.
+	const sep = "/"
+	normalized := strings.ReplaceAll(path, "\\", sep)
+	parts := strings.Split(normalized, sep)
+	var segments []string
+	for _, part := range parts {
+		if part != "" {
+			segments = append(segments, part)
+		}
+	}
+	if len(segments) <= 2 {
+		return path
+	}
+	return segments[len(segments)-2] + sep + segments[len(segments)-1]
+}
+
+func evidenceCountLabel(n int) string {
+	if n == 1 {
+		return "1 site"
+	}
+	return fmt.Sprintf("%d sites", n)
 }
 
 func appendSection(lines *[]string, heading, body string) {
