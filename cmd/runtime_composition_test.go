@@ -135,6 +135,26 @@ func TestProcessRuntimeRoutesDistinctStreamsAndSnapshot(t *testing.T) {
 	}
 }
 
+func TestProcessRuntimeModelFlagsOverrideEnvironment(t *testing.T) {
+	environment := internaladversary.NewProcessEnvironment([]string{
+		"ADVERSARY_MODEL_PROVIDER=anthropic",
+		"ADVERSARY_MODEL=environment-model",
+		"ANTHROPIC_API_KEY=anthropic-secret",
+		"FIREWORKS_API_KEY=fireworks-secret",
+	}, false)
+	runner := (processRuntime{environment: environment}).runner(application.AdversaryRunOptions{
+		ModelProvider: "fireworks",
+		Model:         "accounts/fireworks/models/reviewer",
+	})
+	broker, err := runner.ModelBrokerFactory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broker.Provider.Name() != "fireworks" || broker.Provider.Model() != "accounts/fireworks/models/reviewer" {
+		t.Fatalf("provider = %s/%s", broker.Provider.Name(), broker.Provider.Model())
+	}
+}
+
 func TestProcessRuntimeResolvesRunScopeOnceAndForwardsImmutableContext(t *testing.T) {
 	review := &detection.Context{
 		SchemaVersion:  detection.SchemaVersion,

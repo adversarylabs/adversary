@@ -651,6 +651,7 @@ func (c RunConfig) RuntimeSpec() RuntimeSpec {
 		EnvironmentDeny: []string{
 			modelreview.OpenAIKeyEnv,
 			modelreview.AnthropicKeyEnv,
+			modelreview.FireworksKeyEnv,
 		},
 		Shell:       c.Options.Shell,
 		Publisher:   c.Resolved.Publisher,
