@@ -271,7 +271,10 @@ func toApplicationAutoResult(result internaladversary.AutoResult) application.Ad
 func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladversary.Runner {
 	shell := func() ([]string, error) { return internaladversary.PlatformShell(p.node.LookPath) }
 	modelBrokerFactory := func() (modelreview.Broker, error) {
-		provider, err := modelreview.ProviderFromEnvironment(p.environment.Lookup, http.DefaultClient)
+		provider, err := modelreview.ProviderFromConfig(modelreview.Config{
+			Provider: opts.ModelProvider,
+			Model:    opts.Model,
+		}, p.environment.Lookup, http.DefaultClient)
 		if err != nil {
 			return modelreview.Broker{}, err
 		}

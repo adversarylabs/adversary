@@ -326,6 +326,9 @@ func TestInvalidRunFlagsDoNoRuntimeWorkOrOutput(t *testing.T) {
 	for name, args := range map[string][]string{
 		"all files with refs": {"run", "example", "--all-files", "--base", "main"},
 		"builder":             {"run", "example", "--builder", "remote"},
+		"model provider":      {"run", "example", "--model-provider", "unknown"},
+		"empty provider":      {"run", "example", "--model-provider", " "},
+		"empty model":         {"run", "example", "--model", " "},
 		"shell json":          {"run", "example", "--shell", "--format", "json"},
 		"debug verbose":       {"run", "example", "--debug", "--verbose"},
 	} {
@@ -362,11 +365,18 @@ func TestRunCommandForwardsPathAndPartialRefsForAutomaticCompletion(t *testing.T
 		t.Fatal(err)
 	}
 	cmd := NewRootCommandWithApp(app)
-	cmd.SetArgs([]string{"run", "example", "--path", "/repo", "--base", "main"})
+	cmd.SetArgs([]string{
+		"run", "example",
+		"--path", "/repo",
+		"--base", "main",
+		"--model-provider", "Fireworks",
+		"--model", " accounts/fireworks/models/reviewer ",
+	})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if spy.opts.RepoPath != "/repo" || spy.opts.BaseRef != "main" || spy.opts.HeadRef != "" || spy.opts.AllFiles {
+	if spy.opts.RepoPath != "/repo" || spy.opts.BaseRef != "main" || spy.opts.HeadRef != "" || spy.opts.AllFiles ||
+		spy.opts.ModelProvider != "fireworks" || spy.opts.Model != "accounts/fireworks/models/reviewer" {
 		t.Fatalf("options = %#v", spy.opts)
 	}
 }

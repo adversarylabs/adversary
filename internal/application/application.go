@@ -134,6 +134,7 @@ type Runtime interface {
 }
 type AdversaryRunOptions struct {
 	AdversaryRef, RepoPath, BaseRef, HeadRef, Builder, Format string
+	ModelProvider, Model                                      string
 	Force, KeepTemp, NoNetwork, Verbose, IncludeSuppressed    bool
 	Shell, AllFiles, AllowUnsafeHostExecution                 bool
 	Build                                                     bool

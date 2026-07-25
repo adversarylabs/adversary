@@ -81,7 +81,7 @@ func TestRunnerProvidesModelBrokerWithoutExposingProviderKey(t *testing.T) {
 	if strings.Contains(stderr.String(), executor.spec.Env["ADVERSARY_MODEL_TOKEN"]) || !strings.Contains(stderr.String(), "ADVERSARY_MODEL_TOKEN=<redacted>") {
 		t.Fatalf("verbose diagnostics leaked broker token:\n%s", stderr.String())
 	}
-	for _, key := range []string{modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv} {
+	for _, key := range []string{modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv, modelreview.FireworksKeyEnv} {
 		if !slices.Contains(executor.spec.EnvironmentDeny, key) {
 			t.Fatalf("provider credential %s is not denied at the process boundary", key)
 		}
@@ -111,7 +111,7 @@ func TestRunnerFailsBeforeLaunchWhenModelBrokerIsUnavailable(t *testing.T) {
 
 func TestRuntimeSpecAlwaysDeniesCLIModelProviderCredentials(t *testing.T) {
 	spec := NewRunConfig(ResolvedAdversary{}, t.TempDir(), t.TempDir(), RunOptions{}).RuntimeSpec()
-	for _, key := range []string{modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv} {
+	for _, key := range []string{modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv, modelreview.FireworksKeyEnv} {
 		if !slices.Contains(spec.EnvironmentDeny, key) {
 			t.Fatalf("provider credential %s is not denied without permissions.model", key)
 		}

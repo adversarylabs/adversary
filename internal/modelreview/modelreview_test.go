@@ -150,7 +150,7 @@ func TestProviderFromEnvironmentRequiresUnambiguousKeyAndExplicitModel(t *testin
 	if _, err := ProviderFromEnvironment(lookup(map[string]string{OpenAIKeyEnv: "secret"}), nil); err == nil || !strings.Contains(err.Error(), ModelEnv) {
 		t.Fatalf("missing model error = %v", err)
 	}
-	if _, err := ProviderFromEnvironment(lookup(map[string]string{OpenAIKeyEnv: "one", AnthropicKeyEnv: "two", ModelEnv: "reviewer"}), nil); err == nil || !strings.Contains(err.Error(), ProviderEnv) {
+	if _, err := ProviderFromEnvironment(lookup(map[string]string{OpenAIKeyEnv: "one", AnthropicKeyEnv: "two", FireworksKeyEnv: "three", ModelEnv: "reviewer"}), nil); err == nil || !strings.Contains(err.Error(), ProviderEnv) {
 		t.Fatalf("ambiguous provider error = %v", err)
 	}
 	provider, err := ProviderFromEnvironment(lookup(map[string]string{AnthropicKeyEnv: "secret", ModelEnv: "reviewer"}), nil)
@@ -158,6 +158,45 @@ func TestProviderFromEnvironmentRequiresUnambiguousKeyAndExplicitModel(t *testin
 		t.Fatal(err)
 	}
 	if provider.Name() != "anthropic" || provider.Model() != "reviewer" {
+		t.Fatalf("provider = %s/%s", provider.Name(), provider.Model())
+	}
+	provider, err = ProviderFromEnvironment(lookup(map[string]string{
+		FireworksKeyEnv: "secret",
+		ModelEnv:        "accounts/fireworks/models/reviewer",
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fireworks, ok := provider.(*FireworksProvider)
+	if !ok || fireworks.Model() != "accounts/fireworks/models/reviewer" ||
+		fireworks.BaseURL != "https://api.fireworks.ai/inference" {
+		t.Fatalf("provider = %#v", provider)
+	}
+}
+
+func TestProviderConfigOverridesEnvironmentSelection(t *testing.T) {
+	values := map[string]string{
+		ProviderEnv:     "anthropic",
+		ModelEnv:        "environment-model",
+		AnthropicKeyEnv: "anthropic-secret",
+		FireworksKeyEnv: "fireworks-secret",
+	}
+	lookup := func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}
+	provider, err := ProviderFromConfig(Config{Provider: "fireworks"}, lookup, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Name() != "fireworks" || provider.Model() != "environment-model" {
+		t.Fatalf("provider = %s/%s", provider.Name(), provider.Model())
+	}
+	provider, err = ProviderFromConfig(Config{Model: "flag-model"}, lookup, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Name() != "anthropic" || provider.Model() != "flag-model" {
 		t.Fatalf("provider = %s/%s", provider.Name(), provider.Model())
 	}
 }
@@ -222,5 +261,50 @@ func TestAnthropicProviderUsesForcedStructuredTool(t *testing.T) {
 	choice := payload["tool_choice"].(map[string]any)
 	if choice["name"] != "submit_review" {
 		t.Fatalf("tool_choice = %#v", choice)
+	}
+}
+
+func TestFireworksProviderUsesChatCompletionsStructuredOutput(t *testing.T) {
+	var authorization, path string
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		authorization = request.Header.Get("authorization")
+		path = request.URL.Path
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"content": `{"decision":"approve"}`,
+			}}},
+			"usage": map[string]any{"prompt_tokens": 14, "completion_tokens": 3},
+		})
+	}))
+	defer server.Close()
+	provider := &FireworksProvider{
+		APIKey:  "secret",
+		ModelID: "accounts/fireworks/models/reviewer",
+		BaseURL: server.URL,
+		Client:  server.Client(),
+	}
+	result, err := provider.Review(context.Background(), validRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorization != "Bearer secret" || path != "/v1/chat/completions" || string(result.Output) != `{"decision":"approve"}` {
+		t.Fatalf("authorization=%q path=%q result=%s", authorization, path, result.Output)
+	}
+	format := payload["response_format"].(map[string]any)
+	jsonSchema := format["json_schema"].(map[string]any)
+	if format["type"] != "json_schema" || jsonSchema["name"] != "adversary_model_review" {
+		t.Fatalf("response_format = %#v", format)
+	}
+	messages := payload["messages"].([]any)
+	user := messages[1].(map[string]any)["content"].(string)
+	if !strings.Contains(user, string(validRequest.Input)) || !strings.Contains(user, string(validRequest.Schema)) {
+		t.Fatalf("user content did not include input and schema: %q", user)
+	}
+	if result.Usage != (Usage{InputTokens: 14, OutputTokens: 3}) {
+		t.Fatalf("usage = %#v", result.Usage)
 	}
 }

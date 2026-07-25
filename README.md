@@ -113,7 +113,7 @@ and are not general CLI configuration.
 | registry | explicit OCI reference | `ADVERSARY_REGISTRY_HOST`, `ADVERSARY_REGISTRY_NAMESPACE` | Adversary Labs registry |
 | artifact data | — | `ADVERSARY_DATA_DIR` | OS data directory |
 | Node runtime | manifest requirement | `ADVERSARY_NODE_PATH`, then `PATH` | user runtime locations |
-| model provider | — | `ADVERSARY_MODEL_PROVIDER`, `ADVERSARY_MODEL`, provider API key | inferred only when exactly one supported key is present |
+| model provider | `--model-provider`, `--model` | `ADVERSARY_MODEL_PROVIDER`, `ADVERSARY_MODEL`, provider API key | inferred only when exactly one supported key is present |
 | OCI diagnostics | `--verbose` | `ADVERSARY_OCI_DEBUG` (internal transport toggle) | disabled; secrets redacted |
 | review suppression | command behavior | `ADVERSARY_INCLUDE_SUPPRESSED` (injected into adversary) | suppressed details omitted |
 | adversary protocol paths | — | `ADVERSARY_INPUT`, `ADVERSARY_OUTPUT`, `ADVERSARY_REPO` (injected) | per-run temporary paths |
@@ -130,21 +130,38 @@ network transport. It starts a short-lived authenticated loopback broker for
 the adversary execution and passes only the broker endpoint and execution token
 to the child process; provider API keys are never inherited by the adversary.
 
-Configure an explicit model and either OpenAI or Anthropic:
+Select the provider and model per run while keeping the API token in the
+environment:
 
 ```sh
-export ADVERSARY_MODEL="your-model-id"
 export OPENAI_API_KEY="..."
-# Or:
-export ANTHROPIC_API_KEY="..."
+adversary run adversarylabs/example \
+  --model-provider openai \
+  --model "your-model-id"
 ```
 
-Set `ADVERSARY_MODEL_PROVIDER=openai` or `anthropic` when both keys are present.
-`ADVERSARY_OPENAI_BASE_URL` and `ADVERSARY_ANTHROPIC_BASE_URL` override provider
-endpoints for compatible gateways and testing. Model-backed execution currently
-uses the host executor because sandbox and container loopback routing is not yet
-available. `--no-network` applies to the adversary child; provider network
-access remains isolated in the CLI-owned broker.
+Fireworks uses its full model identifier:
+
+```sh
+export FIREWORKS_API_KEY="..."
+adversary run adversarylabs/example \
+  --model-provider fireworks \
+  --model "accounts/fireworks/models/your-model-id"
+```
+
+Flags override `ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Without a
+provider flag or environment value, the CLI infers `openai`, `anthropic`, or
+`fireworks` only when exactly one of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
+`FIREWORKS_API_KEY` is configured. API tokens are intentionally not accepted as
+flags because command arguments can leak through process listings and shell
+history.
+
+`ADVERSARY_OPENAI_BASE_URL`, `ADVERSARY_ANTHROPIC_BASE_URL`, and
+`ADVERSARY_FIREWORKS_BASE_URL` override provider endpoints for compatible
+gateways and testing. Model-backed execution currently uses the host executor
+because sandbox and container loopback routing is not yet available.
+`--no-network` applies to the adversary child; provider network access remains
+isolated in the CLI-owned broker.
 
 `ADVERSARY_BUILD_HELPER` is a test seam, not a supported user setting. Standard
 `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and platform CA trust are

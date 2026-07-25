@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
@@ -16,6 +17,8 @@ type runOptions struct {
 	base                     string
 	head                     string
 	builder                  string
+	modelProvider            string
+	model                    string
 	force                    bool
 	format                   string
 	json                     bool
@@ -43,7 +46,8 @@ func newRunCommand(app *application.App) *cobra.Command {
   adversary run ./local-adversary --path ../project
   adversary run adversarylabs/dockerfile --base main
   adversary run adversarylabs/dockerfile --base main --head feature
-  adversary run adversarylabs/dockerfile --all-files`,
+  adversary run adversarylabs/dockerfile --all-files
+  adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, opts.format, opts.json)
@@ -58,6 +62,19 @@ func newRunCommand(app *application.App) *cobra.Command {
 			}
 			if opts.builder != "local" && opts.builder != "docker" {
 				return fmt.Errorf("--builder must be local or docker")
+			}
+			opts.modelProvider = strings.ToLower(strings.TrimSpace(opts.modelProvider))
+			opts.model = strings.TrimSpace(opts.model)
+			switch opts.modelProvider {
+			case "", "openai", "anthropic", "fireworks":
+			default:
+				return fmt.Errorf("--model-provider must be openai, anthropic, or fireworks")
+			}
+			if cmd.Flags().Changed("model-provider") && opts.modelProvider == "" {
+				return fmt.Errorf("--model-provider must not be empty")
+			}
+			if cmd.Flags().Changed("model") && opts.model == "" {
+				return fmt.Errorf("--model must not be empty")
 			}
 			if opts.shell && opts.noNetwork {
 				return fmt.Errorf("--shell cannot be combined with --no-network because the host shell cannot enforce network isolation")
@@ -86,6 +103,8 @@ func newRunCommand(app *application.App) *cobra.Command {
 				BaseRef:                  opts.base,
 				HeadRef:                  opts.head,
 				Builder:                  opts.builder,
+				ModelProvider:            opts.modelProvider,
+				Model:                    opts.model,
 				Force:                    opts.force,
 				Format:                   opts.format,
 				KeepTemp:                 opts.keepTemp,
@@ -118,6 +137,8 @@ func newRunCommand(app *application.App) *cobra.Command {
 					BaseRef:                  opts.base,
 					HeadRef:                  opts.head,
 					Builder:                  opts.builder,
+					ModelProvider:            opts.modelProvider,
+					Model:                    opts.model,
 					Force:                    opts.force,
 					Format:                   opts.format,
 					KeepTemp:                 opts.keepTemp,
@@ -145,6 +166,8 @@ func newRunCommand(app *application.App) *cobra.Command {
 	cmd.Flags().StringVar(&opts.base, "base", "", "git base ref (defaults to the detected default branch when --head is set)")
 	cmd.Flags().StringVar(&opts.head, "head", "", "git head ref (defaults to HEAD when --base is set)")
 	cmd.Flags().StringVar(&opts.builder, "builder", "local", "build mechanism for local adversaries: local or docker")
+	cmd.Flags().StringVar(&opts.modelProvider, "model-provider", "", "model provider: openai, anthropic, or fireworks (overrides ADVERSARY_MODEL_PROVIDER)")
+	cmd.Flags().StringVar(&opts.model, "model", "", "provider model identifier (overrides ADVERSARY_MODEL)")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "run even when triggers.files_changed does not match")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "print the versioned review result envelope as JSON")
