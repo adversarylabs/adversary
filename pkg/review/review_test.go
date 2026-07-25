@@ -186,7 +186,7 @@ func TestRenderTerminalDemotesContextObservationsAndCapsEvidence(t *testing.T) {
 		"Files scanned: 436",
 		"Findings (1)",
 		"- [high] Command code terminates the process directly (7 sites)",
-		"- … and 2 more",
+		"- … and 2 more (7 total)",
 		"Commands share a root error mapper.",
 		"Findings: 1",
 	} {
@@ -208,6 +208,42 @@ func TestRenderTerminalDemotesContextObservationsAndCapsEvidence(t *testing.T) {
 	// Evidence sites 1-5 remain visible.
 	if !strings.Contains(got, "site 5") || !strings.Contains(got, "site 1") {
 		t.Fatalf("expected capped evidence retained in:\n%s", got)
+	}
+}
+
+func TestRenderTerminalUsesMetadataOccurrencesForIndexAndEvidenceFooter(t *testing.T) {
+	evidence := make([]Evidence, 0, 8)
+	for i := 1; i <= 8; i++ {
+		n := i
+		evidence = append(evidence, Evidence{File: "cli/cmd/app.go", Line: &n, Message: fmt.Sprintf("site %d", i)})
+	}
+	result := ReviewResult{
+		Adversary: ReviewAdversary{Name: "go-cli"},
+		Findings: []Finding{{
+			ID: "cancel", Title: "Long-running command work starts from a non-cancellable context",
+			Category: "reliability", Severity: "medium", Confidence: "high",
+			Summary:        "135 command paths start work from context.Background or context.TODO.",
+			Evidence:       evidence,
+			Metadata:       json.RawMessage(`{"occurrences":135}`),
+			Recommendation: "Pass cmd.Context().",
+		}},
+	}
+	var out strings.Builder
+	if err := RenderTerminal(&out, result); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"- [medium] Long-running command work starts from a non-cancellable context (135 sites)",
+		"135 command paths start work from context.Background or context.TODO.",
+		"- … and 130 more (135 total)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "(8 sites)") {
+		t.Fatalf("index used sample length instead of occurrences:\n%s", got)
 	}
 }
 

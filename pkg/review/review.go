@@ -327,7 +327,7 @@ func RenderTerminal(w io.Writer, result ReviewResult) error {
 		for _, finding := range result.Findings {
 			title := sanitizeTerminalInline(finding.Title)
 			severity := sanitizeTerminalInline(finding.Severity)
-			if n := len(finding.Evidence); n > 0 {
+			if n := findingOccurrenceCount(finding); n > 0 {
 				lines = append(lines, fmt.Sprintf("- [%s] %s (%s)", severity, title, evidenceCountLabel(n)))
 			} else {
 				lines = append(lines, fmt.Sprintf("- [%s] %s", severity, title))
@@ -403,9 +403,7 @@ func appendTerminalFinding(lines *[]string, finding Finding, qualifier string) {
 	if len(finding.Evidence) > 0 {
 		*lines = append(*lines, "Evidence", "")
 		shown := finding.Evidence
-		remaining := 0
 		if len(shown) > terminalMaxEvidence {
-			remaining = len(shown) - terminalMaxEvidence
 			shown = shown[:terminalMaxEvidence]
 		}
 		for _, evidence := range shown {
@@ -414,8 +412,9 @@ func appendTerminalFinding(lines *[]string, finding Finding, qualifier string) {
 				*lines = append(*lines, "  "+sanitizeTerminalInline(evidence.Snippet))
 			}
 		}
-		if remaining > 0 {
-			*lines = append(*lines, fmt.Sprintf("- … and %d more", remaining))
+		total := findingOccurrenceCount(finding)
+		if total > len(shown) {
+			*lines = append(*lines, fmt.Sprintf("- … and %d more (%d total)", total-len(shown), total))
 		}
 		*lines = append(*lines, "")
 	}
@@ -473,6 +472,41 @@ func noteMetadataString(raw json.RawMessage, field string) (string, bool) {
 		return "", false
 	}
 	return text, true
+}
+
+// findingOccurrenceCount prefers finding.metadata.occurrences when producers
+// attach a true hit total larger than the evidence sample array.
+func findingOccurrenceCount(finding Finding) int {
+	if n, ok := noteMetadataInt(finding.Metadata, "occurrences"); ok && n > 0 {
+		if n < len(finding.Evidence) {
+			return len(finding.Evidence)
+		}
+		return n
+	}
+	return len(finding.Evidence)
+}
+
+func noteMetadataInt(raw json.RawMessage, field string) (int, bool) {
+	if len(raw) == 0 {
+		return 0, false
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return 0, false
+	}
+	value, ok := object[field]
+	if !ok {
+		return 0, false
+	}
+	var asInt int
+	if err := json.Unmarshal(value, &asInt); err == nil {
+		return asInt, true
+	}
+	var asFloat float64
+	if err := json.Unmarshal(value, &asFloat); err == nil {
+		return int(asFloat), true
+	}
+	return 0, false
 }
 
 func shortenRepositoryPath(path string) string {
