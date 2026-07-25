@@ -418,6 +418,49 @@ func TestRuntimeImageSchemaParserAndDownstreamBoundaries(t *testing.T) {
 	}
 }
 
+func TestModelPermissionIsExplicitAndSchemaAligned(t *testing.T) {
+	input := strings.Replace(valid, "permissions:\n", "permissions:\n  model: true\n", 1)
+	parsed, err := Parse([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.Permissions.Model {
+		t.Fatal("permissions.model was not preserved")
+	}
+	if _, err := Parse([]byte(strings.Replace(input, "model: true", "model: required", 1))); err == nil {
+		t.Fatal("non-boolean permissions.model was accepted")
+	}
+
+	schemaData, err := os.ReadFile(filepath.Join("..", "..", "schema", "adversary.manifest.v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schemaDocument any
+	if err := json.Unmarshal(schemaData, &schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	const schemaURL = "https://adversary.dev/schemas/adversary.manifest.v1.schema.json"
+	if err := compiler.AddResource(schemaURL, schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := compiler.Compile(schemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := map[string]any{
+		"name": "adversarylabs/model-review",
+		"runtime": map[string]any{
+			"name": "node", "version": "22", "command": []any{"dist/index.js"},
+		},
+		"permissions": map[string]any{"model": true},
+	}
+	if err := compiled.Validate(document); err != nil {
+		t.Fatalf("schema rejected permissions.model: %v", err)
+	}
+}
+
 func TestRuntimeImageDirectValidateUsesNormalizedRepositoryBoundary(t *testing.T) {
 	base := Manifest{Name: "adversarylabs/example", Runtime: Runtime{Command: []string{"/bin/review"}}}
 	for name, tc := range map[string]struct {

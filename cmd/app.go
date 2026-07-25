@@ -23,6 +23,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/dependencies"
 	"github.com/adversarylabs/adversary/internal/initproject"
+	"github.com/adversarylabs/adversary/internal/modelreview"
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/manifest"
@@ -269,7 +270,14 @@ func toApplicationAutoResult(result internaladversary.AutoResult) application.Ad
 }
 func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladversary.Runner {
 	shell := func() ([]string, error) { return internaladversary.PlatformShell(p.node.LookPath) }
-	return internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: p.stdin, Git: p.git, TempDir: p.tempDir, HomeDir: p.homeDir, DataRoot: p.dataRoot, BuildStateDir: p.buildStateDir, Now: p.now, Files: p.files, BuildProject: p.buildProject, Shell: shell, Executor: internaladversary.HostExecutor{Stdout: opts.Stderr, Stderr: opts.Stderr, Stdin: p.stdin, Environment: p.environment, ResolveExecutable: p.resolveExecutable, FindNode: p.node.Find, Shell: shell, Launcher: p.launcher, Timer: p.timer}, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
+	modelBrokerFactory := func() (modelreview.Broker, error) {
+		provider, err := modelreview.ProviderFromEnvironment(p.environment.Lookup, http.DefaultClient)
+		if err != nil {
+			return modelreview.Broker{}, err
+		}
+		return modelreview.Broker{Provider: provider, Entropy: rand.Reader, Listen: net.Listen}, nil
+	}
+	return internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: p.stdin, Git: p.git, TempDir: p.tempDir, HomeDir: p.homeDir, DataRoot: p.dataRoot, BuildStateDir: p.buildStateDir, Now: p.now, Files: p.files, BuildProject: p.buildProject, ModelBrokerFactory: modelBrokerFactory, Shell: shell, Executor: internaladversary.HostExecutor{Stdout: opts.Stderr, Stderr: opts.Stderr, Stdin: p.stdin, Environment: p.environment, ResolveExecutable: p.resolveExecutable, FindNode: p.node.Find, Shell: shell, Launcher: p.launcher, Timer: p.timer}, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
 }
 func toInternalRunOptions(opts application.AdversaryRunOptions) internaladversary.RunOptions {
 	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout, ReviewContext: opts.ReviewContext}

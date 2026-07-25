@@ -207,6 +207,18 @@ func TestRequestedPermissionsAreComparedWithAllowedPolicy(t *testing.T) {
 	}
 }
 
+func TestModelAccessIsComparedWithAllowedPolicy(t *testing.T) {
+	request := ExecutionPolicyRequest{
+		Trust:     TrustDecision{Publisher: PublisherIdentity{Name: "adversarylabs"}, Trust: TrustedPublisherTrust},
+		Requested: RequestedPermissions{ModelAccess: true},
+		Allowed:   AllowedPermissions{},
+		Backend:   HostExecutorBackend,
+	}
+	if _, err := DecideExecutionPolicy(request); err == nil || !strings.Contains(err.Error(), "does not allow requested model access") {
+		t.Fatalf("permission policy error=%v", err)
+	}
+}
+
 func TestDefaultPublisherTrustPolicy(t *testing.T) {
 	policy := DefaultPublisherTrustPolicy()
 	for publisher, want := range map[string]PublisherTrust{

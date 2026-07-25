@@ -164,6 +164,10 @@
         "network": {
           "type": "boolean"
         },
+        "model": {
+          "type": "boolean",
+          "description": "Request access to the CLI-owned model review broker."
+        },
         "environment": {
           "type": "object",
           "additionalProperties": false,

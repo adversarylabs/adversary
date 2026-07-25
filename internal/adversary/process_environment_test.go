@@ -22,6 +22,22 @@ func TestProcessEnvironmentNormalizesAndOverridesDeterministically(t *testing.T)
 	}
 }
 
+func TestProcessEnvironmentCanDenyParentCredentialsAfterOverrides(t *testing.T) {
+	env := NewProcessEnvironment([]string{
+		"PATH=/bin",
+		"OPENAI_API_KEY=parent-secret",
+		"ANTHROPIC_API_KEY=other-secret",
+	}, false)
+	got := env.EntriesWithout(
+		map[string]string{"OPENAI_API_KEY": "override-secret", "ADVERSARY_MODEL_TOKEN": "broker-token"},
+		[]string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY"},
+	)
+	want := []string{"ADVERSARY_MODEL_TOKEN=broker-token", "PATH=/bin"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("entries = %#v, want %#v", got, want)
+	}
+}
+
 func TestProcessEnvironmentRejectsUnsafePATHEntriesBeforeSelection(t *testing.T) {
 	absolute := t.TempDir()
 	for _, path := range []string{

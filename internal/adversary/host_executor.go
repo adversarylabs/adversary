@@ -65,18 +65,19 @@ type RuntimeTimer interface {
 }
 
 type RuntimeSpec struct {
-	Image          string
-	RuntimeName    string
-	RuntimeVersion string
-	Command        []string
-	RepoPath       string
-	RunDir         string
-	AdversaryPath  string
-	Env            map[string]string
-	Shell          bool
-	Publisher      string
-	Digest         string
-	Permissions    RuntimePermissions
+	Image           string
+	RuntimeName     string
+	RuntimeVersion  string
+	Command         []string
+	RepoPath        string
+	RunDir          string
+	AdversaryPath   string
+	Env             map[string]string
+	EnvironmentDeny []string
+	Shell           bool
+	Publisher       string
+	Digest          string
+	Permissions     RuntimePermissions
 }
 
 type RuntimePermissions struct {
@@ -165,7 +166,7 @@ func (e HostExecutor) Run(ctx context.Context, spec RuntimeSpec) (RuntimeResult,
 	if err := ctx.Err(); err != nil {
 		return RuntimeResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
 	}
-	process, err := e.Launcher.Start(ProcessLaunchOptions{Path: executable, Args: command[1:], Dir: spec.AdversaryPath, Stdout: e.Stdout, Stderr: e.Stderr, Stdin: e.Stdin, Env: e.Environment.Entries(spec.Env)})
+	process, err := e.Launcher.Start(ProcessLaunchOptions{Path: executable, Args: command[1:], Dir: spec.AdversaryPath, Stdout: e.Stdout, Stderr: e.Stderr, Stdin: e.Stdin, Env: e.Environment.EntriesWithout(spec.Env, spec.EnvironmentDeny)})
 	if err != nil {
 		return RuntimeResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
 	}

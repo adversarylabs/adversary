@@ -63,6 +63,7 @@ func permissionRequirements(resolved ResolvedAdversary, opts RunOptions) Permiss
 	requirements.Requested.FilesystemWriteIsolation = len(permissions.Filesystem.Write) > 0
 	requirements.Requested.EnvironmentIsolation = len(permissions.Environment.Allow) > 0
 	requirements.Requested.NetworkIsolation = requirements.Requested.NetworkIsolation || resolved.NetworkOff
+	requirements.Requested.ModelAccess = permissions.Model
 	if permissions.Enforcement == "required" {
 		requirements.Required = requirements.Requested
 	}
@@ -110,6 +111,7 @@ type RequestedPermissions struct {
 	CPULimits                bool
 	MemoryLimits             bool
 	ProcessLimits            bool
+	ModelAccess              bool
 }
 
 type AllowedPermissions struct {
@@ -120,6 +122,7 @@ type AllowedPermissions struct {
 	CPULimits                bool
 	MemoryLimits             bool
 	ProcessLimits            bool
+	ModelAccess              bool
 }
 
 type PermissionPolicy interface {
@@ -137,6 +140,7 @@ func (AllowRequestedPermissionsPolicy) Allowed(TrustDecision) AllowedPermissions
 		CPULimits:                true,
 		MemoryLimits:             true,
 		ProcessLimits:            true,
+		ModelAccess:              true,
 	}
 }
 
@@ -195,6 +199,7 @@ func validateAllowedPermissions(requested RequestedPermissions, allowed AllowedP
 		{requested.CPULimits, allowed.CPULimits, "CPU limits"},
 		{requested.MemoryLimits, allowed.MemoryLimits, "memory limits"},
 		{requested.ProcessLimits, allowed.ProcessLimits, "process limits"},
+		{requested.ModelAccess, allowed.ModelAccess, "model access"},
 	} {
 		if boundary.requested && !boundary.allowed {
 			return fmt.Errorf("execution policy does not allow requested %s", boundary.name)
