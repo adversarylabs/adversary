@@ -14,10 +14,11 @@ import (
 )
 
 type multiRecordingRuntime struct {
-	inner application.Runtime
-	refs  []string
-	opts  []application.AdversaryRunOptions
-	errs  map[string]error
+	inner        application.Runtime
+	refs         []string
+	opts         []application.AdversaryRunOptions
+	errs         map[string]error
+	stdoutBodies map[string]string
 }
 
 func (r *multiRecordingRuntime) BindingIdentity() string {
@@ -26,16 +27,22 @@ func (r *multiRecordingRuntime) BindingIdentity() string {
 func (r *multiRecordingRuntime) Run(_ context.Context, opts application.AdversaryRunOptions) error {
 	r.refs = append(r.refs, opts.AdversaryRef)
 	r.opts = append(r.opts, opts)
+	if opts.Stdout != nil {
+		if r.stdoutBodies != nil {
+			if body, ok := r.stdoutBodies[opts.AdversaryRef]; ok {
+				_, _ = opts.Stdout.Write([]byte(body))
+			}
+		} else if opts.Format == "json" {
+			// Minimal JSON body so multi-json capture is non-empty.
+			_, _ = opts.Stdout.Write([]byte(`{"protocolVersion":1,"result":{"findings":[]}}` + "\n"))
+		} else {
+			_, _ = opts.Stdout.Write([]byte("ok report for " + opts.AdversaryRef + "\n"))
+		}
+	}
 	if r.errs != nil {
 		if err, ok := r.errs[opts.AdversaryRef]; ok {
 			return err
 		}
-	}
-	// Minimal text/json body so multi-json capture is non-empty.
-	if opts.Format == "json" && opts.Stdout != nil {
-		_, _ = opts.Stdout.Write([]byte(`{"protocolVersion":1,"result":{"findings":[]}}` + "\n"))
-	} else if opts.Stdout != nil {
-		_, _ = opts.Stdout.Write([]byte("ok report for " + opts.AdversaryRef + "\n"))
 	}
 	return nil
 }
@@ -112,6 +119,63 @@ func TestRunMultipleJSONConcatenatesResultsEnvelope(t *testing.T) {
 	}
 	if len(envelope.Data.Results[0].Output) == 0 {
 		t.Fatal("expected captured per-adversary JSON output")
+	}
+}
+
+func TestRunMultipleJSONKeepsEnvelopeWhenStdoutIsNotJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut)
+	deps := base.Dependencies()
+	spy := &multiRecordingRuntime{
+		inner: deps.Runtime,
+		errs: map[string]error{
+			"broken": errors.New("child crashed"),
+		},
+		// Write non-JSON stdout for the failing adversary before returning the error.
+		stdoutBodies: map[string]string{
+			"broken": "panic: boom\nnot json\n",
+			"ok":     `{"protocolVersion":1,"result":{"findings":[]}}` + "\n",
+		},
+	}
+	deps.Runtime = spy
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"run", "broken", "ok", "--format", "json"})
+	runErr := cmd.Execute()
+	if runErr == nil {
+		t.Fatal("expected hard error from broken adversary")
+	}
+	var envelope struct {
+		Command string `json:"command"`
+		Data    struct {
+			Results []struct {
+				Adversary string          `json:"adversary"`
+				Output    json.RawMessage `json:"output"`
+				Error     string          `json:"error"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
+		t.Fatalf("multi-run envelope must remain valid JSON: %v\n%s", err, out.String())
+	}
+	if len(envelope.Data.Results) != 2 {
+		t.Fatalf("results = %#v", envelope.Data.Results)
+	}
+	broken := envelope.Data.Results[0]
+	if broken.Adversary != "broken" {
+		t.Fatalf("first result = %#v", broken)
+	}
+	if len(broken.Output) != 0 {
+		t.Fatalf("non-JSON stdout must not be stored as RawMessage: %s", broken.Output)
+	}
+	if !strings.Contains(broken.Error, "child crashed") || !strings.Contains(broken.Error, "non-JSON") {
+		t.Fatalf("error = %q", broken.Error)
+	}
+	if len(envelope.Data.Results[1].Output) == 0 {
+		t.Fatal("second adversary should keep valid JSON output")
 	}
 }
 

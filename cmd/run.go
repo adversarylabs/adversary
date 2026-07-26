@@ -185,10 +185,17 @@ func runAdversaries(
 		}
 
 		item := multiRunItemDTO{Adversary: ref}
+		// Only attach stdout when it is valid JSON so writeJSON can always encode
+		// the multi-run envelope (Greptile: partial/stacktrace stdout broke RawMessage).
+		nonJSONStdout := false
 		if multi && jsonMode {
 			raw := bytes.TrimSpace(buf.Bytes())
 			if len(raw) > 0 {
-				item.Output = json.RawMessage(append([]byte(nil), raw...))
+				if json.Valid(raw) {
+					item.Output = json.RawMessage(append([]byte(nil), raw...))
+				} else {
+					nonJSONStdout = true
+				}
 			}
 		}
 
@@ -197,9 +204,6 @@ func runAdversaries(
 		case err == nil:
 		case errors.As(err, &findings):
 			findingsTotal += findings.Count
-			if multi && jsonMode && item.Error == "" {
-				// Findings still produced output; keep output, note via aggregate only.
-			}
 		default:
 			if hardErr == nil {
 				hardErr = err
@@ -213,6 +217,9 @@ func runAdversaries(
 			}
 		}
 		if multi && jsonMode {
+			if nonJSONStdout {
+				item.Error = joinMultiRunError(item.Error, "adversary wrote non-JSON stdout")
+			}
 			items = append(items, item)
 		}
 	}
@@ -243,6 +250,16 @@ func runAdversaries(
 		return &internaladversary.FindingsError{Count: findingsTotal}
 	}
 	return nil
+}
+
+func joinMultiRunError(existing, next string) string {
+	if existing == "" {
+		return next
+	}
+	if next == "" {
+		return existing
+	}
+	return existing + "; " + next
 }
 
 func runOneAdversary(
