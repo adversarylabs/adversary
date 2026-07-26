@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -40,15 +43,16 @@ func newRunCommand(app *application.App) *cobra.Command {
 	opts := &runOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "run <adversary-ref>",
-		Short: "Run an Adversary against a local source repository",
+		Use:   "run <adversary-ref> [adversary-ref...]",
+		Short: "Run one or more Adversaries against a local source repository",
 		Example: `  adversary run adversarylabs/dockerfile
   adversary run ./local-adversary --path ../project
   adversary run adversarylabs/dockerfile --base main
   adversary run adversarylabs/dockerfile --base main --head feature
   adversary run adversarylabs/dockerfile --all-files
-  adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id`,
-		Args: cobra.ExactArgs(1),
+  adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id
+  adversary run adversarylabs/go-cli adversarylabs/secrets --path . --all-files`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, opts.format, opts.json)
 			if err != nil {
@@ -82,6 +86,9 @@ func newRunCommand(app *application.App) *cobra.Command {
 			if opts.shell && format == "json" {
 				return fmt.Errorf("--shell cannot be combined with JSON output")
 			}
+			if opts.shell && len(args) > 1 {
+				return fmt.Errorf("--shell cannot be combined with multiple adversary references")
+			}
 			if opts.build && opts.noBuild {
 				return fmt.Errorf("--build and --no-build cannot be combined")
 			}
@@ -97,68 +104,7 @@ func newRunCommand(app *application.App) *cobra.Command {
 				opts.verbose = true
 			}
 
-			err = app.Dependencies().Runtime.Run(cmd.Context(), application.AdversaryRunOptions{
-				AdversaryRef:             args[0],
-				RepoPath:                 opts.path,
-				BaseRef:                  opts.base,
-				HeadRef:                  opts.head,
-				Builder:                  opts.builder,
-				ModelProvider:            opts.modelProvider,
-				Model:                    opts.model,
-				Force:                    opts.force,
-				Format:                   opts.format,
-				KeepTemp:                 opts.keepTemp,
-				NoNetwork:                opts.noNetwork,
-				Verbose:                  opts.verbose,
-				IncludeSuppressed:        opts.includeSuppressed,
-				Shell:                    opts.shell,
-				AllFiles:                 opts.allFiles,
-				AllowUnsafeHostExecution: opts.allowUnsafeHostExecution,
-				Build:                    opts.build,
-				RunTimeout:               opts.runTimeout,
-				BuildTimeout:             opts.buildTimeout,
-				Stdout:                   cmd.OutOrStdout(),
-				Stderr:                   cmd.ErrOrStderr(),
-			})
-			if errors.Is(err, context.Canceled) {
-				return err
-			}
-			if err != nil && errors.Is(err, internaladversary.ErrNotInstalledLocally) {
-				// AMB-11: auto-pull if not present locally, then retry once.
-				fmt.Fprintln(cmd.ErrOrStderr(), "Adversary not present locally; attempting pull...")
-				_, pullErr := pullAdversary(cmd.Context(), args[0], app.Dependencies().DefaultAPIURL, "default", app, cmd.ErrOrStderr())
-				if pullErr != nil {
-					return fmt.Errorf("auto-pull for %s failed: %w (original error: %v)", args[0], pullErr, err)
-				}
-				// retry
-				err = app.Dependencies().Runtime.Run(cmd.Context(), application.AdversaryRunOptions{
-					AdversaryRef:             args[0],
-					RepoPath:                 opts.path,
-					BaseRef:                  opts.base,
-					HeadRef:                  opts.head,
-					Builder:                  opts.builder,
-					ModelProvider:            opts.modelProvider,
-					Model:                    opts.model,
-					Force:                    opts.force,
-					Format:                   opts.format,
-					KeepTemp:                 opts.keepTemp,
-					NoNetwork:                opts.noNetwork,
-					Verbose:                  opts.verbose,
-					IncludeSuppressed:        opts.includeSuppressed,
-					Shell:                    opts.shell,
-					AllFiles:                 opts.allFiles,
-					AllowUnsafeHostExecution: opts.allowUnsafeHostExecution,
-					Build:                    opts.build,
-					RunTimeout:               opts.runTimeout,
-					BuildTimeout:             opts.buildTimeout,
-					Stdout:                   cmd.OutOrStdout(),
-					Stderr:                   cmd.ErrOrStderr(),
-				})
-				if errors.Is(err, context.Canceled) {
-					return err
-				}
-			}
-			return err
+			return runAdversaries(cmd.Context(), app, opts, args, cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
 
@@ -186,4 +132,187 @@ func newRunCommand(app *application.App) *cobra.Command {
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
 
 	return cmd
+}
+
+type multiRunItemDTO struct {
+	Adversary string          `json:"adversary"`
+	Output    json.RawMessage `json:"output,omitempty"`
+	Error     string          `json:"error,omitempty"`
+}
+
+type multiRunDTO struct {
+	Results []multiRunItemDTO `json:"results"`
+}
+
+// runAdversaries runs one or more adversary refs with shared flags.
+// Multiple refs concatenate reports (text sections or a JSON results array).
+// Exit policy: first hard error wins after all runs; otherwise FindingsError with total count.
+func runAdversaries(
+	ctx context.Context,
+	app *application.App,
+	opts *runOptions,
+	refs []string,
+	stdout, stderr io.Writer,
+) error {
+	multi := len(refs) > 1
+	jsonMode := opts.format == "json"
+
+	var items []multiRunItemDTO
+	var findingsTotal int
+	var hardErr error
+	hardRef := ""
+
+	for i, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if multi && !jsonMode {
+			if i > 0 {
+				fmt.Fprintln(stdout)
+			}
+			fmt.Fprintf(stdout, "=== %s ===\n", ref)
+		}
+
+		var runStdout io.Writer = stdout
+		var buf bytes.Buffer
+		if multi && jsonMode {
+			runStdout = &buf
+		}
+
+		err := runOneAdversary(ctx, app, opts, ref, runStdout, stderr)
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+
+		item := multiRunItemDTO{Adversary: ref}
+		// Only attach stdout when it is valid JSON so writeJSON can always encode
+		// the multi-run envelope (Greptile: partial/stacktrace stdout broke RawMessage).
+		nonJSONStdout := false
+		if multi && jsonMode {
+			raw := bytes.TrimSpace(buf.Bytes())
+			if len(raw) > 0 {
+				if json.Valid(raw) {
+					item.Output = json.RawMessage(append([]byte(nil), raw...))
+				} else {
+					nonJSONStdout = true
+				}
+			}
+		}
+
+		var findings *internaladversary.FindingsError
+		switch {
+		case err == nil:
+		case errors.As(err, &findings):
+			findingsTotal += findings.Count
+		default:
+			if hardErr == nil {
+				hardErr = err
+				hardRef = ref
+			}
+			if multi && jsonMode {
+				item.Error = err.Error()
+			}
+			if multi && !jsonMode {
+				fmt.Fprintf(stderr, "adversary %q failed: %v\n", ref, err)
+			}
+		}
+		if multi && jsonMode {
+			if nonJSONStdout {
+				// Non-JSON stdout is a hard failure even when the runtime returned
+				// nil or FindingsError (Greptile: item.error alone left exit success).
+				item.Error = joinMultiRunError(item.Error, "adversary wrote non-JSON stdout")
+				if hardErr == nil {
+					hardErr = fmt.Errorf("adversary wrote non-JSON stdout")
+					hardRef = ref
+				}
+			}
+			items = append(items, item)
+		}
+	}
+
+	if multi && jsonMode {
+		if err := writeJSON(stdout, "run", multiRunDTO{Results: items}); err != nil {
+			return err
+		}
+	}
+	if multi {
+		fmt.Fprintf(stderr, "\nRan %d adversaries", len(refs))
+		if findingsTotal > 0 {
+			fmt.Fprintf(stderr, " · findings: %d", findingsTotal)
+		}
+		if hardErr != nil {
+			fmt.Fprintf(stderr, " · errors: 1+")
+		}
+		fmt.Fprintln(stderr)
+	}
+
+	if hardErr != nil {
+		if multi {
+			return fmt.Errorf("adversary %q failed: %w", hardRef, hardErr)
+		}
+		return hardErr
+	}
+	if findingsTotal > 0 {
+		return &internaladversary.FindingsError{Count: findingsTotal}
+	}
+	return nil
+}
+
+func joinMultiRunError(existing, next string) string {
+	if existing == "" {
+		return next
+	}
+	if next == "" {
+		return existing
+	}
+	return existing + "; " + next
+}
+
+func runOneAdversary(
+	ctx context.Context,
+	app *application.App,
+	opts *runOptions,
+	ref string,
+	stdout, stderr io.Writer,
+) error {
+	runOpts := application.AdversaryRunOptions{
+		AdversaryRef:             ref,
+		RepoPath:                 opts.path,
+		BaseRef:                  opts.base,
+		HeadRef:                  opts.head,
+		Builder:                  opts.builder,
+		ModelProvider:            opts.modelProvider,
+		Model:                    opts.model,
+		Force:                    opts.force,
+		Format:                   opts.format,
+		KeepTemp:                 opts.keepTemp,
+		NoNetwork:                opts.noNetwork,
+		Verbose:                  opts.verbose,
+		IncludeSuppressed:        opts.includeSuppressed,
+		Shell:                    opts.shell,
+		AllFiles:                 opts.allFiles,
+		AllowUnsafeHostExecution: opts.allowUnsafeHostExecution,
+		Build:                    opts.build,
+		RunTimeout:               opts.runTimeout,
+		BuildTimeout:             opts.buildTimeout,
+		Stdout:                   stdout,
+		Stderr:                   stderr,
+	}
+	err := app.Dependencies().Runtime.Run(ctx, runOpts)
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	if err != nil && errors.Is(err, internaladversary.ErrNotInstalledLocally) {
+		// AMB-11: auto-pull if not present locally, then retry once.
+		fmt.Fprintln(stderr, "Adversary not present locally; attempting pull...")
+		_, pullErr := pullAdversary(ctx, ref, app.Dependencies().DefaultAPIURL, "default", app, stderr)
+		if pullErr != nil {
+			return fmt.Errorf("auto-pull for %s failed: %w (original error: %v)", ref, pullErr, err)
+		}
+		err = app.Dependencies().Runtime.Run(ctx, runOpts)
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+	}
+	return err
 }
