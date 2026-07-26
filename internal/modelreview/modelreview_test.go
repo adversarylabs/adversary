@@ -303,6 +303,9 @@ func TestFireworksProviderUsesChatCompletionsStructuredOutput(t *testing.T) {
 	if format["type"] != "json_schema" || jsonSchema["name"] != "adversary_model_review" {
 		t.Fatalf("response_format = %#v", format)
 	}
+	if payload["reasoning_effort"] != "low" {
+		t.Fatalf("reasoning_effort = %#v", payload["reasoning_effort"])
+	}
 	messages := payload["messages"].([]any)
 	user := messages[1].(map[string]any)["content"].(string)
 	if !strings.Contains(user, string(validRequest.Input)) || !strings.Contains(user, string(validRequest.Schema)) {
@@ -310,5 +313,14 @@ func TestFireworksProviderUsesChatCompletionsStructuredOutput(t *testing.T) {
 	}
 	if result.Usage != (Usage{InputTokens: 14, OutputTokens: 3}) {
 		t.Fatalf("usage = %#v", result.Usage)
+	}
+}
+
+func TestFireworksReasoningEffortPreservesSmallStructuredOutputBudgets(t *testing.T) {
+	if effort := fireworksReasoningEffort(1_500); effort != "none" {
+		t.Fatalf("1,500-token effort = %q", effort)
+	}
+	if effort := fireworksReasoningEffort(12_000); effort != "low" {
+		t.Fatalf("12,000-token effort = %q", effort)
 	}
 }
