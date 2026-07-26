@@ -715,6 +715,77 @@ func TestReferenceJournalRejectsNoncanonicalReferenceWithoutCreatingIndex(t *tes
 	}
 }
 
+func TestPullRetargetsMutableLatestAfterContentImport(t *testing.T) {
+	// Mirrors adversary pull: install content without binding the mutable tag
+	// (ImportSources CAS-rejects retarget), then UpdateRef moves :latest.
+	r := Repository{Root: t.TempDir()}
+	oldArt := artifactVersioned(t, "local/test", "0.0.11", "old")
+	newArt := artifactVersioned(t, "local/test", "0.0.12", "new")
+	latest := "registry.adversarylabs.ai/adversarylabs/go-cli:latest"
+	if _, err := r.ImportPacked(oldArt, latest); err != nil {
+		t.Fatal(err)
+	}
+	// Same-tag import of different content still fails (immutable bind semantics).
+	if _, err := r.ImportPacked(newArt, latest); !errors.Is(err, ErrCAS) {
+		t.Fatalf("same-tag import err=%v, want ErrCAS", err)
+	}
+	// Pull path: content-only import, then retarget latest.
+	newRec, err := r.ImportSources(SourceImport{
+		Reference:         "",
+		Name:              newArt.ManifestName,
+		Version:           newArt.Version,
+		Manifest:          blobsource.Bytes(mustManifest(t, newArt)),
+		AdversaryManifest: blobsource.Bytes(newArt.AdversaryManifest),
+		Blobs:             mustBlobs(t, newArt),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRec, err := r.Resolve(latest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.UpdateRef(latest, oldRec.Digest, newRec.Digest); err != nil {
+		t.Fatalf("retarget latest: %v", err)
+	}
+	got, err := r.Resolve(latest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Digest != newRec.Digest || got.Version != "0.0.12" {
+		t.Fatalf("latest = %#v, want version 0.0.12 digest %s", got, newRec.Digest)
+	}
+}
+
+func artifactVersioned(t *testing.T, name, version, content string) pack.Artifact {
+	t.Helper()
+	d := t.TempDir()
+	write(t, d, "adversary.yaml", fmt.Sprintf("name: %s\nversion: %s\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n", name, version))
+	write(t, d, "dist/index.js", content)
+	a, err := pack.Create(context.Background(), pack.Options{Dir: d})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func mustManifest(t *testing.T, a pack.Artifact) []byte {
+	t.Helper()
+	if len(a.Manifest) == 0 {
+		t.Fatal("empty manifest")
+	}
+	return a.Manifest
+}
+
+func mustBlobs(t *testing.T, a pack.Artifact) []oci.SourceBlob {
+	t.Helper()
+	blobs, err := a.Sources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return blobs
+}
+
 func TestConflictingImportLeavesNoVisibleRecordOrAliasMutation(t *testing.T) {
 	r := Repository{Root: t.TempDir()}
 	a, b := artifact(t, "one"), artifact(t, "two")
