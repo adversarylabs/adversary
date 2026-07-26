@@ -25,6 +25,9 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 	payload := map[string]any{
 		"model":      p.ModelID,
 		"max_tokens": request.Budget.MaximumOutputTokens,
+		"reasoning_effort": fireworksReasoningEffort(
+			request.Budget.MaximumOutputTokens,
+		),
 		"messages": []map[string]any{
 			{"role": "system", "content": request.Prompt},
 			{"role": "user", "content": fireworksReviewInput(request)},
@@ -69,6 +72,13 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 		}
 	}
 	return Result{}, &ProviderError{Code: "fireworks_missing_output", Message: "fireworks response did not contain structured output"}
+}
+
+func fireworksReasoningEffort(maximumOutputTokens int) string {
+	if maximumOutputTokens <= 2_000 {
+		return "none"
+	}
+	return "low"
 }
 
 func fireworksReviewInput(request Request) string {
