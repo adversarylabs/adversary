@@ -33,6 +33,7 @@ func (p *AnthropicProvider) Review(ctx context.Context, request Request) (Result
 		"tools": []map[string]any{{
 			"name":         "submit_review",
 			"description":  "Return the structured adversary review.",
+			"strict":       true,
 			"input_schema": schema,
 		}},
 		"tool_choice": map[string]any{"type": "tool", "name": "submit_review"},

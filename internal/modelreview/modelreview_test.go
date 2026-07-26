@@ -262,6 +262,10 @@ func TestAnthropicProviderUsesForcedStructuredTool(t *testing.T) {
 	if choice["name"] != "submit_review" {
 		t.Fatalf("tool_choice = %#v", choice)
 	}
+	tool := payload["tools"].([]any)[0].(map[string]any)
+	if tool["strict"] != true {
+		t.Fatalf("tool = %#v", tool)
+	}
 }
 
 func TestFireworksProviderUsesChatCompletionsStructuredOutput(t *testing.T) {
