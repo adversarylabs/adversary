@@ -218,7 +218,13 @@ func runAdversaries(
 		}
 		if multi && jsonMode {
 			if nonJSONStdout {
+				// Non-JSON stdout is a hard failure even when the runtime returned
+				// nil or FindingsError (Greptile: item.error alone left exit success).
 				item.Error = joinMultiRunError(item.Error, "adversary wrote non-JSON stdout")
+				if hardErr == nil {
+					hardErr = fmt.Errorf("adversary wrote non-JSON stdout")
+					hardRef = ref
+				}
 			}
 			items = append(items, item)
 		}

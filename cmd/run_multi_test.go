@@ -179,6 +179,58 @@ func TestRunMultipleJSONKeepsEnvelopeWhenStdoutIsNotJSON(t *testing.T) {
 	}
 }
 
+func TestRunMultipleJSONNonJSONStdoutFailsEvenWhenRunSucceeds(t *testing.T) {
+	// Greptile P1: non-JSON stdout with nil/findings-only return must set hardErr,
+	// not only item.error, so multi-run does not exit successfully.
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut)
+	deps := base.Dependencies()
+	spy := &multiRecordingRuntime{
+		inner: deps.Runtime,
+		// "broken" returns nil but writes garbage; "ok" is fine.
+		stdoutBodies: map[string]string{
+			"broken": "not json at all\n",
+			"ok":     `{"protocolVersion":1,"result":{"findings":[]}}` + "\n",
+		},
+	}
+	deps.Runtime = spy
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"run", "broken", "ok", "--format", "json"})
+	runErr := cmd.Execute()
+	if runErr == nil {
+		t.Fatal("expected hard error when adversary wrote non-JSON stdout")
+	}
+	if !strings.Contains(runErr.Error(), "non-JSON") {
+		t.Fatalf("runErr = %v", runErr)
+	}
+	var envelope struct {
+		Data struct {
+			Results []struct {
+				Adversary string          `json:"adversary"`
+				Output    json.RawMessage `json:"output"`
+				Error     string          `json:"error"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
+		t.Fatalf("envelope must remain valid JSON: %v\n%s", err, out.String())
+	}
+	if len(envelope.Data.Results) != 2 {
+		t.Fatalf("results = %#v", envelope.Data.Results)
+	}
+	broken := envelope.Data.Results[0]
+	if len(broken.Output) != 0 {
+		t.Fatalf("non-JSON stdout must not be stored: %s", broken.Output)
+	}
+	if !strings.Contains(broken.Error, "non-JSON") {
+		t.Fatalf("item error = %q", broken.Error)
+	}
+}
+
 func TestRunMultipleAggregatesFindingsExit(t *testing.T) {
 	var out, errOut bytes.Buffer
 	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut)
