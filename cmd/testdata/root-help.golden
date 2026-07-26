@@ -16,7 +16,7 @@ Available Commands:
   pack        Package the current adversary into the local content-addressable store
   pull        Pull and install an adversary from an OCI registry
   push        Push a locally packed adversary to an OCI registry
-  run         Run an Adversary against a local source repository
+  run         Run one or more Adversaries against a local source repository
   search      Search Adversary Labs adversaries
   store       Inspect and maintain the artifact repository
   validate    Validate an adversary project with the canonical v1 manifest parser
