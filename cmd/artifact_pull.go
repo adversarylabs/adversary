@@ -92,18 +92,27 @@ func pulledByteSource(data []byte, digest string) (blobsource.Source, error) {
 	})
 }
 
+// registerExactRef points the durable local reference at digest, creating or
+// CAS-updating the tag (including :latest) so subsequent runs resolve the
+// newly pulled content.
 func registerExactRef(resolver application.Resolver, ref, digest string) error {
 	current, err := resolver.ResolveRecord(ref)
 	if err == nil {
 		if current.Digest == digest {
 			return nil
 		}
-		return resolver.UpdateRef(ref, current.Digest, digest)
+		if updateErr := resolver.UpdateRef(ref, current.Digest, digest); updateErr != nil {
+			return fmt.Errorf("retarget %s from %s to %s: %w", ref, current.Digest, digest, updateErr)
+		}
+		return nil
 	}
 	if !os.IsNotExist(err) {
 		return err
 	}
-	return resolver.UpdateRef(ref, "", digest)
+	if createErr := resolver.UpdateRef(ref, "", digest); createErr != nil {
+		return fmt.Errorf("create local reference %s -> %s: %w", ref, digest, createErr)
+	}
+	return nil
 }
 
 type pullResult struct {
@@ -160,9 +169,23 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	if sourceErr != nil {
 		return pullResult{}, errors.Join(sourceErr, artifact.Close())
 	}
-	unified, importErr := resolver.ImportSources(repository.SourceImport{Reference: ref.Locator(), Name: artifact.Manifest.Annotations["ai.adversary.full_name"], Version: artifact.Manifest.Annotations["ai.adversary.version"], Manifest: manifestSource, Blobs: artifact.Blobs, AdversaryManifest: adversarySource})
+	// Install content without binding the caller's tag in ImportSources.
+	// ImportSources rejects retargeting a tag that already points at a different
+	// digest (CAS). Pulls of mutable tags such as :latest must overwrite the
+	// local pointer after content is installed.
+	unified, importErr := resolver.ImportSources(repository.SourceImport{
+		Reference:         "",
+		Name:              artifact.Manifest.Annotations["ai.adversary.full_name"],
+		Version:           artifact.Manifest.Annotations["ai.adversary.version"],
+		Manifest:          manifestSource,
+		Blobs:             artifact.Blobs,
+		AdversaryManifest: adversarySource,
+	})
 	if err := errors.Join(importErr, artifact.Close()); err != nil {
 		return pullResult{}, err
+	}
+	if err := registerExactRef(resolver, ref.Locator(), unified.Digest); err != nil {
+		return pullResult{}, fmt.Errorf("update local reference %s: %w", ref.Locator(), err)
 	}
 	// best-effort pull metric (AMB-8)
 	reportPull(ctx, app, apiURL, profile, ref.Locator(), unified.Digest)
