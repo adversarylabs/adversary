@@ -1291,6 +1291,36 @@ func TestPrepareDerivedSDKCopiesExactBytes(t *testing.T) {
 		t.Fatalf("modes source=%o derived=%o package=%o", sourceInfo.Mode().Perm(), derivedInfo.Mode().Perm(), packageInfo.Mode().Perm())
 	}
 }
+func TestPrepareDerivedSDKAcceptsAdversarylabsPackageName(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := root.MkdirAll("vendor/adversary-sdk/dist", 0755); err != nil {
+		t.Fatal(err)
+	}
+	pkg := []byte(`{"name":"@adversarylabs/sdk","version":"0.1.13","type":"module","main":"./dist/index.js"}`)
+	source := []byte("export const marker = 'labs';\n")
+	if err := root.WriteFile("vendor/adversary-sdk/package.json", pkg, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.WriteFile("vendor/adversary-sdk/dist/index.js", source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareDerivedSDK(root); err != nil {
+		t.Fatal(err)
+	}
+	derived, err := root.ReadFile("node_modules/@adversarylabs/sdk/dist/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(source, derived) {
+		t.Fatal("derived SDK bytes differ from verified source")
+	}
+}
+
 func TestPrepareDerivedSDKRejectsMalformedPackage(t *testing.T) {
 	root, err := os.OpenRoot(t.TempDir())
 	if err != nil {
