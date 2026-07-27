@@ -267,9 +267,9 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 	runner := p.runner(application.AdversaryRunOptions{Stdout: opts.Stdout, Stderr: opts.Stderr})
 	internalOptions := internaladversary.AutoOptions{
 		ReviewContext: reviewContext, AllFiles: allFiles,
-		ChangeRequest:            internaladversary.ChangeRequest{RepoPath: opts.RepoPath},
-		MinimumConfidence:        opts.MinimumConfidence,
-		Includes:                 opts.Includes, Excludes: opts.Excludes,
+		ChangeRequest:     internaladversary.ChangeRequest{RepoPath: opts.RepoPath},
+		MinimumConfidence: opts.MinimumConfidence,
+		Includes:          opts.Includes, Excludes: opts.Excludes,
 		All: opts.All, DryRun: opts.DryRun, Format: opts.Format,
 		AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
 		RunTimeout:               opts.RunTimeout, DetectionTimeout: opts.DetectionTimeout,

@@ -195,5 +195,3 @@ func TestEnsureAccessibleAdversariesPropagatesPullCancellation(t *testing.T) {
 		t.Fatalf("cancelled pull must not be counted as soft failure: %q", stderr.String())
 	}
 }
-
-

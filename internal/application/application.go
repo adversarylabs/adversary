@@ -142,6 +142,7 @@ type AdversaryRunOptions struct {
 	Stdout, Stderr                                            io.Writer
 	ReviewContext                                             *detection.Context
 }
+
 // AdversaryAutoOptions drives automatic adversary selection for `run` with no
 // explicit adversary references. Scope uses the same ResolveRunScope rules as
 // explicit run (base/head/all-files/CI/worktree/default-branch fallback).
