@@ -61,7 +61,7 @@ type ExecutionError struct{ Err error }
 func (e *ExecutionError) Error() string { return fmt.Sprintf("adversary execution failed: %v", e.Err) }
 func (e *ExecutionError) Unwrap() error { return e.Err }
 
-// ErrNotInstalledLocally is returned (wrapped) when run/auto/etc. encounter a ref
+// ErrNotInstalledLocally is returned (wrapped) when run encounters a ref
 // that is not a local directory and not materialized in the store. The run command
 // uses this to auto-pull for AMB-11.
 var ErrNotInstalledLocally = errors.New("adversary not installed locally")

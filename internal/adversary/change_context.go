@@ -75,9 +75,9 @@ func (g CommandGitDiffer) RepositoryFiles(ctx context.Context, repoPath string) 
 	return paths, nil
 }
 
-// ChangeRequestForArgument interprets the optional positional syntax accepted
-// by `adversary auto`. A single revision compares it with HEAD; an explicit
-// three-dot range retains its two endpoints and merge-base semantics.
+// ChangeRequestForArgument interprets an optional base-ref or base...head
+// expression into a ChangeRequest. A single revision compares it with HEAD; an
+// explicit three-dot range retains its two endpoints and merge-base semantics.
 func ChangeRequestForArgument(repoPath, argument string) (ChangeRequest, error) {
 	argument = strings.TrimSpace(argument)
 	if argument == "" {

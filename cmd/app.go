@@ -26,6 +26,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/modelreview"
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
@@ -228,20 +229,48 @@ func (p processRuntime) Inspect(ctx context.Context, opts application.AdversaryR
 	return r.Inspect(toInternalRunOptions(opts))
 }
 func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAutoOptions) (application.AdversaryAutoResult, error) {
-	request, err := internaladversary.ChangeRequestForArgument(opts.RepoPath, opts.ChangeArgument)
+	changeResolver, ok := p.git.(internaladversary.ChangeResolver)
+	if !ok {
+		return application.AdversaryAutoResult{}, fmt.Errorf("runtime Git dependency does not support automatic change resolution")
+	}
+	scopes, ok := p.git.(internaladversary.RunScopeResolver)
+	if !ok {
+		return application.AdversaryAutoResult{}, fmt.Errorf("runtime Git dependency does not support automatic run scope resolution")
+	}
+	resolved, err := scopes.ResolveRunScope(ctx, internaladversary.RunScopeRequest{
+		RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef,
+		AllFiles: opts.AllFiles, Lookup: p.environment.Lookup,
+	})
 	if err != nil {
 		return application.AdversaryAutoResult{}, err
 	}
-	if opts.ChangeArgument == "" {
-		if ciRequest, ok := internaladversary.ChangeRequestFromCI(opts.RepoPath, p.environment.Lookup); ok {
-			request = ciRequest
-		}
+	if opts.Stderr != nil {
+		renderRunScope(opts.Stderr, resolved)
 	}
+
+	var reviewContext *detection.Context
+	allFiles := resolved.AllFiles
+	if allFiles {
+		// Whole-target scope: treat every tracked/untracked path as modified so
+		// declarative detection.files can select adversaries for a full scan.
+		synth, synthErr := synthesizeAllFilesDetectionContext(ctx, changeResolver, opts.RepoPath)
+		if synthErr != nil {
+			return application.AdversaryAutoResult{}, synthErr
+		}
+		reviewContext = &synth
+	} else if resolved.ReviewContext != nil {
+		reviewContext = resolved.ReviewContext
+	} else {
+		return application.AdversaryAutoResult{}, fmt.Errorf("automatic selection could not resolve a review scope")
+	}
+
 	runner := p.runner(application.AdversaryRunOptions{Stdout: opts.Stdout, Stderr: opts.Stderr})
 	internalOptions := internaladversary.AutoOptions{
-		ChangeRequest: request, MinimumConfidence: opts.MinimumConfidence,
-		Includes: opts.Includes, Excludes: opts.Excludes,
-		All: opts.All, DryRun: opts.DryRun,
+		ReviewContext: reviewContext, AllFiles: allFiles,
+		ChangeRequest:     internaladversary.ChangeRequest{RepoPath: opts.RepoPath},
+		MinimumConfidence: opts.MinimumConfidence,
+		Includes:          opts.Includes, Excludes: opts.Excludes,
+		All: opts.All, DryRun: opts.DryRun, Format: opts.Format,
 		AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
 		RunTimeout:               opts.RunTimeout, DetectionTimeout: opts.DetectionTimeout,
 		IncludeSuppressed: opts.IncludeSuppressed,
@@ -251,12 +280,41 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 			return opts.ReportSelections(toApplicationAutoResult(result))
 		}
 	}
-	changeResolver, ok := p.git.(internaladversary.ChangeResolver)
-	if !ok {
-		return application.AdversaryAutoResult{}, fmt.Errorf("runtime Git dependency does not support automatic change resolution")
-	}
 	result, runErr := (internaladversary.AutoRunner{Runner: runner, Changes: changeResolver, Resolver: &p.resolver}).Auto(ctx, internalOptions)
 	return toApplicationAutoResult(result), runErr
+}
+
+// synthesizeAllFilesDetectionContext builds a detection context whose changed
+// files are every path in the repository so file-based detectors apply on a
+// whole-target scan.
+func synthesizeAllFilesDetectionContext(ctx context.Context, changes internaladversary.ChangeResolver, repoPath string) (detection.Context, error) {
+	files, ok := changes.(internaladversary.RepositoryFileResolver)
+	if !ok {
+		return detection.Context{}, fmt.Errorf("repository file resolver dependency is required for whole-target automatic selection")
+	}
+	if repoPath == "" {
+		repoPath = "."
+	}
+	paths, err := files.RepositoryFiles(ctx, repoPath)
+	if err != nil {
+		return detection.Context{}, err
+	}
+	// Prefer the repository root from a dirty-worktree resolve when available.
+	root := repoPath
+	if dirty, dirtyErr := changes.ResolveChanges(ctx, internaladversary.ChangeRequest{RepoPath: repoPath, Mode: detection.ModeDirtyWorktree}); dirtyErr == nil && dirty.RepositoryRoot != "" {
+		root = dirty.RepositoryRoot
+	}
+	changed := make([]detection.ChangedFile, 0, len(paths))
+	for _, path := range paths {
+		changed = append(changed, detection.ChangedFile{Path: path, Status: detection.StatusModified})
+	}
+	return detection.Context{
+		SchemaVersion:   detection.SchemaVersion,
+		RepositoryRoot:  root,
+		Mode:            detection.ModeDirtyWorktree,
+		ChangedFiles:    changed,
+		RepositoryFiles: append([]string(nil), paths...),
+	}, nil
 }
 func toApplicationAutoResult(result internaladversary.AutoResult) application.AdversaryAutoResult {
 	converted := application.AdversaryAutoResult{Context: result.Context, Findings: result.Findings, RunErrors: result.RunErrors}

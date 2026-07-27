@@ -62,8 +62,7 @@ func newRootCommand(app *application.App) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&apiURL, "api-url", deps.DefaultAPIURL, "Adversary Labs API endpoint (or ADVERSARY_API_URL)")
 	cmd.PersistentFlags().StringVar(&profile, "profile", "default", "credential profile")
 
-	cmd.AddCommand(newRunCommand(app))
-	cmd.AddCommand(newAutoCommand(app, &apiURL, &profile))
+	cmd.AddCommand(newRunCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newInspectCommand(app))
 	cmd.AddCommand(newValidateCommand(app))
 	cmd.AddCommand(newInitCommand(app))

@@ -142,12 +142,18 @@ type AdversaryRunOptions struct {
 	Stdout, Stderr                                            io.Writer
 	ReviewContext                                             *detection.Context
 }
+
+// AdversaryAutoOptions drives automatic adversary selection for `run` with no
+// explicit adversary references. Scope uses the same ResolveRunScope rules as
+// explicit run (base/head/all-files/CI/worktree/default-branch fallback).
 type AdversaryAutoOptions struct {
-	ChangeArgument, RepoPath                       string
+	RepoPath, BaseRef, HeadRef                     string
+	AllFiles                                       bool
 	MinimumConfidence                              detection.Confidence
 	Includes, Excludes                             []string
 	All, DryRun, Explain, AllowUnsafeHostExecution bool
 	IncludeSuppressed                              bool
+	Format                                         string
 	RunTimeout, DetectionTimeout                   time.Duration
 	Stdout, Stderr                                 io.Writer
 	ReportSelections                               func(AdversaryAutoResult) error

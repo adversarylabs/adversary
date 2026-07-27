@@ -5,7 +5,6 @@ Usage:
   adversary [command]
 
 Available Commands:
-  auto        Pull accessible adversaries, detect relevance, and run the selected set
   completion  Generate shell completion code
   help        Help about any command
   init        Create a new adversary project
@@ -16,7 +15,7 @@ Available Commands:
   pack        Package the current adversary into the local content-addressable store
   pull        Pull and install an adversary from an OCI registry
   push        Push a locally packed adversary to an OCI registry
-  run         Run one or more Adversaries against a local source repository
+  run         Run adversaries against a local source repository
   search      Search adversaries available to you (local store and registry)
   store       Inspect and maintain the artifact repository
   validate    Validate an adversary project with the canonical v1 manifest parser
