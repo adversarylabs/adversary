@@ -58,13 +58,15 @@ func TestRunWithoutRefsForwardsSelectionControls(t *testing.T) {
 		"run", "--path", "/repo", "--base", "main", "--head", "HEAD",
 		"--dry-run", "--explain", "--no-pull", "--min-confidence", "high",
 		"--include", "security", "--include", "complexity", "--exclude", "repository",
+		"--model-provider", "fireworks", "--model", "accounts/fireworks/models/glm-5p2",
 	})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	if stub.opts.RepoPath != "/repo" || stub.opts.BaseRef != "main" || stub.opts.HeadRef != "HEAD" ||
 		!stub.opts.DryRun || !stub.opts.Explain || stub.opts.MinimumConfidence != detection.ConfidenceHigh ||
-		len(stub.opts.Includes) != 2 || len(stub.opts.Excludes) != 1 {
+		len(stub.opts.Includes) != 2 || len(stub.opts.Excludes) != 1 ||
+		stub.opts.ModelProvider != "fireworks" || stub.opts.Model != "accounts/fireworks/models/glm-5p2" {
 		t.Fatalf("options = %#v", stub.opts)
 	}
 	wantFragments := []string{"Detected 1 relevant adversaries", "dockerfile", "high confidence", "Dockerfile changed", "relevant files: Dockerfile", "repository (skipped)", "excluded by --exclude"}

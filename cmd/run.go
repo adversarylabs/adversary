@@ -211,9 +211,6 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	if cmd.Flags().Changed("builder") {
 		return fmt.Errorf("--builder is only valid with explicit adversary references")
 	}
-	if cmd.Flags().Changed("model-provider") || cmd.Flags().Changed("model") {
-		return fmt.Errorf("model flags are only valid with explicit adversary references")
-	}
 	if opts.keepTemp {
 		return fmt.Errorf("--keep-temp is only valid with explicit adversary references")
 	}
@@ -248,6 +245,7 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	}
 	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
+		ModelProvider: opts.modelProvider, Model: opts.model,
 		MinimumConfidence: minimum,
 		Includes:          opts.includes, Excludes: opts.excludes,
 		All: opts.all, DryRun: opts.dryRun, Explain: opts.explain, Format: opts.format,

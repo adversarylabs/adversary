@@ -149,6 +149,7 @@ type AdversaryRunOptions struct {
 type AdversaryAutoOptions struct {
 	RepoPath, BaseRef, HeadRef                     string
 	AllFiles                                       bool
+	ModelProvider, Model                           string
 	MinimumConfidence                              detection.Confidence
 	Includes, Excludes                             []string
 	All, DryRun, Explain, AllowUnsafeHostExecution bool
