@@ -264,7 +264,12 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 		return application.AdversaryAutoResult{}, fmt.Errorf("automatic selection could not resolve a review scope")
 	}
 
-	runner := p.runner(application.AdversaryRunOptions{Stdout: opts.Stdout, Stderr: opts.Stderr})
+	// Model flags apply to every selected adversary via the shared model broker
+	// factory on the runner (same path as explicit run).
+	runner := p.runner(application.AdversaryRunOptions{
+		Stdout: opts.Stdout, Stderr: opts.Stderr,
+		ModelProvider: opts.ModelProvider, Model: opts.Model,
+	})
 	internalOptions := internaladversary.AutoOptions{
 		ReviewContext: reviewContext, AllFiles: allFiles,
 		ChangeRequest:     internaladversary.ChangeRequest{RepoPath: opts.RepoPath},
