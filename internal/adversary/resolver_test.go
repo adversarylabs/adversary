@@ -36,7 +36,7 @@ func TestResolverPrecedenceAndAmbiguity(t *testing.T) {
 	if _, err := r.Repository.ImportPacked(b, "two.example/other/tool:1.0.0"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Resolve("tool"); err != repository.ErrAmbiguous {
+	if _, err := r.Resolve("tool"); !errors.Is(err, repository.ErrAmbiguous) {
 		t.Fatalf("alias err=%v", err)
 	}
 	got, err := r.Resolve(ra.Digest)
