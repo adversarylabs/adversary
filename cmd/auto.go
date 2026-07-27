@@ -22,22 +22,30 @@ type autoOptions struct {
 	dryRun                   bool
 	explain                  bool
 	all                      bool
+	noPull                   bool
 	allowUnsafeHostExecution bool
 	includeSuppressed        bool
 	runTimeout               time.Duration
 	detectionTimeout         time.Duration
 }
 
-func newAutoCommand(app *application.App) *cobra.Command {
+func newAutoCommand(app *application.App, apiURL, profile *string) *cobra.Command {
 	opts := &autoOptions{}
 	cmd := &cobra.Command{
 		Use:   "auto [base-ref|base...head]",
-		Short: "Detect and run adversaries relevant to a Git change",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Pull accessible adversaries, detect relevance, and run the selected set",
+		Long: `Pull every adversary you can access from the remote catalog (unless --no-pull),
+then detect which ones apply to the resolved Git change and run them.
+
+Detection still selects relevance by default. Use --all to run every installed
+adversary after the pull step. Offline or local-only use: pass --no-pull.`,
+		Args: cobra.MaximumNArgs(1),
 		Example: `  adversary auto
   adversary auto main
   adversary auto main...HEAD
   adversary auto --dry-run --explain
+  adversary auto --all
+  adversary auto --no-pull
   adversary auto --include security --exclude repository`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			minimum, err := detection.ParseConfidence(opts.minimumConfidence)
@@ -46,6 +54,17 @@ func newAutoCommand(app *application.App) *cobra.Command {
 			}
 			if opts.runTimeout < 0 || opts.detectionTimeout < 0 {
 				return fmt.Errorf("timeouts cannot be negative")
+			}
+			if !opts.noPull {
+				if err := ensureAccessibleAdversaries(
+					cmd.Context(),
+					app,
+					valueOf(apiURL),
+					valueOf(profile),
+					cmd.ErrOrStderr(),
+				); err != nil {
+					return err
+				}
 			}
 			argument := ""
 			if len(args) == 1 {
@@ -71,6 +90,7 @@ func newAutoCommand(app *application.App) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "resolve and print selections without running adversaries")
 	cmd.Flags().BoolVar(&opts.explain, "explain", false, "show selected and skipped adversaries with reasons")
 	cmd.Flags().BoolVar(&opts.all, "all", false, "run every available adversary without detection filtering")
+	cmd.Flags().BoolVar(&opts.noPull, "no-pull", false, "do not pull remote adversaries; use only the local store")
 	cmd.Flags().BoolVar(&opts.allowUnsafeHostExecution, "allow-unsafe-host-execution", false, "explicitly allow unrestricted HostExecutor use for an unknown publisher")
 	cmd.Flags().BoolVar(&opts.includeSuppressed, "include-suppressed", false, "request suppressed review findings when supported by the runtime")
 	cmd.Flags().DurationVar(&opts.runTimeout, "timeout", 0, "maximum time for each adversary execution (0 disables the deadline)")

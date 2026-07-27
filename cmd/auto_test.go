@@ -54,7 +54,8 @@ func TestAutoCommandForwardsControlsAndExplainsSelections(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := NewRootCommandWithApp(app)
-	cmd.SetArgs([]string{"auto", "main...HEAD", "--path", "/repo", "--dry-run", "--explain", "--min-confidence", "high", "--include", "security", "--include", "complexity", "--exclude", "repository"})
+	// --no-pull keeps this unit test offline; auto otherwise pulls the accessible catalog.
+	cmd.SetArgs([]string{"auto", "main...HEAD", "--path", "/repo", "--dry-run", "--explain", "--no-pull", "--min-confidence", "high", "--include", "security", "--include", "complexity", "--exclude", "repository"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +80,7 @@ func TestAutoCommandNoMatchIsSuccessfulAndConcise(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := NewRootCommandWithApp(app)
-	cmd.SetArgs([]string{"auto", "--dry-run"})
+	cmd.SetArgs([]string{"auto", "--dry-run", "--no-pull"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}

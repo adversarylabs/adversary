@@ -63,7 +63,7 @@ func newRootCommand(app *application.App) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&profile, "profile", "default", "credential profile")
 
 	cmd.AddCommand(newRunCommand(app))
-	cmd.AddCommand(newAutoCommand(app))
+	cmd.AddCommand(newAutoCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newInspectCommand(app))
 	cmd.AddCommand(newValidateCommand(app))
 	cmd.AddCommand(newInitCommand(app))

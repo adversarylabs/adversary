@@ -1,10 +1,12 @@
 # Automatic adversary detection
 
-`adversary auto` resolves one Git change, asks locally runnable adversaries
-whether that change applies to them, explains the selection, and runs the
-selected set. Detection never purchases, subscribes to, pulls, or installs an
-adversary. The current runnable inventory is the content-addressed local store,
-plus local or installed references explicitly supplied with `--include`.
+`adversary auto` first pulls every adversary in the remote catalog you can
+access (unless `--no-pull`), then resolves one Git change, asks each installed
+adversary whether that change applies, explains the selection, and runs the
+selected set.
+
+Pull failures are reported as warnings; the command continues with whatever is
+already local. Offline or local-only use: pass `--no-pull`.
 
 ## Change selection
 
@@ -89,11 +91,17 @@ adversary auto --min-confidence low
 adversary auto --include security --include complexity
 adversary auto --exclude repository
 adversary auto --all
+adversary auto --no-pull
 ```
+
+By default, `auto` pulls the accessible remote catalog before detection so the
+runnable inventory is complete. `--no-pull` skips that step and uses only the
+local store.
 
 `--include` forces a runnable adversary even when its detector fails.
 `--exclude` wins over automatic matching, `--include`, and `--all`. `--all`
-bypasses detector execution and selects the complete runnable inventory.
+bypasses detector execution and selects the complete runnable inventory
+(after the pull step, unless `--no-pull`).
 Selected results are ordered by confidence and then stable alphabetical name.
 Detector failure is isolated to that adversary and shown with `--explain`.
 
