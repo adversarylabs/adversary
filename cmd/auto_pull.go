@@ -24,6 +24,10 @@ import (
 //	  ✗  dockercompose              failed: 404 Not Found
 //	9 ready · 1 failed
 //
+// Catalog entries often ship an untagged repository reference plus a separate
+// Version field. Untagged pulls resolve to :latest, which many packages never
+// publish — so ensure pins the catalog version onto the pull reference.
+//
 // Catalog list failures warn and return nil so offline use continues, except
 // context cancellation/deadline which always propagate.
 func ensureAccessibleAdversaries(
@@ -66,6 +70,9 @@ func ensureAccessibleAdversaries(
 		if version == "" {
 			version = referenceVersionHint(ref)
 		}
+		// Pin the catalog version before selection so newest-version comparison
+		// and the eventual pull use the same concrete tag.
+		ref = catalogPullReference(ref, version)
 		name := strings.TrimSpace(item.Name)
 		if name == "" {
 			name = shortInventoryIdentity(ref)
@@ -224,8 +231,9 @@ func isContextError(err error) bool {
 }
 
 // preferCatalogVersion reports whether candidate should replace current for a
-// single repository identity. Prefers "latest", then higher semver, then
-// lexicographic fallback when versions are not semver.
+// single repository identity. Prefers higher concrete semver over "latest"
+// (catalog "latest" often lacks a published mutable tag), then "latest" over
+// non-semver, then lexicographic fallback.
 func preferCatalogVersion(candidate, current string) bool {
 	candidate = strings.TrimSpace(candidate)
 	current = strings.TrimSpace(current)
@@ -235,18 +243,49 @@ func preferCatalogVersion(candidate, current string) bool {
 	if current == "" {
 		return true
 	}
+	left, leftErr := semver.NewVersion(candidate)
+	right, rightErr := semver.NewVersion(current)
+	if leftErr == nil && rightErr == nil {
+		return left.GreaterThan(right)
+	}
+	if leftErr == nil && rightErr != nil {
+		// Concrete semver beats mutable "latest" and other non-semver labels.
+		return true
+	}
+	if leftErr != nil && rightErr == nil {
+		return false
+	}
 	if strings.EqualFold(candidate, "latest") && !strings.EqualFold(current, "latest") {
 		return true
 	}
 	if strings.EqualFold(current, "latest") && !strings.EqualFold(candidate, "latest") {
 		return false
 	}
-	left, leftErr := semver.NewVersion(candidate)
-	right, rightErr := semver.NewVersion(current)
-	if leftErr == nil && rightErr == nil {
-		return left.GreaterThan(right)
-	}
 	return candidate > current
+}
+
+// catalogPullReference returns the reference ensure should pull. Catalog
+// entries frequently omit a tag while providing Version separately; untagged
+// pulls resolve to :latest and 404 when that tag was never published. When the
+// ref is not already tag- or digest-pinned and version is set, append :version.
+func catalogPullReference(ref, version string) string {
+	ref = strings.TrimSpace(ref)
+	version = strings.TrimSpace(version)
+	if ref == "" || version == "" {
+		return ref
+	}
+	if strings.Contains(ref, "@") {
+		return ref
+	}
+	if referenceVersionHint(ref) != "" {
+		return ref
+	}
+	// Reject versions that would produce an invalid tag (contain path separators
+	// or look like a digest prefix). Catalog versions are short labels.
+	if strings.ContainsAny(version, "/@") || strings.HasPrefix(strings.ToLower(version), "sha256:") {
+		return ref
+	}
+	return ref + ":" + version
 }
 
 // referenceVersionHint extracts a trailing tag from a reference when the API

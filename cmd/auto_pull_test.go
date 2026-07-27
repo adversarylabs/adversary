@@ -43,16 +43,93 @@ func TestPreferCatalogVersion(t *testing.T) {
 	}{
 		{"0.0.15", "0.0.14", true},
 		{"0.0.14", "0.0.15", false},
-		{"latest", "0.0.15", true},
-		{"0.0.15", "latest", false},
+		// Concrete semver beats mutable latest so ensure can pin a published tag.
+		{"latest", "0.0.15", false},
+		{"0.0.15", "latest", true},
 		{"", "0.0.1", false},
 		{"0.0.1", "", true},
 		{"beta", "alpha", true}, // non-semver lexicographic
+		{"latest", "beta", true},
 	}
 	for _, tc := range cases {
 		if got := preferCatalogVersion(tc.candidate, tc.current); got != tc.want {
 			t.Errorf("preferCatalogVersion(%q, %q) = %v, want %v", tc.candidate, tc.current, got, tc.want)
 		}
+	}
+}
+
+func TestCatalogPullReference(t *testing.T) {
+	cases := []struct {
+		ref, version, want string
+	}{
+		// Catalog returns untagged repo + version field (the dockercompose 404 case).
+		{"registry.adversarylabs.ai/adversarylabs/dockercompose", "0.0.5", "registry.adversarylabs.ai/adversarylabs/dockercompose:0.0.5"},
+		{"adversarylabs/go-cli", "0.0.15", "adversarylabs/go-cli:0.0.15"},
+		// Already tagged / digested: leave alone.
+		{"registry.example/adversarylabs/go-cli:0.0.14", "0.0.15", "registry.example/adversarylabs/go-cli:0.0.14"},
+		{"registry.example/adversarylabs/go-cli@sha256:abc", "0.0.15", "registry.example/adversarylabs/go-cli@sha256:abc"},
+		// No version: unchanged (OCI layer may still default to latest).
+		{"registry.example/adversarylabs/go-cli", "", "registry.example/adversarylabs/go-cli"},
+		// host:port must not look like a tag when appending.
+		{"localhost:5000/adversarylabs/go-cli", "1.0.0", "localhost:5000/adversarylabs/go-cli:1.0.0"},
+		{"localhost:5000/adversarylabs/go-cli:1.0.0", "2.0.0", "localhost:5000/adversarylabs/go-cli:1.0.0"},
+	}
+	for _, tc := range cases {
+		if got := catalogPullReference(tc.ref, tc.version); got != tc.want {
+			t.Errorf("catalogPullReference(%q, %q) = %q, want %q", tc.ref, tc.version, got, tc.want)
+		}
+	}
+}
+
+func TestEnsureAccessibleAdversariesPinsCatalogVersionOnUntaggedRef(t *testing.T) {
+	// Capture the registry path so we know ensure requested :0.0.5, not :latest.
+	var seenPath string
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		http.NotFound(w, r)
+	}))
+	defer registry.Close()
+	regHost := strings.TrimPrefix(registry.URL, "http://")
+	// Untagged repository reference — the shape the real catalog returns for dockercompose.
+	ref := regHost + "/adversarylabs/dockercompose"
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/search" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[
+				{"name":"adversarylabs/dockercompose","version":"0.0.5","reference":"` + ref + `"}
+			]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer api.Close()
+
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr).Dependencies()
+	store := base.Auth.(processAuthStore).ConfigStore
+	if err := store.SetAuth(adversarylabs.AuthKey(api.URL, "work"), adversarylabs.Auth{Token: "token"}); err != nil {
+		t.Fatal(err)
+	}
+	base.API = processAPIFactory{store: store, http: api.Client()}
+	base.Registries = processRegistryFactory{store: store, docker: oci.DockerCredentialStore{HomeDir: t.TempDir()}, host: base.RegistryHost, identity: store.Path}
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureAccessibleAdversaries(context.Background(), app, api.URL, "work", &stderr); err != nil {
+		t.Fatal(err)
+	}
+	// OCI distribution resolves tags via .../manifests/<tag>.
+	if !strings.Contains(seenPath, "/manifests/0.0.5") {
+		t.Fatalf("expected pull of tagged 0.0.5, registry saw path %q; stderr=%q", seenPath, stderr.String())
+	}
+	if strings.Contains(seenPath, "/manifests/latest") {
+		t.Fatalf("must not fall back to :latest when catalog version is set; path=%q", seenPath)
+	}
+	if !strings.Contains(stderr.String(), "0.0.5") {
+		t.Fatalf("status should show catalog version, got %q", stderr.String())
 	}
 }
 
