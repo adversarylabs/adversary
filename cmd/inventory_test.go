@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,5 +120,74 @@ func TestMatchesInventoryQuery(t *testing.T) {
 	}
 	if matchesInventoryQuery(item, "zzz-nope") {
 		t.Fatal("non-matching query")
+	}
+}
+
+func TestLocalInventoryMatchesManifestDescription(t *testing.T) {
+	// Offline remote: force search API failure so only local inventory is considered.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	repo := repository.Repository{Root: t.TempDir()}
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repo, &out, &errOut).Dependencies()
+	base.API = processAPIFactory{store: base.Auth.(processAuthStore).ConfigStore, http: server.Client()}
+	base.Registries = processRegistryFactory{
+		store:    base.Auth.(processAuthStore).ConfigStore,
+		docker:   oci.DockerCredentialStore{HomeDir: t.TempDir()},
+		host:     base.RegistryHost,
+		identity: base.Auth.(processAuthStore).ConfigStore.Path,
+	}
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	project := t.TempDir()
+	writeProject(t, project)
+	// Unique phrase only present in description, not name/version.
+	const phrase = "xylophone-lifecycle-boundary"
+	manifestPath := filepath.Join(project, "adversary.yaml")
+	// writeProject already created adversary.yaml; rewrite with description.
+	data := []byte(`name: local/security-reviewer
+version: 1.4.2
+description: Reviews ` + phrase + ` with evidence.
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.js
+`)
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	pack := NewRootCommandWithApp(app)
+	pack.SetArgs([]string{"pack", project})
+	if err := pack.Execute(); err != nil {
+		t.Fatalf("pack: %v stderr=%s", err, errOut.String())
+	}
+
+	errOut.Reset()
+	items, err := collectInventory(context.Background(), app, server.URL, "default", phrase, &errOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 {
+		t.Fatalf("expected local match on description phrase %q; stderr=%q", phrase, errOut.String())
+	}
+	var found bool
+	for _, item := range items {
+		if item.Source == "local" && strings.Contains(strings.ToLower(item.Description), phrase) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected local description containing %q, got %#v", phrase, items)
 	}
 }

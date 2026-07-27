@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
@@ -39,11 +40,12 @@ func collectInventory(
 	items := make([]inventoryItem, 0, len(localEntries)+32)
 	for _, entry := range localEntries {
 		item := inventoryItem{
-			Name:      entry.Record.Name,
-			Version:   entry.Record.Version,
-			Reference: entry.CanonicalReference,
-			Source:    "local",
-			Digest:    entry.Digest,
+			Name:        entry.Record.Name,
+			Version:     entry.Record.Version,
+			Description: localDescription(deps.Resolver, entry.Record),
+			Reference:   entry.CanonicalReference,
+			Source:      "local",
+			Digest:      entry.Digest,
 		}
 		if matchesInventoryQuery(item, query) {
 			items = append(items, item)
@@ -184,4 +186,34 @@ func localArtifactsForListJSON(app *application.App, entries []repository.Entry)
 		items = append(items, storedArtifactDTOWithFiles(e.CanonicalReference, e.Digest, e.Record, files))
 	}
 	return items, nil
+}
+
+// localDescription reads the packed adversary.yaml description for a stored record.
+// Failures are non-fatal so list/search still works for damaged or incomplete installs.
+func localDescription(resolver application.Resolver, rec repository.Record) string {
+	if resolver == nil {
+		return ""
+	}
+	lease, err := resolver.PayloadSources(rec)
+	if err != nil || lease == nil {
+		return ""
+	}
+	defer func() { _ = lease.Close() }()
+	if lease.AdversaryManifest == nil {
+		return ""
+	}
+	reader, err := lease.AdversaryManifest.Open()
+	if err != nil {
+		return ""
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(io.LimitReader(reader, manifest.MaxSize))
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	parsed, err := manifest.Parse(data)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.Description)
 }
