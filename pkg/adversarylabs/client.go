@@ -203,7 +203,10 @@ func (c Client) Search(ctx context.Context, query string, token string) ([]Searc
 		return nil, err
 	}
 	q := u.Query()
-	q.Set("q", query)
+	// Empty query lists the full catalog the caller can access.
+	if query != "" {
+		q.Set("q", query)
+	}
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {

@@ -51,8 +51,11 @@ the deterministic packed order and include path, size, mode, and SHA-256 digest.
 deprecated `inspect --json` shape remains unchanged and does not add inventory.
 Failure to read, decode, or verify the config is an inspect error; the CLI never
 reports a known stored inventory as unavailable.
-Modern `list --format json` uses the same verified entries and likewise fails
-instead of claiming that an inventory present in the config is unavailable.
+Modern `list --format json` includes detailed local `artifacts` (same verified
+entries as before; failure to read inventory is an error rather than claiming
+unavailable) and a unified `results` catalog that merges local store rows with
+remote registry entries. `search` uses the same `results` shape, with an optional
+query argument; empty search is the same inventory as `list` text/results.
 
 Canonical references in modern pack output come from the committed repository
 reference index. Local shorthand lookup uses durable aliases and stored refs,
