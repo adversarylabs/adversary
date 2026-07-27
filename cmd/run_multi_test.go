@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -81,6 +82,41 @@ func TestRunAcceptsMultipleAdversaryPositionals(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "Ran 2 adversaries") {
 		t.Fatalf("missing footer: %q", errOut.String())
+	}
+}
+
+func TestRunOutputFileWritesResultsAndProgressOnStderr(t *testing.T) {
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut)
+	deps := base.Dependencies()
+	spy := &multiRecordingRuntime{inner: deps.Runtime}
+	deps.Runtime = spy
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outPath := t.TempDir() + "/review.txt"
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"run", "go-cli", "secrets", "--output-file", outPath})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	// Terminal stdout should stay empty; progress on stderr; body in the file.
+	if out.Len() != 0 {
+		t.Fatalf("stdout should be empty with --output-file, got %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), "Writing results to") || !strings.Contains(errOut.String(), "[1/2] go-cli") ||
+		!strings.Contains(errOut.String(), "[2/2] secrets") || !strings.Contains(errOut.String(), "Results written to") {
+		t.Fatalf("progress missing from stderr:\n%s", errOut.String())
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "=== go-cli ===") || !strings.Contains(body, "=== secrets ===") ||
+		!strings.Contains(body, "ok report for go-cli") {
+		t.Fatalf("result file missing reports:\n%s", body)
 	}
 }
 

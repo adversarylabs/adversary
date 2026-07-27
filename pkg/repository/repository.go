@@ -1062,13 +1062,18 @@ func prepareDerivedSDK(root *os.Root) error {
 		return fmt.Errorf("vendored SDK package metadata: %w", err)
 	}
 	var metadata struct{ Name, Version, Type, Main string }
-	if json.Unmarshal(packageData, &metadata) != nil || metadata.Name != "@adversary/sdk" || metadata.Version == "" || metadata.Type != "module" || metadata.Main != "./dist/index.js" {
+	if json.Unmarshal(packageData, &metadata) != nil || metadata.Version == "" || metadata.Type != "module" || metadata.Main != "./dist/index.js" {
+		return fmt.Errorf("vendored SDK package identity is invalid")
+	}
+	// Accept the historical @adversary/sdk name and the current @adversarylabs/sdk
+	// package; install under node_modules using the package name so imports resolve.
+	dst, ok := derivedSDKInstallPath(metadata.Name)
+	if !ok {
 		return fmt.Errorf("vendored SDK package identity is invalid")
 	}
 	if info, err := root.Stat(src + "/dist/index.js"); err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("vendored SDK entrypoint is missing or invalid")
 	}
-	dst := "node_modules/@adversary/sdk"
 	if err := root.MkdirAll(dst, 0755); err != nil {
 		return err
 	}
@@ -1094,6 +1099,17 @@ func prepareDerivedSDK(root *os.Root) error {
 		}
 		return root.WriteFile(target, data, mode)
 	})
+}
+
+func derivedSDKInstallPath(packageName string) (string, bool) {
+	switch packageName {
+	case "@adversary/sdk":
+		return "node_modules/@adversary/sdk", true
+	case "@adversarylabs/sdk":
+		return "node_modules/@adversarylabs/sdk", true
+	default:
+		return "", false
+	}
 }
 
 func (r Repository) init() error {

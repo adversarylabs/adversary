@@ -116,8 +116,9 @@ func registerExactRef(resolver application.Resolver, ref, digest string) error {
 }
 
 type pullResult struct {
-	Record    repository.Record
-	Reference oci.Reference
+	Record         repository.Record
+	Reference      oci.Reference
+	AlreadyPresent bool // true when the resolved digest was already in the local store
 }
 
 // pullAdversary resolves a mutable reference once (to its current digest) and
@@ -125,6 +126,9 @@ type pullResult struct {
 // pinned for any download so PullSources does not re-resolve a mutable tag.
 // Both explicit pulls and run's auto-pull use this result.
 func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *application.App, stderr io.Writer) (pullResult, error) {
+	if stderr == nil {
+		stderr = io.Discard
+	}
 	resolver := app.Dependencies().Resolver
 	ref, err := app.Dependencies().References.Parse(refStr)
 	if err != nil {
@@ -155,7 +159,7 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 		}
 		// best-effort pull metric (AMB-8)
 		reportPull(ctx, app, apiURL, profile, ref.Locator(), existing.Digest)
-		return pullResult{Record: existing, Reference: ref}, nil
+		return pullResult{Record: existing, Reference: ref, AlreadyPresent: true}, nil
 	} else if !os.IsNotExist(resolveErr) {
 		return pullResult{}, resolveErr
 	}
@@ -189,7 +193,7 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	}
 	// best-effort pull metric (AMB-8)
 	reportPull(ctx, app, apiURL, profile, ref.Locator(), unified.Digest)
-	return pullResult{Record: unified, Reference: ref}, nil
+	return pullResult{Record: unified, Reference: ref, AlreadyPresent: false}, nil
 }
 
 const pullMetricTimeout = 2 * time.Second

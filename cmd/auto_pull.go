@@ -5,45 +5,51 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+	"unicode/utf8"
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/adversarylabs/adversary/internal/application"
+	"golang.org/x/term"
 )
 
-// ensureAccessibleAdversaries pulls every remote catalog entry the user can
-// access so automatic `run` (no adversary refs) detects against the full
-// inventory, not only what happened to be installed earlier.
+// ensureAccessibleAdversaries verifies every remote catalog entry the user can
+// access (newest version per repository identity), pulls anything not already
+// at the resolved digest, and prints docker-pull-style status lines:
 //
-// Remote catalog failures warn and return nil so offline/local-only use still
-// works, except context cancellation/deadline which always propagate.
-// Individual non-cancellation pull failures warn and continue.
+//	Ensuring 10 accessible adversaries
+//	  ✓  go-cli            0.0.15   up to date
+//	  ✓  secrets           0.0.6    installed
+//	  ✗  dockercompose              failed: 404 Not Found
+//	9 ready · 1 failed
+//
+// Catalog list failures warn and return nil so offline use continues, except
+// context cancellation/deadline which always propagate.
 func ensureAccessibleAdversaries(
 	ctx context.Context,
 	app *application.App,
 	apiURL, profile string,
 	stderr io.Writer,
 ) error {
+	if stderr == nil {
+		stderr = io.Discard
+	}
 	deps := app.Dependencies()
 	remote, err := fetchRemoteInventory(ctx, deps, apiURL, profile, "")
 	if err != nil {
 		if isContextError(err) {
 			return err
 		}
-		if stderr != nil {
-			fmt.Fprintf(stderr, "Warning: could not list remote adversaries (%v); using local store only.\n", err)
-		}
+		fmt.Fprintf(stderr, "Warning: could not list remote adversaries (%v); using local store only.\n", err)
 		return nil
 	}
 	if len(remote) == 0 {
 		return nil
 	}
 
-	// One pull per repository identity, preferring the newest catalog version
-	// (not first-hit order, which can install a stale tag).
 	type chosen struct {
-		ref     string
-		version string
+		name, ref, version string
 	}
 	best := make(map[string]chosen, len(remote))
 	order := make([]string, 0, len(remote))
@@ -60,53 +66,157 @@ func ensureAccessibleAdversaries(
 		if version == "" {
 			version = referenceVersionHint(ref)
 		}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = shortInventoryIdentity(ref)
+		}
 		if prev, ok := best[key]; ok {
 			if !preferCatalogVersion(version, prev.version) {
 				continue
 			}
-			best[key] = chosen{ref: ref, version: version}
+			best[key] = chosen{name: name, ref: ref, version: version}
 			continue
 		}
-		best[key] = chosen{ref: ref, version: version}
+		best[key] = chosen{name: name, ref: ref, version: version}
 		order = append(order, key)
 	}
 	if len(order) == 0 {
 		return nil
 	}
 
-	targets := make([]string, 0, len(order))
-	for _, key := range order {
-		targets = append(targets, best[key].ref)
-	}
+	n := len(order)
+	fmt.Fprintf(stderr, "Ensuring %d accessible adversaries\n", n)
 
-	if stderr != nil {
-		fmt.Fprintf(stderr, "Ensuring %d accessible adversaries are installed...\n", len(targets))
-	}
-	pulled, failed := 0, 0
-	for _, ref := range targets {
+	useCR := ensureWriterIsTTY(stderr)
+	ready, installed, failed := 0, 0, 0
+	for i, key := range order {
+		item := best[key]
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if _, err := pullAdversary(ctx, ref, apiURL, profile, app, stderr); err != nil {
-			if isContextError(err) {
-				return err
+		label := displayAdversaryName(item.name, item.ref)
+		writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "checking…", false)
+
+		result, pullErr := pullAdversary(ctx, item.ref, apiURL, profile, app, io.Discard)
+		if pullErr != nil {
+			if isContextError(pullErr) {
+				if useCR {
+					fmt.Fprintln(stderr)
+				}
+				return pullErr
 			}
 			failed++
-			if stderr != nil {
-				fmt.Fprintf(stderr, "Warning: pull %s failed: %v\n", ref, err)
-			}
+			writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "failed: "+shortPullError(pullErr), true)
 			continue
 		}
-		pulled++
-	}
-	if stderr != nil {
-		fmt.Fprintf(stderr, "Installed or verified %d adversaries", pulled)
-		if failed > 0 {
-			fmt.Fprintf(stderr, " (%d pull failures)", failed)
+		if result.AlreadyPresent {
+			ready++
+			writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "up to date", true)
+			continue
 		}
-		fmt.Fprintln(stderr)
+		installed++
+		ready++
+		writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "installed", true)
 	}
+
+	fmt.Fprintf(stderr, "%d ready", ready)
+	if installed > 0 {
+		fmt.Fprintf(stderr, " · %d newly installed", installed)
+	}
+	if failed > 0 {
+		fmt.Fprintf(stderr, " · %d failed", failed)
+	}
+	fmt.Fprintln(stderr)
 	return nil
+}
+
+func ensureWriterIsTTY(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+func writeEnsureStatus(w io.Writer, useCR bool, index, total int, name, version, status string, done bool) {
+	mark := "·"
+	switch {
+	case strings.HasPrefix(status, "failed"):
+		mark = "✗"
+	case status == "up to date" || status == "installed":
+		mark = "✓"
+	case strings.Contains(status, "check") || strings.Contains(status, "download") || strings.Contains(status, "pull"):
+		mark = "↓"
+	}
+	line := fmt.Sprintf("  %s  %-24s %-10s %s", mark, truncateRunes(name, 24), truncateRunes(version, 10), status)
+	if useCR {
+		// Clear line and rewrite in place while in progress; newline when final.
+		fmt.Fprintf(w, "\r\033[K%s", line)
+		if done {
+			fmt.Fprintln(w)
+		}
+		return
+	}
+	if done {
+		fmt.Fprintln(w, line)
+	}
+}
+
+func displayAdversaryName(name, ref string) string {
+	name = strings.TrimSpace(name)
+	if name != "" {
+		// Prefer short publisher/name when the catalog includes a full path.
+		if short := shortInventoryIdentity(name); short != "" && strings.Contains(name, "/") {
+			return short
+		}
+		return name
+	}
+	return shortInventoryIdentity(ref)
+}
+
+func shortPullError(err error) string {
+	msg := err.Error()
+	// Keep the useful tail of nested OCI errors.
+	for _, prefix := range []string{
+		"OCI resolve network: ",
+		"OCI get ",
+		"pull: ",
+	} {
+		if i := strings.Index(msg, prefix); i >= 0 {
+			msg = msg[i+len(prefix):]
+		}
+	}
+	if len(msg) > 80 {
+		return msg[:77] + "..."
+	}
+	return msg
+}
+
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	runes := []rune(s)
+	if max == 1 {
+		return "…"
+	}
+	return string(runes[:max-1]) + "…"
+}
+
+// shortInventoryIdentity returns publisher/name (last two path segments) or the
+// final segment so full registry refs match local short names.
+func shortInventoryIdentity(ref string) string {
+	key := inventoryIdentityKey(ref)
+	if key == "" {
+		return ""
+	}
+	parts := strings.Split(key, "/")
+	switch {
+	case len(parts) >= 2:
+		return strings.ToLower(parts[len(parts)-2] + "/" + parts[len(parts)-1])
+	default:
+		return strings.ToLower(parts[0])
+	}
 }
 
 func isContextError(err error) bool {

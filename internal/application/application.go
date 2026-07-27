@@ -158,6 +158,9 @@ type AdversaryAutoOptions struct {
 	RunTimeout, DetectionTimeout                   time.Duration
 	Stdout, Stderr                                 io.Writer
 	ReportSelections                               func(AdversaryAutoResult) error
+	// ReportRunStart reports progress before each selected adversary executes
+	// (1-based index among selected adversaries).
+	ReportRunStart func(name string, index, total int) error
 }
 type AdversaryAutoCandidate struct {
 	Name, Reference, Digest string

@@ -285,6 +285,9 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 			return opts.ReportSelections(toApplicationAutoResult(result))
 		}
 	}
+	if opts.ReportRunStart != nil {
+		internalOptions.ReportRunStart = opts.ReportRunStart
+	}
 	result, runErr := (internaladversary.AutoRunner{Runner: runner, Changes: changeResolver, Resolver: &p.resolver}).Auto(ctx, internalOptions)
 	return toApplicationAutoResult(result), runErr
 }

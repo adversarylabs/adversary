@@ -69,7 +69,7 @@ func TestRunWithoutRefsForwardsSelectionControls(t *testing.T) {
 		stub.opts.ModelProvider != "fireworks" || stub.opts.Model != "accounts/fireworks/models/glm-5p2" {
 		t.Fatalf("options = %#v", stub.opts)
 	}
-	wantFragments := []string{"Detected 1 relevant adversaries", "dockerfile", "high confidence", "Dockerfile changed", "relevant files: Dockerfile", "repository (skipped)", "excluded by --exclude"}
+	wantFragments := []string{"Running 1 adversaries", "dockerfile", "high", "Dockerfile changed", "files: Dockerfile", "repository", "skipped", "--exclude"}
 	for _, fragment := range wantFragments {
 		if !bytes.Contains(stdout.Bytes(), []byte(fragment)) {
 			t.Fatalf("output missing %q:\n%s", fragment, stdout.String())
@@ -163,7 +163,7 @@ func TestRunWithoutRefsJSONKeepsSelectionOffStdout(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("JSON mode must not write selection text to stdout: %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "Detected 1 relevant adversaries") || !strings.Contains(stderr.String(), "dockerfile") {
+	if !strings.Contains(stderr.String(), "Running 1 adversaries") || !strings.Contains(stderr.String(), "dockerfile") {
 		t.Fatalf("expected selection narrative on stderr, got %q", stderr.String())
 	}
 }

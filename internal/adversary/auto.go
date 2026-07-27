@@ -32,6 +32,9 @@ type AutoOptions struct {
 	Format                   string
 	IncludeSuppressed        bool
 	ReportSelections         func(AutoResult) error
+	// ReportRunStart is called before each selected adversary runs (1-based index
+	// among selected adversaries). Used for terminal progress when results go elsewhere.
+	ReportRunStart func(name string, index, total int) error
 }
 
 type AutoResult struct {
@@ -130,9 +133,22 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 	if opts.DryRun {
 		return result, nil
 	}
+	selectedTotal := 0
+	for _, selection := range selections {
+		if selection.Selected {
+			selectedTotal++
+		}
+	}
+	runIndex := 0
 	for _, selection := range selections {
 		if !selection.Selected {
 			continue
+		}
+		runIndex++
+		if opts.ReportRunStart != nil {
+			if err := opts.ReportRunStart(selection.Candidate.Name, runIndex, selectedTotal); err != nil {
+				return result, err
+			}
 		}
 		ref := selection.Candidate.Reference
 		if selection.Candidate.Digest != "" {
