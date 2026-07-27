@@ -466,11 +466,13 @@ func runAdversaries(
 		switch {
 		case err == nil:
 			if showProgress {
+				writeProgressDiagnostics(progressOut, childErr.String())
 				fmt.Fprintf(progressOut, "    ✓ done\n")
 			}
 		case errors.As(err, &findings):
 			findingsTotal += findings.Count
 			if showProgress {
+				writeProgressDiagnostics(progressOut, childErr.String())
 				fmt.Fprintf(progressOut, "    · findings: %d\n", findings.Count)
 			}
 		default:
@@ -482,6 +484,7 @@ func runAdversaries(
 				item.Error = err.Error()
 			}
 			if showProgress {
+				writeProgressDiagnostics(progressOut, childErr.String())
 				fmt.Fprintf(progressOut, "    ✗ %s\n", compactRunFailure(err, childErr.String()))
 			} else if multi && !jsonMode {
 				fmt.Fprintf(progressOut, "adversary %q failed: %v\n", ref, err)
@@ -540,6 +543,20 @@ func joinMultiRunError(existing, next string) string {
 		return existing
 	}
 	return existing + "; " + next
+}
+
+// writeProgressDiagnostics forwards important runner warnings that were captured
+// while muting noisy host-process stderr during multi-run progress.
+func writeProgressDiagnostics(w io.Writer, buffered string) {
+	for _, line := range strings.Split(buffered, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "WARNING:") {
+			fmt.Fprintf(w, "    %s\n", line)
+		}
+	}
 }
 
 // compactRunFailure turns nested host/Node failures into a short progress line.
