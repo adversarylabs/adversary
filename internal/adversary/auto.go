@@ -269,23 +269,28 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 	return candidates, nil
 }
 
+// candidateIdentityKey groups automatic-selection candidates that should only
+// run once. Identity is registry + publisher + package name (from the packed
+// manifest), not the full repository path, so renames like depotci-adversary →
+// depotci collapse while true cross-publisher packages stay separate.
+// The legacy default namespace "library" is treated as adversarylabs.
 func candidateIdentityKey(candidate DetectionCandidate) string {
+	name := strings.TrimSpace(candidate.Name)
 	if parsed, err := oci.ParseReference(candidate.Reference); err == nil {
-		repo := parsed.Repository
-		// Treat the historical default namespace as the official publisher path so
-		// library/go-cli and adversarylabs/go-cli collapse to one automatic selection.
-		if strings.HasPrefix(strings.ToLower(repo), "library/") {
-			repo = "adversarylabs/" + repo[len("library/"):]
+		publisher := ""
+		if parts := strings.Split(parsed.Repository, "/"); len(parts) > 0 {
+			publisher = parts[0]
 		}
-		// Early packages were published as <name>-adversary; normalize to the
-		// current short repository name so renames do not double-run.
-		parts := strings.Split(repo, "/")
-		last := parts[len(parts)-1]
-		if trimmed, ok := strings.CutSuffix(last, "-adversary"); ok && trimmed != "" {
-			parts[len(parts)-1] = trimmed
-			repo = strings.Join(parts, "/")
+		if strings.EqualFold(publisher, "library") {
+			publisher = "adversarylabs"
 		}
-		return strings.ToLower(parsed.Registry + "/" + repo)
+		if name != "" {
+			return strings.ToLower(parsed.Registry + "/" + publisher + "/" + name)
+		}
+		return strings.ToLower(parsed.Registry + "/" + publisher + "/" + parsed.Repository)
+	}
+	if name != "" {
+		return strings.ToLower(name)
 	}
 	return strings.ToLower(candidate.Reference)
 }

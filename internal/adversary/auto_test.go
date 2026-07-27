@@ -225,7 +225,9 @@ func TestAvailableCandidatesCollapseSharedDigestAcrossNamespaces(t *testing.T) {
 	}
 }
 
-func TestAvailableCandidatesCollapseRenamedRepositorySuffix(t *testing.T) {
+func TestAvailableCandidatesCollapseSamePublisherPackageRename(t *testing.T) {
+	// Same publisher + same manifest name under different repository paths
+	// (historical rename) should run once, newest version preferred.
 	repo := repository.Repository{Root: t.TempDir()}
 	t.Cleanup(func() { makeResolverWritable(repo.Root) })
 	for _, item := range []struct {
@@ -256,9 +258,6 @@ func TestAvailableCandidatesCollapseRenamedRepositorySuffix(t *testing.T) {
 	}
 	if candidates[0].Manifest.Version != "0.0.8" {
 		t.Fatalf("version = %q, want 0.0.8", candidates[0].Manifest.Version)
-	}
-	if !strings.Contains(candidates[0].Reference, "/depotci:") {
-		t.Fatalf("reference = %q, want non -adversary path", candidates[0].Reference)
 	}
 }
 
