@@ -270,36 +270,50 @@ func renderRunSelections(w io.Writer, result application.AdversaryAutoResult, ex
 	if selected == 0 {
 		fmt.Fprintln(&output, "No relevant adversaries detected for this change.")
 	} else {
-		fmt.Fprintf(&output, "Detected %d relevant adversaries\n", selected)
+		fmt.Fprintf(&output, "Running %d adversaries\n", selected)
 	}
 	for _, selection := range result.Selections {
 		if !selection.Selected && !explain {
 			continue
 		}
-		status := ""
+		name := selection.Candidate.Name
 		if !selection.Selected {
-			status = " (skipped)"
-		}
-		fmt.Fprintf(&output, "\n%s%s\n", selection.Candidate.Name, status)
-		fmt.Fprintf(&output, "  %s confidence\n", selection.Result.Confidence)
-		if selection.Excluded {
-			fmt.Fprintln(&output, "  excluded by --exclude")
-		} else if selection.Forced {
-			fmt.Fprintln(&output, "  forced by --include")
-		}
-		for _, reason := range selection.Result.Reasons {
-			fmt.Fprintf(&output, "  %s\n", terminalSafeText(reason))
-		}
-		if explain && len(selection.Result.RelevantFiles) > 0 {
-			files := append([]string(nil), selection.Result.RelevantFiles...)
-			sort.Strings(files)
-			for i := range files {
-				files[i] = terminalSafeText(files[i])
+			fmt.Fprintf(&output, "  ·  %-24s skipped", truncateRunes(name, 24))
+			if selection.Excluded {
+				fmt.Fprint(&output, " (--exclude)")
 			}
-			fmt.Fprintf(&output, "  relevant files: %s\n", strings.Join(files, ", "))
+			fmt.Fprintln(&output)
+			if explain {
+				for _, reason := range selection.Result.Reasons {
+					fmt.Fprintf(&output, "       %s\n", terminalSafeText(reason))
+				}
+				if selection.Error != nil {
+					fmt.Fprintf(&output, "       detector failure: %s\n", terminalSafeText(selection.Error.Error()))
+				}
+			}
+			continue
 		}
-		if explain && selection.Error != nil {
-			fmt.Fprintf(&output, "  detector failure: %s\n", terminalSafeText(selection.Error.Error()))
+		// Compact one-line selection for the default path; --explain expands reasons.
+		fmt.Fprintf(&output, "  →  %-24s %s", truncateRunes(name, 24), selection.Result.Confidence)
+		if selection.Forced {
+			fmt.Fprint(&output, " (include)")
+		}
+		fmt.Fprintln(&output)
+		if explain {
+			for _, reason := range selection.Result.Reasons {
+				fmt.Fprintf(&output, "       %s\n", terminalSafeText(reason))
+			}
+			if len(selection.Result.RelevantFiles) > 0 {
+				files := append([]string(nil), selection.Result.RelevantFiles...)
+				sort.Strings(files)
+				for i := range files {
+					files[i] = terminalSafeText(files[i])
+				}
+				fmt.Fprintf(&output, "       files: %s\n", strings.Join(files, ", "))
+			}
+			if selection.Error != nil {
+				fmt.Fprintf(&output, "       detector failure: %s\n", terminalSafeText(selection.Error.Error()))
+			}
 		}
 	}
 	if selected > 0 {

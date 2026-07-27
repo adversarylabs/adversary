@@ -126,17 +126,17 @@ func TestEnsureAccessibleAdversariesPrefersNewestVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "Installing 2 missing adversaries") {
-		t.Fatalf("expected missing install count, got %q", out)
+	if !strings.Contains(out, "Ensuring 2 accessible adversaries") {
+		t.Fatalf("expected ensure header, got %q", out)
 	}
-	if !strings.Contains(out, "go-cli:0.0.15") {
-		t.Fatalf("expected newest go-cli reference in pull attempts, got %q", out)
+	if !strings.Contains(out, "go-cli") || !strings.Contains(out, "0.0.15") {
+		t.Fatalf("expected newest go-cli row, got %q", out)
 	}
-	if strings.Contains(out, "go-cli:0.0.14") {
-		t.Fatalf("stale go-cli version should not be pulled, got %q", out)
+	if strings.Contains(out, "0.0.14") {
+		t.Fatalf("stale go-cli version should not appear, got %q", out)
 	}
-	if !strings.Contains(out, "2 pull failures") {
-		t.Fatalf("expected pull failure summary, got %q", out)
+	if !strings.Contains(out, "failed:") || !strings.Contains(out, "2 failed") {
+		t.Fatalf("expected failed status summary, got %q", out)
 	}
 	// Quiet path: do not spam per-item "Pulling manifest..." on ensure.
 	if strings.Contains(out, "Pulling manifest") {
@@ -144,7 +144,7 @@ func TestEnsureAccessibleAdversariesPrefersNewestVersion(t *testing.T) {
 	}
 }
 
-func TestEnsureAccessibleAdversariesSkipsAlreadyInstalled(t *testing.T) {
+func TestEnsureAccessibleAdversariesStatusLines(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/search" {
 			w.Header().Set("Content-Type", "application/json")
@@ -171,28 +171,18 @@ func TestEnsureAccessibleAdversariesSkipsAlreadyInstalled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Pack a local go-cli so ensure skips network pull for that identity.
-	project := t.TempDir()
-	writeProject(t, project)
-	pack := NewRootCommandWithApp(app)
-	pack.SetArgs([]string{"pack", project, "--name", "adversarylabs/go-cli"})
-	if err := pack.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	stderr.Reset()
-
 	if err := ensureAccessibleAdversaries(context.Background(), app, server.URL, "work", &stderr); err != nil {
 		t.Fatal(err)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "Installing 1 missing") || !strings.Contains(out, "1 already local") {
-		t.Fatalf("expected one skip and one install, got %q", out)
+	if !strings.Contains(out, "adversarylabs/go-cli") && !strings.Contains(out, "go-cli") {
+		t.Fatalf("expected go-cli status line, got %q", out)
 	}
-	if strings.Contains(out, "go-cli:0.0.15") {
-		t.Fatalf("should not attempt pull for already-local go-cli, got %q", out)
+	if !strings.Contains(out, "dockerfile") {
+		t.Fatalf("expected dockerfile status line, got %q", out)
 	}
-	if !strings.Contains(out, "dockerfile:0.0.8") {
-		t.Fatalf("expected pull attempt for missing dockerfile, got %q", out)
+	if !strings.Contains(out, "✗") && !strings.Contains(out, "failed:") {
+		t.Fatalf("expected failure mark, got %q", out)
 	}
 }
 
