@@ -60,7 +60,7 @@ func TestTrustedRemoteExecutesWithHostExecutorAndReportsIdentity(t *testing.T) {
 	executor := &policyExecutor{backend: HostExecutorBackend}
 	var stderr bytes.Buffer
 	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &stderr, Executor: executor, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
-		AdversaryRef: "adversarylabs/dockerfile:1.2.0", RepoPath: t.TempDir(),
+		AdversaryRef: "adversarylabs/dockerfile:1.2.0", RepoPath: t.TempDir(), Verbose: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +75,23 @@ func TestTrustedRemoteExecutesWithHostExecutorAndReportsIdentity(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "WARNING") {
 		t.Fatalf("trusted publisher emitted warning: %q", stderr.String())
+	}
+}
+
+func TestTrustedRemoteOmitsIdentityBannerWithoutVerbose(t *testing.T) {
+	repo, resolver, _ := importPolicyArtifact(t, "adversarylabs/dockerfile:1.2.0")
+	executor := &policyExecutor{backend: HostExecutorBackend}
+	var stderr bytes.Buffer
+	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &stderr, Executor: executor, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
+		AdversaryRef: "adversarylabs/dockerfile:1.2.0", RepoPath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, noise := range []string{"Publisher:", "Digest:", "Execution backend:"} {
+		if strings.Contains(stderr.String(), noise) {
+			t.Fatalf("default run should not print %q: %q", noise, stderr.String())
+		}
 	}
 }
 
@@ -98,7 +115,7 @@ func TestUnknownRemoteRequiresSandboxOrUnsafeHostOverride(t *testing.T) {
 	if host.called != 1 || host.spec.Digest != record.Digest {
 		t.Fatalf("calls=%d spec=%+v", host.called, host.spec)
 	}
-	if !strings.Contains(warning.String(), "WARNING: unknown publisher") || !strings.Contains(warning.String(), record.Digest) {
+	if !strings.Contains(warning.String(), "WARNING: unknown publisher") {
 		t.Fatalf("unsafe override warning=%q", warning.String())
 	}
 
@@ -131,9 +148,11 @@ func TestMutableRemoteReferenceIsPinnedBeforeExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if executor.spec.Digest != original.Digest || !strings.Contains(stderr.String(), "Digest: "+original.Digest) {
-		t.Fatalf("executed=%s output=%q want original=%s", executor.spec.Digest, stderr.String(), original.Digest)
+	if executor.spec.Digest != original.Digest {
+		t.Fatalf("executed=%s want original=%s", executor.spec.Digest, original.Digest)
 	}
+	// Identity banner is verbose-only; pin is enforced on the RuntimeSpec digest.
+	_ = stderr
 	current, err := repo.Resolve(canonical)
 	if err != nil || current.Digest != replacement.Digest {
 		t.Fatalf("mutable reference was not changed during launch: record=%+v error=%v", current, err)

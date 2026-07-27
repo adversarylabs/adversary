@@ -357,7 +357,11 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		if resolved.Digest == "" {
 			return fmt.Errorf("remote adversary %q did not resolve to an immutable digest", opts.AdversaryRef)
 		}
-		fmt.Fprintf(stderr, "Publisher: %s\nDigest: %s\nExecution backend: %s\n", trust.Publisher.Name, resolved.Digest, backendDisplayName(executor.Backend()))
+		// Identity details are verbose diagnostics; default multi-run progress
+		// stays a clean [n/m] name + status list.
+		if opts.Verbose {
+			fmt.Fprintf(stderr, "Publisher: %s\nDigest: %s\nExecution backend: %s\n", trust.Publisher.Name, resolved.Digest, backendDisplayName(executor.Backend()))
+		}
 		if decision.UnsafeOverride {
 			fmt.Fprintf(stderr, "WARNING: unknown publisher %q is executing as an unrestricted host process because --allow-unsafe-host-execution was explicitly provided.\n", trust.Publisher.Name)
 		}

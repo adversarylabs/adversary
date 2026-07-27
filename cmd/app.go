@@ -265,10 +265,12 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 	}
 
 	// Model flags apply to every selected adversary via the shared model broker
-	// factory on the runner (same path as explicit run).
+	// factory on the runner (same path as explicit run). Mute child stderr so
+	// multi-run progress stays a clean status list (Node stack traces are noisy).
 	runner := p.runner(application.AdversaryRunOptions{
 		Stdout: opts.Stdout, Stderr: opts.Stderr,
 		ModelProvider: opts.ModelProvider, Model: opts.Model,
+		MuteChildStderr: true,
 	})
 	internalOptions := internaladversary.AutoOptions{
 		ReviewContext: reviewContext, AllFiles: allFiles,
@@ -287,6 +289,9 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 	}
 	if opts.ReportRunStart != nil {
 		internalOptions.ReportRunStart = opts.ReportRunStart
+	}
+	if opts.ReportRunFinish != nil {
+		internalOptions.ReportRunFinish = opts.ReportRunFinish
 	}
 	result, runErr := (internaladversary.AutoRunner{Runner: runner, Changes: changeResolver, Resolver: &p.resolver}).Auto(ctx, internalOptions)
 	return toApplicationAutoResult(result), runErr
@@ -346,7 +351,13 @@ func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladv
 		}
 		return modelreview.Broker{Provider: provider, Entropy: rand.Reader, Listen: net.Listen}, nil
 	}
-	return internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: p.stdin, Git: p.git, TempDir: p.tempDir, HomeDir: p.homeDir, DataRoot: p.dataRoot, BuildStateDir: p.buildStateDir, Now: p.now, Files: p.files, BuildProject: p.buildProject, ModelBrokerFactory: modelBrokerFactory, Shell: shell, Executor: internaladversary.HostExecutor{Stdout: opts.Stderr, Stderr: opts.Stderr, Stdin: p.stdin, Environment: p.environment, ResolveExecutable: p.resolveExecutable, FindNode: p.node.Find, Shell: shell, Launcher: p.launcher, Timer: p.timer}, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
+	// Host process streams default to CLI stderr so review rendering can own stdout.
+	childOut, childErr := opts.Stderr, opts.Stderr
+	if opts.MuteChildStderr {
+		// Progress UIs print their own status; suppress raw Node host process noise.
+		childOut, childErr = io.Discard, io.Discard
+	}
+	return internaladversary.Runner{Stdout: opts.Stdout, Stderr: opts.Stderr, Stdin: p.stdin, Git: p.git, TempDir: p.tempDir, HomeDir: p.homeDir, DataRoot: p.dataRoot, BuildStateDir: p.buildStateDir, Now: p.now, Files: p.files, BuildProject: p.buildProject, ModelBrokerFactory: modelBrokerFactory, Shell: shell, Executor: internaladversary.HostExecutor{Stdout: childOut, Stderr: childErr, Stdin: p.stdin, Environment: p.environment, ResolveExecutable: p.resolveExecutable, FindNode: p.node.Find, Shell: shell, Launcher: p.launcher, Timer: p.timer}, Repository: &p.resolver.Repository, Resolver: &p.resolver, RequireInjectedResolver: true}
 }
 func toInternalRunOptions(opts application.AdversaryRunOptions) internaladversary.RunOptions {
 	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout, ReviewContext: opts.ReviewContext}

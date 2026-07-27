@@ -35,6 +35,9 @@ type AutoOptions struct {
 	// ReportRunStart is called before each selected adversary runs (1-based index
 	// among selected adversaries). Used for terminal progress when results go elsewhere.
 	ReportRunStart func(name string, index, total int) error
+	// ReportRunFinish is called after each selected adversary finishes. err is nil
+	// on clean success, FindingsError when findings were reported, or a hard error.
+	ReportRunFinish func(name string, index, total int, err error) error
 }
 
 type AutoResult struct {
@@ -164,12 +167,20 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 			AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
 			RunTimeout:               opts.RunTimeout,
 			AllFiles:                 opts.AllFiles,
+			// Multi automatic selection keeps a clean progress stream; use
+			// --verbose on explicit single-ref run for identity banners.
+			Verbose: false,
 		}
 		if !opts.AllFiles {
 			ctxCopy := reviewContext
 			runOpts.ReviewContext = &ctxCopy
 		}
 		err := a.Runner.Run(ctx, runOpts)
+		if opts.ReportRunFinish != nil {
+			if finishErr := opts.ReportRunFinish(selection.Candidate.Name, runIndex, selectedTotal, err); finishErr != nil {
+				return result, finishErr
+			}
+		}
 		if err == nil {
 			continue
 		}
