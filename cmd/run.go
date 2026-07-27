@@ -290,6 +290,21 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 			_, err := fmt.Fprintf(progressOut, "[%d/%d] %s\n", index, total, name)
 			return err
 		},
+		ReportRunFinish: func(name string, index, total int, runErr error) error {
+			switch {
+			case runErr == nil:
+				_, err := fmt.Fprintf(progressOut, "    ✓ done\n")
+				return err
+			default:
+				var findings *internaladversary.FindingsError
+				if errors.As(runErr, &findings) {
+					_, err := fmt.Fprintf(progressOut, "    · findings: %d\n", findings.Count)
+					return err
+				}
+				_, err := fmt.Fprintf(progressOut, "    ✗ %s\n", compactRunFailure(runErr, ""))
+				return err
+			}
+		},
 	})
 	if err == nil && strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
@@ -415,12 +430,19 @@ func runAdversaries(
 		}
 
 		var runStdout io.Writer = resultOut
-		var buf bytes.Buffer
+		var outBuf bytes.Buffer
 		if multi && jsonMode {
-			runStdout = &buf
+			runStdout = &outBuf
+		}
+		// Keep multi-run / output-file progress clean: capture child diagnostics
+		// and print a one-line status instead of full Node stack traces.
+		var childErr bytes.Buffer
+		runStderr := progressOut
+		if showProgress {
+			runStderr = &childErr
 		}
 
-		err := runOneAdversary(ctx, app, opts, ref, runStdout, progressOut)
+		err := runOneAdversary(ctx, app, opts, ref, runStdout, runStderr)
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
@@ -430,7 +452,7 @@ func runAdversaries(
 		// the multi-run envelope (Greptile: partial/stacktrace stdout broke RawMessage).
 		nonJSONStdout := false
 		if multi && jsonMode {
-			raw := bytes.TrimSpace(buf.Bytes())
+			raw := bytes.TrimSpace(outBuf.Bytes())
 			if len(raw) > 0 {
 				if json.Valid(raw) {
 					item.Output = json.RawMessage(append([]byte(nil), raw...))
@@ -459,10 +481,10 @@ func runAdversaries(
 			if multi && jsonMode {
 				item.Error = err.Error()
 			}
-			if multi && !jsonMode {
+			if showProgress {
+				fmt.Fprintf(progressOut, "    ✗ %s\n", compactRunFailure(err, childErr.String()))
+			} else if multi && !jsonMode {
 				fmt.Fprintf(progressOut, "adversary %q failed: %v\n", ref, err)
-			} else if showProgress {
-				fmt.Fprintf(progressOut, "    ✗ %v\n", err)
 			}
 		}
 		if multi && jsonMode {
@@ -518,6 +540,48 @@ func joinMultiRunError(existing, next string) string {
 		return existing
 	}
 	return existing + "; " + next
+}
+
+// compactRunFailure turns nested host/Node failures into a short progress line.
+func compactRunFailure(err error, childStderr string) string {
+	if msg := firstInterestingErrorLine(childStderr); msg != "" {
+		return truncateRunes(msg, 120)
+	}
+	if err == nil {
+		return "failed"
+	}
+	msg := err.Error()
+	for _, prefix := range []string{
+		"host execution failed (child exit 1): ",
+		"host execution failed: ",
+		"adversary execution failed: ",
+	} {
+		if strings.HasPrefix(msg, prefix) {
+			msg = strings.TrimPrefix(msg, prefix)
+			break
+		}
+	}
+	return truncateRunes(msg, 120)
+}
+
+func firstInterestingErrorLine(stderr string) string {
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Prefer the actual Node error line over stack frames.
+		if strings.Contains(line, "Error [") || strings.HasPrefix(line, "Error:") || strings.Contains(line, "ERR_") {
+			return line
+		}
+	}
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "at ") && !strings.HasPrefix(line, "Node.js") {
+			return line
+		}
+	}
+	return ""
 }
 
 func runOneAdversary(

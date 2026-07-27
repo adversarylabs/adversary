@@ -137,10 +137,13 @@ type AdversaryRunOptions struct {
 	ModelProvider, Model                                      string
 	Force, KeepTemp, NoNetwork, Verbose, IncludeSuppressed    bool
 	Shell, AllFiles, AllowUnsafeHostExecution                 bool
-	Build                                                     bool
-	RunTimeout, BuildTimeout                                  time.Duration
-	Stdout, Stderr                                            io.Writer
-	ReviewContext                                             *detection.Context
+	// MuteChildStderr keeps host-process diagnostics out of the progress stream
+	// (e.g. automatic multi-run). Runner-level warnings still use Stderr.
+	MuteChildStderr          bool
+	Build                    bool
+	RunTimeout, BuildTimeout time.Duration
+	Stdout, Stderr           io.Writer
+	ReviewContext            *detection.Context
 }
 
 // AdversaryAutoOptions drives automatic adversary selection for `run` with no
@@ -161,6 +164,8 @@ type AdversaryAutoOptions struct {
 	// ReportRunStart reports progress before each selected adversary executes
 	// (1-based index among selected adversaries).
 	ReportRunStart func(name string, index, total int) error
+	// ReportRunFinish reports progress after each selected adversary finishes.
+	ReportRunFinish func(name string, index, total int, err error) error
 }
 type AdversaryAutoCandidate struct {
 	Name, Reference, Digest string
