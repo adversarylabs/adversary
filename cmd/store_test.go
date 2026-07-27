@@ -111,8 +111,30 @@ func TestInjectedAuthSearchAndWhoamiNeedNoProcessEnvironment(t *testing.T) {
 	if err := search.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "NAME") || !strings.Contains(out.String(), "acme/reviewer") || !strings.Contains(out.String(), "1.2.3") {
+	if !strings.Contains(out.String(), "NAME") || !strings.Contains(out.String(), "acme/reviewer") || !strings.Contains(out.String(), "1.2.3") || !strings.Contains(out.String(), "remote") {
 		t.Fatalf("search output=%q", out.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	// search with no query is allowed and lists the catalog
+	searchAll := NewRootCommandWithApp(app)
+	searchAll.SetArgs([]string{"--api-url", server.URL, "--profile", "work", "search"})
+	if err := searchAll.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "acme/reviewer") {
+		t.Fatalf("search without query output=%q", out.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	// list includes remote catalog entries when available
+	listCmd := NewRootCommandWithApp(app)
+	listCmd.SetArgs([]string{"--api-url", server.URL, "--profile", "work", "list"})
+	if err := listCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "SOURCE") || !strings.Contains(out.String(), "remote") || !strings.Contains(out.String(), "acme/reviewer") {
+		t.Fatalf("list output=%q", out.String())
 	}
 	out.Reset()
 	whoami := NewRootCommandWithApp(app)

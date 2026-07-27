@@ -150,7 +150,10 @@ func legacyArtifact(canonical, digest string, rec repository.Record) legacyArtif
 }
 
 type listDTO struct {
+	// Artifacts remains the detailed local-store inventory (digest, trust, files).
 	Artifacts []artifactDTO `json:"artifacts"`
+	// Results is the unified local+remote catalog also used by search.
+	Results []searchResultDTO `json:"results"`
 }
 type packDTO struct {
 	Name               string           `json:"name"`
@@ -212,6 +215,8 @@ type searchResultDTO struct {
 	Version     string `json:"version,omitempty"`
 	Description string `json:"description,omitempty"`
 	Reference   string `json:"reference,omitempty"`
+	Source      string `json:"source,omitempty"` // "local" or "remote"
+	Digest      string `json:"digest,omitempty"` // local only when known
 }
 type whoamiDTO struct {
 	Authenticated bool   `json:"authenticated"`
