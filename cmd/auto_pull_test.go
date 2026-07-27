@@ -126,8 +126,8 @@ func TestEnsureAccessibleAdversariesPrefersNewestVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "Ensuring 2 accessible adversaries") {
-		t.Fatalf("expected deduped target count, got %q", out)
+	if !strings.Contains(out, "Installing 2 missing adversaries") {
+		t.Fatalf("expected missing install count, got %q", out)
 	}
 	if !strings.Contains(out, "go-cli:0.0.15") {
 		t.Fatalf("expected newest go-cli reference in pull attempts, got %q", out)
@@ -137,6 +137,62 @@ func TestEnsureAccessibleAdversariesPrefersNewestVersion(t *testing.T) {
 	}
 	if !strings.Contains(out, "2 pull failures") {
 		t.Fatalf("expected pull failure summary, got %q", out)
+	}
+	// Quiet path: do not spam per-item "Pulling manifest..." on ensure.
+	if strings.Contains(out, "Pulling manifest") {
+		t.Fatalf("ensure should not print pull progress spam, got %q", out)
+	}
+}
+
+func TestEnsureAccessibleAdversariesSkipsAlreadyInstalled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/search" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[
+				{"name":"adversarylabs/go-cli","version":"0.0.15","reference":"registry.example/adversarylabs/go-cli:0.0.15"},
+				{"name":"adversarylabs/dockerfile","version":"0.0.8","reference":"registry.example/adversarylabs/dockerfile:0.0.8"}
+			]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr).Dependencies()
+	store := base.Auth.(processAuthStore).ConfigStore
+	if err := store.SetAuth(adversarylabs.AuthKey(server.URL, "work"), adversarylabs.Auth{Token: "token"}); err != nil {
+		t.Fatal(err)
+	}
+	base.API = processAPIFactory{store: store, http: server.Client()}
+	base.Registries = processRegistryFactory{store: store, docker: oci.DockerCredentialStore{HomeDir: t.TempDir()}, host: base.RegistryHost, identity: store.Path}
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pack a local go-cli so ensure skips network pull for that identity.
+	project := t.TempDir()
+	writeProject(t, project)
+	pack := NewRootCommandWithApp(app)
+	pack.SetArgs([]string{"pack", project, "--name", "adversarylabs/go-cli"})
+	if err := pack.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	stderr.Reset()
+
+	if err := ensureAccessibleAdversaries(context.Background(), app, server.URL, "work", &stderr); err != nil {
+		t.Fatal(err)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "Installing 1 missing") || !strings.Contains(out, "1 already local") {
+		t.Fatalf("expected one skip and one install, got %q", out)
+	}
+	if strings.Contains(out, "go-cli:0.0.15") {
+		t.Fatalf("should not attempt pull for already-local go-cli, got %q", out)
+	}
+	if !strings.Contains(out, "dockerfile:0.0.8") {
+		t.Fatalf("expected pull attempt for missing dockerfile, got %q", out)
 	}
 }
 

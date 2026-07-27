@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,9 +12,9 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 )
 
-// ensureAccessibleAdversaries pulls every remote catalog entry the user can
-// access so automatic `run` (no adversary refs) detects against the full
-// inventory, not only what happened to be installed earlier.
+// ensureAccessibleAdversaries installs remote catalog entries that are not
+// already present locally so automatic `run` can select from the full
+// inventory. Already-installed identities are skipped (no network re-resolve).
 //
 // Remote catalog failures warn and return nil so offline/local-only use still
 // works, except context cancellation/deadline which always propagate.
@@ -74,20 +75,40 @@ func ensureAccessibleAdversaries(
 		return nil
 	}
 
+	localKeys, err := localInstalledIdentityKeys(app)
+	if err != nil {
+		return err
+	}
+
 	targets := make([]string, 0, len(order))
+	already := 0
 	for _, key := range order {
-		targets = append(targets, best[key].ref)
+		ref := best[key].ref
+		if identityInstalled(localKeys, ref, best[key].version) {
+			already++
+			continue
+		}
+		targets = append(targets, ref)
+	}
+
+	if len(targets) == 0 {
+		if stderr != nil && already > 0 {
+			fmt.Fprintf(stderr, "Catalog: %d accessible adversaries already installed locally.\n", already)
+		}
+		return nil
 	}
 
 	if stderr != nil {
-		fmt.Fprintf(stderr, "Ensuring %d accessible adversaries are installed...\n", len(targets))
+		fmt.Fprintf(stderr, "Installing %d missing adversaries (%d already local)...\n", len(targets), already)
 	}
 	pulled, failed := 0, 0
 	for _, ref := range targets {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if _, err := pullAdversary(ctx, ref, apiURL, profile, app, stderr); err != nil {
+		// Quiet per-item progress; summary below. Failures still get a one-line warning.
+		var pullLog bytes.Buffer
+		if _, err := pullAdversary(ctx, ref, apiURL, profile, app, &pullLog); err != nil {
 			if isContextError(err) {
 				return err
 			}
@@ -100,13 +121,86 @@ func ensureAccessibleAdversaries(
 		pulled++
 	}
 	if stderr != nil {
-		fmt.Fprintf(stderr, "Installed or verified %d adversaries", pulled)
+		fmt.Fprintf(stderr, "Installed %d adversaries", pulled)
+		if already > 0 {
+			fmt.Fprintf(stderr, " (%d already local)", already)
+		}
 		if failed > 0 {
 			fmt.Fprintf(stderr, " (%d pull failures)", failed)
 		}
 		fmt.Fprintln(stderr)
 	}
 	return nil
+}
+
+func localInstalledIdentityKeys(app *application.App) (map[string]struct{}, error) {
+	entries, err := app.Dependencies().Resolver.Entries(10000)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]struct{}, len(entries)*4)
+	for _, entry := range entries {
+		for _, candidate := range []string{entry.CanonicalReference, entry.Record.Name} {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "" {
+				continue
+			}
+			if k := inventoryIdentityKey(candidate); k != "" {
+				keys[k] = struct{}{}
+			}
+			if k := shortInventoryIdentity(candidate); k != "" {
+				keys[k] = struct{}{}
+			}
+			// Also key name@version so versioned catalog refs can match records.
+			if v := strings.TrimSpace(entry.Record.Version); v != "" && entry.Record.Name != "" {
+				keys[strings.ToLower(entry.Record.Name)+"@"+v] = struct{}{}
+			}
+		}
+	}
+	return keys, nil
+}
+
+func identityInstalled(localKeys map[string]struct{}, ref, version string) bool {
+	if len(localKeys) == 0 {
+		return false
+	}
+	if k := inventoryIdentityKey(ref); k != "" {
+		if _, ok := localKeys[k]; ok {
+			return true
+		}
+	}
+	if k := shortInventoryIdentity(ref); k != "" {
+		if _, ok := localKeys[k]; ok {
+			return true
+		}
+	}
+	// Prefer exact name@version when catalog supplies a version.
+	version = strings.TrimSpace(version)
+	if version != "" {
+		name := shortInventoryIdentity(ref)
+		if name != "" {
+			if _, ok := localKeys[strings.ToLower(name)+"@"+version]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// shortInventoryIdentity returns publisher/name (last two path segments) or the
+// final segment so full registry refs match local short names.
+func shortInventoryIdentity(ref string) string {
+	key := inventoryIdentityKey(ref)
+	if key == "" {
+		return ""
+	}
+	parts := strings.Split(key, "/")
+	switch {
+	case len(parts) >= 2:
+		return strings.ToLower(parts[len(parts)-2] + "/" + parts[len(parts)-1])
+	default:
+		return strings.ToLower(parts[0])
+	}
 }
 
 func isContextError(err error) bool {
