@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ type runOptions struct {
 	force                    bool
 	format                   string
 	json                     bool
+	outputFile               string
 	keepTemp                 bool
 	noNetwork                bool
 	verbose                  bool
@@ -74,7 +76,9 @@ Use --all-files for a whole-repository scan instead of change inference.`,
   adversary run ./local-adversary --path ../project
   adversary run adversarylabs/dockerfile --base main --head feature
   adversary run adversarylabs/go-cli adversarylabs/secrets --all-files
-  adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id`,
+  adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id
+  adversary run --all --all-files --output-file review.txt
+  adversary run go-cli secrets --format json --output-file results.json`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, opts.format, opts.json)
@@ -115,6 +119,9 @@ Use --all-files for a whole-repository scan instead of change inference.`,
 			if opts.shell && len(args) == 0 {
 				return fmt.Errorf("--shell requires exactly one adversary reference")
 			}
+			if opts.shell && strings.TrimSpace(opts.outputFile) != "" {
+				return fmt.Errorf("--output-file cannot be combined with --shell")
+			}
 			if opts.build && opts.noBuild {
 				return fmt.Errorf("--build and --no-build cannot be combined")
 			}
@@ -130,13 +137,21 @@ Use --all-files for a whole-repository scan instead of change inference.`,
 				opts.verbose = true
 			}
 
+			resultOut, progressOut, closer, err := resolveRunWriters(opts.outputFile, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			if closer != nil {
+				defer closer()
+			}
+
 			if len(args) == 0 {
-				return runAutomaticSelection(cmd, app, opts, apiURL, profile)
+				return runAutomaticSelection(cmd, app, opts, apiURL, profile, resultOut, progressOut)
 			}
 			if err := rejectAutomaticOnlyFlags(cmd, opts); err != nil {
 				return err
 			}
-			return runAdversaries(cmd.Context(), app, opts, args, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			return runAdversaries(cmd.Context(), app, opts, args, resultOut, progressOut)
 		},
 	}
 
@@ -149,6 +164,7 @@ Use --all-files for a whole-repository scan instead of change inference.`,
 	cmd.Flags().BoolVar(&opts.force, "force", false, "run even when triggers.files_changed does not match")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "print the versioned review result envelope as JSON")
+	cmd.Flags().StringVar(&opts.outputFile, "output-file", "", "write review results to this file; progress stays on the terminal (works with one or many adversaries)")
 	cmd.Flags().BoolVar(&opts.keepTemp, "keep-temp", false, "do not delete the temporary run directory")
 	cmd.Flags().BoolVar(&opts.noNetwork, "no-network", false, "require network access to be disabled (fails if the executor cannot enforce it)")
 	cmd.Flags().BoolVar(&opts.verbose, "verbose", false, "print detailed execution diagnostics")
@@ -197,7 +213,23 @@ func rejectAutomaticOnlyFlags(cmd *cobra.Command, opts *runOptions) error {
 	}
 }
 
-func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOptions, apiURL, profile *string) error {
+func resolveRunWriters(outputFile string, stdout, stderr io.Writer) (resultOut, progressOut io.Writer, closer func(), err error) {
+	progressOut = stderr
+	resultOut = stdout
+	outputFile = strings.TrimSpace(outputFile)
+	if outputFile == "" {
+		return resultOut, progressOut, nil, nil
+	}
+	// Parent directories must already exist (cmd handlers cannot call os.MkdirAll).
+	f, err := os.OpenFile(outputFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("open --output-file: %w", err)
+	}
+	fmt.Fprintf(progressOut, "Writing results to %s\n", outputFile)
+	return f, progressOut, func() { _ = f.Close() }, nil
+}
+
+func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOptions, apiURL, profile *string, resultOut, progressOut io.Writer) error {
 	// Flags that only apply to an explicit single-adversary local project loop.
 	if opts.shell {
 		return fmt.Errorf("--shell requires exactly one adversary reference")
@@ -231,17 +263,16 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 			app,
 			valueOf(apiURL),
 			valueOf(profile),
-			cmd.ErrOrStderr(),
+			progressOut,
 		); err != nil {
 			return err
 		}
 	}
-	// Human-readable selection details must not mix into JSON stdout. Text
-	// format keeps the historical stdout report; JSON keeps stdout pure for
-	// adversary result documents and routes the selection narrative to stderr.
-	selectionOut := cmd.OutOrStdout()
-	if opts.format == "json" {
-		selectionOut = cmd.ErrOrStderr()
+	// Selection/progress stays on the terminal (stderr when writing a result
+	// file or JSON). Adversary review bodies go to resultOut.
+	selectionOut := resultOut
+	if opts.format == "json" || strings.TrimSpace(opts.outputFile) != "" {
+		selectionOut = progressOut
 	}
 	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
@@ -251,11 +282,18 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 		All: opts.all, DryRun: opts.dryRun, Explain: opts.explain, Format: opts.format,
 		AllowUnsafeHostExecution: opts.allowUnsafeHostExecution, IncludeSuppressed: opts.includeSuppressed,
 		RunTimeout: opts.runTimeout, DetectionTimeout: opts.detectionTimeout,
-		Stdout: cmd.OutOrStdout(), Stderr: cmd.ErrOrStderr(),
+		Stdout: resultOut, Stderr: progressOut,
 		ReportSelections: func(result application.AdversaryAutoResult) error {
 			return renderRunSelections(selectionOut, result, opts.explain)
 		},
+		ReportRunStart: func(name string, index, total int) error {
+			_, err := fmt.Fprintf(progressOut, "[%d/%d] %s\n", index, total, name)
+			return err
+		},
 	})
+	if err == nil && strings.TrimSpace(opts.outputFile) != "" {
+		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
+	}
 	return err
 }
 
@@ -342,16 +380,20 @@ type multiRunDTO struct {
 
 // runAdversaries runs one or more adversary refs with shared flags.
 // Multiple refs concatenate reports (text sections or a JSON results array).
+// When resultOut is an --output-file, progress lines go to progressOut only.
 // Exit policy: first hard error wins after all runs; otherwise FindingsError with total count.
 func runAdversaries(
 	ctx context.Context,
 	app *application.App,
 	opts *runOptions,
 	refs []string,
-	stdout, stderr io.Writer,
+	resultOut, progressOut io.Writer,
 ) error {
 	multi := len(refs) > 1
 	jsonMode := opts.format == "json"
+	toFile := strings.TrimSpace(opts.outputFile) != ""
+	// Progress on multi-run or when results are redirected to a file.
+	showProgress := toFile || multi
 
 	var items []multiRunItemDTO
 	var findingsTotal int
@@ -362,20 +404,23 @@ func runAdversaries(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if showProgress {
+			fmt.Fprintf(progressOut, "[%d/%d] %s\n", i+1, len(refs), ref)
+		}
 		if multi && !jsonMode {
 			if i > 0 {
-				fmt.Fprintln(stdout)
+				fmt.Fprintln(resultOut)
 			}
-			fmt.Fprintf(stdout, "=== %s ===\n", ref)
+			fmt.Fprintf(resultOut, "=== %s ===\n", ref)
 		}
 
-		var runStdout io.Writer = stdout
+		var runStdout io.Writer = resultOut
 		var buf bytes.Buffer
 		if multi && jsonMode {
 			runStdout = &buf
 		}
 
-		err := runOneAdversary(ctx, app, opts, ref, runStdout, stderr)
+		err := runOneAdversary(ctx, app, opts, ref, runStdout, progressOut)
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
@@ -398,8 +443,14 @@ func runAdversaries(
 		var findings *internaladversary.FindingsError
 		switch {
 		case err == nil:
+			if showProgress {
+				fmt.Fprintf(progressOut, "    ✓ done\n")
+			}
 		case errors.As(err, &findings):
 			findingsTotal += findings.Count
+			if showProgress {
+				fmt.Fprintf(progressOut, "    · findings: %d\n", findings.Count)
+			}
 		default:
 			if hardErr == nil {
 				hardErr = err
@@ -409,7 +460,9 @@ func runAdversaries(
 				item.Error = err.Error()
 			}
 			if multi && !jsonMode {
-				fmt.Fprintf(stderr, "adversary %q failed: %v\n", ref, err)
+				fmt.Fprintf(progressOut, "adversary %q failed: %v\n", ref, err)
+			} else if showProgress {
+				fmt.Fprintf(progressOut, "    ✗ %v\n", err)
 			}
 		}
 		if multi && jsonMode {
@@ -427,19 +480,22 @@ func runAdversaries(
 	}
 
 	if multi && jsonMode {
-		if err := writeJSON(stdout, "run", multiRunDTO{Results: items}); err != nil {
+		if err := writeJSON(resultOut, "run", multiRunDTO{Results: items}); err != nil {
 			return err
 		}
 	}
-	if multi {
-		fmt.Fprintf(stderr, "\nRan %d adversaries", len(refs))
+	if multi || toFile {
+		fmt.Fprintf(progressOut, "\nRan %d adversaries", len(refs))
 		if findingsTotal > 0 {
-			fmt.Fprintf(stderr, " · findings: %d", findingsTotal)
+			fmt.Fprintf(progressOut, " · findings: %d", findingsTotal)
 		}
 		if hardErr != nil {
-			fmt.Fprintf(stderr, " · errors: 1+")
+			fmt.Fprintf(progressOut, " · errors: 1+")
 		}
-		fmt.Fprintln(stderr)
+		fmt.Fprintln(progressOut)
+	}
+	if toFile {
+		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
 	}
 
 	if hardErr != nil {
