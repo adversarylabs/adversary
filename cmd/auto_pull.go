@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
+	semver "github.com/Masterminds/semver/v3"
 	"github.com/adversarylabs/adversary/internal/application"
 )
 
@@ -14,7 +16,8 @@ import (
 // happened to be installed earlier.
 //
 // Remote catalog failures warn and return nil so offline/local-only use still
-// works. Individual pull failures warn and continue.
+// works, except context cancellation/deadline which always propagate.
+// Individual non-cancellation pull failures warn and continue.
 func ensureAccessibleAdversaries(
 	ctx context.Context,
 	app *application.App,
@@ -24,6 +27,9 @@ func ensureAccessibleAdversaries(
 	deps := app.Dependencies()
 	remote, err := fetchRemoteInventory(ctx, deps, apiURL, profile, "")
 	if err != nil {
+		if isContextError(err) {
+			return err
+		}
 		if stderr != nil {
 			fmt.Fprintf(stderr, "Warning: could not list remote adversaries (%v); using local store only.\n", err)
 		}
@@ -33,9 +39,14 @@ func ensureAccessibleAdversaries(
 		return nil
 	}
 
-	// One pull per repository identity (first catalog hit wins; API order preferred).
-	seen := make(map[string]struct{}, len(remote))
-	targets := make([]string, 0, len(remote))
+	// One pull per repository identity, preferring the newest catalog version
+	// (not first-hit order, which can install a stale tag).
+	type chosen struct {
+		ref     string
+		version string
+	}
+	best := make(map[string]chosen, len(remote))
+	order := make([]string, 0, len(remote))
 	for _, item := range remote {
 		ref := strings.TrimSpace(item.Reference)
 		if ref == "" {
@@ -45,14 +56,27 @@ func ensureAccessibleAdversaries(
 			continue
 		}
 		key := inventoryIdentityKey(ref)
-		if _, ok := seen[key]; ok {
+		version := strings.TrimSpace(item.Version)
+		if version == "" {
+			version = referenceVersionHint(ref)
+		}
+		if prev, ok := best[key]; ok {
+			if !preferCatalogVersion(version, prev.version) {
+				continue
+			}
+			best[key] = chosen{ref: ref, version: version}
 			continue
 		}
-		seen[key] = struct{}{}
-		targets = append(targets, ref)
+		best[key] = chosen{ref: ref, version: version}
+		order = append(order, key)
 	}
-	if len(targets) == 0 {
+	if len(order) == 0 {
 		return nil
+	}
+
+	targets := make([]string, 0, len(order))
+	for _, key := range order {
+		targets = append(targets, best[key].ref)
 	}
 
 	if stderr != nil {
@@ -60,7 +84,13 @@ func ensureAccessibleAdversaries(
 	}
 	pulled, failed := 0, 0
 	for _, ref := range targets {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if _, err := pullAdversary(ctx, ref, apiURL, profile, app, stderr); err != nil {
+			if isContextError(err) {
+				return err
+			}
 			failed++
 			if stderr != nil {
 				fmt.Fprintf(stderr, "Warning: pull %s failed: %v\n", ref, err)
@@ -77,6 +107,53 @@ func ensureAccessibleAdversaries(
 		fmt.Fprintln(stderr)
 	}
 	return nil
+}
+
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// preferCatalogVersion reports whether candidate should replace current for a
+// single repository identity. Prefers "latest", then higher semver, then
+// lexicographic fallback when versions are not semver.
+func preferCatalogVersion(candidate, current string) bool {
+	candidate = strings.TrimSpace(candidate)
+	current = strings.TrimSpace(current)
+	if candidate == "" {
+		return false
+	}
+	if current == "" {
+		return true
+	}
+	if strings.EqualFold(candidate, "latest") && !strings.EqualFold(current, "latest") {
+		return true
+	}
+	if strings.EqualFold(current, "latest") && !strings.EqualFold(candidate, "latest") {
+		return false
+	}
+	left, leftErr := semver.NewVersion(candidate)
+	right, rightErr := semver.NewVersion(current)
+	if leftErr == nil && rightErr == nil {
+		return left.GreaterThan(right)
+	}
+	return candidate > current
+}
+
+// referenceVersionHint extracts a trailing tag from a reference when the API
+// did not supply Version. Digests yield an empty hint.
+func referenceVersionHint(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.Contains(ref, "@") {
+		return ""
+	}
+	colon := strings.LastIndex(ref, ":")
+	if colon <= 0 {
+		return ""
+	}
+	if slash := strings.LastIndex(ref, "/"); slash > colon {
+		return ""
+	}
+	return ref[colon+1:]
 }
 
 // inventoryIdentityKey strips tag/digest so multiple versions of the same
