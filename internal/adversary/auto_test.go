@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -148,16 +149,148 @@ func TestAutoTrustedDetectorFailureSkipsUnlessForced(t *testing.T) {
 }
 
 func TestAvailableCandidatesDoNotCollapseAcrossPublishers(t *testing.T) {
-	_, resolver := autoRepository(t, map[string]string{
-		"adversarylabs/security:1.0.0": "name: shared/security\n",
-		"randomperson/security:2.0.0":  "name: shared/security\n",
-	})
+	// Distinct package bytes under different publishers stay separate. Identical
+	// digests (same bytes under library/* and adversarylabs/*) collapse elsewhere.
+	repo := repository.Repository{Root: t.TempDir()}
+	t.Cleanup(func() { makeResolverWritable(repo.Root) })
+	for _, item := range []struct {
+		ref     string
+		version string
+		command string
+	}{
+		{"adversarylabs/security:1.0.0", "1.0.0", "dist/official.js"},
+		{"randomperson/security:2.0.0", "2.0.0", "dist/community.js"},
+	} {
+		project := t.TempDir()
+		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: shared/security\nversion: "+item.version+"\nruntime:\n  name: node\n  version: \"22\"\n  command: ["+strconv.Quote(item.command)+"]\n")
+		writeFile(t, filepath.Join(project, item.command), "export {}\n")
+		artifact, err := pack.Create(context.Background(), pack.Options{Dir: project})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.ImportPacked(artifact, item.ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolver := Resolver{Repository: repo}
 	candidates, err := (AutoRunner{Runner: Runner{Resolver: &resolver}, Resolver: &resolver}).availableCandidates(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(candidates) != 2 {
 		t.Fatalf("candidates = %#v", candidates)
+	}
+	refs := map[string]bool{}
+	for _, candidate := range candidates {
+		refs[candidate.Reference] = true
+	}
+	if !refs["registry.adversarylabs.ai/adversarylabs/security:1.0.0"] || !refs["registry.adversarylabs.ai/randomperson/security:2.0.0"] {
+		t.Fatalf("publisher refs = %#v", refs)
+	}
+}
+
+func TestAvailableCandidatesCollapseSharedDigestAcrossNamespaces(t *testing.T) {
+	repo := repository.Repository{Root: t.TempDir()}
+	t.Cleanup(func() { makeResolverWritable(repo.Root) })
+	project := t.TempDir()
+	writeFile(t, filepath.Join(project, "adversary.yaml"), "name: go-cli\nversion: 0.0.15\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writeFile(t, filepath.Join(project, "dist", "index.js"), "")
+	writeFile(t, filepath.Join(project, "dist", "detect.js"), "")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{
+		"registry.adversarylabs.ai/library/go-cli:0.0.15",
+		"registry.adversarylabs.ai/adversarylabs/go-cli:0.0.15",
+		"registry.adversarylabs.ai/library/go-cli:latest",
+	} {
+		if _, err := repo.ImportPacked(artifact, ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolver := Resolver{Repository: repo}
+	candidates, err := (AutoRunner{Runner: Runner{Resolver: &resolver}, Resolver: &resolver}).availableCandidates(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+	if !strings.Contains(candidates[0].Reference, "adversarylabs/go-cli") {
+		t.Fatalf("preferred reference = %q, want adversarylabs namespace", candidates[0].Reference)
+	}
+	if strings.Contains(candidates[0].Reference, "/library/") {
+		t.Fatalf("preferred reference = %q, must not keep legacy library namespace when adversarylabs alias exists", candidates[0].Reference)
+	}
+}
+
+func TestAvailableCandidatesCollapseSamePublisherPackageRename(t *testing.T) {
+	// Same publisher + same manifest name under different repository paths
+	// (historical rename) should run once, newest version preferred.
+	repo := repository.Repository{Root: t.TempDir()}
+	t.Cleanup(func() { makeResolverWritable(repo.Root) })
+	for _, item := range []struct {
+		ref     string
+		version string
+	}{
+		{"registry.adversarylabs.ai/adversarylabs/depotci-adversary:0.0.4", "0.0.4"},
+		{"registry.adversarylabs.ai/adversarylabs/depotci:0.0.8", "0.0.8"},
+	} {
+		project := t.TempDir()
+		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: depotci\nversion: "+item.version+"\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+		writeFile(t, filepath.Join(project, "dist", "index.js"), item.version+"\n")
+		artifact, err := pack.Create(context.Background(), pack.Options{Dir: project})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.ImportPacked(artifact, item.ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolver := Resolver{Repository: repo}
+	candidates, err := (AutoRunner{Runner: Runner{Resolver: &resolver}, Resolver: &resolver}).availableCandidates(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+	if candidates[0].Manifest.Version != "0.0.8" {
+		t.Fatalf("version = %q, want 0.0.8", candidates[0].Manifest.Version)
+	}
+}
+
+func TestAvailableCandidatesPreferNewestVersionPerRepository(t *testing.T) {
+	repo := repository.Repository{Root: t.TempDir()}
+	t.Cleanup(func() { makeResolverWritable(repo.Root) })
+	for _, version := range []string{"0.0.5", "0.0.6"} {
+		project := t.TempDir()
+		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: engineering-review\nversion: "+version+"\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+		writeFile(t, filepath.Join(project, "dist", "index.js"), "")
+		writeFile(t, filepath.Join(project, "dist", "detect.js"), "")
+		artifact, err := pack.Create(context.Background(), pack.Options{Dir: project})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref := "registry.adversarylabs.ai/adversarylabs/engineering-review:" + version
+		if _, err := repo.ImportPacked(artifact, ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolver := Resolver{Repository: repo}
+	candidates, err := (AutoRunner{Runner: Runner{Resolver: &resolver}, Resolver: &resolver}).availableCandidates(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+	if candidates[0].Manifest.Version != "0.0.6" {
+		t.Fatalf("version = %q, want 0.0.6", candidates[0].Manifest.Version)
+	}
+	if !strings.HasSuffix(candidates[0].Reference, ":0.0.6") {
+		t.Fatalf("reference = %q, want :0.0.6 tag", candidates[0].Reference)
 	}
 }
 

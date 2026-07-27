@@ -205,17 +205,32 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]DetectionCandidate, 0, len(entries)+len(includes))
-	byIdentity := make(map[string]int, len(entries))
+	// Collapse aliases that point at the same package bytes first. Users commonly
+	// retain both library/* and adversarylabs/* refs for one digest after the
+	// default namespace migration; automatic selection must not run that package twice.
+	byDigest := make(map[string]DetectionCandidate, len(entries))
 	for _, entry := range entries {
 		resolved, err := ResolveReferenceWithRuntime(entry.Digest, *a.Resolver, a.Runner.runtimeFiles())
 		if err != nil || resolved.Manifest == nil {
 			continue
 		}
 		candidate := DetectionCandidate{Name: resolved.Manifest.Name, Reference: entry.CanonicalReference, Digest: entry.Digest, Manifest: *resolved.Manifest}
+		if existing, ok := byDigest[candidate.Digest]; ok {
+			if preferCandidateReference(candidate, existing) {
+				byDigest[candidate.Digest] = candidate
+			}
+			continue
+		}
+		byDigest[candidate.Digest] = candidate
+	}
+	// Then keep one candidate per registry/repository identity, preferring the
+	// highest package version. Distinct publishers (different repositories) stay separate.
+	candidates := make([]DetectionCandidate, 0, len(byDigest)+len(includes))
+	byIdentity := make(map[string]int, len(byDigest))
+	for _, candidate := range byDigest {
 		key := candidateIdentityKey(candidate)
 		if index, exists := byIdentity[key]; exists {
-			if newerManifestVersion(candidate.Manifest.Version, candidates[index].Manifest.Version) {
+			if preferCandidateVersion(candidate, candidates[index]) {
 				candidates[index] = candidate
 			}
 			continue
@@ -223,9 +238,11 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 		byIdentity[key] = len(candidates)
 		candidates = append(candidates, candidate)
 	}
-	selectedIdentity := make(map[string]struct{}, len(candidates))
+	selectedDigests := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
-		selectedIdentity[candidateIdentityKey(candidate)+"@"+candidate.Digest] = struct{}{}
+		if candidate.Digest != "" {
+			selectedDigests[candidate.Digest] = struct{}{}
+		}
 	}
 	for _, include := range includes {
 		if candidateSliceMatches(candidates, include) {
@@ -239,12 +256,10 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 			return nil, fmt.Errorf("forced adversary %q is unavailable: %w", include, err)
 		}
 		if resolved.Digest != "" {
-			candidate := DetectionCandidate{Name: resolved.Manifest.Name, Reference: include, Digest: resolved.Digest, Manifest: *resolved.Manifest}
-			key := candidateIdentityKey(candidate) + "@" + resolved.Digest
-			if _, seen := selectedIdentity[key]; seen {
+			if _, seen := selectedDigests[resolved.Digest]; seen {
 				continue
 			}
-			selectedIdentity[key] = struct{}{}
+			selectedDigests[resolved.Digest] = struct{}{}
 		}
 		candidates = append(candidates, DetectionCandidate{Name: resolved.Manifest.Name, Reference: include, Digest: resolved.Digest, Manifest: *resolved.Manifest})
 	}
@@ -254,11 +269,82 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 	return candidates, nil
 }
 
+// candidateIdentityKey groups automatic-selection candidates that should only
+// run once. Identity is registry + publisher + package name (from the packed
+// manifest), not the full repository path, so renames like depotci-adversary →
+// depotci collapse while true cross-publisher packages stay separate.
+// The legacy default namespace "library" is treated as adversarylabs.
 func candidateIdentityKey(candidate DetectionCandidate) string {
+	name := strings.TrimSpace(candidate.Name)
 	if parsed, err := oci.ParseReference(candidate.Reference); err == nil {
-		return strings.ToLower(parsed.Registry + "/" + parsed.Repository)
+		publisher := ""
+		if parts := strings.Split(parsed.Repository, "/"); len(parts) > 0 {
+			publisher = parts[0]
+		}
+		if strings.EqualFold(publisher, "library") {
+			publisher = "adversarylabs"
+		}
+		if name != "" {
+			return strings.ToLower(parsed.Registry + "/" + publisher + "/" + name)
+		}
+		return strings.ToLower(parsed.Registry + "/" + publisher + "/" + parsed.Repository)
+	}
+	if name != "" {
+		return strings.ToLower(name)
 	}
 	return strings.ToLower(candidate.Reference)
+}
+
+// preferCandidateReference chooses which alias to keep when multiple references
+// resolve to the same package digest. Prefer the modern adversarylabs namespace
+// over the legacy library default, then a concrete version tag over :latest.
+func preferCandidateReference(candidate, current DetectionCandidate) bool {
+	candScore := referencePreferenceScore(candidate.Reference)
+	currScore := referencePreferenceScore(current.Reference)
+	if candScore != currScore {
+		return candScore > currScore
+	}
+	if candidate.Manifest.Version != current.Manifest.Version {
+		return newerManifestVersion(candidate.Manifest.Version, current.Manifest.Version)
+	}
+	return candidate.Reference < current.Reference
+}
+
+func preferCandidateVersion(candidate, current DetectionCandidate) bool {
+	if candidate.Manifest.Version != current.Manifest.Version {
+		return newerManifestVersion(candidate.Manifest.Version, current.Manifest.Version)
+	}
+	return preferCandidateReference(candidate, current)
+}
+
+func referencePreferenceScore(ref string) int {
+	parsed, err := oci.ParseReference(ref)
+	if err != nil {
+		return 0
+	}
+	score := 0
+	parts := strings.Split(parsed.Repository, "/")
+	if len(parts) > 0 {
+		switch strings.ToLower(parts[0]) {
+		case "adversarylabs":
+			score += 100
+		case "library":
+			// legacy default namespace; lose to adversarylabs
+		default:
+			score += 50
+		}
+	}
+	tag := strings.TrimSpace(parsed.Tag)
+	switch {
+	case tag == "" || strings.EqualFold(tag, "latest"):
+		// mutable tags are less specific than a pinned version
+	default:
+		score += 10
+		if _, err := semver.NewVersion(tag); err == nil {
+			score += 5
+		}
+	}
+	return score
 }
 
 func newerManifestVersion(candidate, current string) bool {
