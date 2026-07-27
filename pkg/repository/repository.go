@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	semver "github.com/Masterminds/semver/v3"
 	"github.com/adversarylabs/adversary/internal/archiveutil"
 	"github.com/adversarylabs/adversary/internal/publock"
 	"github.com/adversarylabs/adversary/internal/rootreplace"
@@ -545,7 +546,8 @@ func (r Repository) Resolve(value string) (Record, error) {
 	}
 	list = visible
 	if len(list) == 0 {
-		return Record{}, ErrAmbiguous
+		// Dangling aliases (targets without commits) should not report ambiguous.
+		return Record{}, os.ErrNotExist
 	}
 	if len(list) == 1 {
 		return r.record(list[0])
@@ -554,6 +556,7 @@ func (r Repository) Resolve(value string) (Record, error) {
 	semanticKey := ""
 	preferenceRoot := ""
 	preferencesAgree := true
+	sameSemantic := true
 	for _, digest := range list {
 		rec, loadErr := r.record(digest)
 		if loadErr != nil {
@@ -566,7 +569,7 @@ func (r Repository) Resolve(value string) (Record, error) {
 		if semanticKey == "" {
 			semanticKey = candidateKey
 		} else if candidateKey != semanticKey {
-			return Record{}, ErrAmbiguous
+			sameSemantic = false
 		}
 		candidateRoot := rec.CanonicalAliasDigest
 		if candidateRoot == "" {
@@ -579,6 +582,15 @@ func (r Repository) Resolve(value string) (Record, error) {
 		}
 		records = append(records, rec)
 	}
+	if !sameSemantic {
+		// Multiple versions of one package under a short name (engineering-review
+		// → 0.0.5 and 0.0.6) should prefer the newest version. Distinct packages
+		// that only share a short name stay ambiguous.
+		if preferred, ok := r.preferNewestSameRepository(records); ok {
+			return preferred, nil
+		}
+		return Record{}, fmt.Errorf("%w: %q matches multiple packages; use a fully qualified or tagged reference", ErrAmbiguous, value)
+	}
 	sort.Slice(records, func(i, j int) bool { return records[i].Digest < records[j].Digest })
 	if preferencesAgree {
 		for _, rec := range records {
@@ -588,6 +600,92 @@ func (r Repository) Resolve(value string) (Record, error) {
 		}
 	}
 	return records[0], nil
+}
+
+// preferNewestSameRepository returns the highest-version record when every
+// candidate is the same repository identity (registry/name). Cross-registry or
+// cross-name collisions return false so callers can surface ErrAmbiguous.
+func (r Repository) preferNewestSameRepository(records []Record) (Record, bool) {
+	if len(records) < 2 {
+		return Record{}, false
+	}
+	identities := make([]string, 0, len(records))
+	for _, rec := range records {
+		id, err := r.recordRepositoryIdentity(rec)
+		if err != nil || id == "" {
+			return Record{}, false
+		}
+		identities = append(identities, id)
+	}
+	root := identities[0]
+	for _, id := range identities[1:] {
+		if id != root {
+			return Record{}, false
+		}
+	}
+	best := records[0]
+	for _, rec := range records[1:] {
+		if versionPreferred(rec.Version, best.Version) {
+			best = rec
+			continue
+		}
+		if rec.Version == best.Version && rec.Digest > best.Digest {
+			best = rec
+		}
+	}
+	return best, true
+}
+
+// recordRepositoryIdentity returns a stable registry/repository key for a
+// stored record by inspecting durable refs that point at its digest. Falls
+// back to the package name when no qualified ref is present.
+func (r Repository) recordRepositoryIdentity(rec Record) (string, error) {
+	snapshot, err := r.referenceSnapshot()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return strings.ToLower(strings.TrimSpace(rec.Name)), nil
+		}
+		return "", err
+	}
+	var candidates []string
+	for stored, digest := range snapshot {
+		if digest != rec.Digest {
+			continue
+		}
+		ref, parseErr := oci.ParseReferenceWithDefaults(stored, oci.DefaultRegistry, oci.DefaultNamespace)
+		if parseErr != nil {
+			continue
+		}
+		candidates = append(candidates, strings.ToLower(ref.Registry+"/"+ref.Repository))
+	}
+	if len(candidates) == 0 {
+		return strings.ToLower(strings.TrimSpace(rec.Name)), nil
+	}
+	sort.Strings(candidates)
+	return candidates[0], nil
+}
+
+func versionPreferred(candidate, current string) bool {
+	candidate = strings.TrimSpace(candidate)
+	current = strings.TrimSpace(current)
+	if candidate == "" {
+		return false
+	}
+	if current == "" {
+		return true
+	}
+	if strings.EqualFold(candidate, "latest") && !strings.EqualFold(current, "latest") {
+		return true
+	}
+	if strings.EqualFold(current, "latest") && !strings.EqualFold(candidate, "latest") {
+		return false
+	}
+	left, leftErr := semver.NewVersion(candidate)
+	right, rightErr := semver.NewVersion(current)
+	if leftErr == nil && rightErr == nil {
+		return left.GreaterThan(right)
+	}
+	return candidate > current
 }
 
 func (r Repository) recordSemanticKey(rec Record) (string, error) {
@@ -616,8 +714,9 @@ func isContentDigest(value string) bool {
 
 // resolveStoredShorthand supports repositories created before tagged aliases
 // were persisted. It derives candidates exclusively from durable ref records;
-// process registry configuration is deliberately irrelevant. Multiple matches
-// fail closed rather than selecting an arbitrary registry.
+// process registry configuration is deliberately irrelevant. Multiple packages
+// that only share a short name fail closed; multiple versions of one package
+// prefer the newest version.
 func (r Repository) resolveStoredShorthand(value string) (Record, error) {
 	digests, err := r.storedShorthandDigests(value)
 	if err != nil {
@@ -626,10 +725,21 @@ func (r Repository) resolveStoredShorthand(value string) (Record, error) {
 	if len(digests) == 0 {
 		return Record{}, os.ErrNotExist
 	}
-	if len(digests) != 1 {
-		return Record{}, ErrAmbiguous
+	if len(digests) == 1 {
+		return r.record(digests[0])
 	}
-	return r.record(digests[0])
+	records := make([]Record, 0, len(digests))
+	for _, digest := range digests {
+		rec, loadErr := r.record(digest)
+		if loadErr != nil {
+			return Record{}, loadErr
+		}
+		records = append(records, rec)
+	}
+	if preferred, ok := r.preferNewestSameRepository(records); ok {
+		return preferred, nil
+	}
+	return Record{}, fmt.Errorf("%w: %q matches multiple packages; use a fully qualified or tagged reference", ErrAmbiguous, value)
 }
 
 func (r Repository) storedShorthandDigests(value string) ([]string, error) {

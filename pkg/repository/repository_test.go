@@ -215,10 +215,10 @@ func TestAliasesBecomeAmbiguous(t *testing.T) {
 	if _, err := r.ImportPacked(b, "two.example/other/test:1.0.0"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Resolve("test"); err != ErrAmbiguous {
+	if _, err := r.Resolve("test"); !errors.Is(err, ErrAmbiguous) {
 		t.Fatalf("err=%v", err)
 	}
-	if _, err := r.Resolve("test:1.0.0"); err != ErrAmbiguous {
+	if _, err := r.Resolve("test:1.0.0"); !errors.Is(err, ErrAmbiguous) {
 		t.Fatalf("tagged alias err=%v", err)
 	}
 }
@@ -271,6 +271,37 @@ func TestNameOnlyAliasAcrossVersionsFailsClosed(t *testing.T) {
 	}
 	if _, err := r.Resolve("test"); !errors.Is(err, ErrAmbiguous) {
 		t.Fatalf("name-only err=%v", err)
+	}
+}
+
+func TestNameOnlyAliasSameRepositoryPrefersNewestVersion(t *testing.T) {
+	r := Repository{Root: t.TempDir()}
+	older := artifactVersioned(t, "adversarylabs/engineering-review", "0.0.5", "old")
+	newer := artifactVersioned(t, "adversarylabs/engineering-review", "0.0.6", "new")
+	if _, err := r.ImportPacked(older, "registry.adversarylabs.ai/adversarylabs/engineering-review:0.0.5"); err != nil {
+		t.Fatal(err)
+	}
+	newerRec, err := r.ImportPacked(newer, "registry.adversarylabs.ai/adversarylabs/engineering-review:0.0.6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Also register :latest at the new digest the way pulls do.
+	if err := r.UpdateRef("registry.adversarylabs.ai/adversarylabs/engineering-review:latest", "", newerRec.Digest); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"engineering-review", "adversarylabs/engineering-review", "engineering-review:latest"} {
+		got, resolveErr := r.Resolve(query)
+		if resolveErr != nil {
+			t.Fatalf("resolve %q: %v", query, resolveErr)
+		}
+		if got.Digest != newerRec.Digest || got.Version != "0.0.6" {
+			t.Fatalf("resolve %q = version=%s digest=%s, want 0.0.6 %s", query, got.Version, got.Digest, newerRec.Digest)
+		}
+	}
+	// Tagged older still resolves explicitly.
+	olderGot, err := r.Resolve("engineering-review:0.0.5")
+	if err != nil || olderGot.Version != "0.0.5" {
+		t.Fatalf("tagged older = %+v err=%v", olderGot, err)
 	}
 }
 
