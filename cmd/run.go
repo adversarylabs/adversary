@@ -239,6 +239,13 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 			return err
 		}
 	}
+	// Human-readable selection details must not mix into JSON stdout. Text
+	// format keeps the historical stdout report; JSON keeps stdout pure for
+	// adversary result documents and routes the selection narrative to stderr.
+	selectionOut := cmd.OutOrStdout()
+	if opts.format == "json" {
+		selectionOut = cmd.ErrOrStderr()
+	}
 	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
 		MinimumConfidence: minimum,
@@ -248,13 +255,13 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 		RunTimeout: opts.runTimeout, DetectionTimeout: opts.detectionTimeout,
 		Stdout: cmd.OutOrStdout(), Stderr: cmd.ErrOrStderr(),
 		ReportSelections: func(result application.AdversaryAutoResult) error {
-			return renderRunSelections(cmd, result, opts.explain)
+			return renderRunSelections(selectionOut, result, opts.explain)
 		},
 	})
 	return err
 }
 
-func renderRunSelections(cmd *cobra.Command, result application.AdversaryAutoResult, explain bool) error {
+func renderRunSelections(w io.Writer, result application.AdversaryAutoResult, explain bool) error {
 	var output strings.Builder
 	selected := 0
 	for _, selection := range result.Selections {
@@ -300,7 +307,7 @@ func renderRunSelections(cmd *cobra.Command, result application.AdversaryAutoRes
 	if selected > 0 {
 		fmt.Fprintln(&output)
 	}
-	_, err := io.WriteString(cmd.OutOrStdout(), output.String())
+	_, err := io.WriteString(w, output.String())
 	return err
 }
 

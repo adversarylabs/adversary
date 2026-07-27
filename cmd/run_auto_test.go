@@ -10,7 +10,6 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/repository"
-	"github.com/spf13/cobra"
 )
 
 type failingAutoWriter struct{}
@@ -130,17 +129,39 @@ func TestRenderRunSelectionsReturnsOutputFailureAndEscapesHostilePath(t *testing
 		Candidate: application.AdversaryAutoCandidate{Name: "security"}, Selected: true,
 		Result: detection.Result{Confidence: detection.ConfidenceHigh, Reasons: []string{"matched"}, RelevantFiles: []string{"safe.go\nforged heading"}},
 	}}}
-	command := &cobra.Command{}
 	var output bytes.Buffer
-	command.SetOut(&output)
-	if err := renderRunSelections(command, result, true); err != nil {
+	if err := renderRunSelections(&output, result, true); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(output.String(), "safe.go\nforged heading") || !strings.Contains(output.String(), `"safe.go\nforged heading"`) {
 		t.Fatalf("unsafe output = %q", output.String())
 	}
-	command.SetOut(failingAutoWriter{})
-	if err := renderRunSelections(command, result, true); err == nil || !strings.Contains(err.Error(), "closed output") {
+	if err := renderRunSelections(failingAutoWriter{}, result, true); err == nil || !strings.Contains(err.Error(), "closed output") {
 		t.Fatalf("output error = %v", err)
+	}
+}
+
+func TestRunWithoutRefsJSONKeepsSelectionOffStdout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr)
+	deps := base.Dependencies()
+	stub := &autoStubRuntime{inner: deps.Runtime, result: application.AdversaryAutoResult{Selections: []application.AdversaryAutoSelection{
+		{Candidate: application.AdversaryAutoCandidate{Name: "dockerfile"}, Result: detection.Result{Applicable: true, Confidence: detection.ConfidenceHigh, Reasons: []string{"Dockerfile changed"}}, Selected: true},
+	}}}
+	deps.Runtime = stub
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"run", "--dry-run", "--no-pull", "--format", "json", "--explain"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("JSON mode must not write selection text to stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Detected 1 relevant adversaries") || !strings.Contains(stderr.String(), "dockerfile") {
+		t.Fatalf("expected selection narrative on stderr, got %q", stderr.String())
 	}
 }

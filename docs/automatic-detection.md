@@ -143,6 +143,10 @@ That is a successful review. Otherwise the command runs every selected
 adversary, aggregates blocking findings, and returns the existing nonzero
 findings status after all selected reviews finish.
 
+Selection narrative (detected counts, `--explain` detail) is written to stdout
+for text output. With `--format json` it goes to stderr so stdout stays a pure
+JSON stream for adversary result documents.
+
 Repository applicability, change applicability, automatic selection, and an
 explicit `adversary run <reference>` are distinct. Repository applicability
 says the technology exists somewhere in the repository. Change applicability
