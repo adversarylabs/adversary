@@ -196,22 +196,4 @@ func TestEnsureAccessibleAdversariesPropagatesPullCancellation(t *testing.T) {
 	}
 }
 
-func TestAutoCommandNoPullSkipsRemoteEnsure(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr)
-	deps := base.Dependencies()
-	stub := &autoStubRuntime{inner: deps.Runtime}
-	deps.Runtime = stub
-	app, err := application.New(deps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := NewRootCommandWithApp(app)
-	cmd.SetArgs([]string{"auto", "--dry-run", "--no-pull"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(stderr.String(), "Ensuring") || strings.Contains(stderr.String(), "could not list remote") {
-		t.Fatalf("expected no remote ensure with --no-pull, stderr=%q", stderr.String())
-	}
-}
+

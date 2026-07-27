@@ -12,8 +12,8 @@ import (
 )
 
 // ensureAccessibleAdversaries pulls every remote catalog entry the user can
-// access so auto detection runs against the full inventory, not only what
-// happened to be installed earlier.
+// access so automatic `run` (no adversary refs) detects against the full
+// inventory, not only what happened to be installed earlier.
 //
 // Remote catalog failures warn and return nil so offline/local-only use still
 // works, except context cancellation/deadline which always propagate.

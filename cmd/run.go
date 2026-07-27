@@ -7,11 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +36,14 @@ type runOptions struct {
 	includeSuppressed        bool
 	shell                    bool
 	allFiles                 bool
+	all                      bool
+	noPull                   bool
+	dryRun                   bool
+	explain                  bool
+	minimumConfidence        string
+	includes                 []string
+	excludes                 []string
+	detectionTimeout         time.Duration
 	allowUnsafeHostExecution bool
 	build                    bool
 	noBuild                  bool
@@ -39,20 +51,31 @@ type runOptions struct {
 	buildTimeout             time.Duration
 }
 
-func newRunCommand(app *application.App) *cobra.Command {
+func newRunCommand(app *application.App, apiURL, profile *string) *cobra.Command {
 	opts := &runOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "run <adversary-ref> [adversary-ref...]",
-		Short: "Run one or more Adversaries against a local source repository",
-		Example: `  adversary run adversarylabs/dockerfile
+		Use:   "run [adversary-ref...]",
+		Short: "Run adversaries against a local source repository",
+		Long: `Run adversaries against a repository.
+
+With one or more adversary references, those adversaries run explicitly.
+
+With no adversary references, run pulls every adversary you can access (unless
+--no-pull), detects which apply to the resolved review scope, and runs the
+selected set. Use --all to skip detection and run every installed adversary.
+Use --all-files for a whole-repository scan instead of change inference.`,
+		Example: `  adversary run
+  adversary run --all
+  adversary run --all-files
+  adversary run --dry-run --explain
+  adversary run --base main
+  adversary run adversarylabs/dockerfile
   adversary run ./local-adversary --path ../project
-  adversary run adversarylabs/dockerfile --base main
   adversary run adversarylabs/dockerfile --base main --head feature
-  adversary run adversarylabs/dockerfile --all-files
-  adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id
-  adversary run adversarylabs/go-cli adversarylabs/secrets --path . --all-files`,
-		Args: cobra.MinimumNArgs(1),
+  adversary run adversarylabs/go-cli adversarylabs/secrets --all-files
+  adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, opts.format, opts.json)
 			if err != nil {
@@ -89,10 +112,13 @@ func newRunCommand(app *application.App) *cobra.Command {
 			if opts.shell && len(args) > 1 {
 				return fmt.Errorf("--shell cannot be combined with multiple adversary references")
 			}
+			if opts.shell && len(args) == 0 {
+				return fmt.Errorf("--shell requires exactly one adversary reference")
+			}
 			if opts.build && opts.noBuild {
 				return fmt.Errorf("--build and --no-build cannot be combined")
 			}
-			if opts.runTimeout < 0 || opts.buildTimeout < 0 {
+			if opts.runTimeout < 0 || opts.buildTimeout < 0 || opts.detectionTimeout < 0 {
 				return fmt.Errorf("timeouts cannot be negative")
 			}
 			opts.format = format
@@ -104,6 +130,12 @@ func newRunCommand(app *application.App) *cobra.Command {
 				opts.verbose = true
 			}
 
+			if len(args) == 0 {
+				return runAutomaticSelection(cmd, app, opts, apiURL, profile)
+			}
+			if err := rejectAutomaticOnlyFlags(cmd, opts); err != nil {
+				return err
+			}
 			return runAdversaries(cmd.Context(), app, opts, args, cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
@@ -125,6 +157,14 @@ func newRunCommand(app *application.App) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.shell, "shell", false, "UNSAFE: launch an unrestricted host shell in the adversary working directory")
 	cmd.Flags().BoolVar(&opts.allowUnsafeHostExecution, "allow-unsafe-host-execution", false, "explicitly allow unrestricted HostExecutor use for an unknown publisher")
 	cmd.Flags().BoolVar(&opts.allFiles, "all-files", false, "scan the entire target instead of inferring a change")
+	cmd.Flags().BoolVar(&opts.all, "all", false, "with no adversary refs: run every available adversary without detection filtering")
+	cmd.Flags().BoolVar(&opts.noPull, "no-pull", false, "with no adversary refs: do not pull remote adversaries; use only the local store")
+	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "with no adversary refs: resolve and print selections without running")
+	cmd.Flags().BoolVar(&opts.explain, "explain", false, "with no adversary refs: show selected and skipped adversaries with reasons")
+	cmd.Flags().StringVar(&opts.minimumConfidence, "min-confidence", "medium", "with no adversary refs: minimum confidence to run (low, medium, or high)")
+	cmd.Flags().StringArrayVar(&opts.includes, "include", nil, "with no adversary refs: force an available adversary to run (repeatable)")
+	cmd.Flags().StringArrayVar(&opts.excludes, "exclude", nil, "with no adversary refs: exclude an adversary (repeatable; wins over include)")
+	cmd.Flags().DurationVar(&opts.detectionTimeout, "detection-timeout", 30*time.Second, "with no adversary refs: maximum time for each programmatic detector")
 	cmd.Flags().BoolVar(&opts.build, "build", false, "build a local adversary before running (may update dist)")
 	cmd.Flags().BoolVar(&opts.noBuild, "no-build", false, "deprecated compatibility flag; local builds are skipped by default")
 	_ = cmd.Flags().MarkDeprecated("no-build", "local builds are skipped by default; omit this flag")
@@ -132,6 +172,143 @@ func newRunCommand(app *application.App) *cobra.Command {
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
 
 	return cmd
+}
+
+func rejectAutomaticOnlyFlags(cmd *cobra.Command, opts *runOptions) error {
+	switch {
+	case opts.all:
+		return fmt.Errorf("--all cannot be combined with explicit adversary references")
+	case opts.noPull:
+		return fmt.Errorf("--no-pull cannot be combined with explicit adversary references")
+	case opts.dryRun:
+		return fmt.Errorf("--dry-run cannot be combined with explicit adversary references")
+	case opts.explain:
+		return fmt.Errorf("--explain cannot be combined with explicit adversary references")
+	case len(opts.includes) > 0:
+		return fmt.Errorf("--include cannot be combined with explicit adversary references")
+	case len(opts.excludes) > 0:
+		return fmt.Errorf("--exclude cannot be combined with explicit adversary references")
+	case cmd.Flags().Changed("min-confidence"):
+		return fmt.Errorf("--min-confidence cannot be combined with explicit adversary references")
+	case cmd.Flags().Changed("detection-timeout"):
+		return fmt.Errorf("--detection-timeout cannot be combined with explicit adversary references")
+	default:
+		return nil
+	}
+}
+
+func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOptions, apiURL, profile *string) error {
+	// Flags that only apply to an explicit single-adversary local project loop.
+	if opts.shell {
+		return fmt.Errorf("--shell requires exactly one adversary reference")
+	}
+	if opts.force {
+		return fmt.Errorf("--force is only valid with explicit adversary references")
+	}
+	if opts.build || opts.noBuild {
+		return fmt.Errorf("--build is only valid with explicit adversary references")
+	}
+	if cmd.Flags().Changed("builder") {
+		return fmt.Errorf("--builder is only valid with explicit adversary references")
+	}
+	if cmd.Flags().Changed("model-provider") || cmd.Flags().Changed("model") {
+		return fmt.Errorf("model flags are only valid with explicit adversary references")
+	}
+	if opts.keepTemp {
+		return fmt.Errorf("--keep-temp is only valid with explicit adversary references")
+	}
+	if opts.noNetwork {
+		return fmt.Errorf("--no-network is only valid with explicit adversary references")
+	}
+	if opts.verbose {
+		return fmt.Errorf("--verbose is only valid with explicit adversary references")
+	}
+
+	minimum, err := detection.ParseConfidence(opts.minimumConfidence)
+	if err != nil {
+		return err
+	}
+	if !opts.noPull {
+		if err := ensureAccessibleAdversaries(
+			cmd.Context(),
+			app,
+			valueOf(apiURL),
+			valueOf(profile),
+			cmd.ErrOrStderr(),
+		); err != nil {
+			return err
+		}
+	}
+	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
+		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
+		MinimumConfidence: minimum,
+		Includes:          opts.includes, Excludes: opts.excludes,
+		All: opts.all, DryRun: opts.dryRun, Explain: opts.explain, Format: opts.format,
+		AllowUnsafeHostExecution: opts.allowUnsafeHostExecution, IncludeSuppressed: opts.includeSuppressed,
+		RunTimeout: opts.runTimeout, DetectionTimeout: opts.detectionTimeout,
+		Stdout: cmd.OutOrStdout(), Stderr: cmd.ErrOrStderr(),
+		ReportSelections: func(result application.AdversaryAutoResult) error {
+			return renderRunSelections(cmd, result, opts.explain)
+		},
+	})
+	return err
+}
+
+func renderRunSelections(cmd *cobra.Command, result application.AdversaryAutoResult, explain bool) error {
+	var output strings.Builder
+	selected := 0
+	for _, selection := range result.Selections {
+		if selection.Selected {
+			selected++
+		}
+	}
+	if selected == 0 {
+		fmt.Fprintln(&output, "No relevant adversaries detected for this change.")
+	} else {
+		fmt.Fprintf(&output, "Detected %d relevant adversaries\n", selected)
+	}
+	for _, selection := range result.Selections {
+		if !selection.Selected && !explain {
+			continue
+		}
+		status := ""
+		if !selection.Selected {
+			status = " (skipped)"
+		}
+		fmt.Fprintf(&output, "\n%s%s\n", selection.Candidate.Name, status)
+		fmt.Fprintf(&output, "  %s confidence\n", selection.Result.Confidence)
+		if selection.Excluded {
+			fmt.Fprintln(&output, "  excluded by --exclude")
+		} else if selection.Forced {
+			fmt.Fprintln(&output, "  forced by --include")
+		}
+		for _, reason := range selection.Result.Reasons {
+			fmt.Fprintf(&output, "  %s\n", terminalSafeText(reason))
+		}
+		if explain && len(selection.Result.RelevantFiles) > 0 {
+			files := append([]string(nil), selection.Result.RelevantFiles...)
+			sort.Strings(files)
+			for i := range files {
+				files[i] = terminalSafeText(files[i])
+			}
+			fmt.Fprintf(&output, "  relevant files: %s\n", strings.Join(files, ", "))
+		}
+		if explain && selection.Error != nil {
+			fmt.Fprintf(&output, "  detector failure: %s\n", terminalSafeText(selection.Error.Error()))
+		}
+	}
+	if selected > 0 {
+		fmt.Fprintln(&output)
+	}
+	_, err := io.WriteString(cmd.OutOrStdout(), output.String())
+	return err
+}
+
+func terminalSafeText(value string) string {
+	if strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return strconv.QuoteToASCII(value)
+	}
+	return value
 }
 
 type multiRunItemDTO struct {

@@ -40,7 +40,7 @@ func (r *autoStubRuntime) Auto(_ context.Context, opts application.AdversaryAuto
 	return r.result, nil
 }
 
-func TestAutoCommandForwardsControlsAndExplainsSelections(t *testing.T) {
+func TestRunWithoutRefsForwardsSelectionControls(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr)
 	deps := base.Dependencies()
@@ -54,12 +54,18 @@ func TestAutoCommandForwardsControlsAndExplainsSelections(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := NewRootCommandWithApp(app)
-	// --no-pull keeps this unit test offline; auto otherwise pulls the accessible catalog.
-	cmd.SetArgs([]string{"auto", "main...HEAD", "--path", "/repo", "--dry-run", "--explain", "--no-pull", "--min-confidence", "high", "--include", "security", "--include", "complexity", "--exclude", "repository"})
+	// --no-pull keeps this unit test offline; zero-arg run otherwise pulls the catalog.
+	cmd.SetArgs([]string{
+		"run", "--path", "/repo", "--base", "main", "--head", "HEAD",
+		"--dry-run", "--explain", "--no-pull", "--min-confidence", "high",
+		"--include", "security", "--include", "complexity", "--exclude", "repository",
+	})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if stub.opts.ChangeArgument != "main...HEAD" || stub.opts.RepoPath != "/repo" || !stub.opts.DryRun || !stub.opts.Explain || stub.opts.MinimumConfidence != detection.ConfidenceHigh || len(stub.opts.Includes) != 2 || len(stub.opts.Excludes) != 1 {
+	if stub.opts.RepoPath != "/repo" || stub.opts.BaseRef != "main" || stub.opts.HeadRef != "HEAD" ||
+		!stub.opts.DryRun || !stub.opts.Explain || stub.opts.MinimumConfidence != detection.ConfidenceHigh ||
+		len(stub.opts.Includes) != 2 || len(stub.opts.Excludes) != 1 {
 		t.Fatalf("options = %#v", stub.opts)
 	}
 	wantFragments := []string{"Detected 1 relevant adversaries", "dockerfile", "high confidence", "Dockerfile changed", "relevant files: Dockerfile", "repository (skipped)", "excluded by --exclude"}
@@ -70,7 +76,7 @@ func TestAutoCommandForwardsControlsAndExplainsSelections(t *testing.T) {
 	}
 }
 
-func TestAutoCommandNoMatchIsSuccessfulAndConcise(t *testing.T) {
+func TestRunWithoutRefsNoMatchIsSuccessfulAndConcise(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr)
 	deps := base.Dependencies()
@@ -80,7 +86,7 @@ func TestAutoCommandNoMatchIsSuccessfulAndConcise(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := NewRootCommandWithApp(app)
-	cmd.SetArgs([]string{"auto", "--dry-run", "--no-pull"})
+	cmd.SetArgs([]string{"run", "--dry-run", "--no-pull"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +95,37 @@ func TestAutoCommandNoMatchIsSuccessfulAndConcise(t *testing.T) {
 	}
 }
 
-func TestRenderAutoSelectionsReturnsOutputFailureAndEscapesHostilePath(t *testing.T) {
+func TestRunWithoutRefsNoPullSkipsRemoteEnsure(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr)
+	deps := base.Dependencies()
+	stub := &autoStubRuntime{inner: deps.Runtime}
+	deps.Runtime = stub
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"run", "--dry-run", "--no-pull"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stderr.String(), "Ensuring") || strings.Contains(stderr.String(), "could not list remote") {
+		t.Fatalf("expected no remote ensure with --no-pull, stderr=%q", stderr.String())
+	}
+}
+
+func TestRunWithRefsRejectsAutomaticOnlyFlags(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr)
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"run", "example", "--all"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--all") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRenderRunSelectionsReturnsOutputFailureAndEscapesHostilePath(t *testing.T) {
 	result := application.AdversaryAutoResult{Selections: []application.AdversaryAutoSelection{{
 		Candidate: application.AdversaryAutoCandidate{Name: "security"}, Selected: true,
 		Result: detection.Result{Confidence: detection.ConfidenceHigh, Reasons: []string{"matched"}, RelevantFiles: []string{"safe.go\nforged heading"}},
@@ -97,14 +133,14 @@ func TestRenderAutoSelectionsReturnsOutputFailureAndEscapesHostilePath(t *testin
 	command := &cobra.Command{}
 	var output bytes.Buffer
 	command.SetOut(&output)
-	if err := renderAutoSelections(command, result, true); err != nil {
+	if err := renderRunSelections(command, result, true); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(output.String(), "safe.go\nforged heading") || !strings.Contains(output.String(), `"safe.go\nforged heading"`) {
 		t.Fatalf("unsafe output = %q", output.String())
 	}
 	command.SetOut(failingAutoWriter{})
-	if err := renderAutoSelections(command, result, true); err == nil || !strings.Contains(err.Error(), "closed output") {
+	if err := renderRunSelections(command, result, true); err == nil || !strings.Contains(err.Error(), "closed output") {
 		t.Fatalf("output error = %v", err)
 	}
 }

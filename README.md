@@ -41,7 +41,8 @@ Only TypeScript project generation is currently supported. Useful commands:
 
 ```sh
 adversary run . --path . --format json
-adversary auto --dry-run --explain
+adversary run --dry-run --explain
+adversary run --all-files
 adversary inspect . --path .
 adversary pack . --name ghcr.io/acme/reviewer
 adversary push ghcr.io/acme/reviewer:0.1.0
@@ -51,7 +52,7 @@ adversary completion bash
 ```
 
 Run `adversary help <command>` for the canonical command and flag reference.
-See [automatic detection](docs/automatic-detection.md) for change resolution,
+See [automatic selection](docs/automatic-detection.md) for change resolution,
 manifest detection declarations, selection policy, and CI behavior.
 
 ## Automatic review scope

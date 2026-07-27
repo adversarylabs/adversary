@@ -1,34 +1,60 @@
-# Automatic adversary detection
+# Automatic adversary selection
 
-`adversary auto` first pulls every adversary in the remote catalog you can
-access (unless `--no-pull`), then resolves one Git change, asks each installed
-adversary whether that change applies, explains the selection, and runs the
-selected set.
-
-Pull failures are reported as warnings; the command continues with whatever is
-already local. Offline or local-only use: pass `--no-pull`.
-
-## Change selection
+`adversary run` with **no adversary references** pulls every adversary in the
+remote catalog you can access (unless `--no-pull`), resolves one review scope,
+asks each installed adversary whether that scope applies, explains the
+selection, and runs the selected set.
 
 ```sh
-adversary auto                         # staged, unstaged, and untracked files
-adversary auto main                    # merge-base(main, HEAD) through HEAD
-adversary auto main...HEAD             # explicit merge-base range
-adversary auto --path ../project
+adversary run                      # detect + run for inferred scope
+adversary run --all                # every installed adversary
+adversary run --all-files          # whole-repository scan
+adversary run --dry-run --explain
+adversary run --no-pull            # local store only
 ```
 
-With no positional argument in CI, the CLI uses captured base/head pairs when
+With **one or more** adversary references, those adversaries run explicitly
+(no catalog detection). Scope flags (`--base`, `--head`, `--all-files`) still
+apply.
+
+```sh
+adversary run adversarylabs/go-cli
+adversary run adversarylabs/go-cli adversarylabs/secrets --all-files
+```
+
+Pull failures during automatic selection are reported as warnings; the command
+continues with whatever is already local. Offline or local-only automatic use:
+pass `--no-pull`.
+
+## Review scope
+
+Scope for both automatic and explicit `run` uses the same resolution:
+
+```sh
+adversary run                         # dirty worktree, then PR CI, then branch, then whole target
+adversary run --base main             # merge-base(main, HEAD) through HEAD
+adversary run --base main --head feature
+adversary run --all-files             # entire repository
+adversary run --path ../project
+```
+
+With no explicit scope flags in CI, the CLI uses captured base/head pairs when
 available. `ADVERSARY_BASE_REF` and `ADVERSARY_HEAD_REF` take precedence,
 followed by GitHub, GitLab merge-request, and Buildkite pull-request variables.
 The checkout must contain both commits and enough history to compute their
 merge base.
 
+On a clean default branch (or non-Git target), scope falls back to the entire
+target so automatic selection can still match file-based detectors against the
+full tree.
+
 Git resolution happens once. Every detector and selected review receives the
-same versioned context through `ADVERSARY_CHANGE_CONTEXT`; adversaries do not
-independently recalculate the diff. The context includes change mode, refs,
-merge base, and structured added, modified, deleted, renamed, copied, or
-untracked paths. Repository files are enumerated only when an available
-adversary declares `detection.repository_files`.
+same versioned context through `ADVERSARY_CHANGE_CONTEXT` (except intentional
+whole-target runs, which use `--all-files` / entire-target semantics). The
+context includes change mode, refs, merge base, and structured added, modified,
+deleted, renamed, copied, or untracked paths. Repository files are enumerated
+when an available adversary declares `detection.repository_files`, and for
+whole-target automatic selection.
 
 ## Detection declarations
 
@@ -49,11 +75,12 @@ detection:
     - renamed
 ```
 
-`files` matches changed paths. `repository_files` records repository
-applicability but does not by itself make an unrelated change applicable. When
-both are present, a repository can match while a README-only change is skipped.
-`change_types` optionally limits changed-path matching. Existing
-`triggers.files_changed` is used as a declarative fallback for older
+`files` matches changed paths (or every repository path on a whole-target
+automatic scan). `repository_files` records repository applicability but does
+not by itself make an unrelated change applicable when a narrower change scope
+is active. When both are present, a repository can match while a README-only
+change is skipped. `change_types` optionally limits changed-path matching.
+Existing `triggers.files_changed` is used as a declarative fallback for older
 adversaries that do not declare `detection`.
 
 Complex detection can declare a Node entrypoint:
@@ -83,20 +110,21 @@ run; low-confidence results are visible with `--explain` but do not run unless
 the threshold is lowered or they are included explicitly.
 
 ```sh
-adversary auto --dry-run
-adversary auto --explain
-adversary auto --min-confidence high
-adversary auto --min-confidence medium
-adversary auto --min-confidence low
-adversary auto --include security --include complexity
-adversary auto --exclude repository
-adversary auto --all
-adversary auto --no-pull
+adversary run --dry-run
+adversary run --explain
+adversary run --min-confidence high
+adversary run --min-confidence medium
+adversary run --min-confidence low
+adversary run --include security --include complexity
+adversary run --exclude repository
+adversary run --all
+adversary run --no-pull
+adversary run --all-files --all
 ```
 
-By default, `auto` pulls the accessible remote catalog before detection so the
-runnable inventory is complete. `--no-pull` skips that step and uses only the
-local store.
+By default, automatic `run` pulls the accessible remote catalog before detection
+so the runnable inventory is complete. `--no-pull` skips that step and uses only
+the local store.
 
 `--include` forces a runnable adversary even when its detector fails.
 `--exclude` wins over automatic matching, `--include`, and `--all`. `--all`
@@ -120,4 +148,4 @@ explicit `adversary run <reference>` are distinct. Repository applicability
 says the technology exists somewhere in the repository. Change applicability
 says the resolved change intersects the adversary's scope. Automatic selection
 applies the confidence threshold and include/exclude policy. Explicit `run`
-continues to run the named adversary directly.
+with named references continues to run those adversaries directly.

@@ -14,7 +14,13 @@ import (
 )
 
 type AutoOptions struct {
-	ChangeRequest            ChangeRequest
+	// ReviewContext, when set, is the resolved change used for detection.
+	// When nil, ChangeRequest is resolved through Changes.
+	ReviewContext *detection.Context
+	ChangeRequest ChangeRequest
+	// AllFiles runs selected adversaries against the entire target (whole-repo
+	// scan) instead of injecting the change context as the review focus.
+	AllFiles                 bool
 	MinimumConfidence        detection.Confidence
 	Includes                 []string
 	Excludes                 []string
@@ -52,20 +58,31 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 	if minimum == "" {
 		minimum = detection.ConfidenceMedium
 	}
-	reviewContext, err := a.Changes.ResolveChanges(ctx, opts.ChangeRequest)
-	if err != nil {
-		return AutoResult{}, err
+	var reviewContext detection.Context
+	var err error
+	if opts.ReviewContext != nil {
+		reviewContext = *opts.ReviewContext
+	} else {
+		reviewContext, err = a.Changes.ResolveChanges(ctx, opts.ChangeRequest)
+		if err != nil {
+			return AutoResult{}, err
+		}
 	}
 	repositoryRoot := reviewContext.RepositoryRoot
+	if repositoryRoot == "" {
+		repositoryRoot = opts.ChangeRequest.RepoPath
+	}
 	candidates, err := a.availableCandidates(opts.Includes)
 	if err != nil {
 		return AutoResult{}, err
 	}
 	needsRepositoryFiles := false
-	for _, candidate := range candidates {
-		if len(candidate.Manifest.Detection.RepositoryFiles) > 0 {
-			needsRepositoryFiles = true
-			break
+	if len(reviewContext.RepositoryFiles) == 0 {
+		for _, candidate := range candidates {
+			if len(candidate.Manifest.Detection.RepositoryFiles) > 0 {
+				needsRepositoryFiles = true
+				break
+			}
 		}
 	}
 	if needsRepositoryFiles {
@@ -121,7 +138,22 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 		if selection.Candidate.Digest != "" {
 			ref = selection.Candidate.Digest
 		}
-		err := a.Runner.Run(ctx, RunOptions{AdversaryRef: ref, ReferenceIdentity: selection.Candidate.Reference, RepoPath: repositoryRoot, ReviewContext: &reviewContext, Force: true, Format: opts.Format, IncludeSuppressed: opts.IncludeSuppressed, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, RunTimeout: opts.RunTimeout})
+		runOpts := RunOptions{
+			AdversaryRef:             ref,
+			ReferenceIdentity:        selection.Candidate.Reference,
+			RepoPath:                 repositoryRoot,
+			Force:                    true,
+			Format:                   opts.Format,
+			IncludeSuppressed:        opts.IncludeSuppressed,
+			AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
+			RunTimeout:               opts.RunTimeout,
+			AllFiles:                 opts.AllFiles,
+		}
+		if !opts.AllFiles {
+			ctxCopy := reviewContext
+			runOpts.ReviewContext = &ctxCopy
+		}
+		err := a.Runner.Run(ctx, runOpts)
 		if err == nil {
 			continue
 		}
