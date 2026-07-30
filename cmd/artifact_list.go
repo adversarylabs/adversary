@@ -24,6 +24,9 @@ func newListCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 Each name appears once with its newest version (semver). Older local installs
 remain usable via an explicit reference; they are just omitted from this listing.
 
+Retired official paths (…/adversarylabs/… and flat …/library/go-cli style
+packs) are hidden. Domain catalog ids (go/cli, security/secrets, …) remain.
+
 Remote entries require network access and, for private catalog results, login.
 If the remote catalog is unavailable, local adversaries are still listed.`,
 		Args: cobra.NoArgs,

@@ -13,6 +13,9 @@ import (
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
+// Official registry host for retired-path filtering (matches oci.DefaultRegistry).
+const officialRegistryHost = "registry.adversarylabs.ai"
+
 // inventoryItem is one adversary visible through list/search (local store and/or remote catalog).
 type inventoryItem struct {
 	Name        string
@@ -47,6 +50,9 @@ func collectInventory(
 			Source:      "local",
 			Digest:      entry.Digest,
 		}
+		if isRetiredPublisherInventory(item) {
+			continue
+		}
 		if matchesInventoryQuery(item, query) {
 			items = append(items, item)
 		}
@@ -59,7 +65,12 @@ func collectInventory(
 			fmt.Fprintf(stderr, "Warning: remote catalog unavailable (%v); showing local adversaries only.\n", remoteErr)
 		}
 	} else {
-		items = append(items, remote...)
+		for _, item := range remote {
+			if isRetiredPublisherInventory(item) {
+				continue
+			}
+			items = append(items, item)
+		}
 	}
 
 	// Search/list are a package catalog surface: one row per adversary name
@@ -114,6 +125,74 @@ func inventoryNameKey(item inventoryItem) string {
 		return name
 	}
 	return strings.ToLower(strings.TrimSpace(item.Reference))
+}
+
+// isRetiredPublisherInventory reports whether an entry is a retired official-
+// registry path that the free catalog no longer publishes:
+//   - registry.adversarylabs.ai/adversarylabs/<name> (old publisher namespace)
+//   - registry.adversarylabs.ai/library/<flat-name> when the package name is
+//     flat (go-cli, secrets). Multi-segment names (go/cli, local/tool) stay
+//     visible so local packs of domain/dev adversaries still appear.
+//
+// Domain catalog refs and non-official registries (localhost, GHCR, …) stay.
+func isRetiredPublisherInventory(item inventoryItem) bool {
+	name := strings.ToLower(strings.TrimSpace(item.Name))
+	if strings.HasPrefix(name, "adversarylabs/") {
+		return true
+	}
+
+	host, repo, ok := splitInventoryReference(item.Reference)
+	if !ok {
+		return false
+	}
+	if host != officialRegistryHost {
+		return false
+	}
+	ns, rest, hasRest := strings.Cut(repo, "/")
+	switch ns {
+	case "adversarylabs":
+		return true
+	case "library":
+		if !hasRest || rest == "" {
+			return true
+		}
+		// Flat short-name pack path for a flat package name → retired catalog shape.
+		if name == "" || !strings.Contains(name, "/") {
+			return true
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// splitInventoryReference extracts host and repository path from an OCI-ish
+// reference without importing pkg/oci (cmd handlers must not call it directly).
+func splitInventoryReference(value string) (host, repository string, ok bool) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" || strings.Contains(value, "://") {
+		return "", "", false
+	}
+	// Strip digest / tag for path inspection.
+	if at := strings.Index(value, "@"); at >= 0 {
+		value = value[:at]
+	}
+	// Tag is after the last colon only when it is not a port (host:port/...).
+	if colon := strings.LastIndex(value, ":"); colon >= 0 {
+		slash := strings.LastIndex(value, "/")
+		if colon > slash {
+			value = value[:colon]
+		}
+	}
+	parts := strings.Split(value, "/")
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	first := parts[0]
+	if !(strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost") {
+		return "", "", false
+	}
+	return first, strings.Join(parts[1:], "/"), true
 }
 
 func preferInventoryItem(candidate, current inventoryItem) bool {
