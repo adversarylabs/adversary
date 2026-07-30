@@ -21,6 +21,10 @@ With a query, results are filtered by name, version, reference, description, or 
 Each name appears once with its newest version (semver). Older local installs
 remain usable via an explicit reference; they are just omitted from this listing.
 
+Retired paths under registry.adversarylabs.ai/adversarylabs/ and
+…/library/ are hidden — the free catalog uses domain/name ids
+(go/cli, security/secrets, …).
+
 Remote entries require network access and, for private catalog results, login.
 If the remote catalog is unavailable, local adversaries are still searched.`,
 		Example: `  adversary search

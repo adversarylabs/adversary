@@ -123,6 +123,72 @@ func TestMatchesInventoryQuery(t *testing.T) {
 	}
 }
 
+func TestIsRetiredPublisherInventory(t *testing.T) {
+	cases := []struct {
+		item inventoryItem
+		want bool
+	}{
+		{
+			item: inventoryItem{
+				Name:      "go-cli",
+				Reference: "registry.adversarylabs.ai/adversarylabs/go-cli:0.0.16",
+			},
+			want: true,
+		},
+		{
+			item: inventoryItem{
+				Name:      "go-cli",
+				Reference: "registry.adversarylabs.ai/library/go-cli:0.0.16",
+			},
+			want: true,
+		},
+		{
+			item: inventoryItem{
+				Name:      "adversarylabs/dockerfile",
+				Reference: "registry.adversarylabs.ai/adversarylabs/dockerfile:0.0.9",
+			},
+			want: true,
+		},
+		{
+			item: inventoryItem{
+				Name:      "go/cli",
+				Reference: "registry.adversarylabs.ai/go/cli",
+			},
+			want: false,
+		},
+		{
+			item: inventoryItem{
+				Name:      "security/secrets",
+				Reference: "registry.adversarylabs.ai/security/secrets:0.0.9",
+			},
+			want: false,
+		},
+		{
+			item: inventoryItem{
+				Name:      "adversary",
+				Reference: "localhost:8787/adversarylabs/adversary:0.1.0",
+			},
+			want: false, // local registry packs stay visible
+		},
+		{
+			item: inventoryItem{
+				Name:      "adversary",
+				Reference: "localhost:8787/marc/adversary:0.1.0",
+			},
+			want: false,
+		},
+		{
+			item: inventoryItem{Name: "adversarylabs/legacy"},
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		if got := isRetiredPublisherInventory(tc.item); got != tc.want {
+			t.Fatalf("isRetiredPublisherInventory(%#v) = %v, want %v", tc.item, got, tc.want)
+		}
+	}
+}
+
 func TestCollapseInventoryToLatest(t *testing.T) {
 	items := []inventoryItem{
 		{Name: "go-cli", Version: "0.0.6", Source: "local", Reference: "reg/adversarylabs/go-cli:0.0.6"},

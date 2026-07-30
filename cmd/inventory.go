@@ -10,8 +10,17 @@ import (
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/manifest"
+	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
+
+// Retired path prefixes on the official registry. Catalog packages now use
+// domain/name (go/cli, security/secrets, …). Historical installs may still
+// reference the old publisher namespace or the pack default "library/" path.
+var retiredOfficialNamespaces = map[string]struct{}{
+	"adversarylabs": {},
+	"library":       {},
+}
 
 // inventoryItem is one adversary visible through list/search (local store and/or remote catalog).
 type inventoryItem struct {
@@ -47,6 +56,9 @@ func collectInventory(
 			Source:      "local",
 			Digest:      entry.Digest,
 		}
+		if isRetiredPublisherInventory(item) {
+			continue
+		}
 		if matchesInventoryQuery(item, query) {
 			items = append(items, item)
 		}
@@ -59,7 +71,12 @@ func collectInventory(
 			fmt.Fprintf(stderr, "Warning: remote catalog unavailable (%v); showing local adversaries only.\n", remoteErr)
 		}
 	} else {
-		items = append(items, remote...)
+		for _, item := range remote {
+			if isRetiredPublisherInventory(item) {
+				continue
+			}
+			items = append(items, item)
+		}
 	}
 
 	// Search/list are a package catalog surface: one row per adversary name
@@ -114,6 +131,46 @@ func inventoryNameKey(item inventoryItem) string {
 		return name
 	}
 	return strings.ToLower(strings.TrimSpace(item.Reference))
+}
+
+// isRetiredPublisherInventory reports whether an entry is under a retired path
+// on the official registry (…/adversarylabs/… or pack default …/library/…).
+// Domain catalog ids (go/cli) and third-party/local registries are kept.
+func isRetiredPublisherInventory(item inventoryItem) bool {
+	name := strings.ToLower(strings.TrimSpace(item.Name))
+	if _, retired := retiredOfficialNamespaces[strings.SplitN(name, "/", 2)[0]]; retired && strings.Contains(name, "/") {
+		// Names like adversarylabs/dockerfile (not bare "library").
+		if strings.HasPrefix(name, "adversarylabs/") {
+			return true
+		}
+	}
+
+	refText := strings.TrimSpace(item.Reference)
+	if refText == "" {
+		return false
+	}
+	ref, err := oci.ParseReference(refText)
+	if err != nil {
+		lower := strings.ToLower(refText)
+		for ns := range retiredOfficialNamespaces {
+			if strings.HasPrefix(lower, ns+"/") || strings.Contains(lower, "/"+ns+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	if !isOfficialAdversaryRegistry(ref.Registry) {
+		return false
+	}
+	repo := strings.ToLower(strings.Trim(ref.Repository, "/"))
+	ns, _, _ := strings.Cut(repo, "/")
+	_, retired := retiredOfficialNamespaces[ns]
+	return retired
+}
+
+func isOfficialAdversaryRegistry(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == strings.ToLower(oci.DefaultRegistry)
 }
 
 func preferInventoryItem(candidate, current inventoryItem) bool {
