@@ -133,6 +133,7 @@ func inventoryNameKey(item inventoryItem) string {
 //   - registry.adversarylabs.ai/library/<flat-name> when the package name is
 //     flat (go-cli, secrets). Multi-segment names (go/cli, local/tool) stay
 //     visible so local packs of domain/dev adversaries still appear.
+//
 // Domain catalog refs and non-official registries (localhost, GHCR, …) stay.
 func isRetiredPublisherInventory(item inventoryItem) bool {
 	name := strings.ToLower(strings.TrimSpace(item.Name))
