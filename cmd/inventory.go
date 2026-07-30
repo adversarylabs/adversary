@@ -10,17 +10,11 @@ import (
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/manifest"
-	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
-// Retired path prefixes on the official registry. Catalog packages now use
-// domain/name (go/cli, security/secrets, …). Historical installs may still
-// reference the old publisher namespace or the pack default "library/" path.
-var retiredOfficialNamespaces = map[string]struct{}{
-	"adversarylabs": {},
-	"library":       {},
-}
+// Official registry host for retired-path filtering (matches oci.DefaultRegistry).
+const officialRegistryHost = "registry.adversarylabs.ai"
 
 // inventoryItem is one adversary visible through list/search (local store and/or remote catalog).
 type inventoryItem struct {
@@ -133,44 +127,71 @@ func inventoryNameKey(item inventoryItem) string {
 	return strings.ToLower(strings.TrimSpace(item.Reference))
 }
 
-// isRetiredPublisherInventory reports whether an entry is under a retired path
-// on the official registry (…/adversarylabs/… or pack default …/library/…).
-// Domain catalog ids (go/cli) and third-party/local registries are kept.
+// isRetiredPublisherInventory reports whether an entry is a retired official-
+// registry path that the free catalog no longer publishes:
+//   - registry.adversarylabs.ai/adversarylabs/<name> (old publisher namespace)
+//   - registry.adversarylabs.ai/library/<flat-name> when the package name is
+//     flat (go-cli, secrets). Multi-segment names (go/cli, local/tool) stay
+//     visible so local packs of domain/dev adversaries still appear.
+// Domain catalog refs and non-official registries (localhost, GHCR, …) stay.
 func isRetiredPublisherInventory(item inventoryItem) bool {
 	name := strings.ToLower(strings.TrimSpace(item.Name))
-	if _, retired := retiredOfficialNamespaces[strings.SplitN(name, "/", 2)[0]]; retired && strings.Contains(name, "/") {
-		// Names like adversarylabs/dockerfile (not bare "library").
-		if strings.HasPrefix(name, "adversarylabs/") {
+	if strings.HasPrefix(name, "adversarylabs/") {
+		return true
+	}
+
+	host, repo, ok := splitInventoryReference(item.Reference)
+	if !ok {
+		return false
+	}
+	if host != officialRegistryHost {
+		return false
+	}
+	ns, rest, hasRest := strings.Cut(repo, "/")
+	switch ns {
+	case "adversarylabs":
+		return true
+	case "library":
+		if !hasRest || rest == "" {
 			return true
 		}
-	}
-
-	refText := strings.TrimSpace(item.Reference)
-	if refText == "" {
-		return false
-	}
-	ref, err := oci.ParseReference(refText)
-	if err != nil {
-		lower := strings.ToLower(refText)
-		for ns := range retiredOfficialNamespaces {
-			if strings.HasPrefix(lower, ns+"/") || strings.Contains(lower, "/"+ns+"/") {
-				return true
-			}
+		// Flat short-name pack path for a flat package name → retired catalog shape.
+		if name == "" || !strings.Contains(name, "/") {
+			return true
 		}
 		return false
-	}
-	if !isOfficialAdversaryRegistry(ref.Registry) {
+	default:
 		return false
 	}
-	repo := strings.ToLower(strings.Trim(ref.Repository, "/"))
-	ns, _, _ := strings.Cut(repo, "/")
-	_, retired := retiredOfficialNamespaces[ns]
-	return retired
 }
 
-func isOfficialAdversaryRegistry(host string) bool {
-	host = strings.ToLower(strings.TrimSpace(host))
-	return host == strings.ToLower(oci.DefaultRegistry)
+// splitInventoryReference extracts host and repository path from an OCI-ish
+// reference without importing pkg/oci (cmd handlers must not call it directly).
+func splitInventoryReference(value string) (host, repository string, ok bool) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" || strings.Contains(value, "://") {
+		return "", "", false
+	}
+	// Strip digest / tag for path inspection.
+	if at := strings.Index(value, "@"); at >= 0 {
+		value = value[:at]
+	}
+	// Tag is after the last colon only when it is not a port (host:port/...).
+	if colon := strings.LastIndex(value, ":"); colon >= 0 {
+		slash := strings.LastIndex(value, "/")
+		if colon > slash {
+			value = value[:colon]
+		}
+	}
+	parts := strings.Split(value, "/")
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	first := parts[0]
+	if !(strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost") {
+		return "", "", false
+	}
+	return first, strings.Join(parts[1:], "/"), true
 }
 
 func preferInventoryItem(candidate, current inventoryItem) bool {
