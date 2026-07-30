@@ -21,6 +21,9 @@ func newListCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 		Short:   "List adversaries available to you (local store and registry)",
 		Long: `List adversaries from the local store and the remote catalog you can access.
 
+Each name appears once with its newest version (semver). Older local installs
+remain usable via an explicit reference; they are just omitted from this listing.
+
 Remote entries require network access and, for private catalog results, login.
 If the remote catalog is unavailable, local adversaries are still listed.`,
 		Args: cobra.NoArgs,
