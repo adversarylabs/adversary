@@ -18,12 +18,15 @@ func newSearchCommand(app *application.App, apiURL, profile *string) *cobra.Comm
 With no query, search lists the same combined inventory as adversary list.
 With a query, results are filtered by name, version, reference, description, or digest.
 
+Each name appears once with its newest version (semver). Older local installs
+remain usable via an explicit reference; they are just omitted from this listing.
+
 Remote entries require network access and, for private catalog results, login.
 If the remote catalog is unavailable, local adversaries are still searched.`,
 		Example: `  adversary search
   adversary search dockerfile
   adversary search security-reviewer
-  adversary search go-cli`,
+  adversary search go/cli`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved, err := commandFormat(cmd, format, legacyJSON)

@@ -62,20 +62,72 @@ func collectInventory(
 		items = append(items, remote...)
 	}
 
+	// Search/list are a package catalog surface: one row per adversary name
+	// (newest version). Historical local store versions stay available by
+	// explicit reference for pull/run.
+	items = collapseInventoryToLatest(items)
+
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Name != items[j].Name {
 			return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
 		}
-		if items[i].Version != items[j].Version {
-			return items[i].Version < items[j].Version
-		}
 		if items[i].Source != items[j].Source {
-			// local before remote for the same name/version
+			// local before remote for the same name
 			return items[i].Source == "local"
 		}
 		return items[i].Reference < items[j].Reference
 	})
 	return items, nil
+}
+
+// collapseInventoryToLatest keeps one inventory row per package name (case-
+// insensitive). Higher semver wins; when versions tie, prefer remote (catalog)
+// so discovery points at the registry path rather than a stale local alias.
+func collapseInventoryToLatest(items []inventoryItem) []inventoryItem {
+	if len(items) < 2 {
+		return items
+	}
+	best := make(map[string]inventoryItem, len(items))
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		key := inventoryNameKey(item)
+		cur, ok := best[key]
+		if !ok {
+			best[key] = item
+			order = append(order, key)
+			continue
+		}
+		if preferInventoryItem(item, cur) {
+			best[key] = item
+		}
+	}
+	out := make([]inventoryItem, 0, len(best))
+	for _, key := range order {
+		out = append(out, best[key])
+	}
+	return out
+}
+
+func inventoryNameKey(item inventoryItem) string {
+	name := strings.ToLower(strings.TrimSpace(item.Name))
+	if name != "" {
+		return name
+	}
+	return strings.ToLower(strings.TrimSpace(item.Reference))
+}
+
+func preferInventoryItem(candidate, current inventoryItem) bool {
+	if preferCatalogVersion(candidate.Version, current.Version) {
+		return true
+	}
+	if preferCatalogVersion(current.Version, candidate.Version) {
+		return false
+	}
+	// Same (or incomparable) version: prefer remote catalog over local store.
+	if candidate.Source != current.Source {
+		return candidate.Source == "remote"
+	}
+	return candidate.Reference < current.Reference
 }
 
 func fetchRemoteInventory(

@@ -123,6 +123,44 @@ func TestMatchesInventoryQuery(t *testing.T) {
 	}
 }
 
+func TestCollapseInventoryToLatest(t *testing.T) {
+	items := []inventoryItem{
+		{Name: "go-cli", Version: "0.0.6", Source: "local", Reference: "reg/adversarylabs/go-cli:0.0.6"},
+		{Name: "go-cli", Version: "0.0.16", Source: "local", Reference: "reg/adversarylabs/go-cli:0.0.16"},
+		{Name: "go-cli", Version: "0.0.15", Source: "local", Reference: "reg/adversarylabs/go-cli:0.0.15"},
+		// 0.0.10 must beat 0.0.9 (string sort would not).
+		{Name: "dockerfile", Version: "0.0.9", Source: "local", Reference: "reg/adversarylabs/dockerfile:0.0.9"},
+		{Name: "dockerfile", Version: "0.0.10", Source: "remote", Reference: "reg/container/dockerfile"},
+		// Same version: prefer remote over local.
+		{Name: "secrets", Version: "0.0.9", Source: "local", Reference: "reg/adversarylabs/secrets:0.0.9"},
+		{Name: "secrets", Version: "0.0.9", Source: "remote", Reference: "reg/security/secrets"},
+		// Distinct names stay separate (old flat vs domain path).
+		{Name: "go/cli", Version: "0.0.17", Source: "remote", Reference: "reg/go/cli"},
+	}
+
+	got := collapseInventoryToLatest(items)
+	if len(got) != 4 {
+		t.Fatalf("expected 4 names, got %d: %#v", len(got), got)
+	}
+
+	byName := map[string]inventoryItem{}
+	for _, item := range got {
+		byName[item.Name] = item
+	}
+	if byName["go-cli"].Version != "0.0.16" || byName["go-cli"].Source != "local" {
+		t.Fatalf("go-cli want local 0.0.16, got %#v", byName["go-cli"])
+	}
+	if byName["dockerfile"].Version != "0.0.10" || byName["dockerfile"].Source != "remote" {
+		t.Fatalf("dockerfile want remote 0.0.10, got %#v", byName["dockerfile"])
+	}
+	if byName["secrets"].Source != "remote" {
+		t.Fatalf("secrets same version should prefer remote, got %#v", byName["secrets"])
+	}
+	if byName["go/cli"].Version != "0.0.17" {
+		t.Fatalf("go/cli should remain distinct: %#v", byName["go/cli"])
+	}
+}
+
 func TestLocalInventoryMatchesManifestDescription(t *testing.T) {
 	// Offline remote: force search API failure so only local inventory is considered.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
