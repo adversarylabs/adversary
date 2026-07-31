@@ -12,11 +12,11 @@ const (
 	OCIArtifactManifestMediaType = "application/vnd.oci.artifact.manifest.v1+json"
 	AdversaryManifestMediaType   = "application/vnd.adversarylabs.manifest.v1+yaml"
 	// Catalog documentation attachments (OCI referrers, same pattern as adversary.yaml).
-	ReadmeMediaType  = "application/vnd.adversarylabs.readme.v1+markdown"
-	ChecksMediaType  = "application/vnd.adversarylabs.checks.v1+markdown"
-	EmptyConfigMediaType         = "application/vnd.adversarylabs.adversary.config.v1+json"
-	ArtifactMediaType            = "application/vnd.adversarylabs.adversary.manifest.v1+json"
-	PackageLayerMediaType        = "application/vnd.adversarylabs.adversary.layer.v1.tar+gzip"
+	ReadmeMediaType       = "application/vnd.adversarylabs.readme.v1+markdown"
+	ChecksMediaType       = "application/vnd.adversarylabs.checks.v1+markdown"
+	EmptyConfigMediaType  = "application/vnd.adversarylabs.adversary.config.v1+json"
+	ArtifactMediaType     = "application/vnd.adversarylabs.adversary.manifest.v1+json"
+	PackageLayerMediaType = "application/vnd.adversarylabs.adversary.layer.v1.tar+gzip"
 )
 
 type Manifest struct {
