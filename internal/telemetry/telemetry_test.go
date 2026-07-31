@@ -68,3 +68,12 @@ func TestSanitizeOfficialDomainsOnly(t *testing.T) {
 		t.Fatalf("bare name got %q want local", got)
 	}
 }
+
+func TestSanitizeWindowsDrivePaths(t *testing.T) {
+	if got := SanitizeAdversaryRef(`C:/Users/alice/private-reviewer`); got != "local" {
+		t.Fatalf("got %q want local", got)
+	}
+	if got := SanitizeAdversaryRef(`c:\Users\alice\tool`); got != "local" {
+		t.Fatalf("got %q want local", got)
+	}
+}

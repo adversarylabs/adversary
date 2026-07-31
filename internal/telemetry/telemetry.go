@@ -100,9 +100,11 @@ func SanitizeAdversaryRef(value string) string {
 	if ref == "" {
 		return ""
 	}
+	// Explicit path shapes including Windows drive letters (c:/Users/...).
 	if strings.HasPrefix(ref, ".") ||
 		strings.HasPrefix(ref, "/") ||
 		strings.HasPrefix(ref, "~") ||
+		isWindowsDrivePath(ref) ||
 		strings.Contains(ref, `\`) ||
 		strings.Contains(ref, "..") {
 		return "local"
@@ -126,7 +128,8 @@ func SanitizeAdversaryRef(value string) string {
 		}
 	}
 	parts = filtered
-	if len(parts) > 2 && isRegistryHostPart(parts[0]) {
+	// Do not treat Windows drive letters (c:) as registry hosts.
+	if len(parts) > 2 && isRegistryHostPart(parts[0]) && !isWindowsDriveLetter(parts[0]) {
 		ref = strings.Join(parts[1:], "/")
 	} else {
 		ref = strings.Join(parts, "/")
@@ -155,6 +158,33 @@ func SanitizeAdversaryRef(value string) string {
 
 func isRegistryHostPart(value string) bool {
 	return strings.Contains(value, ".") || strings.Contains(value, ":") || value == "localhost"
+}
+
+func isWindowsDrivePath(value string) bool {
+	// c:/users/... or c:\users\...
+	if len(value) < 3 {
+		return false
+	}
+	drive := value[0]
+	if !((drive >= 'a' && drive <= 'z') || (drive >= 'A' && drive <= 'Z')) {
+		return false
+	}
+	if value[1] != ':' {
+		return false
+	}
+	return value[2] == '/' || value[2] == '\\'
+}
+
+func isWindowsDriveLetter(value string) bool {
+	// bare "c:" segment after split on /
+	if len(value) != 2 {
+		return false
+	}
+	drive := value[0]
+	if !((drive >= 'a' && drive <= 'z') || (drive >= 'A' && drive <= 'Z')) {
+		return false
+	}
+	return value[1] == ':'
 }
 
 func splitCatalogID(value string) (domain, name string, ok bool) {
