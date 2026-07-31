@@ -25,7 +25,7 @@ func Execute() error {
 	root := NewRootCommandWithApp(app)
 	root.SetContext(ctx)
 	runErr := root.Execute()
-	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), pullMetricTimeout)
+	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), telemetryTimeout)
 	app.WaitBackground(drainCtx)
 	cancelDrain()
 	if runErr != nil {

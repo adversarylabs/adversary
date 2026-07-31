@@ -72,6 +72,10 @@ func (c *blockingPullAPI) RecordPull(ctx context.Context, token, reference, dige
 	}
 }
 
+func (c *blockingPullAPI) RecordUsage(context.Context, string, string, string, []string) error {
+	return nil
+}
+
 type pullMetricAPIFactory struct {
 	identity string
 	client   application.APIClient

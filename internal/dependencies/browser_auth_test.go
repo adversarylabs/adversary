@@ -54,6 +54,9 @@ func (*browserAPI) Whoami(context.Context, string) (adversarylabs.WhoamiResponse
 func (*browserAPI) RecordPull(context.Context, string, string, string) error {
 	return errors.New("unexpected RecordPull")
 }
+func (*browserAPI) RecordUsage(context.Context, string, string, string, []string) error {
+	return errors.New("unexpected RecordUsage")
+}
 
 func (c *browserAPI) loginOptions() adversarylabs.BrowserLoginOptions {
 	c.mu.Lock()

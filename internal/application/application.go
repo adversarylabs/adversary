@@ -83,6 +83,7 @@ type APIClient interface {
 	Search(context.Context, string, string) ([]adversarylabs.SearchResult, error)
 	Whoami(context.Context, string) (adversarylabs.WhoamiResponse, error)
 	RecordPull(ctx context.Context, token, reference, digest string) error
+	RecordUsage(ctx context.Context, token, eventType, cliVersion string, adversaries []string) error
 }
 type APIFactory interface{ New(string) APIClient }
 type OCIRegistry interface {
