@@ -39,11 +39,14 @@ func TestSanitizeAdversarySelection(t *testing.T) {
 		"go/security",
 		"./local-adv",
 		"/abs/path",
-		"npm",
+		"private-reviewer",          // bare local dir name
+		"internal/private-reviewer", // path-shaped, non-official domain
+		"npm",                       // bare short name (ambiguous with local dirs)
 		"weird!!!",
 		"",
 	})
-	want := []string{"infra/terraform", "go/security", "local", "npm", "other"}
+	// Official catalog ids preserved; everything else buckets to local/other.
+	want := []string{"infra/terraform", "go/security", "local", "other"}
 	if len(got) != len(want) {
 		t.Fatalf("got %#v want %#v", got, want)
 	}
@@ -51,5 +54,17 @@ func TestSanitizeAdversarySelection(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got %#v want %#v", got, want)
 		}
+	}
+}
+
+func TestSanitizeOfficialDomainsOnly(t *testing.T) {
+	if got := SanitizeAdversaryRef("ci/gitlab-ci"); got != "ci/gitlab-ci" {
+		t.Fatalf("got %q", got)
+	}
+	if got := SanitizeAdversaryRef("internal/x"); got != "local" {
+		t.Fatalf("non-official domain got %q want local", got)
+	}
+	if got := SanitizeAdversaryRef("private-reviewer"); got != "local" {
+		t.Fatalf("bare name got %q want local", got)
 	}
 }

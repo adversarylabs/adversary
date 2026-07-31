@@ -274,7 +274,11 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	if opts.format == "json" || strings.TrimSpace(opts.outputFile) != "" {
 		selectionOut = progressOut
 	}
-	autoResult, err := app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
+	// Collect only adversaries that actually finished a run attempt (not the
+	// full selected set). Auto may return early if selection/start/finish
+	// callbacks fail before every selected adversary executes.
+	var ran []string
+	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
 		ModelProvider: opts.modelProvider, Model: opts.model,
 		MinimumConfidence: minimum,
@@ -291,6 +295,11 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 			return err
 		},
 		ReportRunFinish: func(name string, index, total int, runErr error) error {
+			// Record after the runner returns so we never count selections that
+			// never entered Run (e.g. ReportRunStart failure).
+			if strings.TrimSpace(name) != "" {
+				ran = append(ran, name)
+			}
 			switch {
 			case runErr == nil:
 				_, err := fmt.Fprintf(progressOut, "    ✓ done\n")
@@ -306,32 +315,14 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 			}
 		},
 	})
-	// Sanitized usage: CLI version + selected adversaries only (no flags/user/paths).
-	// Skip dry-run (no actual execution) and empty selections.
-	if !opts.dryRun {
-		if selected := selectedAdversaryNames(autoResult); len(selected) > 0 {
-			reportRunUsage(cmd.Context(), app, valueOf(apiURL), valueOf(profile), selected)
-		}
+	// Sanitized usage: CLI version + adversaries that actually ran.
+	if !opts.dryRun && len(ran) > 0 {
+		reportRunUsage(cmd.Context(), app, valueOf(apiURL), valueOf(profile), ran)
 	}
 	if err == nil && strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
 	}
 	return err
-}
-
-func selectedAdversaryNames(result application.AdversaryAutoResult) []string {
-	var names []string
-	for _, selection := range result.Selections {
-		if !selection.Selected {
-			continue
-		}
-		name := strings.TrimSpace(selection.Candidate.Name)
-		if name == "" {
-			continue
-		}
-		names = append(names, name)
-	}
-	return names
 }
 
 func renderRunSelections(w io.Writer, result application.AdversaryAutoResult, explain bool) error {

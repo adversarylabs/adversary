@@ -15,6 +15,14 @@ const (
 	MaxIDLength    = 128
 )
 
+// Official free-catalog domains (domain/name taxonomy). Two-segment ids are
+// only reported when the domain is in this set so bare path segments like
+// internal/private-reviewer cannot leak as catalog identifiers.
+var officialCatalogDomains = map[string]struct{}{
+	"go": {}, "ci": {}, "container": {}, "security": {}, "review": {},
+	"infra": {}, "deps": {}, "meta": {}, "cloud": {}, "lang": {},
+}
+
 // Disabled reports whether the user opted out of sharing sanitized usage data.
 //
 // Truthy values for any of:
@@ -60,7 +68,7 @@ func envTruthy(value string) bool {
 	}
 }
 
-// SanitizeAdversarySelection collapses refs to catalog-style ids or coarse
+// SanitizeAdversarySelection collapses refs to official catalog ids or coarse
 // buckets. No filesystem paths, flags, or host identifiers.
 func SanitizeAdversarySelection(refs []string) []string {
 	out := make([]string, 0, len(refs))
@@ -83,6 +91,10 @@ func SanitizeAdversarySelection(refs []string) []string {
 }
 
 // SanitizeAdversaryRef normalizes one adversary reference for telemetry.
+//
+// Only official free-catalog domain/name ids are preserved. Bare short names
+// and path-shaped two-segment values (e.g. private-reviewer, internal/x)
+// collapse to "local" so directory components never leave the machine.
 func SanitizeAdversaryRef(value string) string {
 	ref := strings.TrimSpace(strings.ToLower(value))
 	if ref == "" {
@@ -123,9 +135,21 @@ func SanitizeAdversaryRef(value string) string {
 	if len(ref) > MaxIDLength {
 		ref = ref[:MaxIDLength]
 	}
-	if isCatalogStyleID(ref) || isSingleSegmentID(ref) {
-		return ref
+
+	// Official catalog domain/name only (syntax + allowlist).
+	if domain, name, ok := splitCatalogID(ref); ok {
+		if _, official := officialCatalogDomains[domain]; official && isSingleSegmentID(name) {
+			return domain + "/" + name
+		}
+		// Path-shaped but not an official catalog id (e.g. internal/private-reviewer).
+		return "local"
 	}
+
+	// Bare short names are ambiguous with local project directories — never emit.
+	if isSingleSegmentID(ref) {
+		return "local"
+	}
+
 	return "other"
 }
 
@@ -133,15 +157,20 @@ func isRegistryHostPart(value string) bool {
 	return strings.Contains(value, ".") || strings.Contains(value, ":") || value == "localhost"
 }
 
-func isCatalogStyleID(value string) bool {
+func splitCatalogID(value string) (domain, name string, ok bool) {
 	slash := strings.IndexByte(value, '/')
 	if slash <= 0 || slash == len(value)-1 {
-		return false
+		return "", "", false
 	}
 	if strings.Count(value, "/") != 1 {
-		return false
+		return "", "", false
 	}
-	return isSingleSegmentID(value[:slash]) && isSingleSegmentID(value[slash+1:])
+	domain = value[:slash]
+	name = value[slash+1:]
+	if !isSingleSegmentID(domain) || !isSingleSegmentID(name) {
+		return "", "", false
+	}
+	return domain, name, true
 }
 
 func isSingleSegmentID(value string) bool {
