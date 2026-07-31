@@ -104,6 +104,10 @@ type fakeOCIRegistry struct{ fakeRegistry }
 func (fakeOCIRegistry) PushAdversaryManifestReferrer(context.Context, oci.Reference, string, []byte) (string, string, error) {
 	return "", "", nil
 }
+
+func (fakeOCIRegistry) PushAttachedReferrer(context.Context, oci.Reference, string, string, string, string, []byte) (string, string, error) {
+	return "", "", nil
+}
 func (fakeOCIRegistry) SetPlainHTTP(bool) {}
 
 type fakeRegistryFactory struct{}

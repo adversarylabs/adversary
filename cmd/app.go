@@ -446,6 +446,11 @@ func (r processOCIRegistry) PushAdversaryManifestReferrer(ctx context.Context, r
 	a, b, e := r.HTTPRegistry.PushAdversaryManifestReferrer(ctx, ref, digest, manifest)
 	return a, b, networkError("OCI referrer push", e)
 }
+
+func (r processOCIRegistry) PushAttachedReferrer(ctx context.Context, ref oci.Reference, digest, mediaType, title, tagKind string, content []byte) (string, string, error) {
+	a, b, e := r.HTTPRegistry.PushAttachedReferrer(ctx, ref, digest, mediaType, title, tagKind, content)
+	return a, b, networkError("OCI referrer push", e)
+}
 func (r processOCIRegistry) PullSources(ctx context.Context, ref oci.Reference) (*oci.PulledSources, error) {
 	v, e := r.HTTPRegistry.PullSources(ctx, ref)
 	return v, networkError("OCI pull", e)

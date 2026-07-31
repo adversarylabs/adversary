@@ -669,8 +669,9 @@ await writeOutput({protocolVersion:1,result:{adversary:{name:"local/security-rev
 	if !strings.Contains(pushStdout.String(), "Published adversary manifest referrer\n\nsha256:") {
 		t.Fatalf("push output missing adversary manifest referrer digest:\n%s", pushStdout.String())
 	}
-	if registry.manifestCount() != 2 {
-		t.Fatalf("expected image and artifact manifests, got %d", registry.manifestCount())
+	// image + adversary.yaml referrer; optional README/CHECKS referrers when present in the package layer
+	if n := registry.manifestCount(); n < 2 {
+		t.Fatalf("expected at least image and adversary.yaml artifact manifests, got %d", n)
 	}
 	imageKey := "acme/security-reviewer/v1"
 	imageManifest := registry.manifest(t, imageKey)
@@ -723,6 +724,7 @@ runtime:
 	if got := registry.manifest(t, imageKey); string(got) != string(imageManifest) {
 		t.Fatal("image tag no longer resolves to runnable image manifest")
 	}
+	beforeRetry := registry.manifestCount()
 	var retryStdout bytes.Buffer
 	var retryStderr bytes.Buffer
 	retry := NewRootCommand(&retryStdout, &retryStderr)
@@ -730,8 +732,8 @@ runtime:
 	if err := retry.Execute(); err != nil {
 		t.Fatalf("retry push: %v", err)
 	}
-	if registry.manifestCount() != 2 {
-		t.Fatalf("retry should not create extra manifest refs, got %d", registry.manifestCount())
+	if registry.manifestCount() != beforeRetry {
+		t.Fatalf("retry should not create extra manifest refs, got %d want %d", registry.manifestCount(), beforeRetry)
 	}
 
 	pullDir := t.TempDir()

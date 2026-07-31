@@ -52,25 +52,33 @@ func NewHTTPRegistry() *HTTPRegistry {
 }
 
 func (r *HTTPRegistry) PushAdversaryManifestReferrer(ctx context.Context, imageRef Reference, imageDigest string, yaml []byte) (string, string, error) {
+	return r.PushAttachedReferrer(ctx, imageRef, imageDigest, AdversaryManifestMediaType, "adversary.yaml", "adversary-manifest", yaml)
+}
+
+// PushAttachedReferrer uploads a single-blob OCI artifact referrer attached to imageDigest.
+func (r *HTTPRegistry) PushAttachedReferrer(ctx context.Context, imageRef Reference, imageDigest, mediaType, title, tagKind string, content []byte) (string, string, error) {
 	ctx, cancel := withOperationDeadline(ctx)
 	defer cancel()
-	yamlDescriptor := Descriptor{
-		MediaType: AdversaryManifestMediaType,
-		Digest:    Digest(yaml),
-		Size:      int64(len(yaml)),
+	if len(content) == 0 {
+		return "", "", fmt.Errorf("empty %s attachment", title)
 	}
-	yamlBlob, err := NewSourceBlob(yamlDescriptor, blobsource.Bytes(yaml))
+	blobDescriptor := Descriptor{
+		MediaType: mediaType,
+		Digest:    Digest(content),
+		Size:      int64(len(content)),
+	}
+	blob, err := NewSourceBlob(blobDescriptor, blobsource.Bytes(content))
 	if err != nil {
 		return "", "", err
 	}
-	if err := r.pushSourceBlob(ctx, imageRef, yamlBlob); err != nil {
+	if err := r.pushSourceBlob(ctx, imageRef, blob); err != nil {
 		return "", "", err
 	}
-	artifactManifest, _, _, err := NewAdversaryManifestArtifact(imageDigest, yaml)
+	artifactManifest, _, _, err := NewAttachedArtifact(imageDigest, mediaType, title, content)
 	if err != nil {
 		return "", "", err
 	}
-	artifactTag, err := AdversaryManifestArtifactTag(imageDigest)
+	artifactTag, err := AttachedArtifactTag(imageDigest, tagKind)
 	if err != nil {
 		return "", "", err
 	}
