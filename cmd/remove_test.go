@@ -61,20 +61,37 @@ func TestSelectRemoveTargetsRequiresMatch(t *testing.T) {
 		{Record: repository.Record{Name: "go/cli", Version: "0.0.2"}, Digest: "sha256:b", CanonicalReference: "r/go/cli:0.0.2"},
 		{Record: repository.Record{Name: "security/secrets", Version: "1.0.0"}, Digest: "sha256:c", CanonicalReference: "r/security/secrets:1.0.0"},
 	}
-	got, err := selectRemoveTargets(entries, []string{"go/cli"})
+	got, err := selectRemoveTargets(entries, []string{"go/cli"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("name should remove all versions: %#v", got)
 	}
-	got, err = selectRemoveTargets(entries, []string{"go/cli:0.0.1"})
+	got, err = selectRemoveTargets(entries, []string{"go/cli:0.0.1"}, true)
 	if err != nil || len(got) != 1 || got[0].Digest != "sha256:a" {
 		t.Fatalf("version pin: got %#v err=%v", got, err)
 	}
-	_, err = selectRemoveTargets(entries, []string{"missing/pkg"})
+	_, err = selectRemoveTargets(entries, []string{"missing/pkg"}, true)
 	if err == nil || !application.IsKind(err, "not_found") {
 		t.Fatalf("want not_found, got %v", err)
+	}
+	// Later passes tolerate empty matches.
+	got, err = selectRemoveTargets(entries, []string{"missing/pkg"}, false)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("requireMatch=false: got %#v err=%v", got, err)
+	}
+}
+
+func TestDeleteStoredRefTreatsMissingAsSuccess(t *testing.T) {
+	repo := repository.Repository{Root: t.TempDir()}
+	// DeleteRef on missing ref should surface NotExist through deleteStoredRef → nil.
+	// Use processRepository wrapper via lifecycle app.
+	var out, errOut bytes.Buffer
+	app := lifecycleTestApp(t, repo, &out, &errOut)
+	err := deleteStoredRef(app.Dependencies().Repository, "registry.example/none/pkg:1.0.0", "sha256:dead")
+	if err != nil {
+		t.Fatalf("missing ref should be ok: %v", err)
 	}
 }
 

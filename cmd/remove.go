@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 
@@ -10,6 +12,10 @@ import (
 	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/spf13/cobra"
 )
+
+// maxRemovePasses bounds re-enumeration after concurrent pack/pull races so a
+// pathological writer cannot force an infinite remove loop.
+const maxRemovePasses = 8
 
 type removeOptions struct {
 	all    bool
@@ -34,7 +40,10 @@ Selectors match:
 Use --all to remove every local adversary (--yes required unless --dry-run).
 
 References are deleted first; unreachable blobs are garbage-collected so disk
-space is reclaimed. The remote catalog is never modified.`,
+space is reclaimed. The remote catalog is never modified.
+
+Concurrent pack/pull is handled by re-scanning the store until matching
+references are gone (or a bounded number of passes is exhausted).`,
 		Example: `  adversary remove go/cli
   adversary remove go/cli:0.0.15 security/secrets
   adversary remove --all --yes
@@ -68,92 +77,13 @@ space is reclaimed. The remote catalog is never modified.`,
 				}
 			}
 
-			deps := app.Dependencies()
-			// Every runnable reference (not collapsed by digest) so :latest and
-			// version tags for the same package are all deleted.
-			entries, err := deps.Repository.ReferenceEntries()
-			if err != nil {
-				return &application.Error{Operation: "remove", Kind: "repository", Err: err}
-			}
-
-			var targets []repository.Entry
-			if opts.all {
-				targets = append([]repository.Entry(nil), entries...)
-			} else {
-				targets, err = selectRemoveTargets(entries, args)
-				if err != nil {
-					return err
-				}
-			}
-
-			// Stable order for output and deterministic CAS ops.
-			sort.SliceStable(targets, func(i, j int) bool {
-				if targets[i].Record.Name != targets[j].Record.Name {
-					return strings.ToLower(targets[i].Record.Name) < strings.ToLower(targets[j].Record.Name)
-				}
-				if targets[i].Record.Version != targets[j].Record.Version {
-					return targets[i].Record.Version < targets[j].Record.Version
-				}
-				return targets[i].CanonicalReference < targets[j].CanonicalReference
+			dto, err := removeLocalAdversaries(app.Dependencies(), removePlan{
+				All:       opts.all,
+				Selectors: args,
+				DryRun:    opts.dryRun,
 			})
-
-			if len(targets) == 0 {
-				if format == "json" {
-					return writeJSON(cmd.OutOrStdout(), "remove", removeDTO{Removed: []removeItemDTO{}, DryRun: opts.dryRun})
-				}
-				fmt.Fprintln(cmd.OutOrStdout(), "No matching local adversaries.")
-				return nil
-			}
-
-			// Delete every matching reference. Report one row per digest (package
-			// version) so text output is not noisy when :latest and :version share
-			// content; still delete all refs so GC can reclaim blobs.
-			removedByDigest := make(map[string]removeItemDTO)
-			var removeOrder []string
-			for _, entry := range targets {
-				if !opts.dryRun {
-					if err := deps.Repository.DeleteRef(entry.CanonicalReference, entry.Digest); err != nil {
-						return &application.Error{
-							Operation: "remove",
-							Kind:      "repository",
-							Resource:  entry.CanonicalReference,
-							Err:       err,
-						}
-					}
-				}
-				if _, seen := removedByDigest[entry.Digest]; !seen {
-					removedByDigest[entry.Digest] = removeItemDTO{
-						Name:               entry.Record.Name,
-						Version:            entry.Record.Version,
-						Digest:             entry.Digest,
-						CanonicalReference: entry.CanonicalReference,
-					}
-					removeOrder = append(removeOrder, entry.Digest)
-				}
-			}
-			removed := make([]removeItemDTO, 0, len(removeOrder))
-			for _, d := range removeOrder {
-				removed = append(removed, removedByDigest[d])
-			}
-
-			var gcDeleted int
-			if !opts.dryRun && len(removed) > 0 {
-				plan, err := deps.Repository.PlanGC()
-				if err != nil {
-					return &application.Error{Operation: "remove gc plan", Kind: "repository", Err: err}
-				}
-				report, err := deps.Repository.ApplyGC(plan, false)
-				if err != nil {
-					return &application.Error{Operation: "remove gc apply", Kind: "repository", Resource: plan.ID, Err: err}
-				}
-				gcDeleted = len(report.DeletedRecords)
-			}
-
-			dto := removeDTO{
-				Removed:          removed,
-				DryRun:           opts.dryRun,
-				GarbageCollected: gcDeleted,
-				PlannedDeletions: len(removed),
+			if err != nil {
+				return err
 			}
 			if format == "json" {
 				return writeJSON(cmd.OutOrStdout(), "remove", dto)
@@ -168,6 +98,12 @@ space is reclaimed. The remote catalog is never modified.`,
 	return cmd
 }
 
+type removePlan struct {
+	All       bool
+	Selectors []string
+	DryRun    bool
+}
+
 type removeDTO struct {
 	Removed          []removeItemDTO `json:"removed"`
 	DryRun           bool            `json:"dryRun"`
@@ -180,6 +116,240 @@ type removeItemDTO struct {
 	Version            string `json:"version,omitempty"`
 	Digest             string `json:"digest,omitempty"`
 	CanonicalReference string `json:"canonicalReference,omitempty"`
+}
+
+func removeLocalAdversaries(deps application.Dependencies, plan removePlan) (removeDTO, error) {
+	if plan.DryRun {
+		entries, err := deps.Repository.ReferenceEntries()
+		if err != nil {
+			return removeDTO{}, &application.Error{Operation: "remove", Kind: "repository", Err: err}
+		}
+		targets, err := planTargets(entries, plan, true)
+		if err != nil {
+			return removeDTO{}, err
+		}
+		return removeDTO{
+			Removed:          summarizeRemoved(targets),
+			DryRun:           true,
+			PlannedDeletions: countUniqueDigests(targets),
+		}, nil
+	}
+
+	removedByDigest := make(map[string]removeItemDTO)
+	var removeOrder []string
+	var gcDeleted int
+	sawMatch := false
+
+	for pass := 0; pass < maxRemovePasses; pass++ {
+		entries, err := deps.Repository.ReferenceEntries()
+		if err != nil {
+			return removeDTO{}, &application.Error{Operation: "remove", Kind: "repository", Err: err}
+		}
+		// After the first pass, missing selectors are fine (already removed).
+		targets, err := planTargets(entries, plan, pass == 0)
+		if err != nil {
+			return removeDTO{}, err
+		}
+		if len(targets) == 0 {
+			break
+		}
+		sawMatch = true
+
+		progress := false
+		var casStuck error
+		for _, entry := range targets {
+			err := deleteStoredRef(deps.Repository, entry.CanonicalReference, entry.Digest)
+			if err != nil {
+				if errors.Is(err, repository.ErrCAS) {
+					// Digest moved under us; next pass re-snapshots and retries.
+					casStuck = err
+					continue
+				}
+				return removeDTO{}, &application.Error{
+					Operation: "remove",
+					Kind:      "repository",
+					Resource:  entry.CanonicalReference,
+					Err:       err,
+				}
+			}
+			progress = true
+			if _, seen := removedByDigest[entry.Digest]; !seen {
+				removedByDigest[entry.Digest] = removeItemDTO{
+					Name:               entry.Record.Name,
+					Version:            entry.Record.Version,
+					Digest:             entry.Digest,
+					CanonicalReference: entry.CanonicalReference,
+				}
+				removeOrder = append(removeOrder, entry.Digest)
+			}
+		}
+
+		// Always GC after a pass that deleted something so partial progress
+		// still reclaims blobs even if a later pass fails.
+		if progress {
+			n, err := garbageCollectUnreachable(deps.Repository)
+			if err != nil {
+				return removeDTO{}, err
+			}
+			gcDeleted += n
+		}
+
+		if !progress {
+			if casStuck != nil {
+				return removeDTO{}, &application.Error{
+					Operation: "remove",
+					Kind:      "repository",
+					Err:       fmt.Errorf("could not finish remove amid concurrent store updates: %w", casStuck),
+				}
+			}
+			break
+		}
+	}
+
+	// Final scan: concurrent pack/pull may have recreated matching refs.
+	entries, err := deps.Repository.ReferenceEntries()
+	if err != nil {
+		return removeDTO{}, &application.Error{Operation: "remove", Kind: "repository", Err: err}
+	}
+	remaining, err := planTargets(entries, plan, false)
+	if err != nil {
+		return removeDTO{}, err
+	}
+	if len(remaining) > 0 {
+		return removeDTO{}, &application.Error{
+			Operation: "remove",
+			Kind:      "repository",
+			Err: fmt.Errorf(
+				"remove did not converge after %d passes (%d matching reference(s) remain); retry",
+				maxRemovePasses, len(remaining),
+			),
+		}
+	}
+
+	if !plan.All && !sawMatch && len(plan.Selectors) > 0 {
+		// planTargets on pass 0 would have returned not_found; defensive.
+		return removeDTO{}, &application.Error{
+			Operation: "remove",
+			Kind:      "not_found",
+			Resource:  plan.Selectors[0],
+			Err:       fmt.Errorf("no local adversary matches %q", plan.Selectors[0]),
+		}
+	}
+
+	removed := make([]removeItemDTO, 0, len(removeOrder))
+	for _, d := range removeOrder {
+		removed = append(removed, removedByDigest[d])
+	}
+	return removeDTO{
+		Removed:          removed,
+		DryRun:           false,
+		PlannedDeletions: len(removed),
+		GarbageCollected: gcDeleted,
+	}, nil
+}
+
+// planTargets selects references to delete. requireMatch errors when a selector
+// matches nothing (first pass / dry-run); later passes allow empty results.
+func planTargets(entries []repository.Entry, plan removePlan, requireMatch bool) ([]repository.Entry, error) {
+	if plan.All {
+		return append([]repository.Entry(nil), entries...), nil
+	}
+	targets, err := selectRemoveTargets(entries, plan.Selectors, requireMatch)
+	if err != nil {
+		return nil, err
+	}
+	sortRemoveTargets(targets)
+	return targets, nil
+}
+
+func sortRemoveTargets(targets []repository.Entry) {
+	sort.SliceStable(targets, func(i, j int) bool {
+		if targets[i].Record.Name != targets[j].Record.Name {
+			return strings.ToLower(targets[i].Record.Name) < strings.ToLower(targets[j].Record.Name)
+		}
+		if targets[i].Record.Version != targets[j].Record.Version {
+			return targets[i].Record.Version < targets[j].Record.Version
+		}
+		return targets[i].CanonicalReference < targets[j].CanonicalReference
+	})
+}
+
+func summarizeRemoved(targets []repository.Entry) []removeItemDTO {
+	byDigest := make(map[string]removeItemDTO)
+	var order []string
+	for _, entry := range targets {
+		if _, seen := byDigest[entry.Digest]; seen {
+			continue
+		}
+		byDigest[entry.Digest] = removeItemDTO{
+			Name:               entry.Record.Name,
+			Version:            entry.Record.Version,
+			Digest:             entry.Digest,
+			CanonicalReference: entry.CanonicalReference,
+		}
+		order = append(order, entry.Digest)
+	}
+	out := make([]removeItemDTO, 0, len(order))
+	for _, d := range order {
+		out = append(out, byDigest[d])
+	}
+	return out
+}
+
+func countUniqueDigests(targets []repository.Entry) int {
+	seen := make(map[string]bool, len(targets))
+	for _, entry := range targets {
+		seen[entry.Digest] = true
+	}
+	return len(seen)
+}
+
+// deleteStoredRef deletes a reference. Already-gone refs succeed. ErrCAS is
+// returned to the caller so a re-snapshot pass can retry with a fresh digest
+// rather than deleting an unrelated tip blindly.
+func deleteStoredRef(repo application.Repository, ref, digest string) error {
+	err := repo.DeleteRef(ref, digest)
+	if err == nil {
+		return nil
+	}
+	if os.IsNotExist(err) || errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if errors.Is(err, repository.ErrCAS) {
+		// Confirm whether the ref still exists. If gone, another remover won.
+		if _, resolveErr := repo.Resolve(ref); resolveErr != nil {
+			if os.IsNotExist(resolveErr) || errors.Is(resolveErr, os.ErrNotExist) {
+				return nil
+			}
+		}
+		return err
+	}
+	return err
+}
+
+func garbageCollectUnreachable(repo application.Repository) (int, error) {
+	plan, err := repo.PlanGC()
+	if err != nil {
+		return 0, &application.Error{Operation: "remove gc plan", Kind: "repository", Err: err}
+	}
+	if len(plan.Delete) == 0 && len(plan.DeleteContent) == 0 {
+		return 0, nil
+	}
+	report, err := repo.ApplyGC(plan, false)
+	if err != nil {
+		// CAS on GC means the plan is stale; replan once and apply.
+		if errors.Is(err, repository.ErrCAS) {
+			plan, err = repo.PlanGC()
+			if err != nil {
+				return 0, &application.Error{Operation: "remove gc plan", Kind: "repository", Err: err}
+			}
+			report, err = repo.ApplyGC(plan, false)
+		}
+		if err != nil {
+			return 0, &application.Error{Operation: "remove gc apply", Kind: "repository", Resource: plan.ID, Err: err}
+		}
+	}
+	return len(report.DeletedRecords), nil
 }
 
 func writeRemoveText(w io.Writer, dto removeDTO) error {
@@ -207,6 +377,10 @@ func writeRemoveText(w io.Writer, dto removeDTO) error {
 		_, err := fmt.Fprintf(w, "Dry run: %d adversary(ies) would be removed.\n", dto.PlannedDeletions)
 		return err
 	}
+	if dto.PlannedDeletions == 0 {
+		_, err := fmt.Fprintln(w, "No matching local adversaries.")
+		return err
+	}
 	_, err := fmt.Fprintf(w, "Removed %d adversary(ies)", dto.PlannedDeletions)
 	if err != nil {
 		return err
@@ -224,9 +398,8 @@ func writeRemoveText(w io.Writer, dto removeDTO) error {
 // selectRemoveTargets picks every local reference that matches any selector.
 // Matching a package name selects all refs for all versions of that name.
 // Matching a digest selects every ref that points at that digest.
-// Unknown selectors are errors so typos do not silently no-op.
-func selectRemoveTargets(entries []repository.Entry, selectors []string) ([]repository.Entry, error) {
-	// First pass: digests selected by name/version/ref/digest match.
+// When requireMatch is true, unknown selectors error so typos do not silently no-op.
+func selectRemoveTargets(entries []repository.Entry, selectors []string, requireMatch bool) ([]repository.Entry, error) {
 	digestWanted := map[string]bool{}
 	for _, raw := range selectors {
 		sel := strings.TrimSpace(raw)
@@ -244,7 +417,7 @@ func selectRemoveTargets(entries []repository.Entry, selectors []string) ([]repo
 				matched++
 			}
 		}
-		if matched == 0 {
+		if matched == 0 && requireMatch {
 			return nil, &application.Error{
 				Operation: "remove",
 				Kind:      "not_found",
@@ -253,8 +426,6 @@ func selectRemoveTargets(entries []repository.Entry, selectors []string) ([]repo
 			}
 		}
 	}
-	// Second pass: include every reference for selected digests so aliases
-	// (:latest, alternate spellings) are removed with the package.
 	out := make([]repository.Entry, 0, len(entries))
 	seenRef := map[string]bool{}
 	for _, entry := range entries {
