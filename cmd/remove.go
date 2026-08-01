@@ -150,10 +150,10 @@ space is reclaimed. The remote catalog is never modified.`,
 			}
 
 			dto := removeDTO{
-				Removed:            removed,
-				DryRun:             opts.dryRun,
-				GarbageCollected:   gcDeleted,
-				PlannedDeletions:   len(removed),
+				Removed:          removed,
+				DryRun:           opts.dryRun,
+				GarbageCollected: gcDeleted,
+				PlannedDeletions: len(removed),
 			}
 			if format == "json" {
 				return writeJSON(cmd.OutOrStdout(), "remove", dto)
