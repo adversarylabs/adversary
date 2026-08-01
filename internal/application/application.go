@@ -91,6 +91,9 @@ type OCIRegistry interface {
 	PushAdversaryManifestReferrer(context.Context, oci.Reference, string, []byte) (string, string, error)
 	PushAttachedReferrer(context.Context, oci.Reference, string, string, string, string, []byte) (string, string, error)
 	PullSources(context.Context, oci.Reference) (*oci.PulledSources, error)
+	// GetOfficialSignatureReferrer returns the official signature envelope for
+	// imageDigest, or nil when none is present.
+	GetOfficialSignatureReferrer(context.Context, oci.Reference, string) ([]byte, error)
 	Resolve(context.Context, oci.Reference) (string, error)
 	SetPlainHTTP(bool)
 }
@@ -107,6 +110,8 @@ type Repository interface {
 	DeleteRef(string, string) error
 	// ReferenceEntries lists every stored runnable reference (not collapsed by digest).
 	ReferenceEntries() ([]repository.Entry, error)
+	SaveOfficialSignature(digest string, envelope []byte) error
+	HasVerifiedOfficialSignature(digest string) bool
 	MigrationStatus(string) (repository.MigrationStatus, error)
 	LeaseMaterialized(repository.Record) (*repository.MaterializationLease, error)
 }

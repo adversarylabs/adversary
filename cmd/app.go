@@ -463,6 +463,10 @@ func (r processOCIRegistry) Resolve(ctx context.Context, ref oci.Reference) (str
 	v, e := r.HTTPRegistry.Resolve(ctx, ref)
 	return v, networkError("OCI resolve", e)
 }
+func (r processOCIRegistry) GetOfficialSignatureReferrer(ctx context.Context, ref oci.Reference, imageDigest string) ([]byte, error) {
+	v, e := r.HTTPRegistry.GetOfficialSignatureReferrer(ctx, ref, imageDigest)
+	return v, networkError("OCI official signature pull", e)
+}
 
 type processAuthStore struct{ adversarylabs.ConfigStore }
 

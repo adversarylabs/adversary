@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/officialsig"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
@@ -96,7 +98,8 @@ func TestTrustedRemoteOmitsIdentityBannerWithoutVerbose(t *testing.T) {
 }
 
 func TestUnknownRemoteRequiresSandboxOrUnsafeHostOverride(t *testing.T) {
-	repo, resolver, record := importPolicyArtifact(t, "randomperson/dockerfile:1.2.0")
+	// Unsigned artifact — no official signature — host exec blocked.
+	repo, resolver, record := importPolicyArtifactSigned(t, "randomperson/dockerfile:1.2.0", false)
 	host := &policyExecutor{backend: HostExecutorBackend}
 	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: host, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
 		AdversaryRef: "randomperson/dockerfile:1.2.0", RepoPath: t.TempDir(),
@@ -159,11 +162,12 @@ func TestMutableRemoteReferenceIsPinnedBeforeExecution(t *testing.T) {
 	}
 }
 
-func TestPinnedDigestRetainsSelectedPublisherIdentity(t *testing.T) {
-	repo, resolver, record := importPolicyArtifact(t, "adversarylabs/security:1.2.0")
+func TestPinnedDigestWithoutOfficialSignatureIsUnknown(t *testing.T) {
+	// Content may be addressed by digest; without an official signature host exec is denied.
+	repo, resolver, record := importPolicyArtifactSigned(t, "adversarylabs/security:1.2.0", false)
 	host := &policyExecutor{backend: HostExecutorBackend}
 	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: host, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
-		AdversaryRef: record.Digest, ReferenceIdentity: "registry.adversarylabs.ai/randomperson/security:1.2.0", RepoPath: t.TempDir(),
+		AdversaryRef: record.Digest, ReferenceIdentity: "registry.adversarylabs.ai/adversarylabs/security:1.2.0", RepoPath: t.TempDir(),
 	})
 	if err == nil || !strings.Contains(err.Error(), "unknown publisher") || host.called != 0 {
 		t.Fatalf("error=%v calls=%d", err, host.called)
@@ -240,32 +244,12 @@ func TestModelAccessIsComparedWithAllowedPolicy(t *testing.T) {
 
 func TestDefaultPublisherTrustPolicy(t *testing.T) {
 	policy := DefaultPublisherTrustPolicy()
-	for publisher, want := range map[string]PublisherTrust{
-		"adversarylabs": TrustedPublisherTrust,
-		"ci":            TrustedPublisherTrust,
-		"go":            TrustedPublisherTrust,
-		"container":     TrustedPublisherTrust,
-		"web":           TrustedPublisherTrust,
-		"infra":         TrustedPublisherTrust,
-		"replicated":    UnknownPublisherTrust,
-		"randomperson":  UnknownPublisherTrust,
-		"marc":          UnknownPublisherTrust,
-	} {
-		if got := policy.Evaluate(PublisherIdentity{Name: publisher, Registry: oci.DefaultRegistry}).Trust; got != want {
-			t.Errorf("publisher %q trust=%q want=%q", publisher, got, want)
-		}
+	// Path/registry alone is never enough — official signature required.
+	if got := policy.Evaluate(PublisherIdentity{Name: "go", Registry: oci.DefaultRegistry}).Trust; got != UnknownPublisherTrust {
+		t.Fatalf("unsigned product registry trust=%q want unknown", got)
 	}
-	// Official catalog domains are trusted on any registry host so local/dev
-	// pulls (localhost:8787/ci/depot) can host-execute without the unsafe flag.
-	if got := policy.Evaluate(PublisherIdentity{Name: "ci", Registry: "localhost:8787"}).Trust; got != TrustedPublisherTrust {
-		t.Fatalf("local registry catalog domain trust=%q", got)
-	}
-	if got := policy.Evaluate(PublisherIdentity{Name: "go", Registry: "evil.example"}).Trust; got != TrustedPublisherTrust {
-		t.Fatalf("catalog domain trust is path-based, got=%q", got)
-	}
-	// Non-catalog namespaces stay unknown even on the official registry.
-	if got := policy.Evaluate(PublisherIdentity{Name: "customer", Registry: oci.DefaultRegistry}).Trust; got != UnknownPublisherTrust {
-		t.Fatalf("non-catalog namespace trust=%q", got)
+	if got := policy.Evaluate(PublisherIdentity{Name: "go", Registry: oci.DefaultRegistry, OfficialSigned: true}).Trust; got != TrustedPublisherTrust {
+		t.Fatalf("signed trust=%q want trusted", got)
 	}
 	if got := policy.Evaluate(PublisherIdentity{Name: "anything", Local: true}).Trust; got != LocalSourceTrust {
 		t.Fatalf("local trust=%q", got)
@@ -284,11 +268,51 @@ func TestHostExecutorReportsCapabilities(t *testing.T) {
 
 func importPolicyArtifact(t *testing.T, reference string) (repository.Repository, Resolver, repository.Record) {
 	t.Helper()
+	return importPolicyArtifactSigned(t, reference, true)
+}
+
+func importPolicyArtifactSigned(t *testing.T, reference string, signOfficial bool) (repository.Repository, Resolver, repository.Record) {
+	t.Helper()
 	repo := repository.Repository{Root: t.TempDir()}
 	t.Cleanup(func() { makeResolverWritable(repo.Root) })
-	record, err := repo.ImportPacked(resolverArtifact(t, t.TempDir(), strings.Split(reference, ":")[0], "1.2.0"), reference)
+	name := strings.Split(reference, ":")[0]
+	// Strip registry host for pack name when present.
+	if strings.Count(name, "/") >= 2 {
+		// host/path/name → use full repository path as package name when possible
+		if i := strings.Index(name, "/"); i >= 0 && (strings.Contains(name[:i], ".") || strings.Contains(name[:i], ":") || name[:i] == "localhost") {
+			name = name[i+1:]
+		}
+	}
+	record, err := repo.ImportPacked(resolverArtifact(t, t.TempDir(), name, "1.2.0"), reference)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if signOfficial {
+		signOfficialDigest(t, repo, record.Digest)
+	}
 	return repo, Resolver{Repository: repo}, record
+}
+
+func signOfficialDigest(t *testing.T, repo repository.Repository, digest string) {
+	t.Helper()
+	// Seed matches pkg/officialsig embedded public key (test/CI only).
+	const seed = "7bef45c91f3ead4f9f79362390d0f32d86347b5ee93138a7bfb93245941b4850"
+	priv, err := officialsig.ParsePrivateKeySeed(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := officialsig.Sign(digest, officialsig.DefaultKeyID, priv, time.Unix(1, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := officialsig.MarshalEnvelope(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveOfficialSignature(digest, raw); err != nil {
+		t.Fatal(err)
+	}
+	if !repo.HasVerifiedOfficialSignature(digest) {
+		t.Fatal("signature did not verify after save")
+	}
 }

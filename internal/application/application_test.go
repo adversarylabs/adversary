@@ -108,6 +108,9 @@ func (fakeOCIRegistry) PushAdversaryManifestReferrer(context.Context, oci.Refere
 func (fakeOCIRegistry) PushAttachedReferrer(context.Context, oci.Reference, string, string, string, string, []byte) (string, string, error) {
 	return "", "", nil
 }
+func (fakeOCIRegistry) GetOfficialSignatureReferrer(context.Context, oci.Reference, string) ([]byte, error) {
+	return nil, nil
+}
 func (fakeOCIRegistry) SetPlainHTTP(bool) {}
 
 type fakeRegistryFactory struct{}
@@ -144,6 +147,8 @@ func (fakeRepo) DeleteRef(string, string) error { return nil }
 func (fakeRepo) ReferenceEntries() ([]repository.Entry, error) {
 	return nil, nil
 }
+func (fakeRepo) SaveOfficialSignature(string, []byte) error { return nil }
+func (fakeRepo) HasVerifiedOfficialSignature(string) bool   { return false }
 func (fakeRepo) MigrationStatus(string) (repository.MigrationStatus, error) {
 	return repository.MigrationStatus{}, nil
 }

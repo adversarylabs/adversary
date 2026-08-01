@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
 type PublisherTrust string
@@ -20,6 +21,10 @@ type PublisherIdentity struct {
 	Registry  string
 	Reference string
 	Local     bool
+	// OfficialSigned is true when a valid official catalog signature was verified
+	// for this artifact digest (see pkg/officialsig).
+	OfficialSigned bool
+	Digest         string
 }
 
 func classifyPublisher(input string, resolved ResolvedAdversary, explicitLocal bool) (PublisherIdentity, error) {
@@ -41,7 +46,30 @@ func classifyPublisher(input string, resolved ResolvedAdversary, explicitLocal b
 	if publisher == "" {
 		publisher = "unknown"
 	}
-	return PublisherIdentity{Name: publisher, Registry: parsed.Registry, Reference: reference}, nil
+	id := PublisherIdentity{
+		Name:      publisher,
+		Registry:  parsed.Registry,
+		Reference: reference,
+		Digest:    resolved.Digest,
+	}
+	if id.Digest == "" {
+		id.Digest = resolved.StoreRecord.Digest
+	}
+	return id, nil
+}
+
+// withOfficialSignature sets OfficialSigned when the local store has a verified
+// signature for the artifact digest.
+func withOfficialSignature(id PublisherIdentity, repo *repository.Repository) PublisherIdentity {
+	if id.Local || repo == nil {
+		return id
+	}
+	digest := id.Digest
+	if digest == "" {
+		return id
+	}
+	id.OfficialSigned = repo.HasVerifiedOfficialSignature(digest)
+	return id
 }
 
 type PermissionRequirements struct {
@@ -81,38 +109,11 @@ type PublisherTrustPolicy interface {
 	Evaluate(PublisherIdentity) TrustDecision
 }
 
+// StaticPublisherTrustPolicy trusts an explicit set of publisher path segments.
+// Prefer OfficialSignatureTrustPolicy for production; this remains for tests
+// and embedders that inject a fixed allowlist.
 type StaticPublisherTrustPolicy struct {
 	Trusted map[string]struct{}
-}
-
-// Official free-catalog domains (domain/name taxonomy) plus the legacy
-// adversarylabs publisher namespace. Host execution is allowed for these first
-// path segments without --allow-unsafe-host-execution, including when the
-// package was pulled from a local/dev registry (localhost:8787/ci/depot).
-//
-// Trust is based on catalog path identity, not registry hostname: any host can
-// publish under ci/…, so this is a product convenience for official catalog
-// packages and local catalog development, not cryptographic publisher auth.
-func DefaultPublisherTrustPolicy() StaticPublisherTrustPolicy {
-	return StaticPublisherTrustPolicy{Trusted: officialCatalogPublishers()}
-}
-
-func officialCatalogPublishers() map[string]struct{} {
-	return map[string]struct{}{
-		"adversarylabs": {}, // legacy publisher namespace
-		"go":            {},
-		"ci":            {},
-		"container":     {},
-		"security":      {},
-		"review":        {},
-		"infra":         {},
-		"deps":          {},
-		"meta":          {},
-		"cloud":         {},
-		"lang":          {},
-		"web":           {},
-		"factory":       {},
-	}
 }
 
 func (p StaticPublisherTrustPolicy) Evaluate(publisher PublisherIdentity) TrustDecision {
@@ -120,6 +121,27 @@ func (p StaticPublisherTrustPolicy) Evaluate(publisher PublisherIdentity) TrustD
 		return TrustDecision{Publisher: publisher, Trust: LocalSourceTrust}
 	}
 	if _, trusted := p.Trusted[strings.ToLower(publisher.Name)]; trusted {
+		return TrustDecision{Publisher: publisher, Trust: TrustedPublisherTrust}
+	}
+	return TrustDecision{Publisher: publisher, Trust: UnknownPublisherTrust}
+}
+
+// OfficialSignatureTrustPolicy trusts packages with a verified official
+// signature (pkg/officialsig) and local source projects. Path allowlists and
+// registry hostname are not used — only cryptographic endorsement.
+type OfficialSignatureTrustPolicy struct{}
+
+// DefaultPublisherTrustPolicy returns the production trust policy based on
+// official Ed25519 signatures verified with the CLI-embedded public keyring.
+func DefaultPublisherTrustPolicy() PublisherTrustPolicy {
+	return OfficialSignatureTrustPolicy{}
+}
+
+func (OfficialSignatureTrustPolicy) Evaluate(publisher PublisherIdentity) TrustDecision {
+	if publisher.Local {
+		return TrustDecision{Publisher: publisher, Trust: LocalSourceTrust}
+	}
+	if publisher.OfficialSigned {
 		return TrustDecision{Publisher: publisher, Trust: TrustedPublisherTrust}
 	}
 	return TrustDecision{Publisher: publisher, Trust: UnknownPublisherTrust}
