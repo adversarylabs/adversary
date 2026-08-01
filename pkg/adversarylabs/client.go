@@ -275,6 +275,17 @@ func (c Client) RecordPull(ctx context.Context, token, reference, digest string)
 	return c.postJSON(ctx, "/v1/registry/pull", payload, token, nil)
 }
 
+// RecordUsage posts a sanitized CLI usage event (CLI version + adversary selection).
+// The server must not store user identity from this payload.
+func (c Client) RecordUsage(ctx context.Context, token, eventType, cliVersion string, adversaries []string) error {
+	payload := map[string]any{
+		"event_type":  strings.TrimSpace(eventType),
+		"cli_version": strings.TrimSpace(cliVersion),
+		"adversaries": adversaries,
+	}
+	return c.postJSON(ctx, "/v1/cli/usage", payload, token, nil)
+}
+
 func (c Client) postJSON(ctx context.Context, path string, payload any, token string, out any) error {
 	if _, err := validateBaseURL(c.BaseURL); err != nil {
 		return err

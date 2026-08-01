@@ -151,7 +151,7 @@ Use --all-files for a whole-repository scan instead of change inference.`,
 			if err := rejectAutomaticOnlyFlags(cmd, opts); err != nil {
 				return err
 			}
-			return runAdversaries(cmd.Context(), app, opts, args, resultOut, progressOut)
+			return runAdversaries(cmd.Context(), app, opts, args, apiURL, profile, resultOut, progressOut)
 		},
 	}
 
@@ -274,6 +274,10 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	if opts.format == "json" || strings.TrimSpace(opts.outputFile) != "" {
 		selectionOut = progressOut
 	}
+	// Collect only adversaries that actually finished a run attempt (not the
+	// full selected set). Auto may return early if selection/start/finish
+	// callbacks fail before every selected adversary executes.
+	var ran []string
 	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
 		ModelProvider: opts.modelProvider, Model: opts.model,
@@ -291,6 +295,11 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 			return err
 		},
 		ReportRunFinish: func(name string, index, total int, runErr error) error {
+			// Record after the runner returns so we never count selections that
+			// never entered Run (e.g. ReportRunStart failure).
+			if strings.TrimSpace(name) != "" {
+				ran = append(ran, name)
+			}
 			switch {
 			case runErr == nil:
 				_, err := fmt.Fprintf(progressOut, "    ✓ done\n")
@@ -306,6 +315,10 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 			}
 		},
 	})
+	// Sanitized usage: CLI version + adversaries that actually ran.
+	if !opts.dryRun && len(ran) > 0 {
+		reportRunUsage(cmd.Context(), app, valueOf(apiURL), valueOf(profile), ran)
+	}
 	if err == nil && strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
 	}
@@ -402,6 +415,7 @@ func runAdversaries(
 	app *application.App,
 	opts *runOptions,
 	refs []string,
+	apiURL, profile *string,
 	resultOut, progressOut io.Writer,
 ) error {
 	multi := len(refs) > 1
@@ -409,6 +423,9 @@ func runAdversaries(
 	toFile := strings.TrimSpace(opts.outputFile) != ""
 	// Progress on multi-run or when results are redirected to a file.
 	showProgress := toFile || multi
+
+	// Sanitized usage: CLI version + requested adversary selection (1..n).
+	reportRunUsage(ctx, app, valueOf(apiURL), valueOf(profile), refs)
 
 	var items []multiRunItemDTO
 	var findingsTotal int
