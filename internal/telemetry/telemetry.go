@@ -128,8 +128,12 @@ func SanitizeAdversaryRef(value string) string {
 		}
 	}
 	parts = filtered
-	// Do not treat Windows drive letters (c:) as registry hosts.
+	// Only peel Adversary Labs registry hosts. External OCI hosts must not
+	// become catalog-shaped ids (registry.example.com/go/secret → go/secret).
 	if len(parts) > 2 && isRegistryHostPart(parts[0]) && !isWindowsDriveLetter(parts[0]) {
+		if !isOfficialRegistryHost(parts[0]) {
+			return "external"
+		}
 		ref = strings.Join(parts[1:], "/")
 	} else {
 		ref = strings.Join(parts, "/")
@@ -185,6 +189,16 @@ func isWindowsDriveLetter(value string) bool {
 		return false
 	}
 	return value[1] == ':'
+}
+
+func isOfficialRegistryHost(value string) bool {
+	host := value
+	if i := strings.IndexByte(value, ':'); i >= 0 {
+		host = value[:i]
+	}
+	return host == "localhost" ||
+		host == "registry.adversarylabs.ai" ||
+		strings.HasSuffix(host, ".adversarylabs.ai")
 }
 
 func splitCatalogID(value string) (domain, name string, ok bool) {

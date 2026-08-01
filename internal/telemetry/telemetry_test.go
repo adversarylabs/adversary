@@ -77,3 +77,15 @@ func TestSanitizeWindowsDrivePaths(t *testing.T) {
 		t.Fatalf("got %q want local", got)
 	}
 }
+
+func TestSanitizeExternalOCIHosts(t *testing.T) {
+	if got := SanitizeAdversaryRef("registry.example.com/go/payroll-private"); got != "external" {
+		t.Fatalf("got %q want external", got)
+	}
+	if got := SanitizeAdversaryRef("ghcr.io/acme/security:1.0.0"); got != "external" {
+		t.Fatalf("got %q want external", got)
+	}
+	if got := SanitizeAdversaryRef("registry.adversarylabs.ai/go/security:0.0.11"); got != "go/security" {
+		t.Fatalf("got %q want go/security", got)
+	}
+}
