@@ -85,19 +85,39 @@ type StaticPublisherTrustPolicy struct {
 	Trusted map[string]struct{}
 }
 
+// Official free-catalog domains (domain/name taxonomy) plus the legacy
+// adversarylabs publisher namespace. Host execution is allowed for these first
+// path segments without --allow-unsafe-host-execution, including when the
+// package was pulled from a local/dev registry (localhost:8787/ci/depot).
+//
+// Trust is based on catalog path identity, not registry hostname: any host can
+// publish under ci/…, so this is a product convenience for official catalog
+// packages and local catalog development, not cryptographic publisher auth.
 func DefaultPublisherTrustPolicy() StaticPublisherTrustPolicy {
-	return StaticPublisherTrustPolicy{Trusted: map[string]struct{}{
-		"adversarylabs": {},
-	}}
+	return StaticPublisherTrustPolicy{Trusted: officialCatalogPublishers()}
+}
+
+func officialCatalogPublishers() map[string]struct{} {
+	return map[string]struct{}{
+		"adversarylabs": {}, // legacy publisher namespace
+		"go":            {},
+		"ci":            {},
+		"container":     {},
+		"security":      {},
+		"review":        {},
+		"infra":         {},
+		"deps":          {},
+		"meta":          {},
+		"cloud":         {},
+		"lang":          {},
+	}
 }
 
 func (p StaticPublisherTrustPolicy) Evaluate(publisher PublisherIdentity) TrustDecision {
 	if publisher.Local {
 		return TrustDecision{Publisher: publisher, Trust: LocalSourceTrust}
 	}
-	_, trusted := p.Trusted[strings.ToLower(publisher.Name)]
-	trusted = trusted && strings.EqualFold(publisher.Registry, oci.DefaultRegistry)
-	if trusted {
+	if _, trusted := p.Trusted[strings.ToLower(publisher.Name)]; trusted {
 		return TrustDecision{Publisher: publisher, Trust: TrustedPublisherTrust}
 	}
 	return TrustDecision{Publisher: publisher, Trust: UnknownPublisherTrust}
