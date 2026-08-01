@@ -105,6 +105,8 @@ type Repository interface {
 	CheckAll() (repository.CheckReport, error)
 	RepairAll(map[string]blobsource.Source) (repository.RepairReport, error)
 	DeleteRef(string, string) error
+	// ReferenceEntries lists every stored runnable reference (not collapsed by digest).
+	ReferenceEntries() ([]repository.Entry, error)
 	MigrationStatus(string) (repository.MigrationStatus, error)
 	LeaseMaterialized(repository.Record) (*repository.MaterializationLease, error)
 }

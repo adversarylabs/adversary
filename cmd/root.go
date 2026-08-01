@@ -69,6 +69,7 @@ func newRootCommand(app *application.App) *cobra.Command {
 	cmd.AddCommand(newPackCommand(app))
 	cmd.AddCommand(newListCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newOutdatedCommand(app, &apiURL, &profile))
+	cmd.AddCommand(newRemoveCommand(app))
 	cmd.AddCommand(newVersionCommand())
 	cmd.AddCommand(newLoginCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newLogoutCommand(app, &apiURL, &profile))
