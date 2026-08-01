@@ -111,7 +111,7 @@ func TestInjectedAuthSearchAndWhoamiNeedNoProcessEnvironment(t *testing.T) {
 	if err := search.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "NAME") || !strings.Contains(out.String(), "acme/reviewer") || !strings.Contains(out.String(), "1.2.3") || !strings.Contains(out.String(), "remote") {
+	if !strings.Contains(out.String(), "NAME") || !strings.Contains(out.String(), "acme/reviewer") || !strings.Contains(out.String(), "1.2.3") || !strings.Contains(out.String(), "catalog") {
 		t.Fatalf("search output=%q", out.String())
 	}
 	out.Reset()
@@ -133,7 +133,7 @@ func TestInjectedAuthSearchAndWhoamiNeedNoProcessEnvironment(t *testing.T) {
 	if err := listCmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "SOURCE") || !strings.Contains(out.String(), "remote") || !strings.Contains(out.String(), "acme/reviewer") {
+	if !strings.Contains(out.String(), "STATUS") || !strings.Contains(out.String(), "catalog") || !strings.Contains(out.String(), "acme/reviewer") {
 		t.Fatalf("list output=%q", out.String())
 	}
 	out.Reset()

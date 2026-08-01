@@ -211,12 +211,14 @@ type searchDTO struct {
 	Results []searchResultDTO `json:"results"`
 }
 type searchResultDTO struct {
-	Name        string `json:"name"`
-	Version     string `json:"version,omitempty"`
-	Description string `json:"description,omitempty"`
-	Reference   string `json:"reference,omitempty"`
-	Source      string `json:"source,omitempty"` // "local" or "remote"
-	Digest      string `json:"digest,omitempty"` // local only when known
+	Name          string `json:"name"`
+	Version       string `json:"version,omitempty"`
+	LatestVersion string `json:"latestVersion,omitempty"` // set when status is outdated
+	Description   string `json:"description,omitempty"`
+	Reference     string `json:"reference,omitempty"`
+	Status        string `json:"status,omitempty"` // installed | catalog | outdated
+	Source        string `json:"source,omitempty"` // local (installed/outdated) or remote (catalog)
+	Digest        string `json:"digest,omitempty"` // local only when known
 }
 type whoamiDTO struct {
 	Authenticated bool   `json:"authenticated"`
