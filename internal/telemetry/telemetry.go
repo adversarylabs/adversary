@@ -21,7 +21,7 @@ const (
 // internal/private-reviewer cannot leak as catalog identifiers.
 var officialCatalogDomains = map[string]struct{}{
 	"go": {}, "ci": {}, "container": {}, "security": {}, "review": {},
-	"infra": {}, "deps": {}, "meta": {}, "cloud": {}, "lang": {},
+	"infra": {}, "deps": {}, "meta": {}, "cloud": {}, "lang": {}, "web": {},
 }
 
 // pathExists is injected in tests.

@@ -110,6 +110,7 @@ func officialCatalogPublishers() map[string]struct{} {
 		"meta":          {},
 		"cloud":         {},
 		"lang":          {},
+		"web":           {},
 	}
 }
 
