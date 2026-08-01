@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
 
@@ -9,6 +10,19 @@ import (
 	"github.com/adversarylabs/adversary/internal/telemetry"
 	"github.com/adversarylabs/adversary/internal/version"
 )
+
+// Constrained forms only — never send free text, emails, or flags as version.
+var cliVersionRE = regexp.MustCompile(
+	`^(dev|unknown|\d{4}\.\d{1,2}\.\d{1,2}(?:-[0-9A-Za-z.]+)?|\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$`,
+)
+
+func sanitizeCLIVersion(value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" || !cliVersionRE.MatchString(v) {
+		return "unknown"
+	}
+	return v
+}
 
 const telemetryTimeout = 2 * time.Second
 
@@ -45,10 +59,7 @@ func reportRunUsage(ctx context.Context, app *application.App, apiURL, profile s
 	if err != nil || !ok || auth.Token == "" {
 		return
 	}
-	cliVersion := strings.TrimSpace(version.Version)
-	if cliVersion == "" {
-		cliVersion = "unknown"
-	}
+	cliVersion := sanitizeCLIVersion(version.Version)
 	client := deps.API.New(apiURL)
 	app.StartBackground(func() {
 		metricCtx, cancel := context.WithTimeout(ctx, telemetryTimeout)
