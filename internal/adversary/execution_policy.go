@@ -111,6 +111,7 @@ func officialCatalogPublishers() map[string]struct{} {
 		"cloud":         {},
 		"lang":          {},
 		"web":           {},
+		"factory":       {},
 	}
 }
 
