@@ -49,30 +49,26 @@ func TestListAndSearchShareLocalAndRemoteInventory(t *testing.T) {
 	writeProject(t, project)
 	pack := NewRootCommandWithApp(app)
 	pack.SetArgs([]string{"pack", project, "--name", "local-reviewer"})
-	// Override data dir isolation: pack uses process env ADVERSARY_DATA_DIR from tests that set it.
-	// lifecycleTestApp already uses a temp repository root via Dependencies.Resolver.
-	// Run pack through the same app so it stores into the injected repository.
-	// If pack requires filesystem repo path from env, fall back to only remote assertions below.
 	_ = pack.Execute()
 	out.Reset()
 	errOut.Reset()
 
-	items, err := collectInventory(context.Background(), app, server.URL, "work", "", &errOut)
+	items, err := collectInventory(context.Background(), app, server.URL, "work", "", &errOut, inventoryScope{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sawRemote bool
+	var sawCatalog bool
 	for _, item := range items {
-		if item.Source == "remote" && strings.Contains(item.Reference, "go-cli") {
-			sawRemote = true
+		if item.Status == inventoryStatusCatalog && strings.Contains(item.Reference, "go-cli") {
+			sawCatalog = true
 		}
 	}
-	if !sawRemote {
-		t.Fatalf("expected remote go-cli in inventory: %#v stderr=%q", items, errOut.String())
+	if !sawCatalog {
+		t.Fatalf("expected catalog go-cli in inventory: %#v stderr=%q", items, errOut.String())
 	}
 
 	// Query filters remote + local
-	filtered, err := collectInventory(context.Background(), app, server.URL, "work", "go-cli", &errOut)
+	filtered, err := collectInventory(context.Background(), app, server.URL, "work", "go-cli", &errOut, inventoryScope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,12 +76,12 @@ func TestListAndSearchShareLocalAndRemoteInventory(t *testing.T) {
 		t.Fatal("expected filtered results for go-cli")
 	}
 	for _, item := range filtered {
-		if !matchesInventoryQuery(item, "go-cli") && item.Source != "remote" {
+		if !matchesInventoryQuery(item, "go-cli") && item.Status != inventoryStatusCatalog {
 			t.Fatalf("unexpected item in filtered set: %#v", item)
 		}
 	}
 
-	// search JSON includes source
+	// search JSON includes status
 	out.Reset()
 	errOut.Reset()
 	cmd := NewRootCommandWithApp(app)
@@ -102,13 +98,17 @@ func TestListAndSearchShareLocalAndRemoteInventory(t *testing.T) {
 	if len(envelope.Data.Results) == 0 {
 		t.Fatalf("expected results, got %s", out.String())
 	}
-	if envelope.Data.Results[0].Source != "remote" && envelope.Data.Results[0].Source != "local" {
-		t.Fatalf("expected source on results: %#v", envelope.Data.Results[0])
+	st := envelope.Data.Results[0].Status
+	if st != inventoryStatusCatalog && st != inventoryStatusInstalled && st != inventoryStatusOutdated {
+		t.Fatalf("expected status on results: %#v", envelope.Data.Results[0])
 	}
 }
 
 func TestMatchesInventoryQuery(t *testing.T) {
-	item := inventoryItem{Name: "go-cli", Version: "0.0.15", Reference: "registry.example/go-cli:0.0.15", Source: "local", Digest: "sha256:abc"}
+	item := inventoryItem{
+		Name: "go-cli", Version: "0.0.15", Reference: "registry.example/go-cli:0.0.15",
+		Source: inventoryOriginLocal, Status: inventoryStatusInstalled, Digest: "sha256:abc",
+	}
 	if !matchesInventoryQuery(item, "") {
 		t.Fatal("empty query should match")
 	}
@@ -117,6 +117,9 @@ func TestMatchesInventoryQuery(t *testing.T) {
 	}
 	if !matchesInventoryQuery(item, "0.0.15") {
 		t.Fatal("version match")
+	}
+	if !matchesInventoryQuery(item, "installed") {
+		t.Fatal("status match")
 	}
 	if matchesInventoryQuery(item, "zzz-nope") {
 		t.Fatal("non-matching query")
@@ -189,41 +192,84 @@ func TestIsRetiredPublisherInventory(t *testing.T) {
 	}
 }
 
-func TestCollapseInventoryToLatest(t *testing.T) {
+func TestMergeInventoryByNameStatuses(t *testing.T) {
 	items := []inventoryItem{
-		{Name: "go-cli", Version: "0.0.6", Source: "local", Reference: "reg/adversarylabs/go-cli:0.0.6"},
-		{Name: "go-cli", Version: "0.0.16", Source: "local", Reference: "reg/adversarylabs/go-cli:0.0.16"},
-		{Name: "go-cli", Version: "0.0.15", Source: "local", Reference: "reg/adversarylabs/go-cli:0.0.15"},
-		// 0.0.10 must beat 0.0.9 (string sort would not).
-		{Name: "dockerfile", Version: "0.0.9", Source: "local", Reference: "reg/adversarylabs/dockerfile:0.0.9"},
-		{Name: "dockerfile", Version: "0.0.10", Source: "remote", Reference: "reg/container/dockerfile"},
-		// Same version: prefer remote over local.
-		{Name: "secrets", Version: "0.0.9", Source: "local", Reference: "reg/adversarylabs/secrets:0.0.9"},
-		{Name: "secrets", Version: "0.0.9", Source: "remote", Reference: "reg/security/secrets"},
-		// Distinct names stay separate (old flat vs domain path).
-		{Name: "go/cli", Version: "0.0.17", Source: "remote", Reference: "reg/go/cli"},
+		{Name: "go-cli", Version: "0.0.6", Source: inventoryOriginLocal, Reference: "reg/go/cli:0.0.6"},
+		{Name: "go-cli", Version: "0.0.16", Source: inventoryOriginLocal, Reference: "reg/go/cli:0.0.16"},
+		{Name: "go-cli", Version: "0.0.15", Source: inventoryOriginLocal, Reference: "reg/go/cli:0.0.15"},
+		// local behind catalog → outdated
+		{Name: "dockerfile", Version: "0.0.9", Source: inventoryOriginLocal, Reference: "localhost:8787/marc/dockerfile:0.0.9"},
+		{Name: "dockerfile", Version: "0.0.10", Source: inventoryOriginRemote, Reference: "reg/container/dockerfile"},
+		// same version: installed (not catalog-only)
+		{Name: "secrets", Version: "0.0.9", Source: inventoryOriginLocal, Reference: "reg/library/secrets:0.0.9"},
+		{Name: "secrets", Version: "0.0.9", Source: inventoryOriginRemote, Reference: "reg/security/secrets"},
+		// catalog only
+		{Name: "go/cli", Version: "0.0.17", Source: inventoryOriginRemote, Reference: "reg/go/cli"},
+		// local only
+		{Name: "local/tool", Version: "1.0.0", Source: inventoryOriginLocal, Reference: "localhost:8787/marc/tool:1.0.0"},
+		// local ahead of catalog → installed
+		{Name: "ahead", Version: "2.0.0", Source: inventoryOriginLocal, Reference: "localhost/ahead:2.0.0"},
+		{Name: "ahead", Version: "1.0.0", Source: inventoryOriginRemote, Reference: "reg/ahead"},
 	}
 
-	got := collapseInventoryToLatest(items)
-	if len(got) != 4 {
-		t.Fatalf("expected 4 names, got %d: %#v", len(got), got)
+	got := mergeInventoryByName(items)
+	if len(got) != 6 {
+		t.Fatalf("expected 6 names, got %d: %#v", len(got), got)
 	}
 
 	byName := map[string]inventoryItem{}
 	for _, item := range got {
 		byName[item.Name] = item
 	}
-	if byName["go-cli"].Version != "0.0.16" || byName["go-cli"].Source != "local" {
-		t.Fatalf("go-cli want local 0.0.16, got %#v", byName["go-cli"])
+	if byName["go-cli"].Version != "0.0.16" || byName["go-cli"].Status != inventoryStatusInstalled {
+		t.Fatalf("go-cli want installed 0.0.16, got %#v", byName["go-cli"])
 	}
-	if byName["dockerfile"].Version != "0.0.10" || byName["dockerfile"].Source != "remote" {
-		t.Fatalf("dockerfile want remote 0.0.10, got %#v", byName["dockerfile"])
+	if byName["dockerfile"].Status != inventoryStatusOutdated || byName["dockerfile"].Version != "0.0.9" || byName["dockerfile"].LatestVersion != "0.0.10" {
+		t.Fatalf("dockerfile want outdated 0.0.9→0.0.10, got %#v", byName["dockerfile"])
 	}
-	if byName["secrets"].Source != "remote" {
-		t.Fatalf("secrets same version should prefer remote, got %#v", byName["secrets"])
+	if byName["secrets"].Status != inventoryStatusInstalled {
+		t.Fatalf("secrets same version should be installed, got %#v", byName["secrets"])
 	}
-	if byName["go/cli"].Version != "0.0.17" {
-		t.Fatalf("go/cli should remain distinct: %#v", byName["go/cli"])
+	if byName["go/cli"].Status != inventoryStatusCatalog {
+		t.Fatalf("go/cli want catalog: %#v", byName["go/cli"])
+	}
+	if byName["local/tool"].Status != inventoryStatusInstalled {
+		t.Fatalf("local/tool want installed: %#v", byName["local/tool"])
+	}
+	if byName["ahead"].Status != inventoryStatusInstalled || byName["ahead"].Version != "2.0.0" {
+		t.Fatalf("ahead local newer should be installed: %#v", byName["ahead"])
+	}
+}
+
+func TestInventoryScopeFilters(t *testing.T) {
+	items := []inventoryItem{
+		{Name: "a", Status: inventoryStatusInstalled},
+		{Name: "b", Status: inventoryStatusCatalog},
+		{Name: "c", Status: inventoryStatusOutdated},
+	}
+	filter := func(scope inventoryScope) []string {
+		var names []string
+		for _, item := range items {
+			if scope.allows(item.Status) {
+				names = append(names, item.Name)
+			}
+		}
+		return names
+	}
+	if got := filter(inventoryScope{}); strings.Join(got, ",") != "a,b,c" {
+		t.Fatalf("all: %v", got)
+	}
+	if got := filter(inventoryScope{Installed: true}); strings.Join(got, ",") != "a,c" {
+		t.Fatalf("installed includes outdated: %v", got)
+	}
+	if got := filter(inventoryScope{Catalog: true}); strings.Join(got, ",") != "b" {
+		t.Fatalf("catalog: %v", got)
+	}
+	if got := filter(inventoryScope{Outdated: true}); strings.Join(got, ",") != "c" {
+		t.Fatalf("outdated: %v", got)
+	}
+	if err := (inventoryScope{Installed: true, Catalog: true}).validate(); err == nil {
+		t.Fatal("expected mutual exclusion error")
 	}
 }
 
@@ -277,7 +323,7 @@ runtime:
 	}
 
 	errOut.Reset()
-	items, err := collectInventory(context.Background(), app, server.URL, "default", phrase, &errOut)
+	items, err := collectInventory(context.Background(), app, server.URL, "default", phrase, &errOut, inventoryScope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,12 +332,93 @@ runtime:
 	}
 	var found bool
 	for _, item := range items {
-		if item.Source == "local" && strings.Contains(strings.ToLower(item.Description), phrase) {
+		if item.Status == inventoryStatusInstalled && strings.Contains(strings.ToLower(item.Description), phrase) {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("expected local description containing %q, got %#v", phrase, items)
+		t.Fatalf("expected installed description containing %q, got %#v", phrase, items)
+	}
+}
+
+func TestOutdatedCommandListsOnlyOutdated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/search" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[
+			{"name":"pkg/old","version":"0.0.2","description":"newer","reference":"registry.example/pkg/old:0.0.2"},
+			{"name":"pkg/current","version":"1.0.0","description":"same","reference":"registry.example/pkg/current:1.0.0"}
+		]}`))
+	}))
+	defer server.Close()
+
+	repo := repository.Repository{Root: t.TempDir()}
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repo, &out, &errOut).Dependencies()
+	store := base.Auth.(processAuthStore).ConfigStore
+	if err := store.SetAuth(adversarylabs.AuthKey(server.URL, "default"), adversarylabs.Auth{Token: "token"}); err != nil {
+		t.Fatal(err)
+	}
+	base.API = processAPIFactory{store: store, http: server.Client()}
+	base.Registries = processRegistryFactory{store: store, docker: oci.DockerCredentialStore{HomeDir: t.TempDir()}, host: base.RegistryHost, identity: store.Path}
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Install older pkg/old and current pkg/current via pack (name/version in manifest).
+	for _, tc := range []struct {
+		name, version string
+	}{
+		{"pkg/old", "0.0.1"},
+		{"pkg/current", "1.0.0"},
+	} {
+		project := t.TempDir()
+		writeProject(t, project)
+		manifestPath := filepath.Join(project, "adversary.yaml")
+		data := []byte(`name: ` + tc.name + `
+version: ` + tc.version + `
+description: test package
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.js
+`)
+		if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		errOut.Reset()
+		pack := NewRootCommandWithApp(app)
+		pack.SetArgs([]string{"pack", project})
+		if err := pack.Execute(); err != nil {
+			t.Fatalf("pack %s: %v stderr=%s", tc.name, err, errOut.String())
+		}
+	}
+
+	out.Reset()
+	errOut.Reset()
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"--api-url", server.URL, "outdated", "--format", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("outdated: %v stderr=%s", err, errOut.String())
+	}
+	var envelope struct {
+		Data searchDTO `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
+		t.Fatalf("json: %v out=%s", err, out.String())
+	}
+	if len(envelope.Data.Results) != 1 {
+		t.Fatalf("want 1 outdated, got %#v out=%s", envelope.Data.Results, out.String())
+	}
+	r := envelope.Data.Results[0]
+	if r.Name != "pkg/old" || r.Status != inventoryStatusOutdated || r.Version != "0.0.1" || r.LatestVersion != "0.0.2" {
+		t.Fatalf("unexpected outdated row: %#v", r)
 	}
 }
