@@ -87,8 +87,11 @@ reading other repository files through its normal SDK APIs.
 ## Safety and trust
 
 Local source adversaries run directly with `HostExecutor` for a fast development
-loop. Installed adversaries from the trusted `adversarylabs` publisher on the
-official registry may also use the host backend.
+loop. Installed adversaries from official free-catalog domains (`ci`, `go`,
+`container`, `security`, `review`, `infra`, `deps`, `meta`, `cloud`, `lang`) or
+the legacy `adversarylabs` publisher namespace may also use the host backend,
+including when pulled from a local/dev registry. Trust is catalog-path based,
+not registry-host or signature based.
 Unknown publishers require a sandbox backend or `--allow-unsafe-host-execution`; that explicit
 override is not isolation. Manifest permissions are advisory by default;
 `permissions.enforcement: required` and `--no-network` fail before launch when

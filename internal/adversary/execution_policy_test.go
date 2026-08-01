@@ -242,15 +242,29 @@ func TestDefaultPublisherTrustPolicy(t *testing.T) {
 	policy := DefaultPublisherTrustPolicy()
 	for publisher, want := range map[string]PublisherTrust{
 		"adversarylabs": TrustedPublisherTrust,
+		"ci":            TrustedPublisherTrust,
+		"go":            TrustedPublisherTrust,
+		"container":     TrustedPublisherTrust,
+		"infra":         TrustedPublisherTrust,
 		"replicated":    UnknownPublisherTrust,
 		"randomperson":  UnknownPublisherTrust,
+		"marc":          UnknownPublisherTrust,
 	} {
 		if got := policy.Evaluate(PublisherIdentity{Name: publisher, Registry: oci.DefaultRegistry}).Trust; got != want {
 			t.Errorf("publisher %q trust=%q want=%q", publisher, got, want)
 		}
 	}
-	if got := policy.Evaluate(PublisherIdentity{Name: "adversarylabs", Registry: "evil.example"}).Trust; got != UnknownPublisherTrust {
-		t.Fatalf("lookalike registry trust=%q", got)
+	// Official catalog domains are trusted on any registry host so local/dev
+	// pulls (localhost:8787/ci/depot) can host-execute without the unsafe flag.
+	if got := policy.Evaluate(PublisherIdentity{Name: "ci", Registry: "localhost:8787"}).Trust; got != TrustedPublisherTrust {
+		t.Fatalf("local registry catalog domain trust=%q", got)
+	}
+	if got := policy.Evaluate(PublisherIdentity{Name: "go", Registry: "evil.example"}).Trust; got != TrustedPublisherTrust {
+		t.Fatalf("catalog domain trust is path-based, got=%q", got)
+	}
+	// Non-catalog namespaces stay unknown even on the official registry.
+	if got := policy.Evaluate(PublisherIdentity{Name: "customer", Registry: oci.DefaultRegistry}).Trust; got != UnknownPublisherTrust {
+		t.Fatalf("non-catalog namespace trust=%q", got)
 	}
 	if got := policy.Evaluate(PublisherIdentity{Name: "anything", Local: true}).Trust; got != LocalSourceTrust {
 		t.Fatalf("local trust=%q", got)
