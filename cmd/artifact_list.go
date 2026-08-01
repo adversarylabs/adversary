@@ -9,8 +9,11 @@ import (
 )
 
 type listOptions struct {
-	json   bool
-	format string
+	json      bool
+	format    string
+	installed bool
+	catalog   bool
+	outdated  bool
 }
 
 func newListCommand(app *application.App, apiURL, profile *string) *cobra.Command {
@@ -21,14 +24,24 @@ func newListCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 		Short:   "List adversaries available to you (local store and registry)",
 		Long: `List adversaries from the local store and the remote catalog you can access.
 
-Each name appears once with its newest version (semver). Older local installs
-remain usable via an explicit reference; they are just omitted from this listing.
+Each name appears once. STATUS is one of:
+  installed  present in the local store (at or ahead of the catalog version)
+  catalog    in the remote catalog but not installed locally
+  outdated   installed, but the catalog has a newer version (LATEST)
+
+Flags filter after status is computed, so --installed still shows outdated rows.
 
 Retired official paths (…/adversarylabs/… and flat …/library/go-cli style
 packs) are hidden. Domain catalog ids (go/cli, security/secrets, …) remain.
 
 Remote entries require network access and, for private catalog results, login.
-If the remote catalog is unavailable, local adversaries are still listed.`,
+If the remote catalog is unavailable, local adversaries are still listed
+(without outdated detection).`,
+		Example: `  adversary list
+  adversary list --installed
+  adversary list --catalog
+  adversary list --outdated
+  adversary list --format json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, opts.format, opts.json)
@@ -52,7 +65,12 @@ If the remote catalog is unavailable, local adversaries are still listed.`,
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(items)
 			}
 
-			items, err := collectInventory(cmd.Context(), app, valueOf(apiURL), valueOf(profile), "", cmd.ErrOrStderr())
+			scope := inventoryScope{
+				Installed: opts.installed,
+				Catalog:   opts.catalog,
+				Outdated:  opts.outdated,
+			}
+			items, err := collectInventory(cmd.Context(), app, valueOf(apiURL), valueOf(profile), "", cmd.ErrOrStderr(), scope)
 			if err != nil {
 				return err
 			}
@@ -75,5 +93,8 @@ If the remote catalog is unavailable, local adversaries are still listed.`,
 	}
 	cmd.Flags().BoolVar(&opts.json, "json", false, "print local adversaries as JSON")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
+	cmd.Flags().BoolVar(&opts.installed, "installed", false, "show only installed adversaries (includes outdated)")
+	cmd.Flags().BoolVar(&opts.catalog, "catalog", false, "show only catalog adversaries that are not installed")
+	cmd.Flags().BoolVar(&opts.outdated, "outdated", false, "show only outdated installed adversaries")
 	return cmd
 }

@@ -16,14 +16,71 @@ import (
 // Official registry host for retired-path filtering (matches oci.DefaultRegistry).
 const officialRegistryHost = "registry.adversarylabs.ai"
 
+// Origin of a raw inventory row before status merge.
+const (
+	inventoryOriginLocal  = "local"
+	inventoryOriginRemote = "remote"
+)
+
+// User-facing inventory status after merging local store + remote catalog.
+const (
+	inventoryStatusInstalled = "installed"
+	inventoryStatusCatalog   = "catalog"
+	inventoryStatusOutdated  = "outdated"
+)
+
 // inventoryItem is one adversary visible through list/search (local store and/or remote catalog).
 type inventoryItem struct {
-	Name        string
-	Version     string
-	Description string
-	Reference   string
-	Source      string // "local" or "remote"
-	Digest      string // local only when known
+	Name          string
+	Version       string // installed version when present; else catalog version
+	LatestVersion string // catalog version when known and newer (outdated)
+	Description   string
+	Reference     string
+	// Source is the raw origin before merge ("local"/"remote"), and after merge
+	// remains "local" for installed/outdated and "remote" for catalog-only
+	// (backward compatible JSON field).
+	Source string
+	// Status is installed | catalog | outdated.
+	Status string
+	Digest string // local only when known
+}
+
+// inventoryScope selects which status rows to show after merge.
+// At most one of Installed, Catalog, Outdated may be true; all false means all.
+type inventoryScope struct {
+	Installed bool // installed + outdated
+	Catalog   bool // catalog-only (not installed)
+	Outdated  bool // outdated only
+}
+
+func (s inventoryScope) validate() error {
+	n := 0
+	if s.Installed {
+		n++
+	}
+	if s.Catalog {
+		n++
+	}
+	if s.Outdated {
+		n++
+	}
+	if n > 1 {
+		return fmt.Errorf("use only one of --installed, --catalog, and --outdated")
+	}
+	return nil
+}
+
+func (s inventoryScope) allows(status string) bool {
+	switch {
+	case s.Outdated:
+		return status == inventoryStatusOutdated
+	case s.Installed:
+		return status == inventoryStatusInstalled || status == inventoryStatusOutdated
+	case s.Catalog:
+		return status == inventoryStatusCatalog
+	default:
+		return true
+	}
 }
 
 func collectInventory(
@@ -31,7 +88,11 @@ func collectInventory(
 	app *application.App,
 	apiURL, profile, query string,
 	stderr io.Writer,
+	scope inventoryScope,
 ) ([]inventoryItem, error) {
+	if err := scope.validate(); err != nil {
+		return nil, err
+	}
 	query = strings.TrimSpace(query)
 	deps := app.Dependencies()
 
@@ -40,27 +101,31 @@ func collectInventory(
 		return nil, err
 	}
 
-	items := make([]inventoryItem, 0, len(localEntries)+32)
+	// Include every non-retired local install before merging. Filtering on the
+	// query here would drop rows that only match after merge (status, latestVersion).
+	raw := make([]inventoryItem, 0, len(localEntries)+32)
 	for _, entry := range localEntries {
 		item := inventoryItem{
 			Name:        entry.Record.Name,
 			Version:     entry.Record.Version,
 			Description: localDescription(deps.Resolver, entry.Record),
 			Reference:   entry.CanonicalReference,
-			Source:      "local",
+			Source:      inventoryOriginLocal,
 			Digest:      entry.Digest,
 		}
 		if isRetiredPublisherInventory(item) {
 			continue
 		}
-		if matchesInventoryQuery(item, query) {
-			items = append(items, item)
-		}
+		raw = append(raw, item)
 	}
 
-	remote, remoteErr := fetchRemoteInventory(ctx, deps, apiURL, profile, query)
+	// Always fetch the full remote catalog (empty API q). Pre-filtering remote by
+	// query would omit packages that only match via status/latestVersion once
+	// combined with local installs; client-side matchesInventoryQuery runs after merge.
+	remote, remoteErr := fetchRemoteInventory(ctx, deps, apiURL, profile, "")
 	if remoteErr != nil {
 		// Local inventory must still work offline or without login.
+		// Without remote we cannot mark outdated; installed rows stay "installed".
 		if stderr != nil {
 			fmt.Fprintf(stderr, "Warning: remote catalog unavailable (%v); showing local adversaries only.\n", remoteErr)
 		}
@@ -69,54 +134,164 @@ func collectInventory(
 			if isRetiredPublisherInventory(item) {
 				continue
 			}
-			items = append(items, item)
+			raw = append(raw, item)
 		}
 	}
 
-	// Search/list are a package catalog surface: one row per adversary name
-	// (newest version). Historical local store versions stay available by
-	// explicit reference for pull/run.
-	items = collapseInventoryToLatest(items)
+	// One row per package name with status: installed | catalog | outdated.
+	// Query and scope filters apply only after status is computed.
+	items := mergeInventoryByName(raw)
+	filtered := make([]inventoryItem, 0, len(items))
+	for _, item := range items {
+		if !scope.allows(item.Status) {
+			continue
+		}
+		if matchesInventoryQuery(item, query) {
+			filtered = append(filtered, item)
+		}
+	}
+	items = filtered
 
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Name != items[j].Name {
 			return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
 		}
-		if items[i].Source != items[j].Source {
-			// local before remote for the same name
-			return items[i].Source == "local"
+		if items[i].Status != items[j].Status {
+			return inventoryStatusRank(items[i].Status) < inventoryStatusRank(items[j].Status)
 		}
 		return items[i].Reference < items[j].Reference
 	})
 	return items, nil
 }
 
-// collapseInventoryToLatest keeps one inventory row per package name (case-
-// insensitive). Higher semver wins; when versions tie, prefer remote (catalog)
-// so discovery points at the registry path rather than a stale local alias.
-func collapseInventoryToLatest(items []inventoryItem) []inventoryItem {
-	if len(items) < 2 {
-		return items
+func inventoryStatusRank(status string) int {
+	switch status {
+	case inventoryStatusOutdated:
+		return 0
+	case inventoryStatusInstalled:
+		return 1
+	case inventoryStatusCatalog:
+		return 2
+	default:
+		return 3
 	}
-	best := make(map[string]inventoryItem, len(items))
+}
+
+// mergeInventoryByName keeps one inventory row per package name. When both a
+// local install and a catalog entry exist, status is installed (current or
+// newer than catalog) or outdated (catalog has a higher version).
+func mergeInventoryByName(items []inventoryItem) []inventoryItem {
+	type pair struct {
+		local  *inventoryItem
+		remote *inventoryItem
+	}
+	best := make(map[string]*pair, len(items))
 	order := make([]string, 0, len(items))
-	for _, item := range items {
+
+	for i := range items {
+		item := items[i]
 		key := inventoryNameKey(item)
-		cur, ok := best[key]
+		p, ok := best[key]
 		if !ok {
-			best[key] = item
+			p = &pair{}
+			best[key] = p
 			order = append(order, key)
-			continue
 		}
-		if preferInventoryItem(item, cur) {
-			best[key] = item
+		switch item.Source {
+		case inventoryOriginRemote:
+			if p.remote == nil || preferRawInventoryItem(item, *p.remote) {
+				cp := item
+				p.remote = &cp
+			}
+		default:
+			if p.local == nil || preferRawInventoryItem(item, *p.local) {
+				cp := item
+				p.local = &cp
+			}
 		}
 	}
+
 	out := make([]inventoryItem, 0, len(best))
 	for _, key := range order {
-		out = append(out, best[key])
+		out = append(out, composeInventoryStatus(best[key].local, best[key].remote))
 	}
 	return out
+}
+
+func composeInventoryStatus(local, remote *inventoryItem) inventoryItem {
+	switch {
+	case local != nil && remote != nil:
+		name := firstNonEmpty(local.Name, remote.Name)
+		desc := firstNonEmpty(local.Description, remote.Description)
+		// Prefer catalog reference so pull/upgrade targets the registry path.
+		ref := firstNonEmpty(remote.Reference, local.Reference)
+		if preferCatalogVersion(remote.Version, local.Version) {
+			return inventoryItem{
+				Name:          name,
+				Version:       local.Version,
+				LatestVersion: remote.Version,
+				Description:   desc,
+				Reference:     ref,
+				Source:        inventoryOriginLocal,
+				Status:        inventoryStatusOutdated,
+				Digest:        local.Digest,
+			}
+		}
+		return inventoryItem{
+			Name:        name,
+			Version:     local.Version,
+			Description: desc,
+			Reference:   ref,
+			Source:      inventoryOriginLocal,
+			Status:      inventoryStatusInstalled,
+			Digest:      local.Digest,
+		}
+	case local != nil:
+		return inventoryItem{
+			Name:        local.Name,
+			Version:     local.Version,
+			Description: local.Description,
+			Reference:   local.Reference,
+			Source:      inventoryOriginLocal,
+			Status:      inventoryStatusInstalled,
+			Digest:      local.Digest,
+		}
+	default:
+		return inventoryItem{
+			Name:        remote.Name,
+			Version:     remote.Version,
+			Description: remote.Description,
+			Reference:   remote.Reference,
+			Source:      inventoryOriginRemote,
+			Status:      inventoryStatusCatalog,
+		}
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// preferRawInventoryItem chooses the better row of the same origin (local or remote).
+func preferRawInventoryItem(candidate, current inventoryItem) bool {
+	if preferCatalogVersion(candidate.Version, current.Version) {
+		return true
+	}
+	if preferCatalogVersion(current.Version, candidate.Version) {
+		return false
+	}
+	return candidate.Reference < current.Reference
+}
+
+// collapseInventoryToLatest is retained for tests that exercise per-name version
+// selection among homogeneous rows; production list/search uses mergeInventoryByName.
+func collapseInventoryToLatest(items []inventoryItem) []inventoryItem {
+	return mergeInventoryByName(items)
 }
 
 func inventoryNameKey(item inventoryItem) string {
@@ -195,20 +370,6 @@ func splitInventoryReference(value string) (host, repository string, ok bool) {
 	return first, strings.Join(parts[1:], "/"), true
 }
 
-func preferInventoryItem(candidate, current inventoryItem) bool {
-	if preferCatalogVersion(candidate.Version, current.Version) {
-		return true
-	}
-	if preferCatalogVersion(current.Version, candidate.Version) {
-		return false
-	}
-	// Same (or incomparable) version: prefer remote catalog over local store.
-	if candidate.Source != current.Source {
-		return candidate.Source == "remote"
-	}
-	return candidate.Reference < current.Reference
-}
-
 func fetchRemoteInventory(
 	ctx context.Context,
 	deps application.Dependencies,
@@ -244,7 +405,7 @@ func fetchRemoteInventory(
 			Version:     r.Version,
 			Description: r.Description,
 			Reference:   ref,
-			Source:      "remote",
+			Source:      inventoryOriginRemote,
 		})
 	}
 	return items, nil
@@ -255,7 +416,16 @@ func matchesInventoryQuery(item inventoryItem, query string) bool {
 		return true
 	}
 	q := strings.ToLower(query)
-	fields := []string{item.Name, item.Version, item.Description, item.Reference, item.Digest, item.Source}
+	fields := []string{
+		item.Name,
+		item.Version,
+		item.LatestVersion,
+		item.Description,
+		item.Reference,
+		item.Digest,
+		item.Source,
+		item.Status,
+	}
 	for _, field := range fields {
 		if strings.Contains(strings.ToLower(field), q) {
 			return true
@@ -270,7 +440,7 @@ func writeInventoryText(w io.Writer, items []inventoryItem) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tVERSION\tSOURCE\tREFERENCE\tDESCRIPTION")
+	fmt.Fprintln(tw, "NAME\tVERSION\tLATEST\tSTATUS\tREFERENCE\tDESCRIPTION")
 	for _, item := range items {
 		name := item.Name
 		if name == "" {
@@ -280,10 +450,24 @@ func writeInventoryText(w io.Writer, items []inventoryItem) error {
 		if desc == "" && item.Digest != "" {
 			desc = shortDigest(item.Digest)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+		latest := item.LatestVersion
+		if latest == "" {
+			latest = "-"
+		}
+		status := item.Status
+		if status == "" {
+			// Fallback for incomplete rows.
+			if item.Source == inventoryOriginRemote {
+				status = inventoryStatusCatalog
+			} else {
+				status = inventoryStatusInstalled
+			}
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			sanitizeCell(name),
 			sanitizeCell(item.Version),
-			sanitizeCell(item.Source),
+			sanitizeCell(latest),
+			sanitizeCell(status),
 			sanitizeCell(item.Reference),
 			sanitizeCell(desc),
 		)
@@ -295,12 +479,14 @@ func inventoryToSearchDTOs(items []inventoryItem) []searchResultDTO {
 	out := make([]searchResultDTO, 0, len(items))
 	for _, item := range items {
 		out = append(out, searchResultDTO{
-			Name:        item.Name,
-			Version:     item.Version,
-			Description: item.Description,
-			Reference:   item.Reference,
-			Source:      item.Source,
-			Digest:      item.Digest,
+			Name:          item.Name,
+			Version:       item.Version,
+			LatestVersion: item.LatestVersion,
+			Description:   item.Description,
+			Reference:     item.Reference,
+			Status:        item.Status,
+			Source:        item.Source,
+			Digest:        item.Digest,
 		})
 	}
 	return out

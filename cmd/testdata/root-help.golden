@@ -12,6 +12,7 @@ Available Commands:
   list        List adversaries available to you (local store and registry)
   login       Authenticate with Adversary Labs
   logout      Log out of Adversary Labs
+  outdated    List installed adversaries with a newer catalog version
   pack        Package the current adversary into the local content-addressable store
   pull        Pull and install an adversary from an OCI registry
   push        Push a locally packed adversary to an OCI registry
