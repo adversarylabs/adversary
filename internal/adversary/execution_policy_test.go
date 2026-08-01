@@ -96,10 +96,12 @@ func TestTrustedRemoteOmitsIdentityBannerWithoutVerbose(t *testing.T) {
 }
 
 func TestUnknownRemoteRequiresSandboxOrUnsafeHostOverride(t *testing.T) {
-	repo, resolver, record := importPolicyArtifact(t, "randomperson/dockerfile:1.2.0")
+	// Foreign registry host = not catalog delivery, regardless of path name.
+	const ref = "ghcr.io/randomperson/dockerfile:1.2.0"
+	repo, resolver, record := importPolicyArtifact(t, ref)
 	host := &policyExecutor{backend: HostExecutorBackend}
 	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: host, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
-		AdversaryRef: "randomperson/dockerfile:1.2.0", RepoPath: t.TempDir(),
+		AdversaryRef: ref, RepoPath: t.TempDir(),
 	})
 	if err == nil || !strings.Contains(err.Error(), "--allow-unsafe-host-execution") || host.called != 0 {
 		t.Fatalf("error=%v calls=%d", err, host.called)
@@ -107,7 +109,7 @@ func TestUnknownRemoteRequiresSandboxOrUnsafeHostOverride(t *testing.T) {
 
 	var warning bytes.Buffer
 	err = Runner{Stdout: &bytes.Buffer{}, Stderr: &warning, Executor: host, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
-		AdversaryRef: "randomperson/dockerfile:1.2.0", RepoPath: t.TempDir(), AllowUnsafeHostExecution: true,
+		AdversaryRef: ref, RepoPath: t.TempDir(), AllowUnsafeHostExecution: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +123,7 @@ func TestUnknownRemoteRequiresSandboxOrUnsafeHostOverride(t *testing.T) {
 
 	sandbox := &policyExecutor{backend: NativeSandboxExecutorBackend, caps: allTestExecutorCapabilities()}
 	err = Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: sandbox, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
-		AdversaryRef: "randomperson/dockerfile:1.2.0", RepoPath: t.TempDir(),
+		AdversaryRef: ref, RepoPath: t.TempDir(),
 	})
 	if err != nil || sandbox.called != 1 {
 		t.Fatalf("sandbox error=%v calls=%d", err, sandbox.called)
@@ -162,8 +164,9 @@ func TestMutableRemoteReferenceIsPinnedBeforeExecution(t *testing.T) {
 func TestPinnedDigestRetainsSelectedPublisherIdentity(t *testing.T) {
 	repo, resolver, record := importPolicyArtifact(t, "adversarylabs/security:1.2.0")
 	host := &policyExecutor{backend: HostExecutorBackend}
+	// Identity comes from ReferenceIdentity host, not content digest alone.
 	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: host, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
-		AdversaryRef: record.Digest, ReferenceIdentity: "registry.adversarylabs.ai/randomperson/security:1.2.0", RepoPath: t.TempDir(),
+		AdversaryRef: record.Digest, ReferenceIdentity: "ghcr.io/randomperson/security:1.2.0", RepoPath: t.TempDir(),
 	})
 	if err == nil || !strings.Contains(err.Error(), "unknown publisher") || host.called != 0 {
 		t.Fatalf("error=%v calls=%d", err, host.called)
@@ -240,35 +243,44 @@ func TestModelAccessIsComparedWithAllowedPolicy(t *testing.T) {
 
 func TestDefaultPublisherTrustPolicy(t *testing.T) {
 	policy := DefaultPublisherTrustPolicy()
-	for publisher, want := range map[string]PublisherTrust{
-		"adversarylabs": TrustedPublisherTrust,
-		"ci":            TrustedPublisherTrust,
-		"go":            TrustedPublisherTrust,
-		"container":     TrustedPublisherTrust,
-		"web":           TrustedPublisherTrust,
-		"infra":         TrustedPublisherTrust,
-		"replicated":    UnknownPublisherTrust,
-		"randomperson":  UnknownPublisherTrust,
-		"marc":          UnknownPublisherTrust,
-	} {
-		if got := policy.Evaluate(PublisherIdentity{Name: publisher, Registry: oci.DefaultRegistry}).Trust; got != want {
-			t.Errorf("publisher %q trust=%q want=%q", publisher, got, want)
+
+	// Anything delivered by the product catalog registry is trusted — no domain list.
+	for _, name := range []string{"go", "factory", "customer", "marc", "adversarylabs"} {
+		if got := policy.Evaluate(PublisherIdentity{Name: name, Registry: oci.DefaultRegistry}).Trust; got != TrustedPublisherTrust {
+			t.Errorf("product registry publisher %q trust=%q want trusted", name, got)
 		}
 	}
-	// Official catalog domains are trusted on any registry host so local/dev
-	// pulls (localhost:8787/ci/depot) can host-execute without the unsafe flag.
+
+	// Same path on a foreign registry is unknown (not catalog delivery).
+	if got := policy.Evaluate(PublisherIdentity{Name: "go", Registry: "evil.example"}).Trust; got != UnknownPublisherTrust {
+		t.Fatalf("foreign registry trust=%q want unknown", got)
+	}
+	if got := policy.Evaluate(PublisherIdentity{Name: "ci", Registry: "ghcr.io"}).Trust; got != UnknownPublisherTrust {
+		t.Fatalf("ghcr trust=%q want unknown", got)
+	}
+
+	// Local/dev registry is trusted only when it is the configured catalog host.
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "localhost:8787")
 	if got := policy.Evaluate(PublisherIdentity{Name: "ci", Registry: "localhost:8787"}).Trust; got != TrustedPublisherTrust {
-		t.Fatalf("local registry catalog domain trust=%q", got)
+		t.Fatalf("configured local registry trust=%q want trusted", got)
 	}
-	if got := policy.Evaluate(PublisherIdentity{Name: "go", Registry: "evil.example"}).Trust; got != TrustedPublisherTrust {
-		t.Fatalf("catalog domain trust is path-based, got=%q", got)
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "")
+	if got := policy.Evaluate(PublisherIdentity{Name: "ci", Registry: "localhost:8787"}).Trust; got != UnknownPublisherTrust {
+		t.Fatalf("unconfigured localhost trust=%q want unknown", got)
 	}
-	// Non-catalog namespaces stay unknown even on the official registry.
-	if got := policy.Evaluate(PublisherIdentity{Name: "customer", Registry: oci.DefaultRegistry}).Trust; got != UnknownPublisherTrust {
-		t.Fatalf("non-catalog namespace trust=%q", got)
-	}
+
 	if got := policy.Evaluate(PublisherIdentity{Name: "anything", Local: true}).Trust; got != LocalSourceTrust {
 		t.Fatalf("local trust=%q", got)
+	}
+}
+
+func TestStaticPublisherTrustPolicyStillAllowsNameAllowlist(t *testing.T) {
+	policy := StaticPublisherTrustPolicy{Trusted: map[string]struct{}{"acme": {}}}
+	if got := policy.Evaluate(PublisherIdentity{Name: "acme", Registry: "evil.example"}).Trust; got != TrustedPublisherTrust {
+		t.Fatalf("static allowlist trust=%q", got)
+	}
+	if got := policy.Evaluate(PublisherIdentity{Name: "go", Registry: oci.DefaultRegistry}).Trust; got != UnknownPublisherTrust {
+		t.Fatalf("name not on static list trust=%q", got)
 	}
 }
 

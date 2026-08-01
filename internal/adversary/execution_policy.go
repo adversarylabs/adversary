@@ -81,38 +81,11 @@ type PublisherTrustPolicy interface {
 	Evaluate(PublisherIdentity) TrustDecision
 }
 
+// StaticPublisherTrustPolicy trusts an explicit set of publisher path segments.
+// Prefer CatalogDeliveryTrustPolicy for production defaults; this type remains
+// for tests and embedders that inject a fixed allowlist.
 type StaticPublisherTrustPolicy struct {
 	Trusted map[string]struct{}
-}
-
-// Official free-catalog domains (domain/name taxonomy) plus the legacy
-// adversarylabs publisher namespace. Host execution is allowed for these first
-// path segments without --allow-unsafe-host-execution, including when the
-// package was pulled from a local/dev registry (localhost:8787/ci/depot).
-//
-// Trust is based on catalog path identity, not registry hostname: any host can
-// publish under ci/…, so this is a product convenience for official catalog
-// packages and local catalog development, not cryptographic publisher auth.
-func DefaultPublisherTrustPolicy() StaticPublisherTrustPolicy {
-	return StaticPublisherTrustPolicy{Trusted: officialCatalogPublishers()}
-}
-
-func officialCatalogPublishers() map[string]struct{} {
-	return map[string]struct{}{
-		"adversarylabs": {}, // legacy publisher namespace
-		"go":            {},
-		"ci":            {},
-		"container":     {},
-		"security":      {},
-		"review":        {},
-		"infra":         {},
-		"deps":          {},
-		"meta":          {},
-		"cloud":         {},
-		"lang":          {},
-		"web":           {},
-		"factory":       {},
-	}
 }
 
 func (p StaticPublisherTrustPolicy) Evaluate(publisher PublisherIdentity) TrustDecision {
@@ -123,6 +96,56 @@ func (p StaticPublisherTrustPolicy) Evaluate(publisher PublisherIdentity) TrustD
 		return TrustDecision{Publisher: publisher, Trust: TrustedPublisherTrust}
 	}
 	return TrustDecision{Publisher: publisher, Trust: UnknownPublisherTrust}
+}
+
+// CatalogDeliveryTrustPolicy trusts packages delivered by the Adversary Labs
+// catalog registry (or the CLI-configured registry host for local/staging),
+// without maintaining a domain/name allowlist in the CLI.
+//
+// The hosted registry only accepts official free-catalog publishes, so delivery
+// from that registry is the product definition of "official". Path segments
+// like go/ or factory/ are not consulted. A lookalike path on another host is
+// unknown. This is not cryptographic publisher authenticity.
+type CatalogDeliveryTrustPolicy struct{}
+
+// DefaultPublisherTrustPolicy returns the production trust policy: host
+// execution is allowed for local projects and for packages whose resolved
+// reference is on the product catalog registry (or ADVERSARY_REGISTRY_HOST).
+func DefaultPublisherTrustPolicy() PublisherTrustPolicy {
+	return CatalogDeliveryTrustPolicy{}
+}
+
+func (CatalogDeliveryTrustPolicy) Evaluate(publisher PublisherIdentity) TrustDecision {
+	if publisher.Local {
+		return TrustDecision{Publisher: publisher, Trust: LocalSourceTrust}
+	}
+	if catalogRegistryHost(publisher.Registry) {
+		return TrustDecision{Publisher: publisher, Trust: TrustedPublisherTrust}
+	}
+	return TrustDecision{Publisher: publisher, Trust: UnknownPublisherTrust}
+}
+
+// catalogRegistryHost reports whether host is the product catalog registry or
+// the process-configured registry (local catalog worker / staging).
+func catalogRegistryHost(host string) bool {
+	host = normalizeRegistryHost(host)
+	if host == "" {
+		return false
+	}
+	if host == normalizeRegistryHost(oci.DefaultRegistry) {
+		return true
+	}
+	// Local/dev and staging: when ADVERSARY_REGISTRY_HOST points at a catalog
+	// worker (e.g. localhost:8787), pulls from that host are treated as catalog
+	// delivery for the same reason as production — that worker is the catalog.
+	configured := normalizeRegistryHost(oci.DefaultRegistryHost())
+	return configured != "" && host == configured
+}
+
+func normalizeRegistryHost(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimSuffix(host, "/")
+	return host
 }
 
 type RequestedPermissions struct {

@@ -97,8 +97,9 @@ func TestAutoDryRunIncludeExcludeAndNoMatch(t *testing.T) {
 }
 
 func TestAutoUntrustedProgramDetectorFallsBackToSafeDeclaration(t *testing.T) {
+	// Foreign registry = not catalog delivery → host detector blocked as untrusted.
 	repo, resolver := autoRepository(t, map[string]string{
-		"randomperson/dockerfile:1.0.0": "name: randomperson/dockerfile\ndetection:\n  files: [Dockerfile]\n  entrypoint: dist/detect.js\n",
+		"ghcr.io/randomperson/dockerfile:1.0.0": "name: randomperson/dockerfile\ndetection:\n  files: [Dockerfile]\n  entrypoint: dist/detect.js\n",
 	})
 	changes := &fakeChangeResolver{context: detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "Dockerfile", Status: detection.StatusModified}}}}
 	result, err := (AutoRunner{Runner: Runner{Resolver: &resolver, Repository: &repo, Executor: &detectorExecutor{backend: HostExecutorBackend}}, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{DryRun: true, MinimumConfidence: detection.ConfidenceMedium})

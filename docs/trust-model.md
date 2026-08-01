@@ -14,8 +14,12 @@ silently weaken a mandatory permission.
 It is the default for explicit local source projects, which are trusted by the
 developer's direct path selection and run without a warning or unsafe flag. It
 is also acceptable for installed artifacts from publishers trusted by the
-replaceable publisher policy. The built-in policy trusts `adversarylabs` only
-on the official registry; a lookalike namespace on another registry is
+replaceable publisher policy. The built-in policy trusts packages **delivered by
+the Adversary Labs catalog registry** (`registry.adversarylabs.ai`, or
+`ADVERSARY_REGISTRY_HOST` when set for local/staging catalog). The hosted
+registry only accepts official free-catalog publishes, so delivery from that
+registry is the definition of "official" — the CLI does not maintain a domain
+path allowlist (`go/`, `ci/`, …). A lookalike path on another registry is
 unknown. Trusted remote execution reports the publisher, immutable digest, and
 selected backend without an alarm-style warning. Team membership is not inferred
 from publisher names; future organization trust must come from authenticated
