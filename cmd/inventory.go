@@ -101,6 +101,8 @@ func collectInventory(
 		return nil, err
 	}
 
+	// Include every non-retired local install before merging. Filtering on the
+	// query here would drop rows that only match after merge (status, latestVersion).
 	raw := make([]inventoryItem, 0, len(localEntries)+32)
 	for _, entry := range localEntries {
 		item := inventoryItem{
@@ -114,12 +116,13 @@ func collectInventory(
 		if isRetiredPublisherInventory(item) {
 			continue
 		}
-		if matchesInventoryQuery(item, query) {
-			raw = append(raw, item)
-		}
+		raw = append(raw, item)
 	}
 
-	remote, remoteErr := fetchRemoteInventory(ctx, deps, apiURL, profile, query)
+	// Always fetch the full remote catalog (empty API q). Pre-filtering remote by
+	// query would omit packages that only match via status/latestVersion once
+	// combined with local installs; client-side matchesInventoryQuery runs after merge.
+	remote, remoteErr := fetchRemoteInventory(ctx, deps, apiURL, profile, "")
 	if remoteErr != nil {
 		// Local inventory must still work offline or without login.
 		// Without remote we cannot mark outdated; installed rows stay "installed".
@@ -136,13 +139,13 @@ func collectInventory(
 	}
 
 	// One row per package name with status: installed | catalog | outdated.
+	// Query and scope filters apply only after status is computed.
 	items := mergeInventoryByName(raw)
 	filtered := make([]inventoryItem, 0, len(items))
 	for _, item := range items {
 		if !scope.allows(item.Status) {
 			continue
 		}
-		// Re-apply query against merged status fields (latest, status).
 		if matchesInventoryQuery(item, query) {
 			filtered = append(filtered, item)
 		}

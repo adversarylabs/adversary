@@ -241,6 +241,71 @@ func TestMergeInventoryByNameStatuses(t *testing.T) {
 	}
 }
 
+func TestCollectInventoryQueryMatchesStatusAfterMerge(t *testing.T) {
+	// Local is behind catalog. A query of "outdated" or the catalog version must
+	// still find the row after status/latestVersion are computed (not pre-merge).
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/search" {
+			http.NotFound(w, r)
+			return
+		}
+		// Full catalog when q is empty (client-side filter after merge).
+		if r.URL.Query().Get("q") != "" {
+			t.Errorf("expected empty remote search q for post-merge filtering, got %q", r.URL.Query().Get("q"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"name":"pkg/behind","version":"0.0.2","description":"catalog","reference":"registry.example/pkg/behind:0.0.2"}]}`))
+	}))
+	defer server.Close()
+
+	repo := repository.Repository{Root: t.TempDir()}
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repo, &out, &errOut).Dependencies()
+	store := base.Auth.(processAuthStore).ConfigStore
+	if err := store.SetAuth(adversarylabs.AuthKey(server.URL, "default"), adversarylabs.Auth{Token: "token"}); err != nil {
+		t.Fatal(err)
+	}
+	base.API = processAPIFactory{store: store, http: server.Client()}
+	base.Registries = processRegistryFactory{store: store, docker: oci.DockerCredentialStore{HomeDir: t.TempDir()}, host: base.RegistryHost, identity: store.Path}
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	project := t.TempDir()
+	writeProject(t, project)
+	if err := os.WriteFile(filepath.Join(project, "adversary.yaml"), []byte(`name: pkg/behind
+version: 0.0.1
+description: local install only phrase
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.js
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pack := NewRootCommandWithApp(app)
+	pack.SetArgs([]string{"pack", project})
+	if err := pack.Execute(); err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+
+	for _, q := range []string{"outdated", "0.0.2"} {
+		errOut.Reset()
+		items, err := collectInventory(context.Background(), app, server.URL, "default", q, &errOut, inventoryScope{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(items) != 1 || items[0].Name != "pkg/behind" || items[0].Status != inventoryStatusOutdated {
+			t.Fatalf("query %q: want one outdated pkg/behind, got %#v stderr=%q", q, items, errOut.String())
+		}
+		if items[0].Version != "0.0.1" || items[0].LatestVersion != "0.0.2" {
+			t.Fatalf("query %q: versions %#v", q, items[0])
+		}
+	}
+}
+
 func TestInventoryScopeFilters(t *testing.T) {
 	items := []inventoryItem{
 		{Name: "a", Status: inventoryStatusInstalled},
