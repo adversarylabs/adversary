@@ -7,6 +7,7 @@ package telemetry
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -21,6 +22,14 @@ const (
 var officialCatalogDomains = map[string]struct{}{
 	"go": {}, "ci": {}, "container": {}, "security": {}, "review": {},
 	"infra": {}, "deps": {}, "meta": {}, "cloud": {}, "lang": {},
+}
+
+// pathExists is injected in tests.
+var pathExists = defaultPathExists
+
+func defaultPathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // Disabled reports whether the user opted out of sharing sanitized usage data.
@@ -92,14 +101,22 @@ func SanitizeAdversarySelection(refs []string) []string {
 
 // SanitizeAdversaryRef normalizes one adversary reference for telemetry.
 //
-// Only official free-catalog domain/name ids are preserved. Bare short names
-// and path-shaped two-segment values (e.g. private-reviewer, internal/x)
-// collapse to "local" so directory components never leave the machine.
+// Local projects (including catalog-shaped relative paths that resolve to an
+// on-disk adversary.yaml) always become "local". Only official free-catalog
+// domain/name ids that are not local projects are preserved.
 func SanitizeAdversaryRef(value string) string {
-	ref := strings.TrimSpace(strings.ToLower(value))
-	if ref == "" {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
 		return ""
 	}
+
+	// Runtime prefers an on-disk <ref>/adversary.yaml over catalog lookup.
+	// Detect that first so ci/private-reviewer never reports as catalog id.
+	if isLocalAdversaryProject(raw) {
+		return "local"
+	}
+
+	ref := strings.ToLower(raw)
 	// Explicit path shapes including Windows drive letters (c:/Users/...).
 	if strings.HasPrefix(ref, ".") ||
 		strings.HasPrefix(ref, "/") ||
@@ -158,6 +175,50 @@ func SanitizeAdversaryRef(value string) string {
 	}
 
 	return "other"
+}
+
+// isLocalAdversaryProject reports whether ref is an on-disk adversary project
+// (directory with adversary.yaml), matching CLI resolution precedence.
+func isLocalAdversaryProject(raw string) bool {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return false
+	}
+	// Drop digest.
+	if at := strings.IndexByte(p, '@'); at >= 0 {
+		p = p[:at]
+	}
+	// Drop trailing :tag when not a Windows drive path (C:\ or C:/).
+	if !isWindowsDrivePath(strings.ToLower(p)) {
+		if colon := strings.LastIndexByte(p, ':'); colon > 0 {
+			// Keep "C:" style only when it is a drive prefix; otherwise treat as tag.
+			if !(colon == 1 && len(p) > 2 && (p[2] == '/' || p[2] == '\\')) {
+				slash := strings.LastIndexByte(p, '/')
+				bslash := strings.LastIndexByte(p, '\\')
+				sep := slash
+				if bslash > sep {
+					sep = bslash
+				}
+				if colon > sep {
+					p = p[:colon]
+				}
+			}
+		}
+	}
+
+	// Direct path to adversary.yaml
+	base := filepath.Base(p)
+	if strings.EqualFold(base, "adversary.yaml") || strings.EqualFold(base, "adversary.yml") {
+		return pathExists(p)
+	}
+
+	// Directory containing adversary.yaml (runtime local project form).
+	for _, name := range []string{"adversary.yaml", "adversary.yml"} {
+		if pathExists(filepath.Join(p, name)) {
+			return true
+		}
+	}
+	return false
 }
 
 func isRegistryHostPart(value string) bool {

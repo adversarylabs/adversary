@@ -1,6 +1,9 @@
 package telemetry
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestDisabledWith(t *testing.T) {
 	if DisabledWith(func(string) string { return "" }) {
@@ -33,19 +36,22 @@ func TestDisabledWith(t *testing.T) {
 }
 
 func TestSanitizeAdversarySelection(t *testing.T) {
+	// No on-disk projects for these refs.
+	pathExists = func(string) bool { return false }
+	t.Cleanup(func() { pathExists = defaultPathExists })
+
 	got := SanitizeAdversarySelection([]string{
 		"registry.adversarylabs.ai/infra/terraform:0.0.4",
 		"go/security",
 		"go/security",
 		"./local-adv",
 		"/abs/path",
-		"private-reviewer",          // bare local dir name
-		"internal/private-reviewer", // path-shaped, non-official domain
-		"npm",                       // bare short name (ambiguous with local dirs)
+		"private-reviewer",
+		"internal/private-reviewer",
+		"npm",
 		"weird!!!",
 		"",
 	})
-	// Official catalog ids preserved; everything else buckets to local/other.
 	want := []string{"infra/terraform", "go/security", "local", "other"}
 	if len(got) != len(want) {
 		t.Fatalf("got %#v want %#v", got, want)
@@ -58,6 +64,9 @@ func TestSanitizeAdversarySelection(t *testing.T) {
 }
 
 func TestSanitizeOfficialDomainsOnly(t *testing.T) {
+	pathExists = func(string) bool { return false }
+	t.Cleanup(func() { pathExists = defaultPathExists })
+
 	if got := SanitizeAdversaryRef("ci/gitlab-ci"); got != "ci/gitlab-ci" {
 		t.Fatalf("got %q", got)
 	}
@@ -70,6 +79,9 @@ func TestSanitizeOfficialDomainsOnly(t *testing.T) {
 }
 
 func TestSanitizeWindowsDrivePaths(t *testing.T) {
+	pathExists = func(string) bool { return false }
+	t.Cleanup(func() { pathExists = defaultPathExists })
+
 	if got := SanitizeAdversaryRef(`C:/Users/alice/private-reviewer`); got != "local" {
 		t.Fatalf("got %q want local", got)
 	}
@@ -79,6 +91,9 @@ func TestSanitizeWindowsDrivePaths(t *testing.T) {
 }
 
 func TestSanitizeExternalOCIHosts(t *testing.T) {
+	pathExists = func(string) bool { return false }
+	t.Cleanup(func() { pathExists = defaultPathExists })
+
 	if got := SanitizeAdversaryRef("registry.example.com/go/payroll-private"); got != "external" {
 		t.Fatalf("got %q want external", got)
 	}
@@ -87,5 +102,23 @@ func TestSanitizeExternalOCIHosts(t *testing.T) {
 	}
 	if got := SanitizeAdversaryRef("registry.adversarylabs.ai/go/security:0.0.11"); got != "go/security" {
 		t.Fatalf("got %q want go/security", got)
+	}
+}
+
+func TestSanitizeCatalogShapedLocalProject(t *testing.T) {
+	// Simulate on-disk ci/private-reviewer/adversary.yaml (runtime local precedence).
+	pathExists = func(p string) bool {
+		return p == filepath.Join("ci/private-reviewer", "adversary.yaml") ||
+			p == filepath.Join("ci/private-reviewer", "adversary.yml")
+	}
+	t.Cleanup(func() { pathExists = defaultPathExists })
+
+	if got := SanitizeAdversaryRef("ci/private-reviewer"); got != "local" {
+		t.Fatalf("catalog-shaped local path got %q want local", got)
+	}
+	// Without on-disk project, same shape is a real catalog id.
+	pathExists = func(string) bool { return false }
+	if got := SanitizeAdversaryRef("ci/gitlab-ci"); got != "ci/gitlab-ci" {
+		t.Fatalf("got %q want ci/gitlab-ci", got)
 	}
 }
