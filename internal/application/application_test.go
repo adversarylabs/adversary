@@ -141,6 +141,9 @@ func (fakeRepo) RepairAll(map[string]blobsource.Source) (repository.RepairReport
 	return repository.RepairReport{}, nil
 }
 func (fakeRepo) DeleteRef(string, string) error { return nil }
+func (fakeRepo) ReferenceEntries() ([]repository.Entry, error) {
+	return nil, nil
+}
 func (fakeRepo) MigrationStatus(string) (repository.MigrationStatus, error) {
 	return repository.MigrationStatus{}, nil
 }

@@ -245,6 +245,7 @@ func TestDefaultPublisherTrustPolicy(t *testing.T) {
 		"ci":            TrustedPublisherTrust,
 		"go":            TrustedPublisherTrust,
 		"container":     TrustedPublisherTrust,
+		"web":           TrustedPublisherTrust,
 		"infra":         TrustedPublisherTrust,
 		"replicated":    UnknownPublisherTrust,
 		"randomperson":  UnknownPublisherTrust,
