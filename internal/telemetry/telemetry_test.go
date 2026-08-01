@@ -100,6 +100,12 @@ func TestSanitizeExternalOCIHosts(t *testing.T) {
 	if got := SanitizeAdversaryRef("ghcr.io/acme/security:1.0.0"); got != "external" {
 		t.Fatalf("got %q want external", got)
 	}
+	if got := SanitizeAdversaryRef("localhost:5000/go/payroll-private"); got != "external" {
+		t.Fatalf("localhost private registry got %q want external", got)
+	}
+	if got := SanitizeAdversaryRef("localhost:8787/infra/terraform:0.0.4"); got != "external" {
+		t.Fatalf("localhost dev registry got %q want external", got)
+	}
 	if got := SanitizeAdversaryRef("registry.adversarylabs.ai/go/security:0.0.11"); got != "go/security" {
 		t.Fatalf("got %q want go/security", got)
 	}

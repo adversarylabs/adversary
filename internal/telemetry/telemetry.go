@@ -253,12 +253,13 @@ func isWindowsDriveLetter(value string) bool {
 }
 
 func isOfficialRegistryHost(value string) bool {
+	// Only Adversary Labs production registry hosts. localhost (any port) is
+	// not official — localhost:5000/go/private must not become go/private.
 	host := value
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		host = value[:i]
 	}
-	return host == "localhost" ||
-		host == "registry.adversarylabs.ai" ||
+	return host == "registry.adversarylabs.ai" ||
 		strings.HasSuffix(host, ".adversarylabs.ai")
 }
 
