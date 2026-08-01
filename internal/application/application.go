@@ -88,6 +88,7 @@ type APIFactory interface{ New(string) APIClient }
 type OCIRegistry interface {
 	PushSources(context.Context, oci.Reference, []byte, []oci.SourceBlob) (string, error)
 	PushAdversaryManifestReferrer(context.Context, oci.Reference, string, []byte) (string, string, error)
+	PushAttachedReferrer(context.Context, oci.Reference, string, string, string, string, []byte) (string, string, error)
 	PullSources(context.Context, oci.Reference) (*oci.PulledSources, error)
 	Resolve(context.Context, oci.Reference) (string, error)
 	SetPlainHTTP(bool)

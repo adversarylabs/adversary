@@ -9,6 +9,7 @@ import (
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
+	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/spf13/cobra"
 )
 
@@ -107,6 +108,8 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 		registry.SetPlainHTTP(true)
 	}
 	fmt.Fprintf(stderr, "Pushing %s (%s) to %s\n", resolution.CanonicalReference, resolution.Digest, ref.Locator())
+	// Catalog docs live in the package layer; extract while the lease is open.
+	docs, docsErr := extractCatalogDocs(lease.Blobs)
 	digest, err := registry.PushSources(ctx, ref, manifest, lease.Blobs)
 	if err != nil {
 		return true, err
@@ -125,6 +128,28 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 	if err != nil {
 		return true, err
 	}
+
+	// Attach README.md and CHECKS.md as OCI referrers (same pattern as adversary.yaml)
+	// so the catalog site can show versioned product content.
+	if docsErr != nil {
+		fmt.Fprintf(stderr, "Warning: could not extract catalog docs from package layer: %v\n", docsErr)
+	} else {
+		if readme := docs["README.md"]; len(readme) > 0 {
+			if _, _, err := registry.PushAttachedReferrer(ctx, ref, digest, oci.ReadmeMediaType, "README.md", "adversary-readme", readme); err != nil {
+				fmt.Fprintf(stderr, "Warning: could not publish README referrer: %v\n", err)
+			} else {
+				fmt.Fprintln(stderr, "Published README.md referrer")
+			}
+		}
+		if checks := docs["CHECKS.md"]; len(checks) > 0 {
+			if _, _, err := registry.PushAttachedReferrer(ctx, ref, digest, oci.ChecksMediaType, "CHECKS.md", "adversary-checks", checks); err != nil {
+				fmt.Fprintf(stderr, "Warning: could not publish CHECKS referrer: %v\n", err)
+			} else {
+				fmt.Fprintln(stderr, "Published CHECKS.md referrer")
+			}
+		}
+	}
+
 	if err := registerExactRef(resolver, ref.Locator(), digest); err != nil {
 		return true, err
 	}
@@ -133,4 +158,14 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 	}
 	fmt.Fprintf(stdout, "Canonical reference: %s\nImage digest\n\n%s\nDigest: %s\nPublished adversary manifest referrer\n\n%s\n", ref.Locator(), digest, digest, artifactDigest)
 	return true, nil
+}
+
+func extractCatalogDocs(blobs []oci.SourceBlob) (map[string][]byte, error) {
+	for _, blob := range blobs {
+		if blob.Descriptor.MediaType != oci.PackageLayerMediaType {
+			continue
+		}
+		return oci.ExtractLayerFiles(blob.Source, "README.md", "CHECKS.md")
+	}
+	return nil, fmt.Errorf("package layer not found among uploaded blobs")
 }
