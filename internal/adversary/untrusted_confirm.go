@@ -2,6 +2,7 @@ package adversary
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -28,7 +29,9 @@ func canPromptUntrustedConfirm(stdin io.Reader, stderr io.Writer) bool {
 }
 
 // confirmUntrustedHostExecution prompts on a TTY. Returns true only for y/yes.
-func confirmUntrustedHostExecution(stdin io.Reader, stderr io.Writer, name, digest string) (bool, error) {
+// Respects ctx cancellation (e.g. Ctrl+C via signal.NotifyContext) so interrupt
+// exits the prompt instead of hanging on ReadString.
+func confirmUntrustedHostExecution(ctx context.Context, stdin io.Reader, stderr io.Writer, name, digest string) (bool, error) {
 	fmt.Fprintf(stderr, "\nUntrusted adversary %q", name)
 	if digest != "" {
 		fmt.Fprintf(stderr, "\nDigest: %s", digest)
@@ -40,10 +43,25 @@ run unrestricted code with your user privileges (filesystem, network, etc.).
 
 Run anyway? [y/N] `)
 
-	line, err := bufio.NewReader(stdin).ReadString('\n')
-	if err != nil && err != io.EOF {
-		return false, fmt.Errorf("read confirmation: %w", err)
+	type readResult struct {
+		line string
+		err  error
 	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
+	ch := make(chan readResult, 1)
+	go func() {
+		line, err := bufio.NewReader(stdin).ReadString('\n')
+		ch <- readResult{line: line, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		fmt.Fprintln(stderr) // move past the prompt line on interrupt
+		return false, ctx.Err()
+	case r := <-ch:
+		if r.err != nil && r.err != io.EOF {
+			return false, fmt.Errorf("read confirmation: %w", r.err)
+		}
+		answer := strings.ToLower(strings.TrimSpace(r.line))
+		return answer == "y" || answer == "yes", nil
+	}
 }

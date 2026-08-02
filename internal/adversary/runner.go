@@ -198,7 +198,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		if display == "" {
 			display = trust.Publisher.Name
 		}
-		ok, promptErr := confirmUntrustedHostExecution(r.Stdin, r.Stderr, display, resolved.Digest)
+		ok, promptErr := confirmUntrustedHostExecution(ctx, r.Stdin, r.Stderr, display, resolved.Digest)
 		if promptErr != nil {
 			return promptErr
 		}
