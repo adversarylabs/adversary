@@ -9,6 +9,8 @@ LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMI
 
 # Local builds embed the official-dev public key only (no -tags release).
 # Release/CI binaries use: go build -tags release … (official-prod only).
+# build does NOT wrap Doppler — anyone can compile without secrets.
+# Package repos (e.g. adversary-adversary) own make sign-dev for Doppler signing.
 build:
 	mkdir -p $(dir $(BINARY))
 	go build -trimpath -ldflags='$(LDFLAGS)' -o $(BINARY) .
