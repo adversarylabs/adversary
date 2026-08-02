@@ -99,7 +99,8 @@ build_release() {
     mkdir -p "$build_dir/docs"
     # The verified commit is stamped explicitly; ambient VCS inspection would
     # make release bytes depend on checkout/cache state.
-    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -buildvcs=false -trimpath \
+    # -tags release embeds only the production official public key (not dev).
+    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -tags release -buildvcs=false -trimpath \
       -ldflags="-s -w -X github.com/adversarylabs/adversary/internal/version.Version=${VERSION} -X github.com/adversarylabs/adversary/internal/version.Commit=${COMMIT} -X github.com/adversarylabs/adversary/internal/version.BuildDate=${BUILD_DATE}" \
       -o "${build_dir}/${BINARY}" .
     verify_binary "${build_dir}/${BINARY}"

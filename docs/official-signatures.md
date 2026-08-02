@@ -3,7 +3,8 @@
 ## Model
 
 Host execution trusts an installed adversary when a valid **official signature**
-verifies for its content digest using a public key embedded in the CLI.
+verifies for its content digest using a public key **baked into that CLI
+binary**.
 
 | Concept | Mechanism |
 |---------|-----------|
@@ -11,10 +12,49 @@ verifies for its content digest using a public key embedded in the CLI.
 | Algorithm | Ed25519 |
 | Where signature lives | OCI referrer on the catalog registry + local store copy after pull |
 | Who verifies | `adversary` CLI only (no Notation/Cosign required for users) |
-| Who signs | Release CI with `ADVERSARY_OFFICIAL_SIGNING_SEED` |
+| Who signs | CI / local tooling with `ADVERSARY_OFFICIAL_SIGNING_SEED` |
 
-Registry hostname and path domain allowlists are **not** the trust decision.
-Delivery is separate from endorsement.
+Public keys are committed and compiled in. Private seeds are never committed.
+
+## Dev vs prod keys (separate binaries)
+
+| | **Dev / default `go build`** | **Release (`-tags release`)** |
+|--|------------------------------|-------------------------------|
+| Build | no special tags | `-tags release` (used by release scripts) |
+| Public key in binary | `official-dev` only | `official-prod` only |
+| Default key id | `official-dev` | `official-prod` |
+| Private seed | local/dev secret only | prod CI secret only |
+| Signs | local/staging catalog | `registry.adversarylabs.ai` |
+
+A **released** CLI cannot verify packages signed with the **dev** key, because
+that public key is not present in the binary. An env var alone would still ship
+both keys; **build tags** keep them out of the wrong artifact.
+
+```bash
+# Everyday development (dev key only)
+go build -o adversary .
+
+# Release-shaped binary (prod key only) — matches Homebrew/release builds
+go build -tags release -o adversary .
+```
+
+Sign with the matching key id:
+
+```bash
+# Dev catalog
+export ADVERSARY_OFFICIAL_SIGNING_SEED  # dev seed from secrets manager
+go run ./scripts/sign-official -digest "sha256:…" -key-id official-dev -out sig.json
+
+# Prod catalog (release CI)
+export ADVERSARY_OFFICIAL_SIGNING_SEED  # prod seed from CI secrets
+go run ./scripts/sign-official -digest "sha256:…" -key-id official-prod -out sig.json
+```
+
+Files:
+
+- `pkg/officialsig/keys_dev.go` — `//go:build !release` (dev public key)
+- `pkg/officialsig/keys_release.go` — `//go:build release` (prod public key)
+- `pkg/officialsig/keys_common.go` — key id constants only
 
 ## Envelope
 
@@ -24,7 +64,7 @@ Media type: `application/vnd.adversarylabs.official-signature.v1+json`
 {
   "specVersion": 1,
   "subjectDigest": "sha256:…",
-  "keyID": "official-v1",
+  "keyID": "official-prod",
   "signedAt": "2026-08-01T12:00:00Z",
   "signature": "<base64 ed25519 signature>"
 }
@@ -42,37 +82,28 @@ adversarylabs-official-sig-v1
 ## CLI verify path
 
 1. `adversary pull` resolves digest, installs content, fetches the signature
-   referrer, verifies with the embedded keyring, stores under
+   referrer, verifies with this binary’s keyring, stores under
    `official-signatures/` in the local repository.
-2. `adversary run` sets `OfficialSigned` when
-   `HasVerifiedOfficialSignature(digest)` is true, then allows `HostExecutor`.
+2. `adversary run` sets `OfficialSigned` when verification succeeds, then allows
+   `HostExecutor`.
 
-## CI sign path
+## Secrets
 
-```bash
-# 32-byte Ed25519 seed as 64 hex chars — store only in CI secrets, never commit.
-export ADVERSARY_OFFICIAL_SIGNING_SEED
-go run ./scripts/sign-official -digest "sha256:…" -out /tmp/sig.json
-# Attach referrer to the published artifact (registry push of
-# OfficialSignatureMediaType subject = image digest).
-```
+| Secret | Where |
+|--------|--------|
+| Prod seed | Prod CI / Doppler prd only |
+| Dev seed | Doppler dev / 1Password for local catalog publishers |
+| Public keys | Repo (safe to commit) |
 
-**Never commit private seeds or key material.** Only the public key is embedded
-in the CLI (`pkg/officialsig/keys.go`). Generate a seed offline, put it in CI
-secrets, and embed the matching public key. Rotate by adding `official-v2` to
-the keyring and re-signing catalog packages.
-
-Tests generate ephemeral keys via `GenerateKey` + `SetKeyringForTest`; they do
-not use the production private key.
+**Never commit private seeds.** Tests use `GenerateKey` + `SetKeyringForTest`.
 
 ## Notation / TUF
 
-- **Notation/Cosign**: optional later for CI interop; verify stays in-process via
-  this package so users do not install extra tools.
-- **TUF**: later for key rotation and catalog metadata; not required for MVP.
+- **Notation/Cosign**: optional later for CI interop; users still only need this CLI.
+- **TUF**: later for key rotation without shipping a new binary for every key id.
 
 ## Migration
 
-Until catalog packages are signed and re-pulled, host execution of remote
-packages requires `--allow-unsafe-host-execution` or a sandbox. Local source
-projects remain trusted by path selection.
+Until catalog packages are signed and re-pulled, remote host exec needs
+`--allow-unsafe-host-execution` or a sandbox. Local source projects remain
+trusted by path selection.

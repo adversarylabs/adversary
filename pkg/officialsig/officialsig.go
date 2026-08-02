@@ -30,9 +30,6 @@ const MediaType = "application/vnd.adversarylabs.official-signature.v1+json"
 // ArtifactTagKind is used for digest-derived fallback tags (like adversary-manifest).
 const ArtifactTagKind = "official-signature"
 
-// DefaultKeyID is the key id for the embedded official public key.
-const DefaultKeyID = "official-v1"
-
 // Envelope is the signed document attached as an OCI referrer to an artifact digest.
 type Envelope struct {
 	SpecVersion   int    `json:"specVersion"`
@@ -45,18 +42,29 @@ type Envelope struct {
 // Keyring maps key ids to Ed25519 public keys trusted for official signatures.
 type Keyring map[string]ed25519.PublicKey
 
-// productionKeyring is the shipped CLI trust store (public keys only).
-func productionKeyring() Keyring {
-	return Keyring{DefaultKeyID: mustParsePublicKey(embeddedOfficialV1PublicKey)}
+// compileTimeKeyring is selected by build tags (keys_release.go / keys_dev.go).
+// Release binaries include only the production public key; default/dev builds
+// include only the development public key. Private seeds are never compiled in.
+func compileTimeKeyring() Keyring {
+	return buildKeyring()
 }
 
 // activeKeyring is the keyring used by DefaultKeyring. Tests may replace it via
 // SetKeyringForTest; production never ships private keys.
-var activeKeyring = productionKeyring()
+var activeKeyring = compileTimeKeyring()
 
-// DefaultKeyring returns the active official public keyring.
+// DefaultKeyring returns the active official public keyring for this binary.
 func DefaultKeyring() Keyring {
 	return activeKeyring
+}
+
+// BuildFlavor reports whether this binary was built for release (prod key only)
+// or development (dev key only).
+func BuildFlavor() string {
+	if DefaultKeyID == ProdKeyID {
+		return "release"
+	}
+	return "dev"
 }
 
 // SetKeyringForTest replaces the active keyring for the duration of a test.
@@ -65,7 +73,7 @@ func DefaultKeyring() Keyring {
 func SetKeyringForTest(k Keyring) (restore func()) {
 	prev := activeKeyring
 	if k == nil {
-		activeKeyring = productionKeyring()
+		activeKeyring = compileTimeKeyring()
 	} else {
 		activeKeyring = k
 	}

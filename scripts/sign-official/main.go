@@ -23,7 +23,7 @@ import (
 
 func main() {
 	digest := flag.String("digest", "", "subject artifact digest (sha256:...)")
-	keyID := flag.String("key-id", officialsig.DefaultKeyID, "official key id")
+	keyID := flag.String("key-id", officialsig.DefaultKeyID, "official key id (official-prod or official-dev; default matches this build's -tags)")
 	out := flag.String("out", "", "write envelope JSON to this path (default stdout)")
 	flag.Parse()
 	if *digest == "" {

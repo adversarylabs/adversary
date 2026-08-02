@@ -83,7 +83,26 @@ func TestProductionPrivateSeedIsNotInModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Verify(env, digest, productionKeyring()); err == nil {
-		t.Fatal("random private key must not verify under production public key")
+	if err := Verify(env, digest, compileTimeKeyring()); err == nil {
+		t.Fatal("random private key must not verify under compile-time public key")
+	}
+}
+
+func TestBuildFlavorMatchesDefaultKeyID(t *testing.T) {
+	restore := SetKeyringForTest(nil)
+	t.Cleanup(restore)
+	flavor := BuildFlavor()
+	if flavor != "dev" && flavor != "release" {
+		t.Fatalf("unexpected flavor %q", flavor)
+	}
+	if _, ok := DefaultKeyring()[DefaultKeyID]; !ok {
+		t.Fatalf("keyring missing DefaultKeyID %q", DefaultKeyID)
+	}
+	// A single binary must not ship both prod and dev public keys.
+	if _, hasProd := DefaultKeyring()[ProdKeyID]; hasProd && flavor == "dev" {
+		t.Fatal("dev build must not embed official-prod public key")
+	}
+	if _, hasDev := DefaultKeyring()[DevKeyID]; hasDev && flavor == "release" {
+		t.Fatal("release build must not embed official-dev public key")
 	}
 }
