@@ -11,41 +11,56 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newSignOfficialCommand(app *application.App, apiURL, profile *string) *cobra.Command {
+func newSignCommand(app *application.App, apiURL, profile *string) *cobra.Command {
 	var keyID string
 	var digestFlag string
+	var seedFlag string
 	var format string
 	cmd := &cobra.Command{
-		Use:   "sign-official <remote-reference>",
+		Use:   "sign <remote-reference>",
 		Short: "Sign a published adversary and attach the official signature referrer",
 		Long: `Create an official catalog signature for a remote artifact digest and push it
-as an OCI referrer. Requires ADVERSARY_OFFICIAL_SIGNING_SEED (private seed hex)
-and registry credentials (adversary login or service account profile).
+as an OCI referrer.
+
+Signing seed (private, never commit):
+  --seed <hex>                    flag (highest precedence)
+  ADVERSARY_OFFICIAL_SIGNING_SEED environment variable
 
 Key id defaults to this binary's build flavor:
-  go build              → official-dev
+  go build               → official-dev
   go build -tags release → official-prod
 
-End users never need this command; release/dev publishers use it after push.`,
-		Example: `  # After push to local/dev registry (dev seed from Doppler)
+Requires registry credentials (adversary login or service account profile).
+End users never need this command; publishers use it after push.`,
+		Example: `  # Local/dev (seed from Doppler)
   doppler run -p adversarylabs -c dev -- \
-    adversary sign-official localhost:8787/adversarylabs/adversary:0.0.22 --key-id official-dev
+    adversary sign localhost:8787/adversarylabs/adversary:0.0.22 --key-id official-dev
 
-  # Production CI (seed from Depot secret ADVERSARY_OFFICIAL_SIGNING_SEED)
-  adversary sign-official registry.adversarylabs.ai/adversarylabs/adversary:0.0.22 --key-id official-prod`,
+  # Or explicit seed flag
+  adversary sign registry…/adversarylabs/adversary:0.0.22 \
+    --seed "$ADVERSARY_OFFICIAL_SIGNING_SEED" --key-id official-prod
+
+  # Production CI
+  adversary sign registry.adversarylabs.ai/adversarylabs/adversary:0.0.22 \
+    --key-id official-prod`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			seed := officialsig.SigningSeedFromEnv()
+			seed := strings.TrimSpace(seedFlag)
+			if seed == "" {
+				seed = officialsig.SigningSeedFromEnv()
+			}
 			if seed == "" {
 				return &application.Error{
-					Operation: "sign-official",
+					Operation: "sign",
 					Kind:      "usage",
-					Err:       fmt.Errorf("ADVERSARY_OFFICIAL_SIGNING_SEED is required (never commit this value)"),
+					Err: fmt.Errorf(
+						"signing seed required via --seed or ADVERSARY_OFFICIAL_SIGNING_SEED (never commit this value)",
+					),
 				}
 			}
 			priv, err := officialsig.ParsePrivateKeySeed(seed)
 			if err != nil {
-				return &application.Error{Operation: "sign-official", Kind: "usage", Err: err}
+				return &application.Error{Operation: "sign", Kind: "usage", Err: err}
 			}
 			if keyID == "" {
 				keyID = officialsig.DefaultKeyID
@@ -71,7 +86,7 @@ End users never need this command; release/dev publishers use it after push.`,
 				resolved, resolveErr := registry.Resolve(cmd.Context(), ref)
 				if resolveErr != nil {
 					return &application.Error{
-						Operation: "sign-official",
+						Operation: "sign",
 						Kind:      "network",
 						Resource:  ref.Locator(),
 						Err:       resolveErr,
@@ -89,7 +104,6 @@ End users never need this command; release/dev publishers use it after push.`,
 				return err
 			}
 
-			// Push as OCI referrer (same pattern as README/CHECKS).
 			sigDigest, _, err := registry.PushAttachedReferrer(
 				cmd.Context(),
 				ref,
@@ -101,20 +115,19 @@ End users never need this command; release/dev publishers use it after push.`,
 			)
 			if err != nil {
 				return &application.Error{
-					Operation: "sign-official",
+					Operation: "sign",
 					Kind:      "network",
 					Resource:  ref.Locator(),
 					Err:       err,
 				}
 			}
 
-			// Best-effort local cache so this machine's run path trusts without re-pull.
 			if saveErr := app.Dependencies().Repository.SaveOfficialSignature(digest, raw); saveErr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not cache signature locally: %v\n", saveErr)
 			}
 
 			if format == "json" {
-				return writeJSON(cmd.OutOrStdout(), "sign-official", map[string]string{
+				return writeJSON(cmd.OutOrStdout(), "sign", map[string]string{
 					"reference":       ref.Locator(),
 					"subjectDigest":   digest,
 					"keyID":           keyID,
@@ -126,7 +139,8 @@ End users never need this command; release/dev publishers use it after push.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&keyID, "key-id", "", "official key id (default: official-dev or official-prod for this binary)")
+	cmd.Flags().StringVar(&seedFlag, "seed", "", "Ed25519 signing seed hex (or set ADVERSARY_OFFICIAL_SIGNING_SEED)")
+	cmd.Flags().StringVar(&keyID, "key-id", "", "key id (default: official-dev or official-prod for this binary)")
 	cmd.Flags().StringVar(&digestFlag, "digest", "", "subject image digest (default: resolve remote tag)")
 	cmd.Flags().StringVar(&format, "format", "text", "output format: text or json")
 	return cmd

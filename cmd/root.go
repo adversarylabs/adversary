@@ -75,7 +75,7 @@ func newRootCommand(app *application.App) *cobra.Command {
 	cmd.AddCommand(newLogoutCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newPushCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newPullCommand(app, &apiURL, &profile))
-	cmd.AddCommand(newSignOfficialCommand(app, &apiURL, &profile))
+	cmd.AddCommand(newSignCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newSearchCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newWhoamiCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newStoreCommand(app))

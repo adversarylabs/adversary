@@ -98,19 +98,20 @@ Same secret **name** in every environment; **values** differ by env:
 | `ADVERSARY_OFFICIAL_KEY_ID` | `official-dev` | `official-prod` | optional |
 
 ```bash
-# Local: push package, then sign+attach referrer (dev key via Doppler)
-make build
+# Local (from a package repo with make sign-dev — Doppler wraps the seed):
 adversary push … localhost:8787/adversarylabs/adversary:0.0.22
 make sign-dev REF=localhost:8787/adversarylabs/adversary:0.0.22
 
-# Or low-level envelope only (then attach yourself):
-doppler run --project adversarylabs --config dev -- \
-  go run ./scripts/sign-official -digest sha256:… -key-id official-dev -out sig.json
+# Or invoke CLI directly (flag or env for the seed):
+adversary sign localhost:8787/adversarylabs/adversary:0.0.22 \
+  --seed "$ADVERSARY_OFFICIAL_SIGNING_SEED" --key-id official-dev
 
-# Prod CI: Depot secret ADVERSARY_OFFICIAL_SIGNING_SEED + after push
-adversary sign-official registry.adversarylabs.ai/adversarylabs/adversary:0.0.22 \
+# Prod CI: inject ADVERSARY_OFFICIAL_SIGNING_SEED, then after push:
+adversary sign registry.adversarylabs.ai/adversarylabs/adversary:0.0.22 \
   --key-id official-prod
 ```
+
+Seed resolution: `--seed` flag, else env `ADVERSARY_OFFICIAL_SIGNING_SEED`.
 
 **Never commit private seeds.** Tests use `GenerateKey` + `SetKeyringForTest`.
 
