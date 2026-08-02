@@ -111,6 +111,11 @@ func RepoKey(absRepo string) string {
 }
 
 // Fingerprint computes the invalidation key for a worktree.
+//
+// For git repos: HEAD + staged tree identity + porcelain status, plus the
+// **content hash** of every dirty or untracked indexable path (so two different
+// edits to the same path do not collide). For non-git: content hash of all
+// indexable files.
 func Fingerprint(absRepo string) (string, error) {
 	absRepo = filepath.Clean(absRepo)
 	h := sha256.New()
@@ -124,32 +129,81 @@ func Fingerprint(absRepo string) (string, error) {
 			head = "NOHEAD"
 		}
 		_, _ = io.WriteString(h, strings.TrimSpace(head)+"\n")
-		// Dirty + untracked content of indexable files via git when possible
+		// Tracked tree as indexed in the object store (clean commit identity)
+		ls, err := gitOutput(absRepo, "ls-files", "-z", "--stage")
+		if err == nil {
+			_, _ = io.WriteString(h, ls)
+		}
 		status, err := gitOutput(absRepo, "status", "--porcelain=v1", "-uall", "--", ".")
 		if err != nil {
 			return "", fmt.Errorf("git status: %w", err)
 		}
 		_, _ = io.WriteString(h, status)
-		// Also hash HEAD tree listing for tracked content identity beyond status
-		ls, err := gitOutput(absRepo, "ls-files", "-z", "--stage")
-		if err == nil {
-			_, _ = io.WriteString(h, ls)
+		// Content identity of dirty/untracked paths — porcelain alone is not enough
+		// (two different edits to the same path share the same status line).
+		for _, rel := range dirtyIndexablePaths(status) {
+			if err := writeFileContentFingerprint(h, absRepo, rel); err != nil {
+				// Missing path (deleted) still contributes a stable marker.
+				fmt.Fprintf(h, "missing\t%s\n", rel)
+			}
 		}
 	} else {
-		// Non-git: walk and hash mtime+size+path for indexable files
 		entries, err := listIndexableFiles(absRepo)
 		if err != nil {
 			return "", err
 		}
 		for _, rel := range entries {
-			info, err := os.Stat(filepath.Join(absRepo, rel))
-			if err != nil {
+			if err := writeFileContentFingerprint(h, absRepo, rel); err != nil {
 				continue
 			}
-			fmt.Fprintf(h, "%s\t%d\t%d\n", rel, info.Size(), info.ModTime().UnixNano())
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func writeFileContentFingerprint(h io.Writer, absRepo, rel string) error {
+	body, err := os.ReadFile(filepath.Join(absRepo, rel))
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(body)
+	_, err = fmt.Fprintf(h, "%s\t%s\n", filepath.ToSlash(rel), hex.EncodeToString(sum[:]))
+	return err
+}
+
+// dirtyIndexablePaths extracts worktree paths from git status --porcelain=v1
+// that may have content not represented by ls-files --stage alone.
+func dirtyIndexablePaths(porcelain string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		p = strings.Trim(p, "\"")
+		p = filepath.ToSlash(p)
+		if p == "" || languageOf(p) == "" {
+			return
+		}
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	for _, line := range strings.Split(porcelain, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		// XY<space>path  or  XY<space>orig -> path (rename)
+		rest := line[3:]
+		if i := strings.Index(rest, " -> "); i >= 0 {
+			add(rest[:i])
+			add(rest[i+4:])
+			continue
+		}
+		add(rest)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Ensure builds or loads the index for absRepo according to mode.

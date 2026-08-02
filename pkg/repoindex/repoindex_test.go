@@ -54,12 +54,66 @@ func TestFingerprintHitMissDirty(t *testing.T) {
 
 	// Dirty edit invalidates
 	write(t, root, "pkg/a/a.go", "package a\n\nimport \"fmt\"\n\nfunc A() { fmt.Println(2) }\n")
+	fpDirty1, err := Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	h3, err := Ensure(root, ModeAuto, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !h3.Meta.Rebuilt {
 		t.Fatal("expected rebuild after dirty edit")
+	}
+
+	// Second distinct dirty rewrite of the same path must change the fingerprint
+	// (porcelain alone is not enough — content must be part of the key).
+	write(t, root, "pkg/a/a.go", "package a\n\nimport \"fmt\"\n\nfunc A() { fmt.Println(3) }\n")
+	fpDirty2, err := Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fpDirty1 == fpDirty2 {
+		t.Fatal("two different dirty edits produced the same fingerprint")
+	}
+	h4, err := Ensure(root, ModeAuto, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h4.Meta.Rebuilt {
+		t.Fatal("expected rebuild after second dirty rewrite")
+	}
+	// Unchanged after second rewrite → hit
+	h5, err := Ensure(root, ModeAuto, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h5.Meta.Rebuilt {
+		t.Fatal("expected cache hit when dirty content is unchanged")
+	}
+}
+
+func TestFingerprintDistinguishesDirtyContent(t *testing.T) {
+	root := t.TempDir()
+	run(t, root, "git", "init")
+	run(t, root, "git", "config", "user.email", "t@example.com")
+	run(t, root, "git", "config", "user.name", "t")
+	write(t, root, "main.go", "package main\n\nfunc main() {}\n")
+	run(t, root, "git", "add", ".")
+	run(t, root, "git", "commit", "-m", "init")
+
+	write(t, root, "main.go", "package main\n\nfunc main() { println(1) }\n")
+	fp1, err := Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, "main.go", "package main\n\nfunc main() { println(2) }\n")
+	fp2, err := Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp1 == fp2 {
+		t.Fatalf("dirty content fingerprints collided: %s", fp1)
 	}
 }
 
