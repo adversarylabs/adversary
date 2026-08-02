@@ -186,10 +186,30 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		permissionPolicy = AllowRequestedPermissionsPolicy{}
 	}
 	requirements := permissionRequirements(resolved, opts)
+	allowUnsafe := opts.AllowUnsafeHostExecution
+	// Interactive TTY: offer to proceed without requiring the long flag up front.
+	// Never prompt for JSON/machine output.
+	if !allowUnsafe &&
+		trust.Trust == UnknownPublisherTrust &&
+		executor.Backend() == HostExecutorBackend &&
+		opts.Format != "json" &&
+		canPromptUntrustedConfirm(r.Stdin, r.Stderr) {
+		display := strings.TrimSpace(opts.AdversaryRef)
+		if display == "" {
+			display = trust.Publisher.Name
+		}
+		ok, promptErr := confirmUntrustedHostExecution(r.Stdin, r.Stderr, display, resolved.Digest)
+		if promptErr != nil {
+			return promptErr
+		}
+		if ok {
+			allowUnsafe = true
+		}
+	}
 	decision, err := DecideExecutionPolicy(ExecutionPolicyRequest{
 		Trust: trust, Requested: requirements.Requested, Required: requirements.Required, Allowed: permissionPolicy.Allowed(trust),
 		Backend: executor.Backend(), Capabilities: executor.Capabilities(),
-		AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
+		AllowUnsafeHostExecution: allowUnsafe,
 	})
 	if err != nil {
 		return err
@@ -367,7 +387,11 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			fmt.Fprintf(stderr, "Publisher: %s\nDigest: %s\nExecution backend: %s\n", trust.Publisher.Name, resolved.Digest, backendDisplayName(executor.Backend()))
 		}
 		if decision.UnsafeOverride {
-			fmt.Fprintf(stderr, "WARNING: unknown publisher %q is executing as an unrestricted host process because --allow-unsafe-host-execution was explicitly provided.\n", trust.Publisher.Name)
+			name := strings.TrimSpace(opts.AdversaryRef)
+			if name == "" {
+				name = trust.Publisher.Name
+			}
+			fmt.Fprintf(stderr, "WARNING: untrusted adversary %q is running as an unrestricted host process (--allow-unsafe-host-execution or interactive confirm).\n", name)
 		}
 	}
 	runStarted := now()

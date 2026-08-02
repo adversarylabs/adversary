@@ -20,11 +20,12 @@ hostnames alone do not grant trust. Trusted remote execution reports the
 publisher, immutable digest, and selected backend without an alarm-style
 warning. Team membership is not inferred from publisher names.
 
-Installed artifacts from unknown publishers require a sandbox executor or
-`--allow-unsafe-host-execution`. The latter prints an explicit warning naming
-the unknown publisher and resolved digest. Mutable remote references resolve
-once through the unified repository; the resulting digest is passed to the
-executor and reported before launch.
+Installed artifacts without a valid official signature are **untrusted**. Host
+execution is blocked unless the user passes `--allow-unsafe-host-execution` or
+confirms interactively on a TTY. The override prints an explicit warning with
+the adversary identity and runs as an unrestricted host process. Mutable remote
+references resolve once through the unified repository; the resulting digest is
+passed to the executor and reported before launch.
 
 Host execution is not a sandbox: child code can access the user's filesystem,
 repository, environment, processes, and network with the user's authority. Its

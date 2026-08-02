@@ -75,7 +75,7 @@ func (forceUnknownTrust) Evaluate(identity PublisherIdentity) TrustDecision {
 func TestUnknownProgrammaticDetectorCannotUseHostBeforeReview(t *testing.T) {
 	executor := &detectorExecutor{backend: HostExecutorBackend, result: `{}`}
 	_, err := (Runner{Executor: executor, TrustPolicy: forceUnknownTrust{}}).Detect(context.Background(), DetectOptions{AdversaryRef: detectorProject(t), RepoPath: t.TempDir(), ReviewContext: detection.Context{SchemaVersion: detection.SchemaVersion, Mode: detection.ModeDirtyWorktree}})
-	if err == nil || !strings.Contains(err.Error(), "cannot execute with HostExecutor") {
+	if err == nil || !strings.Contains(err.Error(), "untrusted adversary") {
 		t.Fatalf("error = %v", err)
 	}
 	if executor.called {
