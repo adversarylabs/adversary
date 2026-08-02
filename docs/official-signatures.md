@@ -50,14 +50,20 @@ adversarylabs-official-sig-v1
 ## CI sign path
 
 ```bash
-export ADVERSARY_OFFICIAL_SIGNING_SEED=<hex seed matching official-v1 public key>
+# 32-byte Ed25519 seed as 64 hex chars — store only in CI secrets, never commit.
+export ADVERSARY_OFFICIAL_SIGNING_SEED
 go run ./scripts/sign-official -digest "sha256:…" -out /tmp/sig.json
 # Attach referrer to the published artifact (registry push of
 # OfficialSignatureMediaType subject = image digest).
 ```
 
-Private seeds are never shipped in the CLI. Rotate by adding `official-v2` to
+**Never commit private seeds or key material.** Only the public key is embedded
+in the CLI (`pkg/officialsig/keys.go`). Generate a seed offline, put it in CI
+secrets, and embed the matching public key. Rotate by adding `official-v2` to
 the keyring and re-signing catalog packages.
+
+Tests generate ephemeral keys via `GenerateKey` + `SetKeyringForTest`; they do
+not use the production private key.
 
 ## Notation / TUF
 

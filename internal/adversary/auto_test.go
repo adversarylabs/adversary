@@ -361,7 +361,8 @@ func autoRepository(t *testing.T, manifests map[string]string) (repository.Repos
 		// Catalog-style packages used in auto tests are treated as officially signed
 		// so HostExecutor detection policy matches production after signature MVP.
 		if !strings.HasPrefix(reference, "ghcr.io/") && !strings.HasPrefix(reference, "randomperson/") {
-			signOfficialDigest(t, repo, rec.Digest)
+			priv := testOfficialSigningKey(t)
+			signOfficialDigest(t, repo, rec.Digest, priv)
 		}
 	}
 	return repo, Resolver{Repository: repo}

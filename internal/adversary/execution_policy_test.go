@@ -3,9 +3,11 @@ package adversary
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -288,19 +290,36 @@ func importPolicyArtifactSigned(t *testing.T, reference string, signOfficial boo
 		t.Fatal(err)
 	}
 	if signOfficial {
-		signOfficialDigest(t, repo, record.Digest)
+		priv := testOfficialSigningKey(t)
+		signOfficialDigest(t, repo, record.Digest, priv)
 	}
 	return repo, Resolver{Repository: repo}, record
 }
 
-func signOfficialDigest(t *testing.T, repo repository.Repository, digest string) {
+// testOfficialSigningKey installs one ephemeral official keyring for the test.
+// Private material is generated in-process and never read from the tree.
+func testOfficialSigningKey(t *testing.T) ed25519.PrivateKey {
 	t.Helper()
-	// Seed matches pkg/officialsig embedded public key (test/CI only).
-	const seed = "7bef45c91f3ead4f9f79362390d0f32d86347b5ee93138a7bfb93245941b4850"
-	priv, err := officialsig.ParsePrivateKeySeed(seed)
+	if priv, ok := testOfficialKeys.Load(t.Name()); ok {
+		return priv.(ed25519.PrivateKey)
+	}
+	pub, priv, err := officialsig.GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
+	restore := officialsig.SetKeyringForTest(officialsig.Keyring{officialsig.DefaultKeyID: pub})
+	t.Cleanup(func() {
+		restore()
+		testOfficialKeys.Delete(t.Name())
+	})
+	testOfficialKeys.Store(t.Name(), priv)
+	return priv
+}
+
+var testOfficialKeys sync.Map
+
+func signOfficialDigest(t *testing.T, repo repository.Repository, digest string, priv ed25519.PrivateKey) {
+	t.Helper()
 	env, err := officialsig.Sign(digest, officialsig.DefaultKeyID, priv, time.Unix(1, 0).UTC())
 	if err != nil {
 		t.Fatal(err)

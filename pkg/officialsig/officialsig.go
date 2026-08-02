@@ -45,9 +45,31 @@ type Envelope struct {
 // Keyring maps key ids to Ed25519 public keys trusted for official signatures.
 type Keyring map[string]ed25519.PublicKey
 
-// DefaultKeyring returns the production CLI trust store (embedded public keys).
-func DefaultKeyring() Keyring {
+// productionKeyring is the shipped CLI trust store (public keys only).
+func productionKeyring() Keyring {
 	return Keyring{DefaultKeyID: mustParsePublicKey(embeddedOfficialV1PublicKey)}
+}
+
+// activeKeyring is the keyring used by DefaultKeyring. Tests may replace it via
+// SetKeyringForTest; production never ships private keys.
+var activeKeyring = productionKeyring()
+
+// DefaultKeyring returns the active official public keyring.
+func DefaultKeyring() Keyring {
+	return activeKeyring
+}
+
+// SetKeyringForTest replaces the active keyring for the duration of a test.
+// The returned function restores the previous keyring. Private keys used with
+// this keyring must be generated in-process — never committed.
+func SetKeyringForTest(k Keyring) (restore func()) {
+	prev := activeKeyring
+	if k == nil {
+		activeKeyring = productionKeyring()
+	} else {
+		activeKeyring = k
+	}
+	return func() { activeKeyring = prev }
 }
 
 // SigningMessage is the exact byte sequence that is signed/verified.

@@ -2,31 +2,20 @@ package officialsig
 
 import (
 	"crypto/ed25519"
-	"encoding/hex"
 	"testing"
 	"time"
 )
 
-// testSeed is the private seed for embeddedOfficialV1PublicKey (CI/dev only).
-const testSeed = "7bef45c91f3ead4f9f79362390d0f32d86347b5ee93138a7bfb93245941b4850"
-
-func testPrivate(t *testing.T) ed25519.PrivateKey {
-	t.Helper()
-	priv, err := ParsePrivateKeySeed(testSeed)
+func TestSignAndVerifyRoundTrip(t *testing.T) {
+	pub, priv, err := GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	pub := priv.Public().(ed25519.PublicKey)
-	if hex.EncodeToString(pub) != embeddedOfficialV1PublicKey {
-		t.Fatalf("test seed does not match embedded public key")
-	}
-	return priv
-}
+	restore := SetKeyringForTest(Keyring{"test-key": pub})
+	t.Cleanup(restore)
 
-func TestSignAndVerifyRoundTrip(t *testing.T) {
-	priv := testPrivate(t)
 	digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	env, err := Sign(digest, DefaultKeyID, priv, time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
+	env, err := Sign(digest, "test-key", priv, time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,24 +33,57 @@ func TestSignAndVerifyRoundTrip(t *testing.T) {
 }
 
 func TestVerifyRejectsTamperAndWrongDigest(t *testing.T) {
-	priv := testPrivate(t)
-	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	env, err := Sign(digest, DefaultKeyID, priv, time.Unix(0, 0).UTC())
+	pub, priv, err := GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Verify(env, "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", DefaultKeyring()); err == nil {
+	keys := Keyring{"test-key": pub}
+	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	env, err := Sign(digest, "test-key", priv, time.Unix(0, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(env, "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", keys); err == nil {
 		t.Fatal("expected subject mismatch")
 	}
 	env.Signature = "AAAA"
-	if err := Verify(env, digest, DefaultKeyring()); err == nil {
+	if err := Verify(env, digest, keys); err == nil {
 		t.Fatal("expected bad signature")
 	}
 }
 
 func TestDefaultKeyringHasOfficialKey(t *testing.T) {
+	// Ensure production keyring is restored even if other tests override it.
+	restore := SetKeyringForTest(nil)
+	t.Cleanup(restore)
 	keys := DefaultKeyring()
 	if _, ok := keys[DefaultKeyID]; !ok {
 		t.Fatal("missing default key")
+	}
+	// Production keyring must not be empty and must be 32-byte keys only.
+	for id, pub := range keys {
+		if len(pub) != ed25519.PublicKeySize {
+			t.Fatalf("key %q has invalid size %d", id, len(pub))
+		}
+	}
+}
+
+func TestProductionPrivateSeedIsNotInModule(t *testing.T) {
+	// Guardrail: no hex private seed constants in this package's tests or keys.
+	// Private material belongs in CI secrets only.
+	restore := SetKeyringForTest(nil)
+	t.Cleanup(restore)
+	// Signing with a random key must not verify under production keyring.
+	_, priv, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	env, err := Sign(digest, DefaultKeyID, priv, time.Unix(0, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(env, digest, productionKeyring()); err == nil {
+		t.Fatal("random private key must not verify under production public key")
 	}
 }
