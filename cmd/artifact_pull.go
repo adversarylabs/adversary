@@ -11,6 +11,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/officialsig"
 	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/spf13/cobra"
 )
@@ -156,6 +157,11 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 		if err := registerExactRef(resolver, ref.Locator(), existing.Digest); err != nil {
 			return pullResult{}, err
 		}
+		if !app.Dependencies().Repository.HasVerifiedOfficialSignature(existing.Digest) {
+			if err := fetchAndStoreOfficialSignature(ctx, app, registry, ref, existing.Digest, stderr); err != nil {
+				fmt.Fprintf(stderr, "Warning: official signature not stored (%v)\n", err)
+			}
+		}
 		// best-effort pull metric (AMB-8); respects telemetry opt-out env vars
 		reportPull(ctx, app, apiURL, profile, ref.Locator(), existing.Digest)
 		return pullResult{Record: existing, Reference: ref, AlreadyPresent: true}, nil
@@ -190,7 +196,39 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	if err := registerExactRef(resolver, ref.Locator(), unified.Digest); err != nil {
 		return pullResult{}, fmt.Errorf("update local reference %s: %w", ref.Locator(), err)
 	}
+	// Best-effort: fetch and store official signature so host-exec trust works offline.
+	if err := fetchAndStoreOfficialSignature(ctx, app, registry, ref, unified.Digest, stderr); err != nil {
+		fmt.Fprintf(stderr, "Warning: official signature not stored (%v)\n", err)
+	}
 	// best-effort pull metric (AMB-8); respects telemetry opt-out env vars
 	reportPull(ctx, app, apiURL, profile, ref.Locator(), unified.Digest)
 	return pullResult{Record: unified, Reference: ref, AlreadyPresent: false}, nil
+}
+
+func fetchAndStoreOfficialSignature(ctx context.Context, app *application.App, registry application.OCIRegistry, ref oci.Reference, digest string, stderr io.Writer) error {
+	data, err := registry.GetOfficialSignatureReferrer(ctx, ref, digest)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("no official signature referrer")
+	}
+	env, err := officialsig.ParseEnvelope(data)
+	if err != nil {
+		return err
+	}
+	if err := officialsig.Verify(env, digest, officialsig.DefaultKeyring()); err != nil {
+		return err
+	}
+	raw, err := officialsig.MarshalEnvelope(env)
+	if err != nil {
+		return err
+	}
+	if err := app.Dependencies().Repository.SaveOfficialSignature(digest, raw); err != nil {
+		return err
+	}
+	if stderr != nil {
+		fmt.Fprintln(stderr, "Official signature verified and stored.")
+	}
+	return nil
 }

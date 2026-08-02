@@ -13,13 +13,12 @@ silently weaken a mandatory permission.
 `HostExecutor` is a first-class backend.
 It is the default for explicit local source projects, which are trusted by the
 developer's direct path selection and run without a warning or unsafe flag. It
-is also acceptable for installed artifacts from publishers trusted by the
-replaceable publisher policy. The built-in policy trusts `adversarylabs` only
-on the official registry; a lookalike namespace on another registry is
-unknown. Trusted remote execution reports the publisher, immutable digest, and
-selected backend without an alarm-style warning. Team membership is not inferred
-from publisher names; future organization trust must come from authenticated
-identity supplied by the registry or an enterprise trust store.
+is also acceptable for installed artifacts that carry a **verified official
+signature** (Ed25519 over the content digest; public key embedded in the CLI).
+See [official signatures](official-signatures.md). Path allowlists and registry
+hostnames alone do not grant trust. Trusted remote execution reports the
+publisher, immutable digest, and selected backend without an alarm-style
+warning. Team membership is not inferred from publisher names.
 
 Installed artifacts from unknown publishers require a sandbox executor or
 `--allow-unsafe-host-execution`. The latter prints an explicit warning naming

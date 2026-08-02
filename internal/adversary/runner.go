@@ -170,6 +170,10 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	if err != nil {
 		return err
 	}
+	if resolved.Digest == "" && resolved.StoreRecord.Digest != "" {
+		publisher.Digest = resolved.StoreRecord.Digest
+	}
+	publisher = withOfficialSignature(publisher, r.Repository)
 	trustPolicy := r.TrustPolicy
 	if trustPolicy == nil {
 		policy := DefaultPublisherTrustPolicy()

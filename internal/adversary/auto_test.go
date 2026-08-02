@@ -354,8 +354,15 @@ func autoRepository(t *testing.T, manifests map[string]string) (repository.Repos
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := repo.ImportPacked(artifact, reference); err != nil {
+		rec, err := repo.ImportPacked(artifact, reference)
+		if err != nil {
 			t.Fatal(err)
+		}
+		// Catalog-style packages used in auto tests are treated as officially signed
+		// so HostExecutor detection policy matches production after signature MVP.
+		if !strings.HasPrefix(reference, "ghcr.io/") && !strings.HasPrefix(reference, "randomperson/") {
+			priv := testOfficialSigningKey(t)
+			signOfficialDigest(t, repo, rec.Digest, priv)
 		}
 	}
 	return repo, Resolver{Repository: repo}

@@ -55,6 +55,111 @@ func (r *HTTPRegistry) PushAdversaryManifestReferrer(ctx context.Context, imageR
 	return r.PushAttachedReferrer(ctx, imageRef, imageDigest, AdversaryManifestMediaType, "adversary.yaml", "adversary-manifest", yaml)
 }
 
+// PushOfficialSignatureReferrer attaches an official signature envelope to imageDigest.
+func (r *HTTPRegistry) PushOfficialSignatureReferrer(ctx context.Context, imageRef Reference, imageDigest string, envelope []byte) (string, string, error) {
+	return r.PushAttachedReferrer(ctx, imageRef, imageDigest, OfficialSignatureMediaType, "official-signature.json", "official-signature", envelope)
+}
+
+// GetOfficialSignatureReferrer fetches the official signature envelope for imageDigest, if any.
+// Missing signatures return (nil, nil).
+func (r *HTTPRegistry) GetOfficialSignatureReferrer(ctx context.Context, ref Reference, imageDigest string) ([]byte, error) {
+	ctx, cancel := withOperationDeadline(ctx)
+	defer cancel()
+	data, err := r.getAttachedReferrerBlob(ctx, ref, imageDigest, OfficialSignatureMediaType, "official-signature")
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// getAttachedReferrerBlob loads a single-blob referrer of the given artifact type.
+func (r *HTTPRegistry) getAttachedReferrerBlob(ctx context.Context, ref Reference, imageDigest, artifactType, tagKind string) ([]byte, error) {
+	req, err := r.newRequest(ctx, http.MethodGet, ref, "/referrers/"+imageDigest+"?artifactType="+url.QueryEscape(artifactType), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.do(req, ref, "repository:"+ref.Repository+":pull")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		return r.getAttachedReferrerFallback(ctx, ref, imageDigest, artifactType, tagKind)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, registryError(resp)
+	}
+	if strings.TrimSpace(resp.Header.Get("Link")) != "" {
+		return r.getAttachedReferrerFallback(ctx, ref, imageDigest, artifactType, tagKind)
+	}
+	data, err := readLimited(resp.Body, DefaultIngestionLimits.ManifestBytes, "referrers response")
+	if err != nil {
+		return nil, err
+	}
+	var referrers ReferrersResponse
+	if err := json.Unmarshal(data, &referrers); err != nil {
+		return nil, err
+	}
+	for _, descriptor := range referrers.Manifests {
+		if descriptor.ArtifactType != artifactType {
+			continue
+		}
+		manifestData, _, err := r.getArtifactManifest(ctx, ref, descriptor.Digest)
+		if err != nil {
+			return nil, err
+		}
+		var artifact ArtifactManifest
+		if err := json.Unmarshal(manifestData, &artifact); err != nil {
+			return nil, err
+		}
+		if artifact.MediaType != OCIArtifactManifestMediaType || artifact.ArtifactType != artifactType || !isImageManifestMediaType(artifact.Subject.MediaType) || artifact.Subject.Digest != imageDigest || len(artifact.Blobs) != 1 || artifact.Blobs[0].MediaType != artifactType {
+			continue
+		}
+		return r.getBlob(ctx, ref, artifact.Blobs[0])
+	}
+	return r.getAttachedReferrerFallback(ctx, ref, imageDigest, artifactType, tagKind)
+}
+
+func (r *HTTPRegistry) getAttachedReferrerFallback(ctx context.Context, ref Reference, imageDigest, artifactType, tagKind string) ([]byte, error) {
+	tag, err := AttachedArtifactTag(imageDigest, tagKind)
+	if err != nil {
+		return nil, err
+	}
+	req, err := r.newRequest(ctx, http.MethodGet, ref, "/manifests/"+tag, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", OCIArtifactManifestMediaType)
+	resp, err := r.do(req, ref, "repository:"+ref.Repository+":pull")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, registryError(resp)
+	}
+	data, err := readLimited(resp.Body, DefaultIngestionLimits.ManifestBytes, "artifact manifest")
+	if err != nil {
+		return nil, err
+	}
+	if header := resp.Header.Get("Docker-Content-Digest"); header != "" {
+		if err := VerifyDigest(data, header); err != nil {
+			return nil, fmt.Errorf("artifact manifest digest header %s does not match content: %w", header, err)
+		}
+	}
+	var artifact ArtifactManifest
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return nil, err
+	}
+	if artifact.MediaType != OCIArtifactManifestMediaType || artifact.ArtifactType != artifactType || artifact.Subject.Digest != imageDigest || !isImageManifestMediaType(artifact.Subject.MediaType) || len(artifact.Blobs) != 1 || artifact.Blobs[0].MediaType != artifactType {
+		return nil, fmt.Errorf("invalid %s fallback artifact", tagKind)
+	}
+	return r.getBlob(ctx, ref, artifact.Blobs[0])
+}
+
 // PushAttachedReferrer uploads a single-blob OCI artifact referrer attached to imageDigest.
 func (r *HTTPRegistry) PushAttachedReferrer(ctx context.Context, imageRef Reference, imageDigest, mediaType, title, tagKind string, content []byte) (string, string, error) {
 	ctx, cancel := withOperationDeadline(ctx)
@@ -298,8 +403,17 @@ func isImageManifestMediaType(value string) bool {
 	return value == ImageManifestMediaType || value == DockerImageManifestMediaType
 }
 
+func allowedAttachmentBlobMediaType(mediaType string) bool {
+	switch mediaType {
+	case AdversaryManifestMediaType, ReadmeMediaType, ChecksMediaType, OfficialSignatureMediaType:
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *HTTPRegistry) getBlob(ctx context.Context, ref Reference, descriptor Descriptor) ([]byte, error) {
-	if descriptor.MediaType != AdversaryManifestMediaType {
+	if !allowedAttachmentBlobMediaType(descriptor.MediaType) {
 		return nil, fmt.Errorf("unsupported blob media type %q", descriptor.MediaType)
 	}
 	limit := DefaultIngestionLimits.ConfigBytes

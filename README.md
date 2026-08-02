@@ -87,11 +87,10 @@ reading other repository files through its normal SDK APIs.
 ## Safety and trust
 
 Local source adversaries run directly with `HostExecutor` for a fast development
-loop. Installed adversaries from official free-catalog domains (`ci`, `go`,
-`container`, `security`, `review`, `infra`, `deps`, `meta`, `cloud`, `lang`) or
-the legacy `adversarylabs` publisher namespace may also use the host backend,
-including when pulled from a local/dev registry. Trust is catalog-path based,
-not registry-host or signature based.
+loop. Installed adversaries may use the host backend when an **official
+signature** verifies for their content digest (Ed25519; public key embedded in
+the CLI). See [official signatures](docs/official-signatures.md). Path names and
+registry hostnames alone do not grant trust.
 Unknown publishers require a sandbox backend or `--allow-unsafe-host-execution`; that explicit
 override is not isolation. Manifest permissions are advisory by default;
 `permissions.enforcement: required` and `--no-network` fail before launch when
