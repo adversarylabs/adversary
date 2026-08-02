@@ -106,7 +106,7 @@ func TestUnknownRemoteRequiresSandboxOrUnsafeHostOverride(t *testing.T) {
 	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: host, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
 		AdversaryRef: "randomperson/dockerfile:1.2.0", RepoPath: t.TempDir(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "--allow-unsafe-host-execution") || host.called != 0 {
+	if err == nil || !strings.Contains(err.Error(), "untrusted adversary") || !strings.Contains(err.Error(), "--allow-unsafe-host-execution") || host.called != 0 {
 		t.Fatalf("error=%v calls=%d", err, host.called)
 	}
 
@@ -120,7 +120,7 @@ func TestUnknownRemoteRequiresSandboxOrUnsafeHostOverride(t *testing.T) {
 	if host.called != 1 || host.spec.Digest != record.Digest {
 		t.Fatalf("calls=%d spec=%+v", host.called, host.spec)
 	}
-	if !strings.Contains(warning.String(), "WARNING: unknown publisher") {
+	if !strings.Contains(warning.String(), "WARNING: untrusted adversary") {
 		t.Fatalf("unsafe override warning=%q", warning.String())
 	}
 
@@ -171,7 +171,7 @@ func TestPinnedDigestWithoutOfficialSignatureIsUnknown(t *testing.T) {
 	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: host, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
 		AdversaryRef: record.Digest, ReferenceIdentity: "registry.adversarylabs.ai/adversarylabs/security:1.2.0", RepoPath: t.TempDir(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "unknown publisher") || host.called != 0 {
+	if err == nil || !strings.Contains(err.Error(), "untrusted adversary") || host.called != 0 {
 		t.Fatalf("error=%v calls=%d", err, host.called)
 	}
 }

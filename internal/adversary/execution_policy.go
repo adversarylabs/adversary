@@ -223,7 +223,17 @@ func DecideExecutionPolicy(request ExecutionPolicyRequest) (ExecutionPolicyDecis
 	}
 	if request.Trust.Trust == UnknownPublisherTrust && request.Backend == HostExecutorBackend {
 		if !request.AllowUnsafeHostExecution {
-			return ExecutionPolicyDecision{}, fmt.Errorf("unknown publisher %q cannot execute with HostExecutor; select a sandbox or pass --allow-unsafe-host-execution", request.Trust.Publisher.Name)
+			name := strings.TrimSpace(request.Trust.Publisher.Name)
+			if name == "" {
+				name = strings.TrimSpace(request.Trust.Publisher.Reference)
+			}
+			if name == "" {
+				name = "adversary"
+			}
+			return ExecutionPolicyDecision{}, fmt.Errorf(
+				"untrusted adversary %q: no valid official signature\n\nHost execution of untrusted adversaries is blocked. Re-run with --allow-unsafe-host-execution to allow an unrestricted host process, or use a sandbox executor",
+				name,
+			)
 		}
 		return ExecutionPolicyDecision{Allowed: true, UnsafeOverride: true, Reason: "explicit unsafe host execution override"}, nil
 	}
