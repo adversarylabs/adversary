@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -165,6 +166,12 @@ func ParseEnvelope(data []byte) (Envelope, error) {
 		return Envelope{}, fmt.Errorf("official signature envelope incomplete")
 	}
 	return env, nil
+}
+
+// SigningSeedFromEnv returns ADVERSARY_OFFICIAL_SIGNING_SEED (process-edge
+// ambient read for publishers/CI). Empty when unset. Never log this value.
+func SigningSeedFromEnv() string {
+	return strings.TrimSpace(os.Getenv("ADVERSARY_OFFICIAL_SIGNING_SEED"))
 }
 
 // GenerateKey creates a new Ed25519 key pair (for CI bootstrap / tests).
