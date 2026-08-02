@@ -15,6 +15,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/adversarylabs/adversary/pkg/repoindex"
 	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
@@ -39,6 +40,8 @@ type RunOptions struct {
 	BuildTimeout             time.Duration
 	ReviewContext            *detection.Context
 	ReferenceIdentity        string
+	// RepoIndexMode controls local repo index ensure (auto|off|force). Empty = auto.
+	RepoIndexMode string
 }
 
 const maxRunOutputBytes int64 = 16 << 20
@@ -228,6 +231,17 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	}
 
 	config := NewRunConfig(resolved, repoPath, "", opts)
+	indexMode, indexErr := repoindex.ParseMode(opts.RepoIndexMode)
+	if indexErr != nil {
+		return indexErr
+	}
+	indexDir, indexErr := repoindex.EnsureForRun(repoPath, indexMode, opts.Verbose, stderr)
+	if indexErr != nil {
+		return fmt.Errorf("repo index: %w", indexErr)
+	}
+	if indexDir != "" {
+		config.Env[repoindex.EnvRepoIndex] = indexDir
+	}
 	if opts.Verbose {
 		PrintVerboseLoad(stderr, opts.AdversaryRef, resolved)
 	}

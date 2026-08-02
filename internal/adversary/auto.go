@@ -31,6 +31,7 @@ type AutoOptions struct {
 	DetectionTimeout         time.Duration
 	Format                   string
 	IncludeSuppressed        bool
+	RepoIndexMode            string
 	ReportSelections         func(AutoResult) error
 	// ReportRunStart is called before each selected adversary runs (1-based index
 	// among selected adversaries). Used for terminal progress when results go elsewhere.
@@ -167,6 +168,7 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 			AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
 			RunTimeout:               opts.RunTimeout,
 			AllFiles:                 opts.AllFiles,
+			RepoIndexMode:            opts.RepoIndexMode,
 			// Multi automatic selection keeps a clean progress stream; use
 			// --verbose on explicit single-ref run for identity banners.
 			Verbose: false,

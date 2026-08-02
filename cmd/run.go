@@ -51,6 +51,7 @@ type runOptions struct {
 	noBuild                  bool
 	runTimeout               time.Duration
 	buildTimeout             time.Duration
+	repoIndex                string
 }
 
 func newRunCommand(app *application.App, apiURL, profile *string) *cobra.Command {
@@ -186,6 +187,7 @@ Use --all-files for a whole-repository scan instead of change inference.`,
 	_ = cmd.Flags().MarkDeprecated("no-build", "local builds are skipped by default; omit this flag")
 	cmd.Flags().DurationVar(&opts.runTimeout, "timeout", 0, "maximum adversary execution time (0 disables the deadline)")
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
+	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "auto", "local repository index for adversary navigation: auto, off, or force")
 
 	return cmd
 }
@@ -286,7 +288,8 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 		All: opts.all, DryRun: opts.dryRun, Explain: opts.explain, Format: opts.format,
 		AllowUnsafeHostExecution: opts.allowUnsafeHostExecution, IncludeSuppressed: opts.includeSuppressed,
 		RunTimeout: opts.runTimeout, DetectionTimeout: opts.detectionTimeout,
-		Stdout: resultOut, Stderr: progressOut,
+		RepoIndexMode: opts.repoIndex,
+		Stdout:        resultOut, Stderr: progressOut,
 		ReportSelections: func(result application.AdversaryAutoResult) error {
 			return renderRunSelections(selectionOut, result, opts.explain)
 		},
@@ -645,6 +648,7 @@ func runOneAdversary(
 		Build:                    opts.build,
 		RunTimeout:               opts.runTimeout,
 		BuildTimeout:             opts.buildTimeout,
+		RepoIndexMode:            opts.repoIndex,
 		Stdout:                   stdout,
 		Stderr:                   stderr,
 	}
