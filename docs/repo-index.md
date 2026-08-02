@@ -182,7 +182,7 @@ If cold builds are painful on large trees, **v1.1 incremental** is the fix—not
 
 1. **On-disk format + CLI ensure/load** with fingerprint (no SDK yet) — unit tests on hit/miss/dirty.  
 2. **SDK read API** + fixture index in tests.  
-3. **Wire specialists** that exercise both languages — e.g. `go/security` (or `go/http`) and a TypeScript-facing specialist / `review/engineering` on a TS tree — to use `importersOf` / `importsOf` in model tools or deterministic pass.  
+3. **Wire specialists** that exercise both languages on day one — `go/security` **and** `lang/typescript` — to use `importersOf` / `importsOf` in deterministic navigation (and later model tools). Both languages get import edges from the CLI builder; specialists only *query*.  
 4. Measure against a private held-out set of multi-hop review findings (offline).  
 5. Turn on by default; document in CLI/runtime docs.  
 6. CI action cache — later, separate change.
