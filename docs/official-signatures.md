@@ -89,13 +89,26 @@ adversarylabs-official-sig-v1
 
 ## Secrets
 
-| Secret | Where |
-|--------|--------|
-| Prod seed | Prod CI / Doppler prd only |
-| Dev seed | Doppler dev / 1Password for local catalog publishers |
-| Public keys | Repo (safe to commit) |
+Same secret **name** in every environment; **values** differ by env:
+
+| Name | Doppler `dev` | Doppler `prd` | Depot (CLI release / sign) |
+|------|---------------|---------------|----------------------------|
+| `ADVERSARY_OFFICIAL_SIGNING_SEED` | dev seed (64 hex) | prod seed (64 hex) | **prod seed** (copy from Doppler prd) |
+| `ADVERSARY_OFFICIAL_PUBLIC_KEY` | dev public hex | prod public hex | optional |
+| `ADVERSARY_OFFICIAL_KEY_ID` | `official-dev` | `official-prod` | optional |
+
+```bash
+# Local sign (dev)
+doppler run --project adversarylabs --config dev -- \
+  go run ./scripts/sign-official -digest sha256:… -key-id official-dev -out sig.json
+
+# Prod sign (CI): inject Depot secret ADVERSARY_OFFICIAL_SIGNING_SEED
+go run ./scripts/sign-official -digest sha256:… -key-id official-prod -out sig.json
+```
 
 **Never commit private seeds.** Tests use `GenerateKey` + `SetKeyringForTest`.
+
+**Depot secret to create:** `ADVERSARY_OFFICIAL_SIGNING_SEED` — paste the value from Doppler project `adversarylabs` config `prd`.
 
 ## Notation / TUF
 

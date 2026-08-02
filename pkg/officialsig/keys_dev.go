@@ -9,7 +9,7 @@ const DefaultKeyID = DevKeyID
 
 // embeddedOfficialPublicKey is the development Ed25519 public key (hex, 32 bytes).
 // Matching seed: local/dev secret ADVERSARY_OFFICIAL_SIGNING_SEED (dev only). Never commit the seed.
-const embeddedOfficialPublicKey = "9627a459b53a07cf675515dd747b8fa6464d031aaf77ee60afed5b13b443f4de"
+const embeddedOfficialPublicKey = "8b91b3823dab66e0d48622363ae63d4ce51b791f76aa77191b317b97254b2d16"
 
 func buildKeyring() Keyring {
 	return Keyring{DevKeyID: mustParsePublicKey(embeddedOfficialPublicKey)}
