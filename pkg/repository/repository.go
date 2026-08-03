@@ -1238,7 +1238,7 @@ func (r Repository) init() error {
 		return err
 	}
 	defer root.Close()
-	for _, d := range []string{"blobs", "manifests", "adversary-manifests", "records", "refs", "aliases", "commits", "checkpoints", "materialized", "transactions"} {
+	for _, d := range []string{"blobs", "manifests", "adversary-manifests", "records", "refs", "aliases", "commits", "checkpoints", "materialized", "transactions", "tmp"} {
 		if err := root.MkdirAll(d, 0700); err != nil {
 			return err
 		}
@@ -1417,7 +1417,12 @@ func (r Repository) writeAtomic(rel string, data []byte, immutable bool) error {
 	if err := root.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	tmp := dir + "/.tmp-" + nonce()
+	// Stage under tmp/ so interrupted writes never leave ".tmp-*" names in
+	// transactions/, refs/, or aliases/ (scanners treat those as journals/indexes).
+	if err := root.MkdirAll("tmp", 0700); err != nil {
+		return err
+	}
+	tmp := "tmp/.tmp-" + nonce()
 	if err := root.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}

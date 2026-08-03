@@ -1072,6 +1072,36 @@ func TestRestartRecoveryRollsBackUnacknowledgedImportJournal(t *testing.T) {
 	}
 }
 
+func TestStaleAtomicWriteTempsDoNotBreakInventory(t *testing.T) {
+	r := Repository{Root: t.TempDir()}
+	a := artifact(t, "one")
+	if _, err := r.ImportPacked(a, "registry.example/team/test:1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate interrupted writeAtomic staging left under transactions/ and refs/.
+	staleTxn := filepath.Join(r.Root, "transactions", ".tmp-deadbeefcafebabe")
+	staleRef := filepath.Join(r.Root, "refs", ".tmp-feedfacefeedface")
+	if err := os.WriteFile(staleTxn, []byte(`{"partial":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staleRef, []byte(`{"partial":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Recover(); err != nil {
+		t.Fatalf("Recover with stale temps: %v", err)
+	}
+	if _, err := os.Stat(staleTxn); !os.IsNotExist(err) {
+		t.Fatalf("stale transaction temp retained: %v", err)
+	}
+	// Inventory / reference snapshot must not fail on leftover temps.
+	if _, err := r.CheckAll(); err != nil {
+		t.Fatalf("CheckAll with stale temps: %v", err)
+	}
+	if _, err := r.Resolve("registry.example/team/test:1.0.0"); err != nil {
+		t.Fatalf("Resolve after stale temps: %v", err)
+	}
+}
+
 func TestRecoveryRetainsJournalUntilCleanupAndAliasReconcileSucceed(t *testing.T) {
 	for _, failure := range []string{"remove", "rebuild"} {
 		t.Run(failure, func(t *testing.T) {
