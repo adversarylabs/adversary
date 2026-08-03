@@ -151,8 +151,10 @@ type AdversaryRunOptions struct {
 	MuteChildStderr          bool
 	Build                    bool
 	RunTimeout, BuildTimeout time.Duration
-	Stdout, Stderr           io.Writer
-	ReviewContext            *detection.Context
+	// RepoIndexMode is auto|off|force for local repo navigation index (empty = auto).
+	RepoIndexMode  string
+	Stdout, Stderr io.Writer
+	ReviewContext  *detection.Context
 }
 
 // AdversaryAutoOptions drives automatic adversary selection for `run` with no
@@ -168,6 +170,7 @@ type AdversaryAutoOptions struct {
 	IncludeSuppressed                              bool
 	Format                                         string
 	RunTimeout, DetectionTimeout                   time.Duration
+	RepoIndexMode                                  string
 	Stdout, Stderr                                 io.Writer
 	ReportSelections                               func(AdversaryAutoResult) error
 	// ReportRunStart reports progress before each selected adversary executes
