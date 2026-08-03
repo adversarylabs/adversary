@@ -462,7 +462,7 @@ func runAdversaries(
 			runStderr = &childErr
 		}
 
-		err := runOneAdversary(ctx, app, opts, ref, runStdout, runStderr)
+		err := runOneAdversary(ctx, app, opts, ref, valueOf(apiURL), valueOf(profile), runStdout, runStderr)
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
@@ -626,6 +626,7 @@ func runOneAdversary(
 	app *application.App,
 	opts *runOptions,
 	ref string,
+	apiURL, profile string,
 	stdout, stderr io.Writer,
 ) error {
 	runOpts := application.AdversaryRunOptions{
@@ -658,8 +659,15 @@ func runOneAdversary(
 	}
 	if err != nil && errors.Is(err, internaladversary.ErrNotInstalledLocally) {
 		// AMB-11: auto-pull if not present locally, then retry once.
+		// Use the same API URL/profile as the parent command so credentials match.
 		fmt.Fprintln(stderr, "Adversary not present locally; attempting pull...")
-		_, pullErr := pullAdversary(ctx, ref, app.Dependencies().DefaultAPIURL, "default", app, stderr)
+		if apiURL == "" {
+			apiURL = app.Dependencies().DefaultAPIURL
+		}
+		if profile == "" {
+			profile = "default"
+		}
+		_, pullErr := pullAdversary(ctx, ref, apiURL, profile, app, stderr)
 		if pullErr != nil {
 			return fmt.Errorf("auto-pull for %s failed: %w (original error: %v)", ref, pullErr, err)
 		}

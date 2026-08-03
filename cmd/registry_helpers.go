@@ -27,13 +27,33 @@ func (s scopedCredentialStore) CredentialsContext(_ context.Context, registry st
 func scopedAuth(store application.AuthStore, apiURL, profile, registryHost string) (adversarylabs.Auth, bool, error) {
 	key := adversarylabs.AuthKey(apiURL, profile)
 	auth, ok, err := store.ExactAuthE(key)
-	if err != nil || ok {
+	if err != nil {
 		return auth, ok, err
 	}
+	if ok {
+		return auth, true, nil
+	}
+	// Legacy installs stored credentials under the bare registry host key.
 	if key == adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, "default") {
-		return store.ExactAuthE(registryHost)
+		if auth, ok, err := store.ExactAuthE(registryHost); err != nil || ok {
+			return auth, ok, err
+		}
+	}
+	// Official catalog registry always authenticates against production API
+	// credentials. A local --api-url (or ADVERSARY_API_URL) used for web/app
+	// development must not leave catalog pulls anonymous.
+	if isOfficialCatalogRegistry(registryHost) {
+		prodKey := adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, profile)
+		if prodKey != key {
+			return store.ExactAuthE(prodKey)
+		}
 	}
 	return adversarylabs.Auth{}, false, nil
+}
+
+func isOfficialCatalogRegistry(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == adversarylabs.DefaultRegistry || host == oci.DefaultRegistry
 }
 
 func registryAuthRealm(apiURL string) string {
