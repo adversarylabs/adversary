@@ -38,6 +38,13 @@ func importJournalPath(digest, ref string) string {
 	return "transactions/import-" + key(digest+"\x00"+ref) + ".json"
 }
 func refMutationJournalPath(ref string) string { return "transactions/ref-" + key(ref) + ".json" }
+
+// isAtomicWriteTemp names leftover writeAtomic staging files (".tmp-<nonce>").
+// They must not be treated as import/ref journals — concurrent pack/push or a
+// crash can leave them under transactions/ and otherwise fail the whole store.
+func isAtomicWriteTemp(name string) bool {
+	return strings.HasPrefix(name, ".tmp-")
+}
 func (r Repository) saveRefMutationJournal(j refMutationJournal) error {
 	data, _ := json.Marshal(j)
 	return r.atomic(refMutationJournalPath(j.Reference), data)
@@ -112,6 +119,10 @@ func (r Repository) refMutationJournals() (map[string]refMutationJournal, error)
 	}
 	out := map[string]refMutationJournal{}
 	for _, entry := range entries {
+		if isAtomicWriteTemp(entry.Name()) {
+			_ = root.Remove("transactions/" + entry.Name())
+			continue
+		}
 		if !strings.HasPrefix(entry.Name(), "ref-") {
 			continue
 		}
@@ -170,6 +181,12 @@ func (r Repository) recoverImportsLocked() error {
 		return fmt.Errorf("repository transaction journal exceeds lifecycle limit")
 	}
 	for _, entry := range entries {
+		if isAtomicWriteTemp(entry.Name()) {
+			if err := removeWithRoot(root, "transactions/"+entry.Name()); err != nil {
+				return err
+			}
+			continue
+		}
 		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
 			return fmt.Errorf("invalid transaction journal %q", entry.Name())
 		}
@@ -347,6 +364,10 @@ func (r Repository) pendingImport(digest string) (bool, error) {
 		return false, fmt.Errorf("repository transaction journal exceeds lifecycle limit")
 	}
 	for _, entry := range entries {
+		if isAtomicWriteTemp(entry.Name()) {
+			_ = root.Remove("transactions/" + entry.Name())
+			continue
+		}
 		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
 			return false, fmt.Errorf("invalid transaction journal %q", entry.Name())
 		}

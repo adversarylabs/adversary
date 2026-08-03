@@ -736,6 +736,10 @@ func (r Repository) referenceSnapshotMode(allowPending bool) (map[string]string,
 			return nil, e
 		}
 		for _, entry := range entries {
+			if isAtomicWriteTemp(entry.Name()) {
+				_ = root.Remove("refs/" + entry.Name())
+				continue
+			}
 			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
 				return nil, fmt.Errorf("invalid reference index entry %q", entry.Name())
 			}
