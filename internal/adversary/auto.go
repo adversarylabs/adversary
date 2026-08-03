@@ -216,6 +216,11 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 		if err != nil || resolved.Manifest == nil {
 			continue
 		}
+		// Skip retired official catalog paths (library/flat, adversarylabs/* publisher).
+		// Domain ids (go/cli, container/dockerfile) remain eligible.
+		if isRetiredAutoReference(entry.CanonicalReference, resolved.Manifest.Name) {
+			continue
+		}
 		candidate := DetectionCandidate{Name: resolved.Manifest.Name, Reference: entry.CanonicalReference, Digest: entry.Digest, Manifest: *resolved.Manifest}
 		if existing, ok := byDigest[candidate.Digest]; ok {
 			if preferCandidateReference(candidate, existing) {
@@ -225,20 +230,26 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 		}
 		byDigest[candidate.Digest] = candidate
 	}
-	// Then keep one candidate per registry/repository identity, preferring the
-	// highest package version. Distinct publishers (different repositories) stay separate.
+	// Then keep one candidate per package family on the same registry class,
+	// preferring domain/name, official host, and highest version. Distinct
+	// third-party publishers stay separate. Flat renames (go-cli ↔ go/cli,
+	// dockerfile ↔ container/dockerfile) collapse here.
 	candidates := make([]DetectionCandidate, 0, len(byDigest)+len(includes))
-	byIdentity := make(map[string]int, len(byDigest))
 	for _, candidate := range byDigest {
-		key := candidateIdentityKey(candidate)
-		if index, exists := byIdentity[key]; exists {
-			if preferCandidateVersion(candidate, candidates[index]) {
-				candidates[index] = candidate
+		merged := false
+		for i := range candidates {
+			if !sameAutoIdentity(candidates[i], candidate) {
+				continue
 			}
-			continue
+			if preferCandidateVersion(candidate, candidates[i]) {
+				candidates[i] = candidate
+			}
+			merged = true
+			break
 		}
-		byIdentity[key] = len(candidates)
-		candidates = append(candidates, candidate)
+		if !merged {
+			candidates = append(candidates, candidate)
+		}
 	}
 	selectedDigests := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
@@ -271,38 +282,154 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 	return candidates, nil
 }
 
-// candidateIdentityKey groups automatic-selection candidates that should only
-// run once. Identity is registry + publisher + package name (from the packed
-// manifest), not the full repository path, so renames like depotci-adversary →
-// depotci collapse while true cross-publisher packages stay separate.
-// The legacy default namespace "library" is treated as adversarylabs.
-func candidateIdentityKey(candidate DetectionCandidate) string {
-	name := strings.TrimSpace(candidate.Name)
-	if parsed, err := oci.ParseReference(candidate.Reference); err == nil {
-		publisher := ""
-		if parts := strings.Split(parsed.Repository, "/"); len(parts) > 0 {
-			publisher = parts[0]
-		}
-		if strings.EqualFold(publisher, "library") {
-			publisher = "adversarylabs"
-		}
-		if name != "" {
-			return strings.ToLower(parsed.Registry + "/" + publisher + "/" + name)
-		}
-		return strings.ToLower(parsed.Registry + "/" + publisher + "/" + parsed.Repository)
+// officialRegistryHost is the free-catalog registry used for retired-path filtering.
+const officialRegistryHost = "registry.adversarylabs.ai"
+
+// sameAutoIdentity reports whether two candidates should only run once.
+// Official/local catalog packages collapse by package family (flat ↔ domain
+// renames). Third-party publishers only collapse within the same publisher.
+func sameAutoIdentity(a, b DetectionCandidate) bool {
+	fa := packageFamilyKey(a.Name)
+	fb := packageFamilyKey(b.Name)
+	if fa == "" {
+		fa = packageFamilyKey(a.Reference)
 	}
-	if name != "" {
-		return strings.ToLower(name)
+	if fb == "" {
+		fb = packageFamilyKey(b.Reference)
 	}
-	return strings.ToLower(candidate.Reference)
+	if !packageFamiliesMatch(fa, fb) {
+		return false
+	}
+	pa, errA := oci.ParseReference(a.Reference)
+	pb, errB := oci.ParseReference(b.Reference)
+	if errA != nil || errB != nil {
+		return true
+	}
+	ha, hb := strings.ToLower(pa.Registry), strings.ToLower(pb.Registry)
+	// Treat official free catalog and local dev registry as one selection pool
+	// so a signed prod go/cli wins over an unsigned localhost go-cli.
+	aOfficial := ha == officialRegistryHost || isLocalDevRegistry(ha)
+	bOfficial := hb == officialRegistryHost || isLocalDevRegistry(hb)
+	if aOfficial && bOfficial {
+		return true
+	}
+	if aOfficial != bOfficial {
+		return true // still same family; preference score picks official
+	}
+	// Third-party: same registry + publisher only.
+	pubA, pubB := "", ""
+	if parts := strings.Split(pa.Repository, "/"); len(parts) > 0 {
+		pubA = strings.ToLower(parts[0])
+	}
+	if parts := strings.Split(pb.Repository, "/"); len(parts) > 0 {
+		pubB = strings.ToLower(parts[0])
+	}
+	if pubA == "library" {
+		pubA = "adversarylabs"
+	}
+	if pubB == "library" {
+		pubB = "adversarylabs"
+	}
+	return ha == hb && pubA == pubB
+}
+
+// packageFamilyKey normalizes catalog ids so flat renames share an identity:
+// go/cli and go-cli → go-cli; container/dockerfile and dockerfile share a family
+// via suffix matching in packageFamiliesMatch.
+func packageFamilyKey(name string) string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return ""
+	}
+	// Strip a registry host only when the value looks like host/repo (not a
+	// bare domain/name catalog id such as go/cli — oci.ParseReference would
+	// treat "go" as the host).
+	if strings.Contains(n, ".") || strings.Contains(n, "://") ||
+		(strings.Count(n, ":") == 1 && !strings.Contains(n, "/")) ||
+		strings.HasPrefix(n, "localhost/") || strings.HasPrefix(n, "localhost:") {
+		if parsed, err := oci.ParseReference(n); err == nil && parsed.Repository != "" {
+			n = strings.ToLower(parsed.Repository)
+		}
+	}
+	return strings.ReplaceAll(n, "/", "-")
+}
+
+// packageFamiliesMatch reports whether two package family keys refer to the same
+// specialist after domain/name migration (flat ↔ domain, or reversed compound).
+func packageFamiliesMatch(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	// container-dockerfile vs dockerfile; security-secrets vs secrets
+	if strings.HasSuffix(a, "-"+b) || strings.HasSuffix(b, "-"+a) {
+		return true
+	}
+	// engineering-review vs review-engineering
+	pa := strings.Split(a, "-")
+	pb := strings.Split(b, "-")
+	if len(pa) == 2 && len(pb) == 2 && pa[0] == pb[1] && pa[1] == pb[0] {
+		return true
+	}
+	return false
+}
+
+// officialMetaPackage is the platform self-review package published under the
+// adversarylabs/ publisher path. All other adversarylabs/* names are retired.
+const officialMetaPackage = "adversarylabs/adversary"
+
+// isRetiredAutoReference skips official catalog paths the free catalog no longer
+// publishes (same policy as inventory: adversarylabs/* publisher, library/flat),
+// except the intentional meta package adversarylabs/adversary.
+func isRetiredAutoReference(reference, manifestName string) bool {
+	name := strings.ToLower(strings.TrimSpace(manifestName))
+	if name == officialMetaPackage {
+		return false
+	}
+	if strings.HasPrefix(name, "adversarylabs/") {
+		return true
+	}
+	parsed, err := oci.ParseReference(reference)
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(parsed.Registry, officialRegistryHost) {
+		return false
+	}
+	ns, rest, hasRest := strings.Cut(parsed.Repository, "/")
+	switch strings.ToLower(ns) {
+	case "adversarylabs":
+		// Keep the meta package; retire historical publisher clones (go-cli, …).
+		return !strings.EqualFold(rest, "adversary")
+	case "library":
+		if !hasRest || rest == "" {
+			return true
+		}
+		// Flat short-name under library for a flat package name → retired.
+		if name == "" || !strings.Contains(name, "/") {
+			return true
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func isLocalDevRegistry(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "localhost" || strings.HasPrefix(host, "localhost:") ||
+		host == "127.0.0.1" || strings.HasPrefix(host, "127.0.0.1:")
 }
 
 // preferCandidateReference chooses which alias to keep when multiple references
-// resolve to the same package digest. Prefer the modern adversarylabs namespace
-// over the legacy library default, then a concrete version tag over :latest.
+// resolve to the same package digest or package family. Prefer domain/name
+// catalog ids, official registry over localhost, modern namespaces, then a
+// concrete version tag over :latest.
 func preferCandidateReference(candidate, current DetectionCandidate) bool {
-	candScore := referencePreferenceScore(candidate.Reference)
-	currScore := referencePreferenceScore(current.Reference)
+	candScore := candidatePreferenceScore(candidate)
+	currScore := candidatePreferenceScore(current)
 	if candScore != currScore {
 		return candScore > currScore
 	}
@@ -319,21 +446,44 @@ func preferCandidateVersion(candidate, current DetectionCandidate) bool {
 	return preferCandidateReference(candidate, current)
 }
 
+func candidatePreferenceScore(candidate DetectionCandidate) int {
+	score := referencePreferenceScore(candidate.Reference)
+	// Domain catalog ids (go/cli) beat flat renames (go-cli).
+	if strings.Contains(strings.TrimSpace(candidate.Name), "/") {
+		score += 40
+	}
+	return score
+}
+
 func referencePreferenceScore(ref string) int {
 	parsed, err := oci.ParseReference(ref)
 	if err != nil {
 		return 0
 	}
 	score := 0
+	host := strings.ToLower(parsed.Registry)
+	if host == officialRegistryHost {
+		score += 80
+	} else if isLocalDevRegistry(host) {
+		// Local packs are fine for dev but lose to signed prod catalog.
+		score += 10
+	} else {
+		score += 40
+	}
 	parts := strings.Split(parsed.Repository, "/")
 	if len(parts) > 0 {
 		switch strings.ToLower(parts[0]) {
 		case "adversarylabs":
-			score += 100
+			score += 20
 		case "library":
-			// legacy default namespace; lose to adversarylabs
+			// legacy default namespace; lose to domain catalog paths
 		default:
-			score += 50
+			// domain path (go/, container/, …) preferred
+			if len(parts) >= 2 {
+				score += 50
+			} else {
+				score += 25
+			}
 		}
 	}
 	tag := strings.TrimSpace(parsed.Tag)
