@@ -491,13 +491,30 @@ func (f processRegistryFactory) New(apiURL, profile string) (application.OCIRegi
 	if realm, err := url.Parse(r.BearerRealm); err == nil && realm.Host != "" {
 		r.TokenAuthorities[f.host] = oci.TokenAuthority{Origin: realm.Scheme + "://" + realm.Host, Service: f.host}
 	}
+	// Production registry WWW-Authenticate always points at adversarylabs.ai,
+	// even when --api-url is a local Next app. Trust that realm so stored
+	// credentials are sent on token requests (otherwise pulls look anonymous).
+	if isOfficialCatalogRegistry(f.host) {
+		r.TokenAuthorities[oci.DefaultRegistry] = oci.TokenAuthority{
+			Origin:  "https://adversarylabs.ai",
+			Service: oci.DefaultRegistry,
+		}
+		r.BearerRealm = "https://adversarylabs.ai/auth/registry"
+		r.BearerService = oci.DefaultRegistry
+	}
 	auth, ok, err := scopedAuth(f.store, apiURL, profile, f.host)
 	if err != nil {
 		return nil, err
 	}
 	stores := oci.ChainCredentialStore{f.docker}
 	if ok {
-		stores = append(oci.ChainCredentialStore{scopedCredentialStore{registry: f.host, token: auth.Token}}, stores...)
+		// Official catalog tokens must key off the production registry host so
+		// the OCI client attaches them when resolving registry.adversarylabs.ai.
+		credHost := f.host
+		if isOfficialCatalogRegistry(f.host) {
+			credHost = oci.DefaultRegistry
+		}
+		stores = append(oci.ChainCredentialStore{scopedCredentialStore{registry: credHost, token: auth.Token}}, stores...)
 	}
 	r.Credentials = stores
 	return processOCIRegistry{r}, nil

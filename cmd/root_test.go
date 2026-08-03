@@ -1464,6 +1464,47 @@ func TestNewOCIRegistryAlwaysIncludesDockerFallback(t *testing.T) {
 	}
 }
 
+func TestOfficialCatalogRegistryTrustsProductionAuthRealm(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, _ := adversarylabs.DefaultConfigStore()
+	factory := processRegistryFactory{store: store, docker: oci.DockerCredentialStore{}, host: adversarylabs.DefaultRegistry}
+	// Local API URL must not prevent sending credentials to production registry auth.
+	created, err := factory.New("http://localhost:3000/api", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := created.(processOCIRegistry).HTTPRegistry
+	if registry.BearerRealm != "https://adversarylabs.ai/auth/registry" {
+		t.Fatalf("BearerRealm = %q, want production auth realm", registry.BearerRealm)
+	}
+	authority, ok := registry.TokenAuthorities[oci.DefaultRegistry]
+	if !ok || authority.Origin != "https://adversarylabs.ai" || authority.Service != oci.DefaultRegistry {
+		t.Fatalf("TokenAuthorities = %#v", registry.TokenAuthorities)
+	}
+}
+
+func TestScopedAuthFallsBackToProductionLoginForOfficialRegistry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, err := adversarylabs.DefaultConfigStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAuth(adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, "default"), adversarylabs.Auth{
+		Token:        "prod-token",
+		RegistryHost: adversarylabs.DefaultRegistry,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// No credentials under the local API key — catalog pulls should still find production login.
+	auth, ok, err := scopedAuth(processAuthStore{store}, "http://localhost:3000/api", "default", adversarylabs.DefaultRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || auth.Token != "prod-token" {
+		t.Fatalf("scopedAuth = ok=%v token=%q", ok, auth.Token)
+	}
+}
+
 type cmdRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f cmdRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
