@@ -60,8 +60,8 @@ func (e *autoRecordingExecutor) Run(_ context.Context, spec RuntimeSpec) (Runtim
 
 func TestAutoSelectsAvailableAdversariesAndSharesOneContext(t *testing.T) {
 	repo, resolver := autoRepository(t, map[string]string{
-		"adversarylabs/dockerfile:1.0.0": "name: adversarylabs/dockerfile\ndetection:\n  files: [Dockerfile]\n",
-		"adversarylabs/general:1.0.0":    "name: adversarylabs/general\ndetection:\n  files: ['**/*.go']\n",
+		"container/dockerfile:1.0.0": "name: container/dockerfile\ndetection:\n  files: [Dockerfile]\n",
+		"lang/go:1.0.0":              "name: lang/go\ndetection:\n  files: ['**/*.go']\n",
 	})
 	changes := &fakeChangeResolver{context: detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "Dockerfile", Status: detection.StatusModified}, {Path: "cmd/main.go", Status: detection.StatusModified}}}}
 	reported := false
@@ -81,8 +81,8 @@ func TestAutoSelectsAvailableAdversariesAndSharesOneContext(t *testing.T) {
 
 func TestAutoDryRunIncludeExcludeAndNoMatch(t *testing.T) {
 	_, resolver := autoRepository(t, map[string]string{
-		"adversarylabs/docs:1.0.0":     "name: adversarylabs/docs\ndetection:\n  files: ['**/*.md']\n",
-		"adversarylabs/security:1.0.0": "name: adversarylabs/security\n",
+		"docs/markdown:1.0.0": "name: docs/markdown\ndetection:\n  files: ['**/*.md']\n",
+		"go/security:1.0.0":   "name: go/security\n",
 	})
 	changes := &fakeChangeResolver{context: detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "main.go", Status: detection.StatusModified}}}}
 	result, err := (AutoRunner{Runner: Runner{Resolver: &resolver}, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{DryRun: true, Includes: []string{"security"}, Excludes: []string{"security"}, MinimumConfidence: detection.ConfidenceMedium})
@@ -112,7 +112,7 @@ func TestAutoUntrustedProgramDetectorFallsBackToSafeDeclaration(t *testing.T) {
 
 func TestAutoPolicyDeniedProgramDetectorFallsBackToSafeDeclaration(t *testing.T) {
 	repo, resolver := autoRepository(t, map[string]string{
-		"adversarylabs/dockerfile:1.0.0": "name: adversarylabs/dockerfile\ndetection:\n  files: [Dockerfile]\n  entrypoint: dist/detect.js\npermissions:\n  enforcement: required\n  network: false\n",
+		"container/dockerfile:1.0.0": "name: container/dockerfile\ndetection:\n  files: [Dockerfile]\n  entrypoint: dist/detect.js\npermissions:\n  enforcement: required\n  network: false\n",
 	})
 	changes := &fakeChangeResolver{context: detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "Dockerfile", Status: detection.StatusModified}}}}
 	caps := ExecutorCapabilities{}
@@ -128,7 +128,7 @@ func TestAutoPolicyDeniedProgramDetectorFallsBackToSafeDeclaration(t *testing.T)
 
 func TestAutoTrustedDetectorFailureSkipsUnlessForced(t *testing.T) {
 	repo, resolver := autoRepository(t, map[string]string{
-		"adversarylabs/dockerfile:1.0.0": "name: adversarylabs/dockerfile\ndetection:\n  files: [Dockerfile]\n  entrypoint: dist/detect.js\n",
+		"container/dockerfile:1.0.0": "name: container/dockerfile\ndetection:\n  files: [Dockerfile]\n  entrypoint: dist/detect.js\n",
 	})
 	changes := &fakeChangeResolver{context: detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeDirtyWorktree, ChangedFiles: []detection.ChangedFile{{Path: "Dockerfile", Status: detection.StatusModified}}}}
 	executor := &detectorExecutor{backend: HostExecutorBackend, result: `{}`}
@@ -139,7 +139,7 @@ func TestAutoTrustedDetectorFailureSkipsUnlessForced(t *testing.T) {
 	if len(result.Selections) != 1 || result.Selections[0].Selected || result.Selections[0].Error == nil {
 		t.Fatalf("failed detector selection = %#v", result.Selections)
 	}
-	forced, err := (AutoRunner{Runner: Runner{Resolver: &resolver, Repository: &repo, Executor: executor}, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{DryRun: true, Includes: []string{"adversarylabs/dockerfile"}, MinimumConfidence: detection.ConfidenceMedium})
+	forced, err := (AutoRunner{Runner: Runner{Resolver: &resolver, Repository: &repo, Executor: executor}, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{DryRun: true, Includes: []string{"container/dockerfile"}, MinimumConfidence: detection.ConfidenceMedium})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,8 +149,8 @@ func TestAutoTrustedDetectorFailureSkipsUnlessForced(t *testing.T) {
 }
 
 func TestAvailableCandidatesDoNotCollapseAcrossPublishers(t *testing.T) {
-	// Distinct package bytes under different publishers stay separate. Identical
-	// digests (same bytes under library/* and adversarylabs/*) collapse elsewhere.
+	// Distinct package bytes under different third-party publishers stay separate.
+	// (Official free-catalog paths collapse by package family — see flat/domain test.)
 	repo := repository.Repository{Root: t.TempDir()}
 	t.Cleanup(func() { makeResolverWritable(repo.Root) })
 	for _, item := range []struct {
@@ -158,8 +158,8 @@ func TestAvailableCandidatesDoNotCollapseAcrossPublishers(t *testing.T) {
 		version string
 		command string
 	}{
-		{"adversarylabs/security:1.0.0", "1.0.0", "dist/official.js"},
-		{"randomperson/security:2.0.0", "2.0.0", "dist/community.js"},
+		{"registry.example/acme/security:1.0.0", "1.0.0", "dist/official.js"},
+		{"registry.example/randomperson/security:2.0.0", "2.0.0", "dist/community.js"},
 	} {
 		project := t.TempDir()
 		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: shared/security\nversion: "+item.version+"\nruntime:\n  name: node\n  version: \"22\"\n  command: ["+strconv.Quote(item.command)+"]\n")
@@ -184,16 +184,18 @@ func TestAvailableCandidatesDoNotCollapseAcrossPublishers(t *testing.T) {
 	for _, candidate := range candidates {
 		refs[candidate.Reference] = true
 	}
-	if !refs["registry.adversarylabs.ai/adversarylabs/security:1.0.0"] || !refs["registry.adversarylabs.ai/randomperson/security:2.0.0"] {
+	if !refs["registry.example/acme/security:1.0.0"] || !refs["registry.example/randomperson/security:2.0.0"] {
 		t.Fatalf("publisher refs = %#v", refs)
 	}
 }
 
 func TestAvailableCandidatesCollapseSharedDigestAcrossNamespaces(t *testing.T) {
+	// Same digest under multiple domain-path tags collapses to one candidate.
+	// (Retired library/* and adversarylabs/* publisher paths are skipped entirely.)
 	repo := repository.Repository{Root: t.TempDir()}
 	t.Cleanup(func() { makeResolverWritable(repo.Root) })
 	project := t.TempDir()
-	writeFile(t, filepath.Join(project, "adversary.yaml"), "name: go-cli\nversion: 0.0.15\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writeFile(t, filepath.Join(project, "adversary.yaml"), "name: go/cli\nversion: 0.0.15\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
 	writeFile(t, filepath.Join(project, "dist", "index.js"), "")
 	writeFile(t, filepath.Join(project, "dist", "detect.js"), "")
 	artifact, err := pack.Create(context.Background(), pack.Options{Dir: project})
@@ -201,9 +203,9 @@ func TestAvailableCandidatesCollapseSharedDigestAcrossNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ref := range []string{
-		"registry.adversarylabs.ai/library/go-cli:0.0.15",
-		"registry.adversarylabs.ai/adversarylabs/go-cli:0.0.15",
-		"registry.adversarylabs.ai/library/go-cli:latest",
+		"registry.adversarylabs.ai/go/cli:0.0.15",
+		"registry.adversarylabs.ai/go/cli:latest",
+		"localhost:8787/go/cli:0.0.15",
 	} {
 		if _, err := repo.ImportPacked(artifact, ref); err != nil {
 			t.Fatal(err)
@@ -217,28 +219,30 @@ func TestAvailableCandidatesCollapseSharedDigestAcrossNamespaces(t *testing.T) {
 	if len(candidates) != 1 {
 		t.Fatalf("candidates = %#v", candidates)
 	}
-	if !strings.Contains(candidates[0].Reference, "adversarylabs/go-cli") {
-		t.Fatalf("preferred reference = %q, want adversarylabs namespace", candidates[0].Reference)
+	if !strings.Contains(candidates[0].Reference, "go/cli") {
+		t.Fatalf("preferred reference = %q, want go/cli", candidates[0].Reference)
 	}
-	if strings.Contains(candidates[0].Reference, "/library/") {
-		t.Fatalf("preferred reference = %q, must not keep legacy library namespace when adversarylabs alias exists", candidates[0].Reference)
+	// Prefer official registry over localhost when the digest is shared.
+	if strings.Contains(candidates[0].Reference, "localhost") {
+		t.Fatalf("preferred reference = %q, want official registry over localhost", candidates[0].Reference)
 	}
 }
 
 func TestAvailableCandidatesCollapseSamePublisherPackageRename(t *testing.T) {
-	// Same publisher + same manifest name under different repository paths
-	// (historical rename) should run once, newest version preferred.
+	// Same domain package under older and newer versions should run once,
+	// newest version preferred (historical path renames share family key).
 	repo := repository.Repository{Root: t.TempDir()}
 	t.Cleanup(func() { makeResolverWritable(repo.Root) })
 	for _, item := range []struct {
 		ref     string
+		name    string
 		version string
 	}{
-		{"registry.adversarylabs.ai/adversarylabs/depotci-adversary:0.0.4", "0.0.4"},
-		{"registry.adversarylabs.ai/adversarylabs/depotci:0.0.8", "0.0.8"},
+		{"registry.adversarylabs.ai/ci/depot:0.0.4", "ci/depot", "0.0.4"},
+		{"registry.adversarylabs.ai/ci/depot:0.0.8", "ci/depot", "0.0.8"},
 	} {
 		project := t.TempDir()
-		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: depotci\nversion: "+item.version+"\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: "+item.name+"\nversion: "+item.version+"\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
 		writeFile(t, filepath.Join(project, "dist", "index.js"), item.version+"\n")
 		artifact, err := pack.Create(context.Background(), pack.Options{Dir: project})
 		if err != nil {
@@ -261,19 +265,104 @@ func TestAvailableCandidatesCollapseSamePublisherPackageRename(t *testing.T) {
 	}
 }
 
+func TestAvailableCandidatesCollapseFlatAndDomainCatalogNames(t *testing.T) {
+	// Historical flat installs (go-cli, dockerfile) must not double-run alongside
+	// modern domain catalog packages (go/cli, container/dockerfile).
+	repo := repository.Repository{Root: t.TempDir()}
+	t.Cleanup(func() { makeResolverWritable(repo.Root) })
+	for _, item := range []struct {
+		ref     string
+		name    string
+		version string
+	}{
+		{"registry.adversarylabs.ai/go/cli:0.0.21", "go/cli", "0.0.21"},
+		{"localhost:8787/go-cli:0.0.18", "go-cli", "0.0.18"},
+		{"registry.adversarylabs.ai/container/dockerfile:0.0.13", "container/dockerfile", "0.0.13"},
+		{"localhost:8787/dockerfile:0.0.11", "dockerfile", "0.0.11"},
+		{"registry.adversarylabs.ai/security/secrets:0.0.12", "security/secrets", "0.0.12"},
+		{"localhost:8787/secrets:0.0.9", "secrets", "0.0.9"},
+		{"registry.adversarylabs.ai/review/engineering:0.0.11", "review/engineering", "0.0.11"},
+		{"localhost:8787/engineering-review:0.0.7", "engineering-review", "0.0.7"},
+	} {
+		project := t.TempDir()
+		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: "+item.name+"\nversion: "+item.version+"\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+		writeFile(t, filepath.Join(project, "dist", "index.js"), item.version+"\n")
+		artifact, err := pack.Create(context.Background(), pack.Options{Dir: project})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.ImportPacked(artifact, item.ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Retired official publisher path should be ignored entirely.
+	project := t.TempDir()
+	writeFile(t, filepath.Join(project, "adversary.yaml"), "name: go-cli\nversion: 0.0.1\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writeFile(t, filepath.Join(project, "dist", "index.js"), "retired\n")
+	artifact, err := pack.Create(context.Background(), pack.Options{Dir: project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ImportPacked(artifact, "registry.adversarylabs.ai/library/go-cli:0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	// Meta package stays eligible (not retired).
+	metaProject := t.TempDir()
+	writeFile(t, filepath.Join(metaProject, "adversary.yaml"), "name: adversarylabs/adversary\nversion: 0.0.24\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writeFile(t, filepath.Join(metaProject, "dist", "index.js"), "meta\n")
+	metaArtifact, err := pack.Create(context.Background(), pack.Options{Dir: metaProject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ImportPacked(metaArtifact, "registry.adversarylabs.ai/adversarylabs/adversary:0.0.24"); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := Resolver{Repository: repo}
+	candidates, err := (AutoRunner{Runner: Runner{Resolver: &resolver}, Resolver: &resolver}).availableCandidates(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 5 {
+		t.Fatalf("want 5 families (cli, dockerfile, secrets, engineering, meta), got %#v", candidates)
+	}
+	byName := map[string]DetectionCandidate{}
+	for _, c := range candidates {
+		byName[c.Name] = c
+	}
+	for _, want := range []struct {
+		name    string
+		version string
+	}{
+		{"go/cli", "0.0.21"},
+		{"container/dockerfile", "0.0.13"},
+		{"security/secrets", "0.0.12"},
+		{"review/engineering", "0.0.11"},
+		{"adversarylabs/adversary", "0.0.24"},
+	} {
+		got, ok := byName[want.name]
+		if !ok {
+			t.Fatalf("missing preferred domain package %q in %#v", want.name, byName)
+		}
+		if got.Manifest.Version != want.version {
+			t.Fatalf("%s version = %q, want %q", want.name, got.Manifest.Version, want.version)
+		}
+	}
+}
+
 func TestAvailableCandidatesPreferNewestVersionPerRepository(t *testing.T) {
 	repo := repository.Repository{Root: t.TempDir()}
 	t.Cleanup(func() { makeResolverWritable(repo.Root) })
 	for _, version := range []string{"0.0.5", "0.0.6"} {
 		project := t.TempDir()
-		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: engineering-review\nversion: "+version+"\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: review/engineering\nversion: "+version+"\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
 		writeFile(t, filepath.Join(project, "dist", "index.js"), "")
 		writeFile(t, filepath.Join(project, "dist", "detect.js"), "")
 		artifact, err := pack.Create(context.Background(), pack.Options{Dir: project})
 		if err != nil {
 			t.Fatal(err)
 		}
-		ref := "registry.adversarylabs.ai/adversarylabs/engineering-review:" + version
+		ref := "registry.adversarylabs.ai/review/engineering:" + version
 		if _, err := repo.ImportPacked(artifact, ref); err != nil {
 			t.Fatal(err)
 		}
