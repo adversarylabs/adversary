@@ -32,6 +32,86 @@ run:
 	}
 }
 
+func TestAuthorReviewsDiscoveryValidates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, DefaultConfigName)
+	body := `
+version: 1
+adversaries:
+  path: ../person-x
+official:
+  enabled: false
+sources:
+  discovery: author_reviews
+  authors_only: [mitchellh]
+  orgs: [hashicorp]
+  author_roles: [reviewed-by]
+run:
+  max_prs: 20
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DiscoveryMode() != "author_reviews" {
+		t.Fatalf("mode=%s", cfg.DiscoveryMode())
+	}
+}
+
+func TestAuthorOnlyAutoDiscoveryMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, DefaultConfigName)
+	body := `
+version: 1
+adversaries:
+  path: .
+sources:
+  authors_only: [dhh]
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DiscoveryMode() != "author_reviews" {
+		t.Fatalf("auto mode want author_reviews got %s", cfg.DiscoveryMode())
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAuthorReviewsRequiresAuthors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, DefaultConfigName)
+	body := `
+version: 1
+adversaries:
+  path: .
+sources:
+  discovery: author_reviews
+  repos: []
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
 func TestLoadValidConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, DefaultConfigName)

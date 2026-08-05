@@ -18,6 +18,8 @@ import (
 func Execute() error {
 	ctx, stop := signal.NotifyContext(context.Background(), processSignals()...)
 	defer stop()
+	armSecondInterruptForceExit(ctx)
+
 	app, err := newProcessApp(os.Stdin, os.Stdout, os.Stderr)
 	if err != nil {
 		return err

@@ -120,8 +120,8 @@ func TestWriteStoryIsPlainEnglish(t *testing.T) {
 		}
 	}
 
-	// CLI block plain
-	if !strings.Contains(res.CLIBlock, "BOTTOM LINE") || !strings.Contains(res.CLIBlock, "Open this file") {
+	// CLI block plain — points at results inbox, not jargon metrics
+	if !strings.Contains(res.CLIBlock, "BOTTOM LINE") || !strings.Contains(res.CLIBlock, "train results ls") {
 		t.Fatalf("CLI block: %s", res.CLIBlock)
 	}
 	if strings.Contains(res.CLIBlock, "Precision:") || strings.Contains(res.CLIBlock, "False-positive") {

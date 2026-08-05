@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/adversarylabs/adversary/internal/train/securefs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -29,16 +30,13 @@ func Load(path string) (*Case, error) {
 	return &c, nil
 }
 
-// SaveJSON writes a case as JSON.
+// SaveJSON writes a case as JSON (user-only perms: may contain private review bodies).
 func SaveJSON(path string, c *Case) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	raw, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, raw, 0o644)
+	return securefs.WriteFile(path, raw)
 }
 
 // ListIDs lists case IDs under a directory (json/yaml files).

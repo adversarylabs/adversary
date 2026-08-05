@@ -40,20 +40,32 @@ type OfficialConfig struct {
 }
 
 type SourcesConfig struct {
-	Host            string   `yaml:"host"`
-	Org             string   `yaml:"org"`
+	Host string `yaml:"host"`
+	// Discovery selects how train finds PRs:
+	//   "repos" (default) — hunt listed sources.repos / org catalog
+	//   "author_reviews"  — GitHub search for PRs reviewed/commented by authors_only (no repo list required)
+	// Empty: auto — author_reviews when authors_only set and repos empty; else repos.
+	Discovery string `yaml:"discovery"`
+	Org       string `yaml:"org"`
+	// Orgs bounds author_reviews search (gh --owner). Optional.
+	Orgs            []string `yaml:"orgs"`
 	Repos           []string `yaml:"repos"`
 	Languages       []string `yaml:"languages"`
 	Since           string   `yaml:"since"`
 	ReposAllowlist  []string `yaml:"repos_allowlist"`
 	AuthorsIgnore   []string `yaml:"authors_ignore"`
 	AuthorsOnly     []string `yaml:"authors_only"`
+	// AuthorRoles for author_reviews: reviewed-by (default), commenter, author.
+	AuthorRoles []string `yaml:"author_roles"`
 }
 
 type RunConfig struct {
 	MaxPRs   int      `yaml:"max_prs"`
 	MaxTurns int      `yaml:"max_turns"`
-	Only     []string `yaml:"only"`
+	// Concurrency is parallel PR collect workers (gh). 0 = default (4). Cap 16.
+	// Local package runs stay serialized under a per-path lock.
+	Concurrency int      `yaml:"concurrency"`
+	Only        []string `yaml:"only"`
 }
 
 // OfficialEnabled returns whether the official jury is on (default true).
@@ -72,6 +84,25 @@ func (c Config) StateDirResolved() string {
 	return c.StateDir
 }
 
+// DiscoveryMode returns the effective discovery strategy.
+func (c Config) DiscoveryMode() string {
+	d := strings.ToLower(strings.TrimSpace(c.Sources.Discovery))
+	switch d {
+	case "repos", "repo", "catalog":
+		return "repos"
+	case "author_reviews", "author", "authors", "person", "reviewed-by":
+		return "author_reviews"
+	case "":
+		// Auto: person-first when authors_only is set and no explicit repo list.
+		if len(trimNonEmpty(c.Sources.AuthorsOnly)) > 0 && len(trimNonEmpty(c.Sources.Repos)) == 0 {
+			return "author_reviews"
+		}
+		return "repos"
+	default:
+		return d
+	}
+}
+
 // Validate reports config errors (empty sources, etc.).
 func (c Config) Validate() error {
 	if c.Version != 0 && c.Version != 1 {
@@ -80,8 +111,18 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Adversaries.Root) == "" && strings.TrimSpace(c.Adversaries.Path) == "" {
 		return fmt.Errorf("adversaries.root or adversaries.path is required")
 	}
-	if !c.HasHistorySources() {
-		return fmt.Errorf("sources are empty: set sources.org and/or sources.repos in %s", DefaultConfigName)
+	mode := c.DiscoveryMode()
+	switch mode {
+	case "author_reviews":
+		if len(trimNonEmpty(c.Sources.AuthorsOnly)) == 0 {
+			return fmt.Errorf("sources.discovery=author_reviews requires sources.authors_only (GitHub logins)")
+		}
+	case "repos":
+		if !c.HasRepoSources() {
+			return fmt.Errorf("sources are empty: set sources.repos and/or sources.org, or use sources.authors_only for author_reviews discovery")
+		}
+	default:
+		return fmt.Errorf("unknown sources.discovery %q (want repos or author_reviews)", c.Sources.Discovery)
 	}
 	if c.Run.MaxPRs < 0 || c.Run.MaxTurns < 0 {
 		return fmt.Errorf("run.max_prs and run.max_turns must be non-negative")
@@ -91,6 +132,14 @@ func (c Config) Validate() error {
 
 // HasHistorySources reports whether any history target is configured.
 func (c Config) HasHistorySources() bool {
+	if c.DiscoveryMode() == "author_reviews" && len(trimNonEmpty(c.Sources.AuthorsOnly)) > 0 {
+		return true
+	}
+	return c.HasRepoSources()
+}
+
+// HasRepoSources reports org or explicit repos.
+func (c Config) HasRepoSources() bool {
 	if strings.TrimSpace(c.Sources.Org) != "" {
 		return true
 	}
@@ -100,6 +149,16 @@ func (c Config) HasHistorySources() bool {
 		}
 	}
 	return false
+}
+
+func trimNonEmpty(in []string) []string {
+	var out []string
+	for _, s := range in {
+		if strings.TrimSpace(s) != "" {
+			out = append(out, strings.TrimSpace(s))
+		}
+	}
+	return out
 }
 
 // Load reads and validates adversary.train.yaml from workspace (or path).

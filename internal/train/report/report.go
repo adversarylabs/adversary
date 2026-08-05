@@ -49,6 +49,8 @@ type Result struct {
 	Verdict    string // BAD | MIXED | GOOD
 	Headline   string // one plain sentence
 	CLIBlock   string // entire CLI blurb (no jargon)
+	// Issues are local-package draft suggestions (train results inbox).
+	Issues []SuggestedIssue
 }
 
 // Write creates a plain-English story report.
@@ -66,7 +68,9 @@ func Write(in Input) (*Result, error) {
 	}
 
 	verdict, headline := classify(in.Scorecard)
-	story := renderStory(in, verdict, headline)
+	// Build issues once; story + SUGGESTED_ISSUES.md reuse them.
+	issues := suggestIssues(in)
+	story := renderStoryWithIssues(in, verdict, headline, issues)
 
 	// Primary: STORY.md in the run (harder to miss than README full of other dirs)
 	primary := filepath.Join(in.RunDir, "STORY.md")
@@ -87,6 +91,14 @@ func Write(in Input) (*Result, error) {
 		_ = os.WriteFile(filepath.Join(in.DataRoot, "LATEST_RUN_REPORT.md"), []byte(story), 0o644)
 	}
 
+	writeSuggestedIssuesFile(in.ExperimentDir, issues)
+	writeSuggestedIssuesFile(in.RunDir, issues)
+	if in.DataRoot != "" {
+		writeSuggestedIssuesFile(in.DataRoot, issues)
+		_ = os.WriteFile(filepath.Join(in.DataRoot, "LATEST_SUGGESTED_ISSUES.md"),
+			mustSuggestedIssuesBytes(issues), 0o644)
+	}
+
 	openPath := primary
 	if in.ExperimentDir != "" {
 		openPath = filepath.Join(in.ExperimentDir, "STORY.md")
@@ -98,7 +110,21 @@ func Write(in Input) (*Result, error) {
 		Verdict:    verdict,
 		Headline:   headline,
 		CLIBlock:   cli,
+		Issues:     issues,
 	}, nil
+}
+
+func mustSuggestedIssuesBytes(issues []SuggestedIssue) []byte {
+	var all strings.Builder
+	all.WriteString("# Suggested GitHub issues (NOT filed — review first)\n\n")
+	if len(issues) == 0 {
+		all.WriteString("_No drafts this run._\n")
+	}
+	for i, iss := range issues {
+		fmt.Fprintf(&all, "## %d. %s\n\nLabels: %s\n\n%s\n\n---\n\n",
+			i+1, iss.Title, strings.Join(iss.Labels, ", "), iss.Body)
+	}
+	return []byte(all.String())
 }
 
 func classify(sc *score.Scorecard) (verdict, headline string) {
@@ -174,19 +200,21 @@ func formatCLI(verdict, headline, openPath string, in Input) string {
 	}
 	b.WriteString("========================================================\n\n")
 	fmt.Fprintf(&b, "%s\n\n", headline)
-	b.WriteString("Open this file and read the stories (what humans said vs what we said):\n\n")
-	fmt.Fprintf(&b, "  %s\n\n", openPath)
+	b.WriteString("Next steps:\n\n")
+	b.WriteString("  adversary train results ls\n")
+	b.WriteString("  adversary train results inspect <id>\n")
+	b.WriteString("  adversary train results apply <id>\n\n")
+	fmt.Fprintf(&b, "Full story (optional):\n  %s\n", openPath)
 	if in.DataRoot != "" {
-		fmt.Fprintf(&b, "Same story also at:\n  %s/LATEST_STORY.md\n\n", in.DataRoot)
+		fmt.Fprintf(&b, "  %s/LATEST_STORY.md\n", in.DataRoot)
 	}
-	b.WriteString("That file is written in plain English. Ignore the JSON next to it.\n")
 	return b.String()
 }
 
-func renderStory(in Input, verdict, headline string) string {
+func renderStoryWithIssues(in Input, verdict, headline string, issues []SuggestedIssue) string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "# What happened in this factory run\n\n")
+	fmt.Fprintf(&b, "# What happened in this train run\n\n")
 	fmt.Fprintf(&b, "_Generated %s_\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
 
 	fmt.Fprintf(&b, "## Bottom line\n\n")
@@ -267,8 +295,7 @@ func renderStory(in Input, verdict, headline string) string {
 
 	// Suggested GitHub issues (draft only — not created)
 	fmt.Fprintf(&b, "## Suggested GitHub issue(s) for our agents\n\n")
-	b.WriteString("_These are **drafts for you to review**. Nothing was filed on GitHub. Copy into an issue if you agree._\n\n")
-	issues := suggestIssues(in)
+	b.WriteString("_These are **drafts for you to review**. Nothing was filed on GitHub. Use `adversary train results ls` / `apply`._\n\n")
 	if len(issues) == 0 {
 		b.WriteString("No suggested issues this run (no clear misses to generalize).\n\n")
 	} else {
@@ -279,9 +306,6 @@ func renderStory(in Input, verdict, headline string) string {
 			fmt.Fprintf(&b, "**Body:**\n\n```markdown\n%s\n```\n\n", iss.Body)
 		}
 	}
-	// Standalone draft file for easy copy (always written).
-	writeSuggestedIssuesFile(in.ExperimentDir, issues)
-	writeSuggestedIssuesFile(in.RunDir, issues)
 
 	// What to do
 	fmt.Fprintf(&b, "## What should I do next?\n\n")

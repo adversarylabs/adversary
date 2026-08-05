@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/train/adversaries"
@@ -23,10 +25,11 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/receipt"
 	"github.com/adversarylabs/adversary/internal/train/report"
 	"github.com/adversarylabs/adversary/internal/train/repos"
+	"github.com/adversarylabs/adversary/internal/train/results"
 	"github.com/adversarylabs/adversary/internal/train/runner"
 	"github.com/adversarylabs/adversary/internal/train/scope"
 	"github.com/adversarylabs/adversary/internal/train/score"
-	"github.com/adversarylabs/adversary/internal/train/state"
+	"github.com/adversarylabs/adversary/internal/train/securefs"
 )
 
 // Options for the first-slice end-to-end path.
@@ -47,13 +50,18 @@ type Options struct {
 	// Languages filters the catalog (empty = any language; engineering-review uses any).
 	// Example: []string{"go"} for go-security.
 	Languages []string
-	// AdversaryName for scope docs and future language defaults (default engineering-review).
+	// AdversaryName is the primary package id for hunt logs, scorecards, and
+	// empty-owner fallbacks. When empty, derived from loaded local packages
+	// (or "engineering-review" only as a last-resort legacy default).
 	AdversaryName string
 	// MaxPRs is how many usable PRs we want to grade this run (default 1).
 	MaxPRs int
 	// MaxTurns is how many PRs we may attempt while hunting (default 15).
 	// Each turn = try one not-yet-seen PR (collect + scope). Stops early when MaxPRs usable cases collected.
 	MaxTurns int
+	// Concurrency is how many PR collects may run in parallel (gh API). Default 4.
+	// Local package `adversary run` stays serialized via a per-path lock.
+	Concurrency int
 	// ResetDiscovery clears seen-PR state for repos we touch before hunting.
 	ResetDiscovery bool
 	AdversarySource    string
@@ -73,6 +81,14 @@ type Options struct {
 	// AuthorsOnly / AuthorsIgnore filter gold authors (from train config).
 	AuthorsOnly   []string
 	AuthorsIgnore []string
+	// DiscoveryMode: "repos" (default) or "author_reviews".
+	DiscoveryMode string
+	// AuthorRoles for author_reviews: reviewed-by, commenter, author.
+	AuthorRoles []string
+	// AuthorOrgs bounds author search (--owner).
+	AuthorOrgs []string
+	// AuthorSince optional date bound (merged-at >=).
+	AuthorSince string
 	EngineeringFixture string
 	BaselineFixture    string
 	CaseFixtureDir     string
@@ -90,6 +106,8 @@ type Result struct {
 	Report      *experiment.Report
 	HumanReport *report.Result
 	CaseIDs     []string
+	// ResultsAdded is how many new inbox rows were written for train results ls.
+	ResultsAdded int
 	ExitCode    int
 	Blocked     *dataroot.BlockedResult
 	Message     string
@@ -120,7 +138,7 @@ func Run(opts Options) (*Result, error) {
 	if opts.DataRoot == "" {
 		return nil, fmt.Errorf("data root required")
 	}
-	if err := os.MkdirAll(opts.DataRoot, 0o755); err != nil {
+	if err := securefs.MkdirAll(opts.DataRoot); err != nil {
 		return nil, err
 	}
 	runID := fmt.Sprintf("slice-%d", time.Now().UTC().UnixNano())
@@ -140,9 +158,6 @@ func Run(opts Options) (*Result, error) {
 		rcpt.SetStage("reconstruct", dataroot.ClassFixture)
 	} else {
 		opts.Live = true
-		if opts.AdversaryName == "" {
-			opts.AdversaryName = "engineering-review"
-		}
 		targetPRs := opts.MaxPRs
 		if targetPRs <= 0 {
 			targetPRs = 1
@@ -153,26 +168,31 @@ func Run(opts Options) (*Result, error) {
 		}
 
 		// Build the set of repos to hunt across (config sources first).
+		// Author-reviews mode does not need a catalog.
+		authorMode := strings.EqualFold(opts.DiscoveryMode, "author_reviews") ||
+			(opts.DiscoveryMode == "" && len(opts.AuthorsOnly) > 0 && len(opts.CatalogRepos) == 0 && opts.Owner == "" && opts.Repo == "")
 		var catalogRepos []repos.Repo
-		if len(opts.CatalogRepos) > 0 {
-			catalogRepos = opts.CatalogRepos
-		} else if opts.Owner != "" && opts.Repo != "" {
-			catalogRepos = []repos.Repo{{Owner: opts.Owner, Name: opts.Repo, Languages: opts.Languages, Role: "discovery"}}
-		} else {
-			catPath := opts.ReposFile
-			if catPath == "" && opts.RepoRoot != "" {
-				catPath = repos.DefaultPath(opts.RepoRoot)
-			}
-			if catPath == "" {
-				return nil, fmt.Errorf("no repositories catalog (set sources in adversary.train.yaml, or RepoRoot/ReposFile)")
-			}
-			cat, err := repos.Load(catPath)
-			if err != nil {
-				return nil, err
-			}
-			catalogRepos = cat.Filter("discovery", opts.Languages)
-			if len(catalogRepos) == 0 {
-				return nil, fmt.Errorf("no repos in %s matching languages %v", catPath, opts.Languages)
+		if !authorMode {
+			if len(opts.CatalogRepos) > 0 {
+				catalogRepos = opts.CatalogRepos
+			} else if opts.Owner != "" && opts.Repo != "" {
+				catalogRepos = []repos.Repo{{Owner: opts.Owner, Name: opts.Repo, Languages: opts.Languages, Role: "discovery"}}
+			} else {
+				catPath := opts.ReposFile
+				if catPath == "" && opts.RepoRoot != "" {
+					catPath = repos.DefaultPath(opts.RepoRoot)
+				}
+				if catPath == "" {
+					return nil, fmt.Errorf("no repositories catalog (set sources.repos, or sources.authors_only with discovery: author_reviews)")
+				}
+				cat, err := repos.Load(catPath)
+				if err != nil {
+					return nil, err
+				}
+				catalogRepos = cat.Filter("discovery", opts.Languages)
+				if len(catalogRepos) == 0 {
+					return nil, fmt.Errorf("no repos in %s matching languages %v", catPath, opts.Languages)
+				}
 			}
 		}
 
@@ -202,20 +222,29 @@ func Run(opts Options) (*Result, error) {
 			if loadErr != nil {
 				fmt.Fprintf(os.Stderr, "note: adversary discovery: %v (falling back to single source)\n", loadErr)
 			}
-			scopeClf = &scope.Classifier{AdversaryName: "engineering-review", UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
+			// Resolve name before scope classifier so we do not always label as eng-review.
+			primary := resolvePrimaryAdversaryName(opts, siblingPkgs)
+			opts.AdversaryName = primary
+			scopeClf = &scope.Classifier{AdversaryName: primary, UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
 			srcForScope := opts.AdversarySource
 			if srcForScope == "" && opts.RepoRoot != "" {
-				cand := filepath.Join(filepath.Dir(opts.RepoRoot), "engineering-review-adversary")
-				if st, err := os.Stat(cand); err == nil && st.IsDir() {
-					srcForScope = cand
+				// Prefer path matching primary name; eng-review only as last resort.
+				for _, candName := range []string{primary + "-adversary", "engineering-review-adversary"} {
+					cand := filepath.Join(filepath.Dir(opts.RepoRoot), candName)
+					if st, err := os.Stat(cand); err == nil && st.IsDir() {
+						srcForScope = cand
+						break
+					}
 				}
 			}
-			if mission, _, err := scope.LoadMission(srcForScope, opts.RepoRoot, "engineering-review"); err == nil {
+			if mission, _, err := scope.LoadMission(srcForScope, opts.RepoRoot, primary); err == nil {
 				scopeClf.MissionMarkdown = mission
 			}
 			if srcForScope != "" {
 				if one, err := loadOnePackage(srcForScope); err == nil {
 					siblingPkgs = []adversaries.Package{one}
+					opts.AdversaryName = resolvePrimaryAdversaryName(opts, siblingPkgs)
+					scopeClf.AdversaryName = opts.AdversaryName
 				}
 			}
 		} else {
@@ -232,243 +261,77 @@ func Run(opts Options) (*Result, error) {
 			commentRouter = &scope.Router{Candidates: cands, UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
 			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing\n", len(siblingPkgs))
 		}
+		// Hunt/scorecard primary: loaded packages, not a hard-coded eng-review default.
+		opts.AdversaryName = resolvePrimaryAdversaryName(opts, siblingPkgs)
 		advPackages = siblingPkgs
 
-		// Per-repo discovery stores (skip already-seen PRs).
-		stores := map[string]*state.DiscoveryStore{}
-		storeFor := func(owner, name string) (*state.DiscoveryStore, error) {
-			key := owner + "/" + name
-			if s, ok := stores[key]; ok {
-				return s, nil
-			}
-			s, err := state.LoadDiscovery(opts.DataRoot, owner, name)
-			if err != nil {
-				return nil, err
-			}
-			if opts.ResetDiscovery {
-				s.PRs = map[string]state.PRRecord{}
-				_ = s.Save()
-			}
-			stores[key] = s
-			return s, nil
-		}
+		var huntLog []string
+		var logMu sync.Mutex
+		progress := makeProgress(&huntLog, &logMu)
 
-		huntLog := []string{}
-		turnsUsed := 0
-		prsWithInScope := 0
-		var fallbackCases []*cases.Case
-
-		progress := func(format string, args ...any) {
-			msg := fmt.Sprintf(format, args...)
-			fmt.Fprintln(os.Stderr, msg)
-			huntLog = append(huntLog, strings.TrimSpace(msg))
-		}
-
-		tryPR := func(owner, name string, ref collect.PRRef, store *state.DiscoveryStore, pinned bool) {
-			if err := ctx.Err(); err != nil {
-				progress("interrupted")
-				return
-			}
-			turnsUsed++
-			title := ref.Title
-			if title == "" {
-				title = "(title loading…)"
-			}
-			url := ref.URL
-			if url == "" {
-				url = fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, name, ref.Number)
-			}
-			progress("→ turn %d/%d: trying %s/%s#%d — %s", turnsUsed, maxTurns, owner, name, ref.Number, title)
-			progress("  %s", url)
-			progress("  collecting reviews and comments…")
-
-			var authorOK collect.AuthorFilter
-			if len(opts.AuthorsOnly) > 0 || len(opts.AuthorsIgnore) > 0 {
-				only, ignore := opts.AuthorsOnly, opts.AuthorsIgnore
-				authorOK = func(login string) bool {
-					return workspaceAuthorOK(login, only, ignore)
-				}
-			}
-			cres, err := collect.CollectPRWithOptions(opts.DataRoot, owner, name, ref.Number, collect.CollectOptions{
-				Context:  ctx,
-				Scope:    scopeClf,
-				Router:   commentRouter,
-				AuthorOK: authorOK,
-			})
-			if err != nil {
-				store.Record(ref.Number, ref.Title, ref.URL, state.OutcomeBlocked, err.Error())
-				_ = store.Save()
-				progress("  ✗ collect error: %v", err)
-				return
-			}
-			if cres.Blocked != nil {
-				out.Blocked = cres.Blocked
-				_, _ = dataroot.WriteBlocked(opts.DataRoot, runID, *cres.Blocked)
-				store.Record(ref.Number, ref.Title, ref.URL, state.OutcomeBlocked, cres.Blocked.SanitizedError)
-				_ = store.Save()
-				progress("  ✗ blocked (%s): %s", cres.Blocked.Classification, cres.Blocked.SanitizedError)
-				return
-			}
-			var kept []*cases.Case
-			inScopeN := 0
-			outScopeN := 0
-			for _, c := range cres.CaseCandidates {
-				if c.Exclusion != nil && c.ReviewEvent.ReviewedSHA == "" {
+		// Persist gold into results.db as soon as each PR is kept (survives Ctrl+C).
+		onKeep := func(kept []*cases.Case) int {
+			added := 0
+			for _, c := range kept {
+				n, err := results.WriteKeptCase(opts.DataRoot, runID, c)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warning: results persist: %v\n", err)
 					continue
 				}
-				kept = append(kept, c)
-				inScopeN += len(cases.ApprovedLabels(c.Labels.ExpectedConcerns))
-				outScopeN += len(cases.OutOfScopeLabels(c.Labels.ExpectedConcerns))
+				added += n
 			}
-			if len(kept) == 0 {
-				store.Record(ref.Number, ref.Title, ref.URL, state.OutcomeNoCases, "no reconstructable review rounds")
-				_ = store.Save()
-				progress("  ✗ no usable review rounds — skip")
-				return
+			if added > 0 {
+				progress("  ↳ saved %d human-concern row(s) to results.db", added)
 			}
-			rcpt.SetStage("collect", cres.ExecutionClass)
-			rcpt.SetStage("reconstruct", dataroot.ClassReal)
-			outcome := state.OutcomeNoInScope
-			note := "out of scope only — keep hunting"
-			if inScopeN > 0 {
-				caseList = append(caseList, kept...)
-				outcome = state.OutcomeGraded
-				note = fmt.Sprintf("%d in-scope concern(s) — keep", inScopeN)
-				prsWithInScope++
-				progress("  ✓ keep: %d in-scope, %d out-of-scope human comment(s)", inScopeN, outScopeN)
-			} else {
-				fallbackCases = kept
-				progress("  · no in-scope comments (%d out-of-scope) — keep hunting", outScopeN)
-			}
-			if pinned {
-				outcome = state.OutcomePinned
-				if inScopeN == 0 {
-					caseList = append(caseList, kept...)
-				}
-			}
-			store.Record(ref.Number, ref.Title, ref.URL, outcome, note)
-			_ = store.Save()
+			return added
 		}
 
-		if opts.PR > 0 {
-			owner, name := opts.Owner, opts.Repo
-			if owner == "" || name == "" {
-				if len(catalogRepos) > 0 {
-					owner, name = catalogRepos[0].Owner, catalogRepos[0].Name
-				} else {
-					return nil, fmt.Errorf("--pr requires --owner and --repo (or a non-empty catalog)")
-				}
-			}
-			store, err := storeFor(owner, name)
-			if err != nil {
-				return nil, err
-			}
-			progress("Pinned PR mode: %s/%s#%d", owner, name, opts.PR)
-			ref := collect.PRRef{
-				Number: opts.PR,
-				URL:    fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, name, opts.PR),
-			}
-			tryPR(owner, name, ref, store, true)
-			if err := ctx.Err(); err != nil {
-				return nil, fmt.Errorf("train interrupted: %w", err)
-			}
+		var hunt huntOutcome
+		if authorMode {
+			hunt = runAuthorHunt(ctx, opts, opts.DataRoot, targetPRs, maxTurns, scopeClf, commentRouter, progress, onKeep)
 		} else {
-			langNote := "any language"
-			if len(opts.Languages) > 0 {
-				langNote = "languages=" + strings.Join(opts.Languages, ",")
-			}
-			progress("Hunting across %d repos (%s) for %s", len(catalogRepos), langNote, opts.AdversaryName)
-			progress("max-turns=%d, target in-scope PRs=%d", maxTurns, targetPRs)
-
-			// Round-robin repos so we don't burn all turns on one project.
-			repoIdx := 0
-			for turnsUsed < maxTurns && prsWithInScope < targetPRs {
-				if err := ctx.Err(); err != nil {
-					progress("interrupted by signal")
-					return nil, fmt.Errorf("train interrupted: %w", err)
-				}
-				if len(catalogRepos) == 0 {
-					break
-				}
-				// Try each repo once per outer cycle until a PR is attempted.
-				started := repoIdx
-				attempted := false
-				for {
-					if err := ctx.Err(); err != nil {
-						progress("interrupted by signal")
-						return nil, fmt.Errorf("train interrupted: %w", err)
-					}
-					r := catalogRepos[repoIdx%len(catalogRepos)]
-					repoIdx++
-					store, err := storeFor(r.Owner, r.Name)
-					if err != nil {
-						progress("  state error for %s: %v", r.FullName(), err)
-						if repoIdx%len(catalogRepos) == started%len(catalogRepos) {
-							break
-						}
-						continue
-					}
-					progress("Looking for new PRs in %s (seen %d)…", r.FullName(), len(store.SeenSet()))
-					found, err := collect.DiscoverPRsWithOpts(r.Owner, r.Name, collect.DiscoverOpts{
-						Context: ctx,
-						Limit:   3,
-						Skip:    store.SeenSet(),
-					})
-					if err != nil {
-						progress("  no new PRs in %s: %v", r.FullName(), err)
-						if repoIdx%len(catalogRepos) == started%len(catalogRepos) && !attempted {
-							// Full cycle with no candidates anywhere.
-							progress("All catalog repos exhausted of new PRs this cycle")
-							goto huntDone
-						}
-						continue
-					}
-					for _, ref := range found {
-						if turnsUsed >= maxTurns || prsWithInScope >= targetPRs {
-							break
-						}
-						if store.Seen(ref.Number) {
-							continue
-						}
-						store.Record(ref.Number, ref.Title, ref.URL, state.OutcomeAttempted, "in progress")
-						_ = store.Save()
-						tryPR(r.Owner, r.Name, ref, store, false)
-						attempted = true
-						// One PR per repo visit, then rotate.
-						break
-					}
-					if attempted || turnsUsed >= maxTurns || prsWithInScope >= targetPRs {
-						break
-					}
-					if repoIdx%len(catalogRepos) == started%len(catalogRepos) {
-						progress("Cycled all repos without a new attempt — stopping")
-						goto huntDone
-					}
-				}
-				if !attempted {
-					progress("No progress this cycle — stopping hunt")
-					break
-				}
-			}
-		huntDone:
-			progress("Hunt finished: turns=%d, in-scope PRs kept=%d", turnsUsed, prsWithInScope)
+			hunt = runParallelHunt(ctx, opts, catalogRepos, opts.DataRoot, targetPRs, maxTurns, scopeClf, commentRouter, progress, onKeep)
 		}
-		if len(caseList) == 0 && len(fallbackCases) > 0 {
-			caseList = fallbackCases
+		out.ResultsAdded += hunt.resultsAdded
+		rateLimited := hunt.interrupted != nil && collect.IsRateLimit(hunt.interrupted)
+		if hunt.interrupted != nil && !rateLimited {
+			// Ctrl+C / hard stop — gold already in SQLite.
+			out.Message = fmt.Sprintf("train interrupted during hunt (%d result row(s) saved)\n  next: adversary train results ls", out.ResultsAdded)
+			return out, hunt.interrupted
+		}
+		caseList = hunt.caseList
+		if len(caseList) == 0 && len(hunt.fallbackCases) > 0 {
+			caseList = hunt.fallbackCases
 			progress("Using last out-of-scope-only PR for the story (no in-scope gold this hunt)")
 		}
-		for _, s := range stores {
-			_ = s.Save()
+		if rateLimited {
+			out.Message = fmt.Sprintf("GitHub rate limit during hunt (%d result row(s) saved)\n  wait for quota reset; use --concurrency 1 or 2\n  next: adversary train results ls", out.ResultsAdded)
+			if len(caseList) > 0 {
+				progress("rate limited — grading %d kept case(s) already collected (no more hunting)", len(caseList))
+			}
 		}
-
+		if hunt.blocked != nil {
+			out.Blocked = hunt.blocked
+			_, _ = dataroot.WriteBlocked(opts.DataRoot, runID, *hunt.blocked)
+		}
+		if hunt.collectClass != "" {
+			rcpt.SetStage("collect", hunt.collectClass)
+			rcpt.SetStage("reconstruct", dataroot.ClassReal)
+		}
 		if len(caseList) == 0 {
+			if rateLimited {
+				rcpt.Finish("partial")
+				_, _ = receipt.Save(opts.DataRoot, rcpt)
+				out.ExitCode = dataroot.ExitPartial
+				return out, nil // soft stop: keep partial results
+			}
 			if out.Blocked == nil {
 				out.Blocked = &dataroot.BlockedResult{
 					Dependency:     "github-api",
 					Operation:      "collect",
 					Classification: "missing-source",
 					SanitizedError: fmt.Sprintf("no usable cases after %d turn(s); hunt: %s",
-						turnsUsed, strings.Join(huntLog, "; ")),
+						hunt.turnsUsed, strings.Join(huntLog, "; ")),
 					NextAction: "raise --max-turns, pass --pr N, expand config/repositories.json, or --reset-discovery",
 					RetrySafe:  true,
 				}
@@ -479,14 +342,17 @@ func Run(opts Options) (*Result, error) {
 			_, _ = receipt.Save(opts.DataRoot, rcpt)
 			out.ExitCode = dataroot.ExitBlocked
 			out.Message = out.Blocked.NextAction + "\n" + out.Blocked.SanitizedError
+			if out.ResultsAdded > 0 {
+				out.Message += fmt.Sprintf("\n%d result row(s) already in results.db — adversary train results ls\n", out.ResultsAdded)
+			}
 			return out, nil
 		}
-		rcpt.Notes = fmt.Sprintf("hunt turns=%d in_scope_prs=%d target_prs=%d max_turns=%d repos=%d; %s",
-			turnsUsed, prsWithInScope, targetPRs, maxTurns, len(catalogRepos), strings.Join(huntLog, " | "))
+		rcpt.Notes = fmt.Sprintf("hunt turns=%d in_scope_prs=%d target_prs=%d max_turns=%d concurrency=%d repos=%d; %s",
+			hunt.turnsUsed, hunt.prsWithInScope, targetPRs, maxTurns, normalizeConcurrency(opts.Concurrency), len(catalogRepos), strings.Join(huntLog, " | "))
 	}
 
 	casesDir := filepath.Join(opts.DataRoot, "runs", runID, "cases")
-	_ = os.MkdirAll(casesDir, 0o755)
+	_ = securefs.MkdirAll(casesDir)
 	var usable []*cases.Case
 	for _, c := range caseList {
 		if c.Exclusion != nil && c.ReviewEvent.ReviewedSHA == "" {
@@ -515,14 +381,18 @@ func Run(opts Options) (*Result, error) {
 	reviewBlocked := false
 
 	pkgByID := adversaries.ByID(advPackages)
-	// Default eng-review path for fixture / fallback.
-	defaultAdvRef := "engineering-review"
+	primaryID := resolvePrimaryAdversaryName(opts, advPackages)
+	opts.AdversaryName = primaryID
+	// Default adversary path for fixture / fallback (local package, not always eng-review).
+	defaultAdvRef := primaryID
 	if opts.AdversarySource != "" {
 		if abs, err := filepath.Abs(opts.AdversarySource); err == nil {
 			if st, err := os.Stat(abs); err == nil && st.IsDir() {
 				defaultAdvRef = abs
 			}
 		}
+	} else if p, ok := pkgByID[primaryID]; ok {
+		defaultAdvRef = p.Dir
 	} else if p, ok := pkgByID["engineering-review"]; ok {
 		defaultAdvRef = p.Dir
 	}
@@ -533,7 +403,8 @@ func Run(opts Options) (*Result, error) {
 			rcpt.Finish("interrupted")
 			_, _ = receipt.Save(opts.DataRoot, rcpt)
 			out.ExitCode = 130
-			out.Message = "train interrupted"
+			out.Failures = allFailures
+			out.Message = fmt.Sprintf("train interrupted during grade (%d result row(s) saved)\n  next: adversary train results ls", out.ResultsAdded)
 			return out, fmt.Errorf("train interrupted: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Grading case %d/%d: %s\n", i+1, len(usable), c.ID)
@@ -545,14 +416,22 @@ func Run(opts Options) (*Result, error) {
 		for _, lab := range cases.ApprovedLabels(c.Labels.ExpectedConcerns) {
 			own := lab.OwnerAdversary
 			if own == "" {
-				own = "engineering-review"
+				own = primaryID
 			}
 			owners[own] = append(owners[own], lab)
 			fmt.Fprintf(os.Stderr, "  gold → %s: %s\n", own, softWrapOne(lab.Summary, 80))
 		}
 		if len(owners) == 0 {
-			fmt.Fprintf(os.Stderr, "  (no in-scope gold; still running engineering-review for extras)\n")
-			owners["engineering-review"] = nil
+			// Run loaded locals (or primary) for extras — not a hard-coded eng-review.
+			if len(advPackages) > 0 {
+				for _, p := range advPackages {
+					owners[p.ID] = nil
+				}
+				fmt.Fprintf(os.Stderr, "  (no in-scope gold; still running %s for extras)\n", primaryID)
+			} else {
+				fmt.Fprintf(os.Stderr, "  (no in-scope gold; still running %s for extras)\n", primaryID)
+				owners[primaryID] = nil
+			}
 		}
 
 		man, err := bundle.BuildFromCase(c)
@@ -622,7 +501,7 @@ func Run(opts Options) (*Result, error) {
 			advRef := defaultAdvRef
 			if p, ok := pkgByID[ownerID]; ok {
 				advRef = p.Dir
-			} else if ownerID == "engineering-review" {
+			} else if ownerID == primaryID || ownerID == "engineering-review" {
 				advRef = defaultAdvRef
 			} else {
 				fmt.Fprintf(os.Stderr, "  skip %s: package not found as sibling\n", ownerID)
@@ -681,9 +560,9 @@ func Run(opts Options) (*Result, error) {
 			}
 			nRev.ReviewerID = ownerID
 			normPath := filepath.Join(runDir, "normalized", c.ID+"-"+ownerID+".json")
-			_ = os.MkdirAll(filepath.Dir(normPath), 0o755)
+			_ = securefs.MkdirAll(filepath.Dir(normPath))
 			rawN, _ := normalize.ToJSON(nRev)
-			_ = os.WriteFile(normPath, rawN, 0o644)
+			_ = securefs.WriteFile(normPath, rawN)
 			// Judge only this owner's gold (may be empty → only extras matter)
 			j := judge.JudgeReview(nRev, gold)
 			j.ReviewerID = ownerID
@@ -693,9 +572,9 @@ func Run(opts Options) (*Result, error) {
 				combinedFails = append(combinedFails, f)
 			}
 			jPath := filepath.Join(runDir, "judgments", c.ID+"-"+ownerID+".json")
-			_ = os.MkdirAll(filepath.Dir(jPath), 0o755)
+			_ = securefs.MkdirAll(filepath.Dir(jPath))
 			jr, _ := json.MarshalIndent(j, "", "  ")
-			_ = os.WriteFile(jPath, jr, 0o644)
+			_ = securefs.WriteFile(jPath, jr)
 			if primaryNorm == nil {
 				primaryNorm = nRev
 				primaryJ = j
@@ -718,16 +597,24 @@ func Run(opts Options) (*Result, error) {
 			Case: c, Proj: revProj, RepoPath: repoPath, BaseRef: baseRef, HeadRef: headRef,
 			BaseRaw: bRes.RawJSON, EngRaw: lastRaw, Judgment: primaryJ, Norm: primaryNorm,
 		})
+
+		// Progressive results: upgrade gold → miss/caught immediately after each case.
+		if n, err := results.WriteGradedCase(opts.DataRoot, runID, c, combinedFails); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: results grade persist: %v\n", err)
+		} else if n > 0 {
+			out.ResultsAdded += n
+			fmt.Fprintf(os.Stderr, "  ↳ updated %d result row(s) in results.db\n", n)
+		}
 	}
 
 	if len(judgments) == 0 && reviewBlocked {
 		// Still write a story so the user sees real PR links and what blocked the grade.
-		blockedNote := "engineering-review did not produce a usable review for grading."
+		blockedNote := primaryID + " did not produce a usable review for grading."
 		if out.Blocked != nil {
 			blockedNote = out.Blocked.SanitizedError + " — next: " + out.Blocked.NextAction
 		}
 		expDir := filepath.Join(opts.DataRoot, "experiments", runID)
-		_ = os.MkdirAll(expDir, 0o755)
+		_ = securefs.MkdirAll(expDir)
 		locIDs, offIDs := trainDraftContext(opts, advPackages)
 		human, err := report.Write(report.Input{
 			RunID: runID, DataRoot: opts.DataRoot, RunDir: runDir, ExperimentDir: expDir,
@@ -751,7 +638,7 @@ func Run(opts Options) (*Result, error) {
 		// Critic still needs at least one signal if scorecard is perfect; emit scorecard-only path.
 	}
 
-	sc := score.Aggregate("engineering-review", judgments, allFailures)
+	sc := score.Aggregate(primaryID, judgments, allFailures)
 	scoreDir := filepath.Join(runDir, "reports")
 	if err := score.Save(scoreDir, sc); err != nil {
 		return nil, err
@@ -767,28 +654,28 @@ func Run(opts Options) (*Result, error) {
 	var prop *optimizer.Proposal
 	var rec *optimizer.ExperimentRecord
 	if len(allFailures) > 0 {
-		hyps = critic.AnalyzeFailures(allFailures, "engineering-review")
+		hyps = critic.AnalyzeFailures(allFailures, primaryID)
 		out.Hypotheses = hyps
 		hypPath := filepath.Join(runDir, "critic", "hypotheses.json")
-		_ = os.MkdirAll(filepath.Dir(hypPath), 0o755)
+		_ = securefs.MkdirAll(filepath.Dir(hypPath))
 		hr, _ := json.MarshalIndent(hyps, "", "  ")
-		_ = os.WriteFile(hypPath, hr, 0o644)
+		_ = securefs.WriteFile(hypPath, hr)
 		rcpt.SetStage("critic", dataroot.ClassFixture)
 
 		// --- 6. Optimizer propose ---
 		var err error
-		prop, rec, err = optimizer.Propose(hyps, "engineering-review", "local", out.CaseIDs, expDir)
+		prop, rec, err = optimizer.Propose(hyps, primaryID, "local", out.CaseIDs, expDir)
 		if err != nil {
 			return nil, err
 		}
 	} else {
 		// Clean run: no critic/optimizer noise.
-		_ = os.MkdirAll(expDir, 0o755)
+		_ = securefs.MkdirAll(expDir)
 		rcpt.SetStage("critic", dataroot.ClassFixture)
 		rec = &optimizer.ExperimentRecord{
 			ID:              fmt.Sprintf("exp-%d-clean", time.Now().UTC().Unix()),
 			Status:          "proposed",
-			TargetAdversary: "engineering-review",
+			TargetAdversary: primaryID,
 			Hypothesis:      "No in-scope misses this run; no improvement proposal.",
 			CaseIDs:         out.CaseIDs,
 			CreatedAt:       time.Now().UTC(),
@@ -799,7 +686,7 @@ func Run(opts Options) (*Result, error) {
 		prop = &optimizer.Proposal{ID: "none", Status: "proposed"}
 	}
 	if rec == nil {
-		rec = &optimizer.ExperimentRecord{ID: "none", Status: "proposed", TargetAdversary: "engineering-review"}
+		rec = &optimizer.ExperimentRecord{ID: "none", Status: "proposed", TargetAdversary: primaryID}
 	}
 	out.Proposal = prop
 	out.Experiment = rec
@@ -814,9 +701,16 @@ func Run(opts Options) (*Result, error) {
 		improvementMD, _ := os.ReadFile(filepath.Join(expDir, prop.ID+"-IMPROVEMENT.md"))
 		src := opts.AdversarySource
 		if src == "" {
-			cand := filepath.Join(filepath.Dir(opts.RepoRoot), "engineering-review-adversary")
-			if st, err := os.Stat(cand); err == nil && st.IsDir() {
-				src = cand
+			if p, ok := pkgByID[primaryID]; ok {
+				src = p.Dir
+			} else {
+				for _, candName := range []string{primaryID + "-adversary", "engineering-review-adversary"} {
+					cand := filepath.Join(filepath.Dir(opts.RepoRoot), candName)
+					if st, err := os.Stat(cand); err == nil && st.IsDir() {
+						src = cand
+						break
+					}
+				}
 			}
 		}
 		var err error
@@ -896,6 +790,22 @@ func Run(opts Options) (*Result, error) {
 		return nil, err
 	}
 	out.HumanReport = human
+
+	// Inbox rows for: adversary train results ls / inspect / apply
+	var issues []report.SuggestedIssue
+	if human != nil {
+		issues = human.Issues
+	}
+	if n, err := results.WriteFromRun(opts.DataRoot, results.WriteInput{
+		RunID:    runID,
+		Cases:    usable,
+		Failures: allFailures,
+		Issues:   issues,
+	}); err == nil {
+		out.ResultsAdded = n
+	} else {
+		fmt.Fprintf(os.Stderr, "warning: results index: %v\n", err)
+	}
 
 	status := "success"
 	exit := dataroot.ExitSuccess
@@ -1033,22 +943,82 @@ func loadOnePackage(dir string) (adversaries.Package, error) {
 	return pkgs[0], nil
 }
 
+// resolvePrimaryAdversaryName picks the hunt/scorecard package id.
+// Prefers an explicit Options.AdversaryName, then loaded local packages,
+// then AdversarySource basename, then engineering-review as last resort.
+func resolvePrimaryAdversaryName(opts Options, pkgs []adversaries.Package) string {
+	if name := strings.TrimSpace(opts.AdversaryName); name != "" {
+		// Multi-package labels from a prior resolve are fine to keep.
+		return name
+	}
+	if len(opts.TrainOnlyIDs) == 1 {
+		id := strings.TrimSpace(opts.TrainOnlyIDs[0])
+		if id != "" {
+			return packageIDFromName(id)
+		}
+	}
+	if len(pkgs) == 1 {
+		return pkgs[0].ID
+	}
+	if len(pkgs) > 1 {
+		var ids []string
+		for _, p := range pkgs {
+			if p.ID != "" {
+				ids = append(ids, p.ID)
+			}
+		}
+		if len(ids) == 1 {
+			return ids[0]
+		}
+		if len(ids) > 1 {
+			// Stable multi-package hunt label (not eng-review).
+			sort.Strings(ids)
+			return strings.Join(ids, "+")
+		}
+	}
+	if opts.AdversarySource != "" {
+		return packageIDFromName(filepath.Base(opts.AdversarySource))
+	}
+	if len(opts.LocalIDs) == 1 {
+		return packageIDFromName(opts.LocalIDs[0])
+	}
+	if len(opts.LocalPackageDirs) == 1 {
+		return packageIDFromName(filepath.Base(opts.LocalPackageDirs[0]))
+	}
+	return "engineering-review"
+}
+
+// packageIDFromName normalizes a directory or package name to a short id
+// (go-concurrency-adversary → go-concurrency).
+func packageIDFromName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.TrimSuffix(name, "/")
+	name = filepath.Base(name)
+	return strings.TrimSuffix(name, "-adversary")
+}
+
 // trainDraftContext builds local/official id sets for report draft filtering.
 func trainDraftContext(opts Options, pkgs []adversaries.Package) (localIDs, officialIDs map[string]bool) {
 	localIDs = map[string]bool{}
 	officialIDs = map[string]bool{}
 	for _, id := range opts.LocalIDs {
-		localIDs[strings.ToLower(id)] = true
+		id = packageIDFromName(id)
+		if id != "" {
+			localIDs[strings.ToLower(id)] = true
+		}
 	}
 	for _, id := range opts.OfficialIDs {
 		officialIDs[strings.ToLower(id)] = true
 	}
-	if len(localIDs) == 0 {
-		for _, p := range pkgs {
-			localIDs[strings.ToLower(p.ID)] = true
-			if p.ManifestName != "" {
-				localIDs[strings.ToLower(p.ManifestName)] = true
-			}
+	// Always merge loaded package ids so drafts match router owner ids
+	// (e.g. go-concurrency) even when CLI LocalIDs used directory basenames.
+	for _, p := range pkgs {
+		localIDs[strings.ToLower(p.ID)] = true
+		if p.ManifestName != "" {
+			localIDs[strings.ToLower(p.ManifestName)] = true
+		}
+		if p.DirName != "" {
+			localIDs[strings.ToLower(packageIDFromName(p.DirName))] = true
 		}
 	}
 	// Explicit official list only; unknowns default to local when listed as packages.

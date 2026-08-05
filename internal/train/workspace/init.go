@@ -34,10 +34,19 @@ official:
   # exclude:
   #   - engineering-review
 
-# History sources (required: set org and/or repos before train run).
+# History sources — pick one style:
+#
+# A) Repo catalog (default): list repos to hunt
+# B) Author reviews: no repo list; GitHub search for PRs they reviewed
+#    discovery: author_reviews
+#    authors_only: [mitchellh]
+#    # orgs: [hashicorp]   # optional bound
+#    # author_roles: [reviewed-by]  # or commenter, author
 sources:
   host: github.com
+  # discovery: author_reviews
   # org: acme
+  # orgs: []
   repos: []
   # languages: [go]
   # since: "2024-01-01"
@@ -45,10 +54,14 @@ sources:
   #   - noisy-reviewer
   # authors_only:
   #   - staff-eng-alice
+  # author_roles: [reviewed-by]
 
 run:
   max_prs: 50
   max_turns: 200
+  # Parallel PR collect (gh API). Default 4; raise carefully to avoid rate limits.
+  # Local package runs stay serialized (safe to edit drafts in another turn).
+  concurrency: 4
 
 state_dir: .adversary-train
 `
@@ -121,6 +134,7 @@ func Init(opts InitOptions) (InitResult, error) {
 	}
 
 	stateDir := filepath.Join(abs, DefaultStateDir)
+	// results.db is created on first train run (SQLite); no results/ tree needed.
 	for _, sub := range []string{"", "state", "state/discovery", "runs", "experiments"} {
 		if err := os.MkdirAll(filepath.Join(stateDir, sub), 0o755); err != nil {
 			return InitResult{}, err

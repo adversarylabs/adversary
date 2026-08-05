@@ -13,6 +13,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/cases"
 	"github.com/adversarylabs/adversary/internal/train/dataroot"
 	"github.com/adversarylabs/adversary/internal/train/scope"
+	"github.com/adversarylabs/adversary/internal/train/securefs"
 )
 
 // Result of a collect operation.
@@ -47,7 +48,8 @@ func CollectPR(dataRoot, owner, repo string, pr int) (*Result, error) {
 // CollectPRWithOptions is CollectPR with scope classification options.
 func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOptions) (*Result, error) {
 	cacheDir := filepath.Join(dataRoot, "github-cache", owner, repo, fmt.Sprintf("pr-%d", pr))
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+	// Private review content: user-only dirs/files (not world-readable).
+	if err := securefs.MkdirAll(cacheDir); err != nil {
 		return nil, err
 	}
 	res := &Result{Owner: owner, Repo: repo, PR: pr, CacheDir: cacheDir}
@@ -81,7 +83,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		res.Blocked = blockedFromErr("github-api", "collect-pr", err)
 		return res, nil
 	}
-	_ = os.WriteFile(filepath.Join(cacheDir, "pull.json"), prJSON, 0o644)
+	_ = securefs.WriteFile(filepath.Join(cacheDir, "pull.json"), prJSON)
 
 	reviewsJSON, err := ghJSON(ctx, owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, pr))
 	if err != nil {
@@ -89,7 +91,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		res.ExecutionClass = dataroot.ClassPartial
 		return res, nil
 	}
-	_ = os.WriteFile(filepath.Join(cacheDir, "reviews.json"), reviewsJSON, 0o644)
+	_ = securefs.WriteFile(filepath.Join(cacheDir, "reviews.json"), reviewsJSON)
 
 	commentsJSON, err := ghJSON(ctx, owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, pr))
 	if err != nil {
@@ -97,7 +99,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		res.ExecutionClass = dataroot.ClassPartial
 		return res, nil
 	}
-	_ = os.WriteFile(filepath.Join(cacheDir, "review-comments.json"), commentsJSON, 0o644)
+	_ = securefs.WriteFile(filepath.Join(cacheDir, "review-comments.json"), commentsJSON)
 
 	res.ExecutionClass = dataroot.ClassReal
 	built, err := BuildCasesFromCacheFiltered(owner, repo, pr, cacheDir, opts.Scope, opts.Router, opts.AuthorOK)
@@ -119,13 +121,15 @@ func ghJSON(ctx context.Context, owner, repo, apiPath string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cmd := exec.CommandContext(ctx, "gh", "api", apiPath, "--paginate")
-	out, err := cmd.CombinedOutput()
+	out, err := ghRun(ctx, "api", apiPath, "--paginate")
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("collect interrupted: %w", ctx.Err())
 		}
-		return nil, fmt.Errorf("%w: %s", err, sanitize(string(out)))
+		if IsRateLimit(err) {
+			return nil, err
+		}
+		return nil, err
 	}
 	return out, nil
 }
@@ -142,10 +146,13 @@ func sanitize(s string) string {
 func blockedFromErr(dep, op string, err error) *dataroot.BlockedResult {
 	class := "outage"
 	msg := err.Error()
-	if strings.Contains(msg, "401") || strings.Contains(msg, "403") {
+	next := "check gh auth and repository access"
+	if IsRateLimit(err) {
+		class = "rate-limit"
+		next = "wait for GitHub rate limit reset, lower run.concurrency (e.g. 1–2), then train run again; partial results stay in results.db"
+	} else if strings.Contains(msg, "401") || strings.Contains(msg, "403") {
 		class = "auth"
-	}
-	if strings.Contains(msg, "404") {
+	} else if strings.Contains(msg, "404") {
 		class = "missing-source"
 	}
 	return &dataroot.BlockedResult{
@@ -155,7 +162,7 @@ func blockedFromErr(dep, op string, err error) *dataroot.BlockedResult {
 		SanitizedError: sanitize(msg),
 		StagesNotRun:   []string{"collect"},
 		RetrySafe:      true,
-		NextAction:     "check gh auth and repository access",
+		NextAction:     next,
 		At:             time.Now().UTC(),
 	}
 }

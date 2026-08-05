@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/train/optimizer"
+	"github.com/adversarylabs/adversary/internal/train/runner"
 	"github.com/adversarylabs/adversary/internal/train/score"
 )
 
@@ -111,6 +112,7 @@ func CopyScorecardAsCandidate(base *score.Scorecard) *score.Scorecard {
 
 // ApplyProposalToWorktree copies the adversary source and applies the improvement snippet.
 // It does not modify the canonical checkout; work happens under dataRoot/worktrees.
+// The source package path is locked so concurrent package runs cannot race a copy.
 func ApplyProposalToWorktree(dataRoot, adversarySource, improvementMarkdown, experimentID string) (BuildResult, error) {
 	if adversarySource == "" {
 		return BuildResult{
@@ -121,6 +123,8 @@ func ApplyProposalToWorktree(dataRoot, adversarySource, improvementMarkdown, exp
 			NextAction:     "set engineering-review local_path in config/adversaries.yaml or pass --source",
 		}, nil
 	}
+	unlock := runner.LockLocalPackage(adversarySource)
+	defer unlock()
 	if _, err := os.Stat(adversarySource); err != nil {
 		return BuildResult{
 			OK:             false,

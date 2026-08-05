@@ -8,11 +8,54 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/train/bundle"
 	"github.com/adversarylabs/adversary/internal/train/dataroot"
 )
+
+// localPackageLocks serializes runs against the same local package directory.
+// Hunt/collect may run in parallel, but reading or patching a package while
+// another goroutine is `adversary run`-ing it races (draft apply, remeasure,
+// concurrent grade). OCI refs and non-dirs skip the lock.
+var localPackageLocks sync.Map // abs path -> *sync.Mutex
+
+// LockLocalPackage holds an exclusive lock for a local package directory.
+// Use around copy/patch of a package source while another goroutine might
+// `adversary run` the same path. Returns an unlock func (always non-nil; no-op
+// when the ref is not a local directory).
+func LockLocalPackage(adversaryRef string) (unlock func()) {
+	return lockLocalPackage(adversaryRef)
+}
+
+// lockLocalPackage holds an exclusive lock for a local package directory.
+// Returns an unlock func (always non-nil; no-op when lock is not needed).
+func lockLocalPackage(adversaryRef string) (unlock func()) {
+	unlock = func() {}
+	if adversaryRef == "" {
+		return unlock
+	}
+	// Bare catalog names (engineering-review) are not local paths.
+	if !strings.Contains(adversaryRef, string(filepath.Separator)) && !filepath.IsAbs(adversaryRef) {
+		// Still allow "./foo" and "foo-adversary" relative dirs if they exist.
+		if st, err := os.Stat(adversaryRef); err != nil || !st.IsDir() {
+			return unlock
+		}
+	}
+	abs, err := filepath.Abs(adversaryRef)
+	if err != nil {
+		return unlock
+	}
+	st, err := os.Stat(abs)
+	if err != nil || !st.IsDir() {
+		return unlock
+	}
+	v, _ := localPackageLocks.LoadOrStore(abs, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 // Result of running a reviewer.
 type Result struct {
@@ -120,6 +163,8 @@ func RunEngineeringReview(proj *bundle.Projection, outDir, repoPath, baseSHA, he
 }
 
 // RunEngineeringReviewContext is RunEngineeringReview with cancelable context (Ctrl+C).
+// Local package directories are locked for the duration of the run so concurrent
+// train workers never execute the same package while another goroutine patches it.
 func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, outDir, repoPath, baseSHA, headSHA, adversaryRef string, fixturePath string) (*Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -127,6 +172,17 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("adversary run interrupted: %w", err)
 	}
+	// Prefer absolute local path early so the lock keys match across callers.
+	if adversaryRef != "" {
+		if abs, err := filepath.Abs(adversaryRef); err == nil {
+			if st, err := os.Stat(abs); err == nil && st.IsDir() {
+				adversaryRef = abs
+			}
+		}
+	}
+	unlock := lockLocalPackage(adversaryRef)
+	defer unlock()
+
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, err
 	}

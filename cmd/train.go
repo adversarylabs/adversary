@@ -8,6 +8,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/train/pipeline"
 	"github.com/adversarylabs/adversary/internal/train/repos"
+	"github.com/adversarylabs/adversary/internal/train/results"
 	"github.com/adversarylabs/adversary/internal/train/workspace"
 	"github.com/spf13/cobra"
 )
@@ -19,9 +20,15 @@ func newTrainCommand(app *application.App) *cobra.Command {
 		Long: `Train walks your PR review history, grades local adversary packages against
 human review comments, and drafts suggested improvements.
 
-It does not fine-tune model weights or write a new model artifact. Official
-catalog packages (when enabled) act as a read-only jury: if they catch a
-concern, home-grown packages are not trained on that gold.
+Workflow:
+  adversary train run
+  adversary train results ls
+  adversary train results inspect <id>
+  adversary train results apply <id>
+  adversary train reset          # forget seen PRs and re-hunt
+
+It does not fine-tune model weights. Official catalog packages (when enabled)
+act as a read-only jury only.
 
 Configure history sources and packages in adversary.train.yaml (see train init).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -30,6 +37,8 @@ Configure history sources and packages in adversary.train.yaml (see train init).
 	}
 	cmd.AddCommand(newTrainInitCommand(app))
 	cmd.AddCommand(newTrainRunCommand(app))
+	cmd.AddCommand(newTrainResultsCommand(app))
+	cmd.AddCommand(newTrainResetCommand(app))
 	cmd.AddCommand(newTrainStoryCommand(app))
 	cmd.AddCommand(newTrainStatusCommand(app))
 	cmd.AddCommand(newTrainIssuesCommand(app))
@@ -81,6 +90,7 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 		adversaryOnly  string
 		maxPRs         int
 		maxTurns       int
+		concurrency    int
 		resetDiscovery bool
 		fixture        bool
 		pr             int
@@ -130,8 +140,13 @@ the state directory. Drafts never target official package ids.`,
 			if maxTurns > 0 {
 				cfg.Run.MaxTurns = maxTurns
 			}
+			if concurrency > 0 {
+				cfg.Run.Concurrency = concurrency
+			}
 
-			// History sources from config → pipeline catalog
+			// History sources from config → pipeline catalog (repos mode).
+			// author_reviews mode needs no catalog (GitHub search by login).
+			discoveryMode := cfg.DiscoveryMode()
 			var catalog []repos.Repo
 			for _, r := range cfg.Sources.Repos {
 				r = strings.TrimSpace(r)
@@ -147,7 +162,9 @@ the state directory. Drafts never target official package ids.`,
 					Languages: cfg.Sources.Languages, Role: "discovery",
 				})
 			}
-			// org-only without repos still needs live org expansion (not v1); pin owner if --owner/--repo
+			if discoveryMode == "repos" && len(catalog) == 0 && strings.TrimSpace(cfg.Sources.Org) != "" {
+				return fmt.Errorf("sources.org without sources.repos is not expanded yet; list repos or use discovery: author_reviews with authors_only")
+			}
 
 			// Local packages: all under root (or single path)
 			var localRoot string
@@ -171,7 +188,7 @@ the state directory. Drafts never target official package ids.`,
 				}
 			}
 
-			// Local ids for draft filtering (from directory names under root)
+			// Local ids for draft filtering (package short ids: strip -adversary).
 			var localIDs []string
 			if localRoot != "" {
 				if names, err := workspace.ListDir(localRoot); err == nil {
@@ -179,12 +196,13 @@ the state directory. Drafts never target official package ids.`,
 						if strings.HasPrefix(n, ".") {
 							continue
 						}
-						localIDs = append(localIDs, n)
+						localIDs = append(localIDs, strings.TrimSuffix(n, "-adversary"))
 					}
 				}
 			}
 			for _, d := range localDirs {
-				localIDs = append(localIDs, filepath.Base(d))
+				base := filepath.Base(d)
+				localIDs = append(localIDs, strings.TrimSuffix(base, "-adversary"))
 			}
 
 			// Official jury ids from include/exclude (exclude-only still marks known official)
@@ -208,12 +226,27 @@ the state directory. Drafts never target official package ids.`,
 				advSource = workspace.FirstScopedPackage(localRoot)
 			}
 
+			// Primary package label for hunt logs (derived further in pipeline from loaded packages).
+			primaryName := ""
+			if adversaryOnly != "" {
+				primaryName = strings.TrimSuffix(adversaryOnly, "-adversary")
+			} else if len(trainOnly) == 1 {
+				primaryName = strings.TrimSuffix(trainOnly[0], "-adversary")
+			} else if len(localIDs) == 1 {
+				primaryName = localIDs[0]
+			}
+
+			authorOrgs := append([]string{}, cfg.Sources.Orgs...)
+			if cfg.Sources.Org != "" {
+				authorOrgs = append(authorOrgs, cfg.Sources.Org)
+			}
 			opts := pipeline.Options{
 				Context:          cmd.Context(),
 				DataRoot:         stateRoot,
 				RepoRoot:         trainRoot,
 				Fixture:          fixture,
 				Live:             !fixture,
+				AdversaryName:    primaryName,
 				AdversarySource:  advSource,
 				LocalPackageRoot: localRoot,
 				LocalPackageDirs: localDirs,
@@ -224,8 +257,13 @@ the state directory. Drafts never target official package ids.`,
 				AuthorsIgnore:    cfg.Sources.AuthorsIgnore,
 				Languages:        cfg.Sources.Languages,
 				CatalogRepos:     catalog,
+				DiscoveryMode:    discoveryMode,
+				AuthorRoles:      cfg.Sources.AuthorRoles,
+				AuthorOrgs:       authorOrgs,
+				AuthorSince:      cfg.Sources.Since,
 				MaxPRs:           cfg.Run.MaxPRs,
 				MaxTurns:         cfg.Run.MaxTurns,
+				Concurrency:      cfg.Run.Concurrency,
 				ResetDiscovery:   resetDiscovery,
 				PR:               pr,
 				Owner:            owner,
@@ -250,7 +288,13 @@ the state directory. Drafts never target official package ids.`,
 				fmt.Fprintln(stderr, "  mode:   fixture (hermetic)")
 			} else {
 				fmt.Fprintln(stderr, "  mode:   live history")
-				fmt.Fprintf(stderr, "  sources.repos: %v org: %s\n", cfg.Sources.Repos, cfg.Sources.Org)
+				fmt.Fprintf(stderr, "  discovery: %s\n", discoveryMode)
+				if discoveryMode == "author_reviews" {
+					fmt.Fprintf(stderr, "  authors: %v roles: %v orgs: %v\n",
+						cfg.Sources.AuthorsOnly, cfg.Sources.AuthorRoles, authorOrgs)
+				} else {
+					fmt.Fprintf(stderr, "  sources.repos: %v org: %s\n", cfg.Sources.Repos, cfg.Sources.Org)
+				}
 			}
 			if adversaryOnly != "" {
 				fmt.Fprintf(stderr, "  local:  %s only\n", adversaryOnly)
@@ -264,27 +308,38 @@ the state directory. Drafts never target official package ids.`,
 			}
 
 			res, err := pipeline.Run(opts)
-			if err != nil {
-				return err
-			}
 			out := cmd.OutOrStdout()
-			if res.HumanReport != nil && res.HumanReport.CLIBlock != "" {
-				fmt.Fprint(out, res.HumanReport.CLIBlock)
-			} else if res.HumanReport != nil && res.HumanReport.READMEPath != "" {
-				fmt.Fprintf(out, "Story: %s\n", res.HumanReport.READMEPath)
-			} else {
-				fmt.Fprintf(out, "train run complete (run_id=%s)\n", res.RunID)
+			// Always show progress toward results — including on interrupt (partial SQLite writes).
+			if res != nil {
+				if err != nil {
+					fmt.Fprintf(out, "train run stopped\n")
+				} else {
+					fmt.Fprintf(out, "train run complete\n")
+				}
+				fmt.Fprintf(out, "  run:     %s\n", res.RunID)
+				if res.Scorecard != nil {
+					fmt.Fprintf(out, "  grade:   %d failure(s) scored\n", res.Scorecard.FailureCount)
+				}
+				fmt.Fprintf(out, "  results: %d row(s) written this run\n", res.ResultsAdded)
+				fmt.Fprintf(out, "  next:    adversary train results ls\n")
+				if res.HumanReport != nil && res.HumanReport.READMEPath != "" {
+					fmt.Fprintf(out, "  story:   %s\n", res.HumanReport.READMEPath)
+				}
+				if res.Message != "" && err != nil {
+					fmt.Fprintln(stderr, res.Message)
+				}
+				if err2 := workspace.RewriteTrainDrafts(stateRoot); err2 != nil {
+					fmt.Fprintf(stderr, "warning: draft rewrite: %v\n", err2)
+				}
 			}
-			if err := workspace.RewriteTrainDrafts(stateRoot); err != nil {
-				fmt.Fprintf(stderr, "warning: draft rewrite: %v\n", err)
-			}
-			return nil
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&workspacePath, "path", "", "workspace with adversary.train.yaml")
 	cmd.Flags().StringVar(&adversaryOnly, "adversary", "", "train only this local package id")
 	cmd.Flags().IntVar(&maxPRs, "max-prs", 0, "override run.max_prs")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns")
+	cmd.Flags().IntVar(&concurrency, "concurrency", 0, "override run.concurrency (parallel PR collect; default 2)")
 	cmd.Flags().BoolVar(&resetDiscovery, "reset-discovery", false, "forget seen PRs before hunting")
 	cmd.Flags().BoolVar(&fixture, "fixture", false, "hermetic fixture run (for tests/gates; ignores empty sources)")
 	cmd.Flags().IntVar(&pr, "pr", 0, "pin a single PR number (debug)")
@@ -293,11 +348,213 @@ the state directory. Drafts never target official package ids.`,
 	return cmd
 }
 
+func newTrainResultsCommand(app *application.App) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "results",
+		Aliases: []string{"result"},
+		Short:   "List, inspect, and apply train result drafts",
+		Long: `The results inbox is the primary train output.
+
+  adversary train results ls
+  adversary train results inspect <id>
+  adversary train results apply <id> [<id>...]`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+	cmd.AddCommand(newTrainResultsLSCommand(app))
+	cmd.AddCommand(newTrainResultsInspectCommand(app))
+	cmd.AddCommand(newTrainResultsApplyCommand(app))
+	cmd.AddCommand(newTrainResultsDismissCommand(app))
+	return cmd
+}
+
+func newTrainResultsLSCommand(app *application.App) *cobra.Command {
+	var path, pkg, status string
+	cmd := &cobra.Command{
+		Use:     "ls",
+		Aliases: []string{"list"},
+		Short:   "List result inbox rows (summaries)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			state, err := resolveStateDir(path)
+			if err != nil {
+				return err
+			}
+			rows, err := results.List(state, pkg, status)
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), results.FormatListTable(rows))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&path, "path", "", "workspace with adversary.train.yaml")
+	cmd.Flags().StringVar(&pkg, "package", "", "filter by package id")
+	cmd.Flags().StringVar(&status, "status", "", "filter: new|applied|dismissed")
+	return cmd
+}
+
+func newTrainResultsInspectCommand(app *application.App) *cobra.Command {
+	var path string
+	cmd := &cobra.Command{
+		Use:   "inspect <id>",
+		Short: "Show full detail for one result",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			state, err := resolveStateDir(path)
+			if err != nil {
+				return err
+			}
+			r, err := results.Get(state, args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), results.FormatInspect(r))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&path, "path", "", "workspace with adversary.train.yaml")
+	return cmd
+}
+
+func newTrainResultsApplyCommand(app *application.App) *cobra.Command {
+	var path string
+	var noGit bool
+	cmd := &cobra.Command{
+		Use:   "apply <id> [<id>...]",
+		Short: "Write draft(s) into the local package (docs/train-drafts/)",
+		Long: `Apply writes each result draft into the local adversary package under
+docs/train-drafts/<id>.md. With git available, creates/updates branch
+train/<package>/<id> and commits (disable with --no-git).
+
+Does not open a PR; review the branch and open one yourself when ready.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			state, err := resolveStateDir(path)
+			if err != nil {
+				return err
+			}
+			cfgPath, cfg, err := resolveTrainConfig(path)
+			if err != nil {
+				return err
+			}
+			wsRoot := filepath.Dir(cfgPath)
+			out := cmd.OutOrStdout()
+			for _, id := range args {
+				r, err := results.Get(state, id)
+				if err != nil {
+					return err
+				}
+				pkgPath, err := resolvePackagePath(wsRoot, cfg, r.Package)
+				if err != nil {
+					return fmt.Errorf("%s: %w", id, err)
+				}
+				ar, err := results.Apply(state, id, results.ApplyOptions{
+					PackagePath:  pkgPath,
+					CreateBranch: !noGit,
+				})
+				if err != nil {
+					return err
+				}
+				if ar.AlreadyDone {
+					fmt.Fprintf(out, "%s: already applied → %s\n", id, ar.Path)
+					continue
+				}
+				fmt.Fprintf(out, "%s: wrote %s\n", id, ar.Path)
+				if ar.Branch != "" {
+					fmt.Fprintf(out, "       branch %s", ar.Branch)
+					if ar.Committed {
+						fmt.Fprintf(out, " (committed)")
+					}
+					fmt.Fprintln(out)
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&path, "path", "", "workspace with adversary.train.yaml")
+	cmd.Flags().BoolVar(&noGit, "no-git", false, "only write draft file; skip git branch/commit")
+	return cmd
+}
+
+func newTrainResultsDismissCommand(app *application.App) *cobra.Command {
+	var path string
+	cmd := &cobra.Command{
+		Use:   "dismiss <id> [<id>...]",
+		Short: "Mark result(s) dismissed (not applied)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			state, err := resolveStateDir(path)
+			if err != nil {
+				return err
+			}
+			for _, id := range args {
+				if err := results.Dismiss(state, id); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: dismissed\n", id)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&path, "path", "", "workspace with adversary.train.yaml")
+	return cmd
+}
+
+func newTrainResetCommand(app *application.App) *cobra.Command {
+	var path string
+	var all bool
+	var resultsOnly bool
+	cmd := &cobra.Command{
+		Use:   "reset",
+		Short: "Clear seen-PR discovery (re-hunt repos) and/or results inbox",
+		Long: `By default clears discovery state only (which PRs train already tried),
+so the next train run will re-examine the catalog repos.
+
+  adversary train reset           # discovery only
+  adversary train reset --results # clear results inbox only
+  adversary train reset --all     # discovery + results`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			state, err := resolveStateDir(path)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if all {
+				msg, err := results.ResetAll(state)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(out, msg)
+				return nil
+			}
+			if resultsOnly {
+				n, err := results.ResetResults(state)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "cleared %d result file(s)\n", n)
+				return nil
+			}
+			n, err := results.ResetDiscovery(state)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "cleared %d discovery file(s) — next train run will re-hunt repos\n", n)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&path, "path", "", "workspace with adversary.train.yaml")
+	cmd.Flags().BoolVar(&all, "all", false, "clear discovery and results inbox")
+	cmd.Flags().BoolVar(&resultsOnly, "results", false, "clear results inbox only")
+	return cmd
+}
+
 func newTrainStoryCommand(app *application.App) *cobra.Command {
 	var path string
 	cmd := &cobra.Command{
 		Use:   "story",
-		Short: "Print the latest train story (LATEST_STORY.md)",
+		Short: "Print the latest train story (LATEST_STORY.md) — prefer results ls",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			state, err := resolveStateDir(path)
 			if err != nil {
@@ -320,7 +577,7 @@ func newTrainIssuesCommand(app *application.App) *cobra.Command {
 	var path string
 	cmd := &cobra.Command{
 		Use:   "issues",
-		Short: "Print draft suggested issues from the latest train run",
+		Short: "Print draft suggested issues (prefer: train results ls)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			state, err := resolveStateDir(path)
 			if err != nil {
@@ -336,6 +593,54 @@ func newTrainIssuesCommand(app *application.App) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&path, "path", "", "workspace with adversary.train.yaml")
 	return cmd
+}
+
+func resolveTrainConfig(workspacePath string) (cfgPath string, cfg workspace.Config, err error) {
+	ws := workspacePath
+	if ws == "" {
+		wd, e := workspace.WorkingDir()
+		if e != nil {
+			return "", workspace.Config{}, e
+		}
+		ws = wd
+	}
+	cfgPath, err = workspace.FindConfig(ws)
+	if err != nil {
+		return "", workspace.Config{}, err
+	}
+	cfg, err = workspace.Load(cfgPath)
+	return cfgPath, cfg, err
+}
+
+// resolvePackagePath finds the local package directory for apply.
+func resolvePackagePath(wsRoot string, cfg workspace.Config, packageID string) (string, error) {
+	packageID = strings.TrimSpace(packageID)
+	if cfg.Adversaries.Path != "" {
+		p := cfg.Adversaries.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(wsRoot, p)
+		}
+		// Single-package workspace: path is the package itself.
+		return p, nil
+	}
+	if cfg.Adversaries.Root != "" {
+		root := cfg.Adversaries.Root
+		if !filepath.IsAbs(root) {
+			root = filepath.Join(wsRoot, root)
+		}
+		if packageID == "" {
+			return "", fmt.Errorf("result has empty package id")
+		}
+		// Prefer exact id, then id-adversary folder name.
+		for _, name := range []string{packageID, packageID + "-adversary"} {
+			cand := filepath.Join(root, name)
+			if workspace.DirExists(cand) {
+				return cand, nil
+			}
+		}
+		return "", fmt.Errorf("package %q not found under %s", packageID, root)
+	}
+	return "", fmt.Errorf("adversaries.path or adversaries.root required in config")
 }
 
 func newTrainStatusCommand(app *application.App) *cobra.Command {

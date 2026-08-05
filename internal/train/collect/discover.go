@@ -33,18 +33,23 @@ func DiscoverPRs(owner, repo string, limit int) ([]PRRef, error) {
 }
 
 // DiscoverPRsWithOpts is DiscoverPRs with skip-set and larger list window.
+//
+// Rate-limit policy: use one list call per repo; never probe each PR with extra
+// comments/reviews API calls (that was burning authenticated quota under
+// concurrent hunt). Prefer list metadata (reviews, commentsCount); otherwise
+// accept non-bot merged PRs as candidates and let collect decide.
 func DiscoverPRsWithOpts(owner, repo string, opts DiscoverOpts) ([]PRRef, error) {
 	if opts.Limit <= 0 {
 		opts.Limit = 5
 	}
 	if opts.ListLimit <= 0 {
-		// Pull a wide window so skip-set still leaves fresh candidates.
-		opts.ListLimit = 100
-		if opts.ListLimit < opts.Limit*10 {
-			opts.ListLimit = opts.Limit * 10
+		// Modest window: enough to skip-set progress without listing 100 every wave.
+		opts.ListLimit = 40
+		if opts.ListLimit < opts.Limit*8 {
+			opts.ListLimit = opts.Limit * 8
 		}
-		if opts.ListLimit > 200 {
-			opts.ListLimit = 200
+		if opts.ListLimit > 80 {
+			opts.ListLimit = 80
 		}
 	}
 	if opts.Skip == nil {
@@ -61,16 +66,19 @@ func DiscoverPRsWithOpts(owner, repo string, opts DiscoverOpts) ([]PRRef, error)
 		return nil, fmt.Errorf("discover interrupted: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
+	out, err := ghRun(ctx, "pr", "list",
 		"--repo", owner+"/"+repo,
 		"--state", "merged",
 		"--limit", fmt.Sprintf("%d", opts.ListLimit),
 		"--json", "number,title,url,author,reviews,commentsCount",
 	)
-	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("discover interrupted: %w", ctx.Err())
+		}
+		if IsRateLimit(err) {
+			// Do NOT fall through to REST — that multiplies failed API calls.
+			return nil, err
 		}
 		return discoverPRsREST(owner, repo, opts)
 	}
@@ -88,12 +96,18 @@ func DiscoverPRsWithOpts(owner, repo string, opts DiscoverOpts) ([]PRRef, error)
 		} `json:"reviews"`
 	}
 	if err := json.Unmarshal(out, &rows); err != nil {
+		if IsRateLimit(err) {
+			return nil, err
+		}
 		return discoverPRsREST(owner, repo, opts)
 	}
 
 	var candidates []PRRef
 	var fallback []PRRef
 	for _, p := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("discover interrupted: %w", err)
+		}
 		if opts.Skip[p.Number] {
 			continue
 		}
@@ -103,7 +117,8 @@ func DiscoverPRsWithOpts(owner, repo string, opts DiscoverOpts) ([]PRRef, error)
 		}
 		ref := PRRef{Number: p.Number, Title: p.Title, URL: p.URL}
 		fallback = append(fallback, ref)
-		if len(p.Reviews) > 0 || p.CommentsCount > 0 || hasReviewActivity(owner, repo, p.Number) {
+		// List metadata only — no per-PR hasReviewActivity probes.
+		if len(p.Reviews) > 0 || p.CommentsCount > 0 {
 			candidates = append(candidates, ref)
 		}
 		if len(candidates) >= opts.Limit {
@@ -111,6 +126,7 @@ func DiscoverPRsWithOpts(owner, repo string, opts DiscoverOpts) ([]PRRef, error)
 		}
 	}
 	if len(candidates) == 0 {
+		// Still try merged non-bot PRs; collect will no-op if no human comments.
 		for _, ref := range fallback {
 			candidates = append(candidates, ref)
 			if len(candidates) >= opts.Limit {
@@ -125,8 +141,8 @@ func DiscoverPRsWithOpts(owner, repo string, opts DiscoverOpts) ([]PRRef, error)
 }
 
 func discoverPRsREST(owner, repo string, opts DiscoverOpts) ([]PRRef, error) {
-	// GitHub max per_page is 100; paginate lightly if needed.
-	perPage := 100
+	// GitHub max per_page is 100; keep small to save quota.
+	perPage := 40
 	if opts.ListLimit > 0 && opts.ListLimit < perPage {
 		perPage = opts.ListLimit
 	}
@@ -135,13 +151,12 @@ func discoverPRsREST(owner, repo string, opts DiscoverOpts) ([]PRRef, error) {
 		ctx = context.Background()
 	}
 	api := fmt.Sprintf("repos/%s/%s/pulls?state=closed&per_page=%d&sort=created&direction=desc", owner, repo, perPage)
-	cmd := exec.CommandContext(ctx, "gh", "api", api)
-	out, err := cmd.CombinedOutput()
+	out, err := ghRun(ctx, "api", api)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("discover interrupted: %w", ctx.Err())
 		}
-		return nil, fmt.Errorf("gh api: %w (%s)", err, sanitize(string(out)))
+		return nil, err
 	}
 	var prs []struct {
 		Number   int    `json:"number"`
@@ -157,6 +172,9 @@ func discoverPRsREST(owner, repo string, opts DiscoverOpts) ([]PRRef, error) {
 	}
 	var candidates []PRRef
 	for _, p := range prs {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("discover interrupted: %w", err)
+		}
 		if p.MergedAt == "" || opts.Skip[p.Number] {
 			continue
 		}
@@ -164,57 +182,14 @@ func discoverPRsREST(owner, repo string, opts DiscoverOpts) ([]PRRef, error) {
 		if strings.Contains(login, "dependabot") || strings.Contains(login, "bot") {
 			continue
 		}
-		if !hasReviewActivity(owner, repo, p.Number) {
-			continue
-		}
+		// No per-PR activity probes — rate-limit safe.
 		candidates = append(candidates, PRRef{Number: p.Number, Title: p.Title, URL: p.HTMLURL})
 		if len(candidates) >= opts.Limit {
 			break
 		}
 	}
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no new merged PRs with review activity for %s/%s (skipped %d)", owner, repo, len(opts.Skip))
+		return nil, fmt.Errorf("no new merged PRs for %s/%s (skipped %d)", owner, repo, len(opts.Skip))
 	}
 	return candidates, nil
-}
-
-func hasReviewActivity(owner, repo string, pr int) bool {
-	cOut, err := exec.Command("gh", "api",
-		fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, pr)).CombinedOutput()
-	if err != nil {
-		return false
-	}
-	var comments []struct {
-		Body string `json:"body"`
-	}
-	if json.Unmarshal(cOut, &comments) != nil {
-		return false
-	}
-	for _, c := range comments {
-		if len(strings.TrimSpace(c.Body)) > 30 {
-			return true
-		}
-	}
-	// formal reviews with body
-	revOut, err := exec.Command("gh", "api",
-		fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, pr)).CombinedOutput()
-	if err != nil {
-		return false
-	}
-	var revs []struct {
-		Body  string `json:"body"`
-		State string `json:"state"`
-	}
-	if json.Unmarshal(revOut, &revs) != nil {
-		return false
-	}
-	for _, r := range revs {
-		if r.State == "PENDING" {
-			continue
-		}
-		if len(strings.TrimSpace(r.Body)) > 40 {
-			return true
-		}
-	}
-	return false
 }

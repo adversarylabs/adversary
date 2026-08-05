@@ -3,11 +3,11 @@ package score
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/train/judge"
+	"github.com/adversarylabs/adversary/internal/train/securefs"
 )
 
 // Scorecard summarizes reviewer quality on a case set.
@@ -92,22 +92,22 @@ Concrete failures listed:      %d
 
 // Save writes scorecard JSON and text.
 func Save(dir string, sc *Scorecard) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := securefs.MkdirAll(dir); err != nil {
 		return err
 	}
 	raw, err := json.MarshalIndent(sc, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "scorecard.json"), raw, 0o644); err != nil {
+	if err := securefs.WriteFile(filepath.Join(dir, "scorecard.json"), raw); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "scorecard.txt"), []byte(FormatText(sc)), 0o644); err != nil {
+	if err := securefs.WriteFile(filepath.Join(dir, "scorecard.txt"), []byte(FormatText(sc))); err != nil {
 		return err
 	}
 	failRaw, err := json.MarshalIndent(sc.Failures, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "failures.json"), failRaw, 0o644)
+	return securefs.WriteFile(filepath.Join(dir, "failures.json"), failRaw)
 }

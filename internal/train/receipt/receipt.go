@@ -3,11 +3,11 @@ package receipt
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/train/dataroot"
+	"github.com/adversarylabs/adversary/internal/train/securefs"
 )
 
 // Receipt is the durable proof of a factory run.
@@ -102,7 +102,7 @@ func (r *Receipt) Finish(status string) {
 // Save writes receipt.json under runs/<id>/.
 func Save(dataRoot string, r *Receipt) (string, error) {
 	dir := filepath.Join(dataRoot, "runs", r.RunID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := securefs.MkdirAll(dir); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, "receipt.json")
@@ -110,7 +110,7 @@ func Save(dataRoot string, r *Receipt) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
+	if err := securefs.WriteFile(path, raw); err != nil {
 		return "", err
 	}
 	return path, nil

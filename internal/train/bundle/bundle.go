@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/train/cases"
+	"github.com/adversarylabs/adversary/internal/train/securefs"
 )
 
 // Section names present on a full bundle.
@@ -302,7 +303,7 @@ func MaterializeReviewerInput(p *Projection, destDir string) error {
 	if err := AssertReviewerIsolation(p); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	if err := securefs.MkdirAll(destDir); err != nil {
 		return err
 	}
 	// Write projection manifest without forbidden sections.
@@ -311,7 +312,7 @@ func MaterializeReviewerInput(p *Projection, destDir string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(destDir, "projection.json"), raw, 0o644); err != nil {
+	if err := securefs.WriteFile(filepath.Join(destDir, "projection.json"), raw); err != nil {
 		return err
 	}
 	for name, sec := range p.Sections {
@@ -319,7 +320,7 @@ func MaterializeReviewerInput(p *Projection, destDir string) error {
 			return fmt.Errorf("refusing to materialize forbidden section %q", name)
 		}
 		if len(sec.Payload) > 0 {
-			if err := os.WriteFile(filepath.Join(destDir, name+".json"), sec.Payload, 0o644); err != nil {
+			if err := securefs.WriteFile(filepath.Join(destDir, name+".json"), sec.Payload); err != nil {
 				return err
 			}
 		}
@@ -330,7 +331,7 @@ func MaterializeReviewerInput(p *Projection, destDir string) error {
 // SaveManifest writes the full bundle (including sensitive sections) under data root.
 func SaveManifest(dataRoot string, m *Manifest) (string, error) {
 	dir := filepath.Join(dataRoot, "bundles", m.CaseID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := securefs.MkdirAll(dir); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, "manifest.json")
@@ -338,7 +339,7 @@ func SaveManifest(dataRoot string, m *Manifest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
+	if err := securefs.WriteFile(path, raw); err != nil {
 		return "", err
 	}
 	return path, nil

@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
+
+	"github.com/adversarylabs/adversary/internal/train/securefs"
 )
 
 // PROutcome records what happened when we last looked at a PR.
@@ -36,7 +39,9 @@ type PRRecord struct {
 }
 
 // DiscoveryStore remembers which PRs we already tried for a repo.
+// Methods are safe for concurrent use (parallel hunt workers).
 type DiscoveryStore struct {
+	mu            sync.Mutex
 	SchemaVersion int                 `json:"schema_version"`
 	Owner         string              `json:"owner"`
 	Repo          string              `json:"repo"`
@@ -83,6 +88,8 @@ func (s *DiscoveryStore) Seen(pr int) bool {
 	if s == nil {
 		return false
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, ok := s.PRs[strconv.Itoa(pr)]
 	return ok
 }
@@ -93,6 +100,8 @@ func (s *DiscoveryStore) SeenSet() map[int]bool {
 	if s == nil {
 		return out
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for k := range s.PRs {
 		n, err := strconv.Atoi(k)
 		if err == nil {
@@ -107,6 +116,8 @@ func (s *DiscoveryStore) Record(pr int, title, url string, outcome PROutcome, no
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.PRs == nil {
 		s.PRs = map[string]PRRecord{}
 	}
@@ -127,17 +138,31 @@ func (s *DiscoveryStore) Record(pr int, title, url string, outcome PROutcome, no
 
 // Save writes the store to disk.
 func (s *DiscoveryStore) Save() error {
-	if s == nil || s.path == "" {
+	if s == nil {
 		return fmt.Errorf("nil discovery store")
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.path == "" {
+		return fmt.Errorf("nil discovery store")
 	}
-	raw, err := json.MarshalIndent(s, "", "  ")
+	// Marshal only JSON-serializable fields (avoid copying the mutex).
+	snap := struct {
+		SchemaVersion int                 `json:"schema_version"`
+		Owner         string              `json:"owner"`
+		Repo          string              `json:"repo"`
+		PRs           map[string]PRRecord `json:"prs"`
+	}{
+		SchemaVersion: s.SchemaVersion,
+		Owner:         s.Owner,
+		Repo:          s.Repo,
+		PRs:           s.PRs,
+	}
+	raw, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, raw, 0o644)
+	return securefs.WriteFile(s.path, raw)
 }
 
 // Summary is a short human line about memory size.
@@ -145,11 +170,18 @@ func (s *DiscoveryStore) Summary() string {
 	if s == nil {
 		return "no discovery state"
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return fmt.Sprintf("%d previously seen PR(s) in %s", len(s.PRs), s.path)
 }
 
 // ListNumbers returns sorted PR numbers in state (for tests/debug).
 func (s *DiscoveryStore) ListNumbers() []int {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var out []int
 	for k := range s.PRs {
 		n, err := strconv.Atoi(k)

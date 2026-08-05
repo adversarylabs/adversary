@@ -6,8 +6,91 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/adversarylabs/adversary/internal/train/adversaries"
 	"github.com/adversarylabs/adversary/internal/train/receipt"
 )
+
+func TestResolvePrimaryAdversaryName(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		opts Options
+		pkgs []adversaries.Package
+		want string
+	}{
+		{
+			name: "explicit name wins",
+			opts: Options{AdversaryName: "go-concurrency"},
+			pkgs: []adversaries.Package{{ID: "engineering-review"}},
+			want: "go-concurrency",
+		},
+		{
+			name: "single loaded package",
+			opts: Options{},
+			pkgs: []adversaries.Package{{ID: "go-concurrency"}},
+			want: "go-concurrency",
+		},
+		{
+			name: "multi packages joined",
+			opts: Options{},
+			pkgs: []adversaries.Package{{ID: "go-testing"}, {ID: "go-concurrency"}},
+			want: "go-concurrency+go-testing",
+		},
+		{
+			name: "source path basename",
+			opts: Options{AdversarySource: "/tmp/go-concurrency-adversary"},
+			want: "go-concurrency",
+		},
+		{
+			name: "local package dir basename",
+			opts: Options{LocalPackageDirs: []string{"../go-concurrency-adversary"}},
+			want: "go-concurrency",
+		},
+		{
+			name: "legacy default",
+			opts: Options{},
+			want: "engineering-review",
+		},
+		{
+			name: "train-only single",
+			opts: Options{TrainOnlyIDs: []string{"go-security-adversary"}},
+			pkgs: []adversaries.Package{{ID: "go-security"}, {ID: "go-concurrency"}},
+			want: "go-security",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolvePrimaryAdversaryName(tc.opts, tc.pkgs)
+			if got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPackageIDFromName(t *testing.T) {
+	t.Parallel()
+	if got := packageIDFromName("go-concurrency-adversary"); got != "go-concurrency" {
+		t.Fatalf("got %q", got)
+	}
+	if got := packageIDFromName("/x/y/go-concurrency-adversary/"); got != "go-concurrency" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestTrainDraftContextMergesPackageIDs(t *testing.T) {
+	t.Parallel()
+	// CLI used to pass directory basename (…-adversary); drafts must still match short id.
+	loc, off := trainDraftContext(Options{
+		LocalIDs: []string{"go-concurrency-adversary"},
+	}, []adversaries.Package{{ID: "go-concurrency", DirName: "go-concurrency-adversary"}})
+	if !loc["go-concurrency"] {
+		t.Fatalf("expected go-concurrency local, got %#v", loc)
+	}
+	if len(off) != 0 {
+		t.Fatalf("unexpected official %#v", off)
+	}
+}
 
 func TestFixtureSliceEndToEnd(t *testing.T) {
 	// Locate repo root (module root with fixtures).

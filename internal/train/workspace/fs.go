@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/adversarylabs/adversary/internal/train/securefs"
 )
 
-// EnsureStateDir creates the state directory tree.
+// EnsureStateDir creates the state directory tree (user-only 0700).
 func EnsureStateDir(path string) error {
-	return os.MkdirAll(path, 0o755)
+	return securefs.MkdirAll(path)
 }
 
 // ReadFile reads a file from disk.
@@ -17,9 +19,9 @@ func ReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// WriteFile writes a file to disk.
+// WriteFile writes a file to disk (user-only 0600 for train state).
 func WriteFile(path string, data []byte) error {
-	return os.WriteFile(path, data, 0o644)
+	return securefs.WriteFile(path, data)
 }
 
 // WorkingDir returns the process working directory.
