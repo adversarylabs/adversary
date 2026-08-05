@@ -446,17 +446,29 @@ func newTrainResultsInspectCommand(app *application.App) *cobra.Command {
 
 func newTrainResultsApplyCommand(app *application.App) *cobra.Command {
 	var path string
-	var noGit bool
+	var noGit, noIssue, applyAll bool
 	cmd := &cobra.Command{
-		Use:   "apply <id> [<id>...]",
-		Short: "Write draft(s) into the local package (docs/train-drafts/)",
+		Use:   "apply [<id>...]",
+		Short: "Apply train result(s): local draft + GitHub issue for coding agents",
 		Long: `Apply writes each result draft into the local adversary package under
-docs/train-drafts/<id>.md. With git available, creates/updates branch
-train/<package>/<id> and commits (disable with --no-git).
+docs/train-drafts/<id>.md and opens a GitHub issue on the package's git remote
+with agent-ready context (goal, source PR, what to change, acceptance).
 
-Does not open a PR; review the branch and open one yourself when ready.`,
-		Args: cobra.MinimumNArgs(1),
+  adversary train results apply <id>
+  adversary train results apply --all
+  adversary train results apply --all --no-issue   # draft file only
+  adversary train results apply --all --no-git     # skip branch/commit
+
+Requires ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN with issues:write
+on the package repo (unless --no-issue). Does not open a PR.`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if applyAll && len(args) > 0 {
+				return fmt.Errorf("use either --all or explicit ids, not both")
+			}
+			if !applyAll && len(args) == 0 {
+				return fmt.Errorf("provide result id(s) or --all (see: adversary train results ls)")
+			}
 			state, err := resolveStateDir(path)
 			if err != nil {
 				return err
@@ -465,9 +477,24 @@ Does not open a PR; review the branch and open one yourself when ready.`,
 			if err != nil {
 				return err
 			}
+			ids := args
+			if applyAll {
+				rows, err := results.List(state, "", results.StatusNew)
+				if err != nil {
+					return err
+				}
+				if len(rows) == 0 {
+					fmt.Fprintln(cmd.OutOrStdout(), "no new results to apply")
+					return nil
+				}
+				ids = make([]string, 0, len(rows))
+				for _, r := range rows {
+					ids = append(ids, r.ID)
+				}
+			}
 			wsRoot := filepath.Dir(cfgPath)
 			out := cmd.OutOrStdout()
-			for _, id := range args {
+			for _, id := range ids {
 				r, err := results.Get(state, id)
 				if err != nil {
 					return err
@@ -479,15 +506,26 @@ Does not open a PR; review the branch and open one yourself when ready.`,
 				ar, err := results.Apply(state, id, results.ApplyOptions{
 					PackagePath:  pkgPath,
 					CreateBranch: !noGit,
+					CreateIssue:  !noIssue,
+					Context:      cmd.Context(),
 				})
 				if err != nil {
 					return err
 				}
 				if ar.AlreadyDone {
-					fmt.Fprintf(out, "%s: already applied → %s\n", id, ar.Path)
+					fmt.Fprintf(out, "%s: already applied", id)
+					if ar.IssueURL != "" {
+						fmt.Fprintf(out, " → %s", ar.IssueURL)
+					} else if ar.Path != "" {
+						fmt.Fprintf(out, " → %s", ar.Path)
+					}
+					fmt.Fprintln(out)
 					continue
 				}
 				fmt.Fprintf(out, "%s: wrote %s\n", id, ar.Path)
+				if ar.IssueURL != "" {
+					fmt.Fprintf(out, "       issue %s\n", ar.IssueURL)
+				}
 				if ar.Branch != "" {
 					fmt.Fprintf(out, "       branch %s", ar.Branch)
 					if ar.Committed {
@@ -501,6 +539,8 @@ Does not open a PR; review the branch and open one yourself when ready.`,
 	}
 	cmd.Flags().StringVar(&path, "path", "", "workspace with adversary.train.yaml")
 	cmd.Flags().BoolVar(&noGit, "no-git", false, "only write draft file; skip git branch/commit")
+	cmd.Flags().BoolVar(&noIssue, "no-issue", false, "skip GitHub issue creation (local draft only)")
+	cmd.Flags().BoolVar(&applyAll, "all", false, "apply all results with status=new")
 	return cmd
 }
 

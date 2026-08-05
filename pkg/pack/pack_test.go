@@ -324,6 +324,45 @@ func TestDefaultIgnoreRules(t *testing.T) {
 	}
 }
 
+func TestPackIncludesPublishedSDKNodeModules(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/package.json", `{"name":"@adversarylabs/sdk","version":"0.1.16","type":"module","main":"./dist/index.js","dependencies":{"ajv":"^8.0.0"}}`)
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/dist/index.js", "export const ok = true\n")
+	writeFile(t, dir, "node_modules/ajv/package.json", `{"name":"ajv","version":"8.0.0"}`)
+	writeFile(t, dir, "node_modules/ajv/lib/index.js", "export default {}\n")
+	writeFile(t, dir, "node_modules/typescript/package.json", `{"name":"typescript","version":"5.0.0"}`)
+	writeFile(t, dir, "node_modules/typescript/lib/tsc.js", "ignored-dev\n")
+	writeFile(t, dir, "node_modules/pkg/index.js", "unrelated\n")
+
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, file := range artifact.Files {
+		got[file.Path] = true
+	}
+	for _, want := range []string{
+		"node_modules/@adversarylabs/sdk/package.json",
+		"node_modules/@adversarylabs/sdk/dist/index.js",
+		"node_modules/ajv/package.json",
+		"node_modules/ajv/lib/index.js",
+	} {
+		if !got[want] {
+			t.Fatalf("missing packed SDK runtime file %s", want)
+		}
+	}
+	for _, ban := range []string{
+		"node_modules/typescript/package.json",
+		"node_modules/typescript/lib/tsc.js",
+		"node_modules/pkg/index.js",
+	} {
+		if got[ban] {
+			t.Fatalf("dev or unrelated node_modules packed: %s", ban)
+		}
+	}
+}
+
 func TestAdversaryIgnore(t *testing.T) {
 	dir := testProject(t)
 	writeFile(t, dir, ".adversaryignore", "secrets/\n*.log\n")

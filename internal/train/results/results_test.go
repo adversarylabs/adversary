@@ -1,13 +1,16 @@
 package results
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/train/cases"
 	"github.com/adversarylabs/adversary/internal/train/judge"
 	"github.com/adversarylabs/adversary/internal/train/report"
@@ -88,7 +91,7 @@ func TestSQLiteWriteListInspectApply(t *testing.T) {
 
 	pkg := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(pkg, "docs"), 0o755)
-	ar, err := Apply(state, id, ApplyOptions{PackagePath: pkg, CreateBranch: false})
+	ar, err := Apply(state, id, ApplyOptions{PackagePath: pkg, CreateBranch: false, CreateIssue: false})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +105,76 @@ func TestSQLiteWriteListInspectApply(t *testing.T) {
 	if got.Status != StatusApplied {
 		t.Fatalf("status %s", got.Status)
 	}
+}
+
+type fakeIssueClient struct {
+	lastOwner, lastRepo, lastTitle, lastBody string
+	labels                                   []string
+}
+
+func (f *fakeIssueClient) CreateIssue(_ context.Context, owner, repo string, in githubapi.CreateIssueInput) (githubapi.Issue, error) {
+	f.lastOwner, f.lastRepo = owner, repo
+	f.lastTitle, f.lastBody = in.Title, in.Body
+	f.labels = append([]string{}, in.Labels...)
+	return githubapi.Issue{
+		Number:  7,
+		HTMLURL: "https://github.com/" + owner + "/" + repo + "/issues/7",
+		Title:   in.Title,
+		State:   "open",
+	}, nil
+}
+
+func TestApplyCreatesGitHubIssue(t *testing.T) {
+	state := t.TempDir()
+	if err := SaveResult(state, Result{
+		ID: "deadbeef", RunID: "r1", Package: "torvalds",
+		Kind: KindMiss, Status: StatusNew,
+		Summary:   "Is this offset actually guaranteed to be there?",
+		PRURL:     "https://github.com/subsurface/subsurface/pull/1414",
+		DraftBody: "## Miss\n\nPackage should catch offset questions.\n",
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pkg := t.TempDir()
+	// Minimal git remote so ResolvePackageGitHubRepo works when IssueClient is set we bypass...
+	// Wait: createApplyIssue always ResolvePackageGitHubRepo. Need git remote.
+	_ = exec.Command("git", "init", pkg).Run()
+	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/torvalds-adversary.git").Run()
+
+	fake := &fakeIssueClient{}
+	ar, err := Apply(state, "deadbeef", ApplyOptions{
+		PackagePath:  pkg,
+		CreateBranch: false,
+		CreateIssue:  true,
+		IssueClient:  fake,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ar.IssueURL != "https://github.com/adversarylabs/torvalds-adversary/issues/7" {
+		t.Fatalf("issue url %q", ar.IssueURL)
+	}
+	if fake.lastOwner != "adversarylabs" || fake.lastRepo != "torvalds-adversary" {
+		t.Fatalf("repo %s/%s", fake.lastOwner, fake.lastRepo)
+	}
+	if !strings.Contains(fake.lastBody, "coding agent") || !strings.Contains(fake.lastBody, "subsurface") {
+		t.Fatalf("body not agent-ready: %s", fake.lastBody[:min(200, len(fake.lastBody))])
+	}
+	got, err := Get(state, "deadbeef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IssueURL != ar.IssueURL {
+		t.Fatalf("stored issue %q", got.IssueURL)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func TestResetResultsClearsDB(t *testing.T) {

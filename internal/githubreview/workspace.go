@@ -103,8 +103,9 @@ func PreparePRWorkspace(
 		_ = os.RemoveAll(tmp)
 		return out, fmt.Errorf("clone %s: %w", cloneURL, err)
 	}
+	// Fetch into FETCH_HEAD only — never create a durable named ref.
 	_ = exec.CommandContext(ctx, "git", "-C", tmp, "fetch", "origin",
-		fmt.Sprintf("pull/%d/head:refs/adversary/pr-%d", number, number)).Run()
+		fmt.Sprintf("pull/%d/head", number)).Run()
 	if err := exec.CommandContext(ctx, "git", "-C", tmp, "checkout", "--detach", out.HeadSHA).Run(); err != nil {
 		_ = exec.CommandContext(ctx, "git", "-C", tmp, "fetch", "--depth", "200", "origin", out.HeadSHA).Run()
 		if err2 := exec.CommandContext(ctx, "git", "-C", tmp, "checkout", "--detach", out.HeadSHA).Run(); err2 != nil {
@@ -128,8 +129,10 @@ func prepareWorktree(ctx context.Context, repoPath string, prNumber int, headSHA
 	if progress != nil {
 		fmt.Fprintf(progress, "Using detached worktree of %s at %s\n", repoPath, tmp)
 	}
+	// Fetch PR head without writing refs/adversary/* into the user's repository
+	// (those refs would persist after worktree cleanup).
 	_ = exec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "origin",
-		fmt.Sprintf("pull/%d/head:refs/adversary/pr-%d", prNumber, prNumber)).Run()
+		fmt.Sprintf("pull/%d/head", prNumber)).Run()
 	if err := exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "add", "--detach", tmp, headSHA).Run(); err != nil {
 		// Fetch tip and retry.
 		_ = exec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "--depth", "200", "origin", headSHA).Run()
@@ -143,19 +146,34 @@ func prepareWorktree(ctx context.Context, repoPath string, prNumber int, headSHA
 
 // CleanupWorkspace removes an ephemeral PR workspace.
 // When worktreeRoot is set, removes the linked worktree; otherwise RemoveAll tempDir.
-func CleanupWorkspace(path, tempDir, worktreeRoot string) {
-	if strings.TrimSpace(tempDir) == "" {
+// prNumber, when > 0, also deletes any leftover refs/adversary/pr-<n> from older CLI versions.
+func CleanupWorkspace(path, tempDir, worktreeRoot string, prNumber int) {
+	if strings.TrimSpace(tempDir) == "" && strings.TrimSpace(worktreeRoot) == "" {
 		return
 	}
-	if strings.TrimSpace(worktreeRoot) != "" {
+	if strings.TrimSpace(worktreeRoot) != "" && strings.TrimSpace(tempDir) != "" {
 		_ = exec.Command("git", "-C", worktreeRoot, "worktree", "remove", "--force", tempDir).Run()
 	}
-	_ = os.RemoveAll(tempDir)
+	if strings.TrimSpace(tempDir) != "" {
+		_ = os.RemoveAll(tempDir)
+	}
+	if prNumber > 0 && strings.TrimSpace(worktreeRoot) != "" {
+		DeleteAdversaryPRRef(worktreeRoot, prNumber)
+	}
+}
+
+// DeleteAdversaryPRRef removes refs/adversary/pr-<n> if present (legacy fetch target).
+func DeleteAdversaryPRRef(repoPath string, prNumber int) {
+	if strings.TrimSpace(repoPath) == "" || prNumber <= 0 {
+		return
+	}
+	ref := fmt.Sprintf("refs/adversary/pr-%d", prNumber)
+	_ = exec.Command("git", "-C", repoPath, "update-ref", "-d", ref).Run()
 }
 
 // CleanupTempDir removes an ephemeral PR workspace (clone-only helper).
 func CleanupTempDir(dir string) {
-	CleanupWorkspace("", dir, "")
+	CleanupWorkspace("", dir, "", 0)
 }
 
 func isGitRepo(path string) bool {

@@ -421,7 +421,13 @@ func applyScopeFiltered(labels []cases.ExpectedConcern, comments []cases.Comment
 			labels[i].OwnerAdversary = route.OwnerID
 			labels[i].ScopeReason = route.Reason
 			labels[i].ScopeMethod = route.Method
-			if route.OwnerID != "" && route.Decision == scope.InScope && len(strings.TrimSpace(labels[i].Summary)) > 20 {
+			// Broad generalists keep short comments (LGTM, "why?", etc.); specialists
+			// still require a minimal summary so empty stubs are not gold.
+			minLen := 20
+			if route.OwnerID != "" && scope.BroadScopeMission(route.OwnerID, "") {
+				minLen = 1
+			}
+			if route.OwnerID != "" && route.Decision == scope.InScope && len(strings.TrimSpace(labels[i].Summary)) >= minLen {
 				labels[i].Scope = string(scope.InScope)
 				labels[i].Approved = true
 				labels[i].Confidence = "medium"
@@ -439,10 +445,18 @@ func applyScopeFiltered(labels []cases.ExpectedConcern, comments []cases.Comment
 		labels[i].ScopeReason = r.Reason
 		labels[i].ScopeMethod = r.Method
 		labels[i].OwnerAdversary = ""
-		if r.Decision == scope.InScope && len(strings.TrimSpace(labels[i].Summary)) > 20 {
+		minLen := 20
+		if clf != nil && scope.BroadScopeMission(clf.AdversaryName, clf.MissionMarkdown) {
+			minLen = 1
+		}
+		if r.Decision == scope.InScope && len(strings.TrimSpace(labels[i].Summary)) >= minLen {
 			labels[i].Approved = true
 			labels[i].Confidence = "medium"
-			labels[i].OwnerAdversary = "engineering-review"
+			if clf != nil && clf.AdversaryName != "" {
+				labels[i].OwnerAdversary = clf.AdversaryName
+			} else {
+				labels[i].OwnerAdversary = "engineering-review"
+			}
 		} else {
 			labels[i].Approved = false
 		}

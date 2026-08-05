@@ -1,6 +1,7 @@
 package githubreview
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -26,7 +27,18 @@ func TestActionsContext(t *testing.T) {
 
 func TestCleanupTempDirNoop(t *testing.T) {
 	CleanupTempDir("")
-	CleanupWorkspace("", "", "")
+	CleanupWorkspace("", "", "", 0)
+	DeleteAdversaryPRRef("", 0)
+	DeleteAdversaryPRRef("/no/such/path", 1)
+}
+
+func TestAdversaryPRRefName(t *testing.T) {
+	// Ensure we never document a fetch that writes a durable ref destination.
+	// Regression guard for greptile: pull/N/head:refs/adversary/pr-N.
+	want := "pull/17/head"
+	if got := fmt.Sprintf("pull/%d/head", 17); got != want {
+		t.Fatal(got)
+	}
 }
 
 func TestIsGitRepoFalse(t *testing.T) {

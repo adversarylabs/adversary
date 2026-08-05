@@ -17,7 +17,7 @@ func TestValidateCommandTextAndJSON(t *testing.T) {
 			t.Fatal(err)
 		}
 		data = bytes.ReplaceAll(data, []byte("{{name}}"), []byte("validation-test"))
-		data = bytes.ReplaceAll(data, []byte("{{version}}"), []byte("0.1.0"))
+		data = bytes.ReplaceAll(data, []byte("{{version}}"), []byte("0.0.1"))
 		data = bytes.ReplaceAll(data, []byte("{{description}}"), []byte("test"))
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
 			t.Fatal(err)

@@ -46,11 +46,22 @@ func (r *Router) RouteComment(body, path, author string) Route {
 	if isPROverviewBlob(body) {
 		return Route{Decision: OutOfScope, Reason: "PR overview / summary dump", Method: "heuristic"}
 	}
-	// Global non-defect filters only (LGTM, soft-OK, package-doc nits, explicit nits).
-	// Do not run eng-review-specific CI outs here — specialists must still own those.
-	// Do not let LLM "rescue" non-defects into engineering-review false gold.
-	if reason, ok := globalNonDefectOut(body, path); ok {
-		return Route{Decision: OutOfScope, Reason: reason, Method: "heuristic"}
+	// Global non-defect filters (LGTM, soft-OK, package-doc nits, explicit nits).
+	// Broad generalists skip these entirely — their mission owns every human comment
+	// that reaches routing (bots already rejected above; empty already rejected).
+	hasBroad := false
+	for _, cand := range r.Candidates {
+		if BroadScopeMission(cand.ID, cand.Mission) {
+			hasBroad = true
+			break
+		}
+	}
+	if !hasBroad {
+		// Do not run eng-review-specific CI outs here — specialists must still own those.
+		// Do not let LLM "rescue" non-defects into engineering-review false gold.
+		if reason, ok := globalNonDefectOut(body, path); ok {
+			return Route{Decision: OutOfScope, Reason: reason, Method: "heuristic"}
+		}
 	}
 
 	type scored struct {
@@ -144,7 +155,9 @@ func (r *Router) RouteComment(body, path, author string) Route {
 }
 
 func isGeneralist(id string) bool {
-	return id == "engineering-review" || id == "complexity"
+	id = strings.ToLower(id)
+	return id == "engineering-review" || id == "complexity" ||
+		strings.HasPrefix(id, "person-") || strings.Contains(id, "torvalds")
 }
 
 func pathAffinity(path string, cand Candidate) int {

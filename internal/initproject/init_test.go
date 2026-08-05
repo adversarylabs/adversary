@@ -233,6 +233,37 @@ func TestCreateScaffoldsFactoryScopeDocs(t *testing.T) {
 	}
 }
 
+func TestCreateUsesPublishedSDKNotVendor(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "published-sdk-project")
+	if _, err := Create(Options{Destination: dst}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "vendor", "adversary-sdk")); !os.IsNotExist(err) {
+		t.Fatalf("must not scaffold vendor/adversary-sdk: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("must not scaffold node_modules: %v", err)
+	}
+	pkg, err := os.ReadFile(filepath.Join(dst, "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(pkg)
+	if !strings.Contains(text, `"@adversarylabs/sdk"`) {
+		t.Fatalf("package.json missing published SDK dependency:\n%s", text)
+	}
+	if strings.Contains(text, "file:vendor") {
+		t.Fatalf("package.json still points at vendored SDK:\n%s", text)
+	}
+	src, err := os.ReadFile(filepath.Join(dst, "src", "index.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), `from "@adversarylabs/sdk"`) {
+		t.Fatalf("src must import published @adversarylabs/sdk:\n%s", src)
+	}
+}
+
 func TestRenderSuccessUsesLocationAndShellQuotes(t *testing.T) {
 	var out bytes.Buffer
 	location := "/tmp/a path/it's-here"

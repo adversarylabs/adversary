@@ -1,7 +1,6 @@
 package review
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -463,7 +462,7 @@ func TestDecodeRunEnvelopeRejectsSharedInvalidFixtures(t *testing.T) {
 	}
 }
 
-func TestProtocolSchemasAreValidJSONAndSDKCopiesMatch(t *testing.T) {
+func TestProtocolSchemasAreValidJSON(t *testing.T) {
 	for _, name := range []string{"adversary.input.v1.schema.json", "adversary.review.v1.schema.json"} {
 		canonical, err := os.ReadFile(filepath.Join("..", "..", "schema", name))
 		if err != nil {
@@ -471,13 +470,6 @@ func TestProtocolSchemasAreValidJSONAndSDKCopiesMatch(t *testing.T) {
 		}
 		if !json.Valid(canonical) {
 			t.Fatalf("schema/%s is not valid JSON", name)
-		}
-		vendored, err := os.ReadFile(filepath.Join("..", "..", "templates", "typescript", "vendor", "adversary-sdk", "schemas", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(canonical, vendored) {
-			t.Fatalf("vendored SDK schema %s differs from canonical schema", name)
 		}
 	}
 }

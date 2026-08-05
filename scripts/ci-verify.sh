@@ -57,8 +57,23 @@ tracked_format() {
 native_tests() {
   log "Go tests"
   go test ./...
-  log "vendored TypeScript SDK protocol tests"
-  node --test templates/typescript/vendor/adversary-sdk/test/protocol.test.js
+  log "published TypeScript SDK schema check (@adversarylabs/sdk)"
+  local tmp tgz
+  tmp="$(make_temp_dir)"
+  trap 'rm -rf -- "$tmp"' RETURN
+  (
+    cd "$tmp"
+    npm_config_cache="$tmp/npm-cache" npm pack @adversarylabs/sdk@^0.1.16 >/dev/null
+    tgz="$(echo adversarylabs-sdk-*.tgz)"
+    tar -xzf "$tgz"
+    # Published SDK schemas that mirror the CLI protocol contracts.
+    for name in adversary.input.v1.schema.json adversary.review.v1.schema.json; do
+      cmp -s -- "$root/schema/$name" "package/schemas/$name" \
+        || fail "published SDK schema diverges from CLI schema/$name"
+    done
+  )
+  rm -rf -- "$tmp"
+  trap - RETURN
 }
 
 quality() {
@@ -139,16 +154,8 @@ generated_template_tests() {
 }
 
 example_smoke_tests() {
-  local tmp project asset source duplicate
+  local tmp project
   need npm
-  while IFS= read -r asset; do
-    source="$root/templates/typescript/vendor/adversary-sdk/$asset"
-    duplicate="$root/smoke-tests/comment-sentence-adversary/vendor/adversary-sdk/$asset"
-    cmp -s -- "$source" "$duplicate" || fail "checked-in example vendored SDK asset drift: $asset"
-  done < <(
-    cd "$root/templates/typescript/vendor/adversary-sdk"
-    find dist schemas -type f -print | LC_ALL=C sort
-  )
   tmp="$(make_temp_dir)"
   trap 'rm -rf -- "$tmp"' RETURN
   project="$tmp/comment-sentence-adversary"

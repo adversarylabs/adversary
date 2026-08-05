@@ -59,12 +59,23 @@ func TestDiscoverRootSinglePackageWorkspace(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(root, "docs", "scope.md"), []byte("# m\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(root, "adversary.yaml"), []byte("name: solo\n"), 0o644)
+	// Nested agent/scope.md must NOT be discovered as a second package.
+	if err := os.MkdirAll(filepath.Join(root, "agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(root, "agent", "scope.md"), []byte("# agent fragment\nEverything is in scope.\n"), 0o644)
 	pkgs, err := DiscoverRoot(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pkgs) != 1 {
 		t.Fatalf("%+v", pkgs)
+	}
+	if pkgs[0].ID == "agent" {
+		t.Fatal("must not treat agent/ as the package")
+	}
+	if filepath.Base(pkgs[0].Dir) != filepath.Base(root) {
+		t.Fatalf("want package root, got dir=%s", pkgs[0].Dir)
 	}
 }
 

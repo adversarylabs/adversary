@@ -63,6 +63,7 @@ type Result struct {
 	AppliedAt   time.Time `json:"applied_at,omitempty"`
 	AppliedPath string    `json:"applied_path,omitempty"`
 	Branch      string    `json:"branch,omitempty"`
+	IssueURL    string    `json:"issue_url,omitempty"`
 }
 
 // normalizeKind maps legacy stored values to current vocabulary.
@@ -564,6 +565,9 @@ func FormatInspect(r Result) string {
 	}
 	if r.Branch != "" {
 		fmt.Fprintf(&b, "Branch:  %s\n", r.Branch)
+	}
+	if r.IssueURL != "" {
+		fmt.Fprintf(&b, "Issue:   %s\n", r.IssueURL)
 	}
 	fmt.Fprintf(&b, "Created: %s\n", r.CreatedAt.Format(time.RFC3339))
 	if r.DraftBody != "" {

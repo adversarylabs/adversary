@@ -203,8 +203,9 @@ review base/head and optional posting context. Posting still requires
 				return err
 			}
 			// Register cleanup only after resolve may set tempPRDir / worktree root.
-			if opts.tempPRDir != "" {
-				defer githubreview.CleanupWorkspace(opts.path, opts.tempPRDir, opts.worktreeRoot)
+			if opts.tempPRDir != "" || (opts.worktreeRoot != "" && opts.githubPR > 0) {
+				prNum := opts.githubPR
+				defer githubreview.CleanupWorkspace(opts.path, opts.tempPRDir, opts.worktreeRoot, prNum)
 			}
 
 			var runErr error

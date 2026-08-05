@@ -99,6 +99,13 @@ func (c *Classifier) Classify(commentBody, path, author string) Result {
 		return Result{Decision: OutOfScope, Reason: "empty comment", Method: "heuristic"}
 	}
 
+	// Broad generalists (person packages / "everything is in scope" missions) own
+	// nearly all technical review comments — including nits and style. Do not use
+	// the eng-review "prefer ignore" default; only hard non-gold filters apply.
+	if BroadScopeMission(c.AdversaryName, c.MissionMarkdown) {
+		return classifyBroadMission(body, path, author)
+	}
+
 	if r, ok := heuristicOut(body, path, author, c.AdversaryName); ok {
 		return r
 	}
@@ -119,6 +126,82 @@ func (c *Classifier) Classify(commentBody, path, author string) Result {
 	return Result{
 		Decision: OutOfScope,
 		Reason:   "heuristic: not clearly in adversary mission (prefer ignore over false miss)",
+		Method:   "heuristic",
+	}
+}
+
+// BroadScopeMission reports whether a package's mission claims nearly all
+// technical review comments (including nits), not just hard correctness defects.
+// engineering-review is intentionally NOT broad: multi-package factory dumps nits
+// off specialists / ignore.
+func BroadScopeMission(adversaryID, missionMarkdown string) bool {
+	id := strings.ToLower(strings.TrimSpace(adversaryID))
+	if strings.Contains(id, "engineering-review") || id == "complexity" {
+		return false
+	}
+	if strings.HasPrefix(id, "person-") || strings.Contains(id, "torvalds") {
+		return true
+	}
+	m := strings.ToLower(missionMarkdown)
+	if m == "" {
+		return false
+	}
+	signals := []string{
+		"everything is in scope",
+		"everything technical about the change",
+		"if you are unsure whether something is in scope, **it is in scope**",
+		"if you are unsure whether something is in scope, it is in scope",
+		"if you are unsure whether something is in scope",
+		"do **not** exclude nits",
+		"do not exclude nits",
+		"nits (**all in scope**)",
+		"nits (all in scope)",
+		"clarity, style, and nits",
+		"almost nothing. only exclude",
+		"no language ghetto",
+		"zero “someone else’s problem”",
+		"zero \"someone else's problem\"",
+		"whole-diff ownership",
+		"whole-diff maintainer",
+	}
+	for _, s := range signals {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	// "## Out of scope" section that says almost nothing / only bots
+	if strings.Contains(m, "## out of scope") &&
+		(strings.Contains(m, "almost nothing") || strings.Contains(m, "only exclude") ||
+			strings.Contains(m, "bot / non-human") || strings.Contains(m, "bot/non-human")) {
+		return true
+	}
+	return false
+}
+
+// classifyBroadMission: for person/whole-diff generalists, any non-empty human
+// comment from a real author is gold. Scope.md already says nits, style, and
+// design chat count — do not second-guess with eng-review filters.
+// Only bots and empty bodies are out (author filtering is handled by train config).
+func classifyBroadMission(body, path, author string) Result {
+	_ = path
+	authorL := strings.ToLower(author)
+	if isReviewBot(authorL) {
+		return Result{
+			Decision: OutOfScope,
+			Reason:   "bot/automated reviewer comment (not a human engineering review)",
+			Method:   "heuristic",
+		}
+	}
+	if strings.TrimSpace(body) == "" {
+		return Result{
+			Decision: OutOfScope,
+			Reason:   "empty comment",
+			Method:   "heuristic",
+		}
+	}
+	return Result{
+		Decision: InScope,
+		Reason:   "broad mission: any human review comment is in scope",
 		Method:   "heuristic",
 	}
 }

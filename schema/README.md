@@ -43,8 +43,8 @@ semantic rules recorded in the schema annotation. That length excludes registry,
 tag, and digest, but includes Docker Hub's injected `library/` namespace.
 
 The fixtures in `fixtures/` are shared compatibility examples. The Go review
-decoder and vendored TypeScript SDK both exercise the review fixture. Schema
-copies shipped in the vendored SDK are tested byte-for-byte against these files.
+decoder and the published `@adversarylabs/sdk` package both exercise the review
+fixture. CI compares published SDK schemas byte-for-byte against these files.
 
 Suppression is explicit in review v1: `suppressed.findings` is always the total
 number withheld from `findings`. When suppressed details are requested, the

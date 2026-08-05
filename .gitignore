@@ -10,3 +10,10 @@ docs/cli-audit.md
 
 # adversary train runtime state
 .adversary-train/
+
+# Never embed or commit install trees under templates / smoke packages.
+# Packages depend on the published @adversarylabs/sdk from npm.
+templates/**/node_modules/
+smoke-tests/**/node_modules/
+templates/**/vendor/
+smoke-tests/**/vendor/

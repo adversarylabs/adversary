@@ -2,7 +2,8 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
-import { Adversary, Finding, Severity, log, type RuleContext } from "@adversary/sdk";
+import { pathToFileURL } from "node:url";
+import { Adversary, Severity, log, type RuleContext } from "@adversarylabs/sdk";
 
 type SourceFile = {
   path: string;
@@ -31,7 +32,6 @@ export function createApp(): Adversary {
     const files = await getSourceFiles(ctx);
     ctx.summary.files_scanned = files.length;
 
-    const findings: Finding[] = [];
     for (const file of files) {
       log.info(`Scanning ${file.relPath}...`);
       for (const comment of file.comments) {
@@ -39,24 +39,28 @@ export function createApp(): Adversary {
           continue;
         }
         log.info(`Found incomplete comment on line ${comment.line}`);
-        findings.push(
-          new Finding({
-            ruleId: "comments.full-sentence",
-            id: `comments.full-sentence:${file.relPath}:${comment.line}`,
-            severity: Severity.Low,
-            title: "Comment is not a complete sentence",
-            message: "Consider rewriting comments as complete sentences.",
-            path: file.relPath,
-            line: comment.line,
-            evidence: comment.evidence,
-            recommendation: "Rewrite the comment as a complete sentence ending with punctuation.",
-          }),
-        );
+        ctx.finding({
+          ruleId: "comments.full-sentence",
+          id: `comments.full-sentence:${file.relPath}:${comment.line}`,
+          category: "docs",
+          severity: Severity.Low,
+          confidence: "high",
+          title: "Comment is not a complete sentence",
+          summary: "Consider rewriting comments as complete sentences.",
+          evidence: [
+            {
+              file: file.relPath,
+              line: comment.line,
+              message: comment.evidence,
+              snippet: comment.evidence,
+            },
+          ],
+          recommendation: "Rewrite the comment as a complete sentence ending with punctuation.",
+        });
       }
     }
 
     log.info("Finished.");
-    return findings;
   });
 
   return app;
@@ -177,6 +181,9 @@ function toPosix(path: string): string {
   return path.replaceAll("\\", "/");
 }
 
-if (process.argv[1] !== undefined && import.meta.url === new URL(process.argv[1], "file:").href) {
-  await createApp().run();
+const app = createApp();
+export default app;
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await app.runFromEnvironment();
 }
