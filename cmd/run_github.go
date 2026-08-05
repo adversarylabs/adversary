@@ -9,6 +9,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/githubreview"
+	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
 
@@ -157,7 +158,7 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		}
 	}
 
-	_, voiceInfo := githubreview.ResolveVoice(opts.path)
+	voicePrompt, voiceInfo := githubreview.ResolveVoice(opts.path)
 
 	plan := githubreview.ProjectFindings(envelopes, githubreview.ProjectOptions{
 		Repository:  owner + "/" + repo,
@@ -165,6 +166,17 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		MinSeverity: opts.githubMinSeverity,
 		Voice:       voiceInfo,
 	})
+
+	// Default voice rewrite: try model provider; template remains on failure/missing creds.
+	if provider, err := modelreview.ProviderFromConfig(modelreview.Config{
+		Provider: opts.modelProvider,
+		Model:    opts.model,
+	}, githubapi.LookupEnv, nil); err == nil && provider != nil {
+		githubreview.EnhanceBodies(ctx, &plan, githubreview.EnhanceOptions{
+			Provider:    provider,
+			VoicePrompt: voicePrompt,
+		})
+	}
 
 	token := githubapi.TokenFromEnv()
 	client := githubapi.NewClient(token)
