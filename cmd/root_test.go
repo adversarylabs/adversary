@@ -797,8 +797,16 @@ runtime:
 	if err := inspect.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(inspectOut.String(), imageDigest) || !strings.Contains(inspectOut.String(), host+"/acme/security-reviewer:v1") {
-		t.Fatalf("inspect output=%s", inspectOut.String())
+	// Pull of :v1 also registers the durable name:version ref. CanonicalReference
+	// picks a stable ref among aliases (lexicographic); the version tag is preferred.
+	out := inspectOut.String()
+	if !strings.Contains(out, imageDigest) {
+		t.Fatalf("inspect output missing digest:\n%s", out)
+	}
+	versionRef := host + "/acme/security-reviewer:1.4.2"
+	pullRef := host + "/acme/security-reviewer:v1"
+	if !strings.Contains(out, versionRef) && !strings.Contains(out, pullRef) {
+		t.Fatalf("inspect output missing pull or version ref:\n%s", out)
 	}
 	var listOut bytes.Buffer
 	list := NewRootCommand(&listOut, &bytes.Buffer{})

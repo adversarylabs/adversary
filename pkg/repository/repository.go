@@ -607,6 +607,7 @@ func (r Repository) Resolve(value string) (Record, error) {
 // the same package, either by:
 //   - identical Record.Name (package identity from adversary.yaml / config), or
 //   - identical durable registry/repository path (legacy same-repo check).
+//
 // Distinct package names that only collide on a short alias stay ambiguous.
 func (r Repository) preferNewestCompatible(records []Record) (Record, bool) {
 	if len(records) < 2 {
