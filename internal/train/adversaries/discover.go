@@ -23,7 +23,7 @@ type Package struct {
 	ManifestName string
 	// Description from adversary.yaml.
 	Description string
-	// ScopeMarkdown from docs/scope.md.
+	// ScopeMarkdown from agent/scope.md (or train/docs legacy paths).
 	ScopeMarkdown string
 	// ScopePath filesystem path to scope.md.
 	ScopePath string
@@ -64,13 +64,13 @@ func DiscoverSiblings(factoryRoot string) ([]Package, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	if len(out) == 0 {
-		return nil, fmt.Errorf("no sibling *-adversary packages with docs/scope.md under %s", parent)
+		return nil, fmt.Errorf("no sibling *-adversary packages with agent/scope.md (or legacy docs/scope.md) under %s", parent)
 	}
 	return out, nil
 }
 
-// DiscoverRoot loads every child directory under root that has docs/scope.md
-// (customer multi-package workspace: adversaries/*).
+// DiscoverRoot loads every child directory under root that has agent/scope.md
+// (or legacy docs/scope.md; customer multi-package workspace: adversaries/*).
 func DiscoverRoot(root string) ([]Package, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -98,7 +98,7 @@ func DiscoverRoot(root string) ([]Package, error) {
 		if pkg, err := loadPackage(abs, filepath.Base(abs)); err == nil {
 			return []Package{pkg}, nil
 		}
-		return nil, fmt.Errorf("no packages with docs/scope.md under %s", abs)
+		return nil, fmt.Errorf("no packages with agent/scope.md (or legacy docs/scope.md) under %s", abs)
 	}
 	return out, nil
 }

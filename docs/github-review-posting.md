@@ -51,10 +51,19 @@ The CLI does not read `gh auth`’s on-disk store. Optionally:
 
 ## Comment voice
 
-When `--github-review` is set, comment bodies use a product voice:
+When `--github-review` is set, comment bodies use a product voice. Search order
+(first hit wins):
 
-1. Target repo root **`VOICE.md`** if present (override)
-2. Else the **CLI-embedded** default prompt
+1. **Local adversary package roots** (path args that look like packages), in order:
+   - `agent/voice.md` (preferred)
+   - `train/voice.md`
+   - `voice.md`
+   - `VOICE.md` (legacy)
+2. **Review target** (`--path`), same relative names
+3. Else the **CLI-embedded** default prompt
+
+Example: `adversary run ./torvalds-adversary --path ../app --github-review` loads
+`./torvalds-adversary/agent/voice.md` when present.
 
 Without a model provider configured, a deterministic **template** body is used.
 Analysis model flags (`--model-provider` / `--model`) are shared when LLM rewrite

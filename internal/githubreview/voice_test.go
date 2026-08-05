@@ -14,13 +14,29 @@ func TestResolveVoiceDefaultAndOverride(t *testing.T) {
 	if info.Source != "cli_default" || !strings.Contains(prompt, "Adversary Labs") {
 		t.Fatalf("%s %q", info.Source, prompt[:min(40, len(prompt))])
 	}
+	// Prefer agent/voice.md over legacy VOICE.md
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "VOICE.md"), []byte("Custom voice for Acme"), 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "VOICE.md"), []byte("legacy VOICE"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent", "voice.md"), []byte("Custom voice for Acme"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	prompt, info = ResolveVoice(dir)
-	if info.Source != "repo" || info.Path != "VOICE.md" || prompt != "Custom voice for Acme" {
+	if info.Source != "package" || info.Path != filepath.Join("agent", "voice.md") || prompt != "Custom voice for Acme" {
 		t.Fatalf("%#v %q", info, prompt)
+	}
+	// Package root wins over target root
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "voice.md"), []byte("target voice"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prompt, info = ResolveVoice(dir, target)
+	if prompt != "Custom voice for Acme" {
+		t.Fatalf("package should win: %q %#v", prompt, info)
 	}
 }
 

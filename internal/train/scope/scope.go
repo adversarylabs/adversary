@@ -39,9 +39,11 @@ type Classifier struct {
 // LoadMissionFromAdversary loads scope from the adversary package checkout.
 // Preferred paths (first hit wins):
 //
-//	docs/scope.md
-//	SCOPE.md
-//	docs/factory-scope.md
+//	agent/scope.md
+//	train/scope.md
+//	docs/scope.md          (legacy)
+//	SCOPE.md               (legacy)
+//	docs/factory-scope.md  (legacy)
 func LoadMissionFromAdversary(adversarySource string) (string, string, error) {
 	if adversarySource == "" {
 		return "", "", fmt.Errorf("empty adversary source")
@@ -51,6 +53,8 @@ func LoadMissionFromAdversary(adversarySource string) (string, string, error) {
 		return "", "", err
 	}
 	candidates := []string{
+		filepath.Join(root, "agent", "scope.md"),
+		filepath.Join(root, "train", "scope.md"),
 		filepath.Join(root, "docs", "scope.md"),
 		filepath.Join(root, "SCOPE.md"),
 		filepath.Join(root, "docs", "factory-scope.md"),
@@ -62,7 +66,7 @@ func LoadMissionFromAdversary(adversarySource string) (string, string, error) {
 		}
 		return string(raw), path, nil
 	}
-	return "", "", fmt.Errorf("no scope.md in adversary at %s (tried docs/scope.md, SCOPE.md)", root)
+	return "", "", fmt.Errorf("no scope.md in adversary at %s (tried agent/scope.md, train/scope.md, docs/scope.md)", root)
 }
 
 // LoadMission is deprecated name kept for call sites; prefers adversarySource, then factory fallback.

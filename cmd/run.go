@@ -72,6 +72,8 @@ type runOptions struct {
 	worktreeRoot    string // source repo when tempPRDir is a linked worktree
 	resolvedHeadSHA string
 	envelopes       []githubreview.NamedEnvelope
+	// Local adversary package roots (for agent/voice.md resolution).
+	adversaryPackageRoots []string
 }
 
 func newRunCommand(app *application.App, apiURL, profile *string) *cobra.Command {
@@ -121,6 +123,7 @@ review base/head and optional posting context. Posting still requires
 			}
 			opts.prURL = pr
 			args = rest
+			opts.adversaryPackageRoots = githubreview.LocalPackageRoots(args)
 			if opts.githubReview && opts.shell {
 				return fmt.Errorf("--github-review cannot be combined with --shell")
 			}

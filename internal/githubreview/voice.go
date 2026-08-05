@@ -16,29 +16,75 @@ var DefaultVoicePrompt string
 
 const maxVoiceBytes = 32 << 10
 
-// ResolveVoice loads VOICE.md from repo root if present, else embedded default.
-func ResolveVoice(repoRoot string) (prompt string, info VoiceInfo) {
+// Voice relative paths, first hit wins within a root.
+// Prefer agent/ (package agent identity), then train/, then lowercase root, then legacy VOICE.md.
+var voiceRelPaths = []string{
+	filepath.Join("agent", "voice.md"),
+	filepath.Join("train", "voice.md"),
+	"voice.md",
+	"VOICE.md", // legacy
+}
+
+// LocalPackageRoots returns absolute paths for args that look like local
+// adversary package directories (adversary.yaml or agent/scope.md / docs/scope.md).
+func LocalPackageRoots(args []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range args {
+		a = strings.TrimSpace(a)
+		if a == "" || strings.HasPrefix(a, "-") {
+			continue
+		}
+		st, err := os.Stat(a)
+		if err != nil || !st.IsDir() {
+			continue
+		}
+		abs, err := filepath.Abs(a)
+		if err != nil || seen[abs] {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(abs, "adversary.yaml")); err != nil {
+			if _, err2 := os.Stat(filepath.Join(abs, "agent", "scope.md")); err2 != nil {
+				if _, err3 := os.Stat(filepath.Join(abs, "docs", "scope.md")); err3 != nil {
+					continue
+				}
+			}
+		}
+		seen[abs] = true
+		out = append(out, abs)
+	}
+	return out
+}
+
+// ResolveVoice loads a voice prompt from the first existing candidate under roots
+// (package dirs first, then review target). Falls back to the CLI-embedded default.
+func ResolveVoice(roots ...string) (prompt string, info VoiceInfo) {
 	info = VoiceInfo{Source: "cli_default"}
 	prompt = DefaultVoicePrompt
-	if strings.TrimSpace(repoRoot) == "" {
-		return prompt, info
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		for _, rel := range voiceRelPaths {
+			p := filepath.Join(abs, rel)
+			raw, err := os.ReadFile(p)
+			if err != nil || len(raw) == 0 {
+				continue
+			}
+			if len(raw) > maxVoiceBytes || !utf8.Valid(raw) {
+				continue
+			}
+			// Prefer package-relative path in metadata when under a known subdir.
+			display := rel
+			return string(raw), VoiceInfo{Source: "package", Path: display}
+		}
 	}
-	p := filepath.Join(repoRoot, "VOICE.md")
-	raw, err := os.ReadFile(p)
-	if err != nil {
-		return prompt, info
-	}
-	if len(raw) == 0 {
-		return prompt, info
-	}
-	if len(raw) > maxVoiceBytes {
-		// Fall through to default.
-		return prompt, info
-	}
-	if !utf8.Valid(raw) {
-		return prompt, info
-	}
-	return string(raw), VoiceInfo{Source: "repo", Path: "VOICE.md"}
+	return prompt, info
 }
 
 // TemplateBody builds a deterministic offline comment body.

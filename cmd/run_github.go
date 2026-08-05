@@ -159,7 +159,10 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		}
 	}
 
-	voicePrompt, voiceInfo := githubreview.ResolveVoice(opts.path)
+	// Prefer package agent/voice.md (adversary identity), then target --path.
+	voiceRoots := append([]string{}, opts.adversaryPackageRoots...)
+	voiceRoots = append(voiceRoots, opts.path)
+	voicePrompt, voiceInfo := githubreview.ResolveVoice(voiceRoots...)
 
 	plan := githubreview.ProjectFindings(envelopes, githubreview.ProjectOptions{
 		Repository:  owner + "/" + repo,

@@ -142,7 +142,7 @@ func TestEnhanceBodiesUsesRepoVoicePrompt(t *testing.T) {
 		},
 	}
 	plan := ProjectFindings([]NamedEnvelope{{Adversary: "x", Envelope: env}}, ProjectOptions{
-		Voice: VoiceInfo{Source: "repo", Path: "VOICE.md"},
+		Voice: VoiceInfo{Source: "package", Path: "agent/voice.md"},
 	})
 	fp := &fakeProvider{bodies: map[string]string{"f1": "Acme voice rewrite."}}
 	EnhanceBodies(context.Background(), &plan, EnhanceOptions{
