@@ -12,16 +12,16 @@ import (
 
 // Scorecard summarizes reviewer quality on a case set.
 type Scorecard struct {
-	ReviewerID             string             `json:"reviewer_id"`
-	GeneratedAt            time.Time          `json:"generated_at"`
-	CaseCount              int                `json:"case_count"`
-	ImportantConcernRecall float64            `json:"important_concern_recall"`
-	Precision              float64            `json:"precision"`
-	FalsePositiveRate      float64            `json:"false_positive_rate"`
-	UnsupportedClaimRate   float64            `json:"unsupported_claim_rate"`
-	FailureCount           int                `json:"failure_count"`
-	Failures               []judge.Failure    `json:"failures"`
-	PerCase                []CaseScore        `json:"per_case"`
+	ReviewerID             string          `json:"reviewer_id"`
+	GeneratedAt            time.Time       `json:"generated_at"`
+	CaseCount              int             `json:"case_count"`
+	ImportantConcernRecall float64         `json:"important_concern_recall"`
+	Precision              float64         `json:"precision"`
+	FalsePositiveRate      float64         `json:"false_positive_rate"`
+	UnsupportedClaimRate   float64         `json:"unsupported_claim_rate"`
+	FailureCount           int             `json:"failure_count"`
+	Failures               []judge.Failure `json:"failures"`
+	PerCase                []CaseScore     `json:"per_case"`
 }
 
 // CaseScore is per-case metrics.
@@ -35,9 +35,9 @@ type CaseScore struct {
 // Aggregate builds a scorecard from per-case judgments and failures.
 func Aggregate(reviewerID string, judgments map[string]*judge.ReviewJudgment, failures []judge.Failure) *Scorecard {
 	sc := &Scorecard{
-		ReviewerID:  reviewerID,
-		GeneratedAt: time.Now().UTC(),
-		Failures:    failures,
+		ReviewerID:   reviewerID,
+		GeneratedAt:  time.Now().UTC(),
+		Failures:     failures,
 		FailureCount: len(failures),
 	}
 	if len(judgments) == 0 {

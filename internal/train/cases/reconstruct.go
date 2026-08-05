@@ -25,6 +25,7 @@ type ReviewSignal struct {
 //  1. formal review commit_id when present and non-empty
 //  2. unanimous original_commit_id across review comments
 //  3. single distinct original_commit_id
+//
 // If none of these yield a trustworthy SHA, returns an Exclusion rather than approximating.
 func ReconstructReviewedSHA(sig ReviewSignal) (sha string, source string, excl *Exclusion) {
 	if s := strings.TrimSpace(sig.ReviewCommitID); s != "" && looksLikeSHA(s) {

@@ -9,14 +9,14 @@ type Case struct {
 	SchemaVersion int    `json:"schema_version" yaml:"schema_version"`
 	ID            string `json:"id" yaml:"id"`
 
-	Repository Repository `json:"repository" yaml:"repository"`
+	Repository  Repository  `json:"repository" yaml:"repository"`
 	PullRequest PullRequest `json:"pull_request" yaml:"pull_request"`
 
-	ReviewEvent   ReviewEvent   `json:"review_event" yaml:"review_event"`
+	ReviewEvent    ReviewEvent    `json:"review_event" yaml:"review_event"`
 	EvidenceWindow EvidenceWindow `json:"evidence_window" yaml:"evidence_window"`
 
 	Comments []Comment `json:"comments" yaml:"comments"`
-	FollowUp FollowUp `json:"follow_up" yaml:"follow_up"`
+	FollowUp FollowUp  `json:"follow_up" yaml:"follow_up"`
 
 	Labels Labels `json:"labels" yaml:"labels"`
 
@@ -41,21 +41,21 @@ type PullRequest struct {
 }
 
 type ReviewEvent struct {
-	RoundIndex        int      `json:"round_index" yaml:"round_index"`
-	Kind              string   `json:"kind" yaml:"kind"` // formal-review | inline-comment-cluster | issue-comment
-	GitHubReviewIDs   []int64  `json:"github_review_ids" yaml:"github_review_ids"`
-	ReviewedSHA       string   `json:"reviewed_sha" yaml:"reviewed_sha"`
-	ReviewedSHASource string   `json:"reviewed_sha_source" yaml:"reviewed_sha_source"`
+	RoundIndex        int       `json:"round_index" yaml:"round_index"`
+	Kind              string    `json:"kind" yaml:"kind"` // formal-review | inline-comment-cluster | issue-comment
+	GitHubReviewIDs   []int64   `json:"github_review_ids" yaml:"github_review_ids"`
+	ReviewedSHA       string    `json:"reviewed_sha" yaml:"reviewed_sha"`
+	ReviewedSHASource string    `json:"reviewed_sha_source" yaml:"reviewed_sha_source"`
 	SubmittedAt       time.Time `json:"submitted_at" yaml:"submitted_at"`
-	Reviewers         []string `json:"reviewers" yaml:"reviewers"`
-	Dismissed         bool     `json:"dismissed" yaml:"dismissed"`
+	Reviewers         []string  `json:"reviewers" yaml:"reviewers"`
+	Dismissed         bool      `json:"dismissed" yaml:"dismissed"`
 }
 
 type EvidenceWindow struct {
-	OpensAt          time.Time     `json:"opens_at" yaml:"opens_at"`
-	ClosesAt         time.Time     `json:"closes_at,omitempty" yaml:"closes_at,omitempty"`
-	CloseReason      string        `json:"close_reason,omitempty" yaml:"close_reason,omitempty"`
-	FollowUpCommits  []FollowUpCommit `json:"follow_up_commits" yaml:"follow_up_commits"`
+	OpensAt         time.Time        `json:"opens_at" yaml:"opens_at"`
+	ClosesAt        time.Time        `json:"closes_at,omitempty" yaml:"closes_at,omitempty"`
+	CloseReason     string           `json:"close_reason,omitempty" yaml:"close_reason,omitempty"`
+	FollowUpCommits []FollowUpCommit `json:"follow_up_commits" yaml:"follow_up_commits"`
 }
 
 type FollowUpCommit struct {
@@ -65,22 +65,22 @@ type FollowUpCommit struct {
 }
 
 type Comment struct {
-	ID               int64     `json:"id" yaml:"id"`
-	Kind             string    `json:"kind" yaml:"kind"` // review-comment | issue-comment | review-body
-	Author           string    `json:"author" yaml:"author"`
-	Body             string    `json:"body" yaml:"body"`
-	Path             string    `json:"path,omitempty" yaml:"path,omitempty"`
-	Line             int       `json:"line,omitempty" yaml:"line,omitempty"`
-	OriginalCommitID string    `json:"original_commit_id,omitempty" yaml:"original_commit_id,omitempty"`
-	CreatedAt        time.Time `json:"created_at" yaml:"created_at"`
-	Classification   string    `json:"classification,omitempty" yaml:"classification,omitempty"`
-	GeneralizedConcern string  `json:"generalized_concern,omitempty" yaml:"generalized_concern,omitempty"`
-	ApprovedAsLabel  bool      `json:"approved_as_label" yaml:"approved_as_label"`
+	ID                 int64     `json:"id" yaml:"id"`
+	Kind               string    `json:"kind" yaml:"kind"` // review-comment | issue-comment | review-body
+	Author             string    `json:"author" yaml:"author"`
+	Body               string    `json:"body" yaml:"body"`
+	Path               string    `json:"path,omitempty" yaml:"path,omitempty"`
+	Line               int       `json:"line,omitempty" yaml:"line,omitempty"`
+	OriginalCommitID   string    `json:"original_commit_id,omitempty" yaml:"original_commit_id,omitempty"`
+	CreatedAt          time.Time `json:"created_at" yaml:"created_at"`
+	Classification     string    `json:"classification,omitempty" yaml:"classification,omitempty"`
+	GeneralizedConcern string    `json:"generalized_concern,omitempty" yaml:"generalized_concern,omitempty"`
+	ApprovedAsLabel    bool      `json:"approved_as_label" yaml:"approved_as_label"`
 }
 
 type FollowUp struct {
-	Commits               []FollowUpCommit `json:"commits" yaml:"commits"`
-	LikelyResolvedConcerns []string        `json:"likely_resolved_concerns,omitempty" yaml:"likely_resolved_concerns,omitempty"`
+	Commits                []FollowUpCommit `json:"commits" yaml:"commits"`
+	LikelyResolvedConcerns []string         `json:"likely_resolved_concerns,omitempty" yaml:"likely_resolved_concerns,omitempty"`
 }
 
 type Labels struct {
@@ -89,13 +89,13 @@ type Labels struct {
 }
 
 type ExpectedConcern struct {
-	ID          string   `json:"id" yaml:"id"`
-	Summary     string   `json:"summary" yaml:"summary"`
-	Importance  string   `json:"importance" yaml:"importance"` // high | medium | low
-	Confidence  string   `json:"confidence" yaml:"confidence"`
-	Source      []string `json:"source" yaml:"source"`
-	File        string   `json:"file,omitempty" yaml:"file,omitempty"`
-	Approved    bool     `json:"approved" yaml:"approved"`
+	ID         string   `json:"id" yaml:"id"`
+	Summary    string   `json:"summary" yaml:"summary"`
+	Importance string   `json:"importance" yaml:"importance"` // high | medium | low
+	Confidence string   `json:"confidence" yaml:"confidence"`
+	Source     []string `json:"source" yaml:"source"`
+	File       string   `json:"file,omitempty" yaml:"file,omitempty"`
+	Approved   bool     `json:"approved" yaml:"approved"`
 	// Scope relative to the owning adversary mission.
 	// in_scope | out_of_scope | unclear — only in_scope should be graded as gold.
 	Scope       string `json:"scope,omitempty" yaml:"scope,omitempty"`
@@ -107,9 +107,9 @@ type ExpectedConcern struct {
 }
 
 type Metadata struct {
-	CreatedAt      time.Time `json:"created_at" yaml:"created_at"`
+	CreatedAt       time.Time `json:"created_at" yaml:"created_at"`
 	ReviewedByHuman bool      `json:"reviewed_by_human" yaml:"reviewed_by_human"`
-	Split          string    `json:"split" yaml:"split"` // discovery | validation | hidden | regression
+	Split           string    `json:"split" yaml:"split"` // discovery | validation | hidden | regression
 }
 
 type Exclusion struct {

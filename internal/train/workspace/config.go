@@ -48,20 +48,20 @@ type SourcesConfig struct {
 	Discovery string `yaml:"discovery"`
 	Org       string `yaml:"org"`
 	// Orgs bounds author_reviews search (gh --owner). Optional.
-	Orgs            []string `yaml:"orgs"`
-	Repos           []string `yaml:"repos"`
-	Languages       []string `yaml:"languages"`
-	Since           string   `yaml:"since"`
-	ReposAllowlist  []string `yaml:"repos_allowlist"`
-	AuthorsIgnore   []string `yaml:"authors_ignore"`
-	AuthorsOnly     []string `yaml:"authors_only"`
+	Orgs           []string `yaml:"orgs"`
+	Repos          []string `yaml:"repos"`
+	Languages      []string `yaml:"languages"`
+	Since          string   `yaml:"since"`
+	ReposAllowlist []string `yaml:"repos_allowlist"`
+	AuthorsIgnore  []string `yaml:"authors_ignore"`
+	AuthorsOnly    []string `yaml:"authors_only"`
 	// AuthorRoles for author_reviews: reviewed-by (default), commenter, author.
 	AuthorRoles []string `yaml:"author_roles"`
 }
 
 type RunConfig struct {
-	MaxPRs   int      `yaml:"max_prs"`
-	MaxTurns int      `yaml:"max_turns"`
+	MaxPRs   int `yaml:"max_prs"`
+	MaxTurns int `yaml:"max_turns"`
 	// Concurrency is parallel PR collect workers (gh). 0 = default (4). Cap 16.
 	// Local package runs stay serialized under a per-path lock.
 	Concurrency int      `yaml:"concurrency"`

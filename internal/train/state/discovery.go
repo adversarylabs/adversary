@@ -17,13 +17,13 @@ import (
 type PROutcome string
 
 const (
-	OutcomeAttempted       PROutcome = "attempted"
-	OutcomeGraded          PROutcome = "graded"            // had in-scope gold and ran review path
-	OutcomeNoInScope       PROutcome = "no_in_scope"       // collected but nothing in mission scope
-	OutcomeNoCases         PROutcome = "no_cases"          // no reconstructable review rounds
-	OutcomeBlocked         PROutcome = "blocked"           // collect/review blocked
-	OutcomeExcluded        PROutcome = "excluded"          // SHA unrecoverable etc.
-	OutcomePinned          PROutcome = "pinned"            // user forced --pr
+	OutcomeAttempted PROutcome = "attempted"
+	OutcomeGraded    PROutcome = "graded"      // had in-scope gold and ran review path
+	OutcomeNoInScope PROutcome = "no_in_scope" // collected but nothing in mission scope
+	OutcomeNoCases   PROutcome = "no_cases"    // no reconstructable review rounds
+	OutcomeBlocked   PROutcome = "blocked"     // collect/review blocked
+	OutcomeExcluded  PROutcome = "excluded"    // SHA unrecoverable etc.
+	OutcomePinned    PROutcome = "pinned"      // user forced --pr
 )
 
 // PRRecord is per-PR discovery memory.

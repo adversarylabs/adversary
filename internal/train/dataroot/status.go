@@ -33,17 +33,17 @@ const (
 
 // BlockedResult is a first-class outcome when an external dependency prevents the real path.
 type BlockedResult struct {
-	SchemaVersion     int       `json:"schema_version"`
-	Dependency        string    `json:"dependency"`
-	Operation         string    `json:"operation"`
-	Classification    string    `json:"classification"`
-	SanitizedError    string    `json:"sanitized_error"`
-	StagesCompleted   []string  `json:"stages_completed"`
-	StagesNotRun      []string  `json:"stages_not_run"`
-	PartialArtifacts  []string  `json:"partial_artifacts,omitempty"`
-	RetrySafe         bool      `json:"retry_safe"`
-	NextAction        string    `json:"next_action"`
-	At                time.Time `json:"at"`
+	SchemaVersion    int       `json:"schema_version"`
+	Dependency       string    `json:"dependency"`
+	Operation        string    `json:"operation"`
+	Classification   string    `json:"classification"`
+	SanitizedError   string    `json:"sanitized_error"`
+	StagesCompleted  []string  `json:"stages_completed"`
+	StagesNotRun     []string  `json:"stages_not_run"`
+	PartialArtifacts []string  `json:"partial_artifacts,omitempty"`
+	RetrySafe        bool      `json:"retry_safe"`
+	NextAction       string    `json:"next_action"`
+	At               time.Time `json:"at"`
 }
 
 // WriteBlocked persists a blocked result and returns ExitBlocked.

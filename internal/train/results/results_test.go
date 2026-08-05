@@ -18,8 +18,8 @@ func TestSQLiteWriteListInspectApply(t *testing.T) {
 	n, err := WriteFromRun(state, WriteInput{
 		RunID: "slice-test",
 		Cases: []*cases.Case{{
-			ID: "c1",
-			Repository: cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r"},
+			ID:          "c1",
+			Repository:  cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r"},
 			PullRequest: cases.PullRequest{Number: 1, Title: "fix leak"},
 			Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
 				{ID: "g1", Summary: "goroutine leak on Shutdown", Approved: true, OwnerAdversary: "go-concurrency"},
@@ -146,8 +146,8 @@ func TestResetDiscovery(t *testing.T) {
 func TestProgressiveKeptThenGraded(t *testing.T) {
 	state := t.TempDir()
 	c := &cases.Case{
-		ID: "c-prog",
-		Repository: cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r"},
+		ID:          "c-prog",
+		Repository:  cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r"},
 		PullRequest: cases.PullRequest{Number: 9, Title: "race fix"},
 		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
 			{ID: "g1", Summary: "data race on map", Approved: true, OwnerAdversary: "go-concurrency"},
@@ -191,8 +191,8 @@ func TestProgressiveKeptThenGraded(t *testing.T) {
 	}
 	// Grade as caught
 	c2 := &cases.Case{
-		ID: "c-hit",
-		Repository: cases.Repository{Owner: "o", Name: "r"},
+		ID:          "c-hit",
+		Repository:  cases.Repository{Owner: "o", Name: "r"},
 		PullRequest: cases.PullRequest{Number: 2},
 		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
 			{ID: "g2", Summary: "leak", Approved: true, OwnerAdversary: "go-concurrency"},

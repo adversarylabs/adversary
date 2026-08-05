@@ -28,8 +28,8 @@ func TestWriteStoryIsPlainEnglish(t *testing.T) {
 		ReviewEvent: cases.ReviewEvent{ReviewedSHA: "bbb", Reviewers: []string{"alice"}},
 		Comments: []cases.Comment{{
 			ID: 20001, Author: "alice",
-			Body:               "This goroutine can leak after Shutdown if the context is not cancelled",
-			Path:               "sdk/trace/span_processor.go", Line: 142,
+			Body: "This goroutine can leak after Shutdown if the context is not cancelled",
+			Path: "sdk/trace/span_processor.go", Line: 142,
 			GeneralizedConcern: "Worker goroutine lifecycle not tied to Shutdown",
 			ApprovedAsLabel:    true,
 		}},
@@ -67,9 +67,9 @@ func TestWriteStoryIsPlainEnglish(t *testing.T) {
 	res, err := Write(Input{
 		RunID: "slice-test", DataRoot: dir, RunDir: runDir, ExperimentDir: expDir,
 		Fixture: true, Scorecard: sc, Cases: []*cases.Case{c},
-		Judgments: map[string]*judge.ReviewJudgment{c.ID: j},
+		Judgments:   map[string]*judge.ReviewJudgment{c.ID: j},
 		NormReviews: map[string]*normalize.Review{c.ID: rev},
-		Experiment: exp, ProposalPatch: filepath.Join(expDir, "exp.patch"),
+		Experiment:  exp, ProposalPatch: filepath.Join(expDir, "exp.patch"),
 		LocalIDs: map[string]bool{"engineering-review": true},
 	})
 	if err != nil {
@@ -134,8 +134,8 @@ func TestSuggestIssuesNeverDraftsOfficialOwners(t *testing.T) {
 	runDir := filepath.Join(dir, "runs", "off")
 	expDir := filepath.Join(dir, "experiments", "off")
 	c := &cases.Case{
-		ID: "case-1",
-		Repository: cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r/pull/1"},
+		ID:          "case-1",
+		Repository:  cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r/pull/1"},
 		PullRequest: cases.PullRequest{Number: 1, Title: "t"},
 		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
 			{ID: "c1", Summary: "secret in HCL", Approved: true, OwnerAdversary: "go-security", Importance: "high"},
@@ -174,8 +174,8 @@ func TestSuggestIssuesDraftsLocalOwnerOnly(t *testing.T) {
 	runDir := filepath.Join(dir, "runs", "loc")
 	expDir := filepath.Join(dir, "experiments", "loc")
 	c := &cases.Case{
-		ID: "case-1",
-		Repository: cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r/pull/1"},
+		ID:          "case-1",
+		Repository:  cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r/pull/1"},
 		PullRequest: cases.PullRequest{Number: 1, Title: "t"},
 		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
 			{ID: "c1", Summary: "company policy violated", Approved: true, OwnerAdversary: "my-policy", Importance: "high"},

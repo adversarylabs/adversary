@@ -50,10 +50,10 @@ var forbiddenInReviewer = []string{
 
 // Manifest is an immutable prepared-input bundle.
 type Manifest struct {
-	SchemaVersion int               `json:"schema_version"`
-	CaseID        string            `json:"case_id"`
+	SchemaVersion int                `json:"schema_version"`
+	CaseID        string             `json:"case_id"`
 	Sections      map[string]Section `json:"sections"`
-	BundleDigest  string            `json:"bundle_digest,omitempty"`
+	BundleDigest  string             `json:"bundle_digest,omitempty"`
 }
 
 // Section references content by digest and optional inline payload for small fixtures.
@@ -65,11 +65,11 @@ type Section struct {
 
 // Projection is a role-specific view of a bundle.
 type Projection struct {
-	Role           string            `json:"role"`
-	CaseID         string            `json:"case_id"`
-	BundleDigest   string            `json:"bundle_digest"`
-	Sections       map[string]Section `json:"sections"`
-	ProjectionDigest string          `json:"projection_digest,omitempty"`
+	Role             string             `json:"role"`
+	CaseID           string             `json:"case_id"`
+	BundleDigest     string             `json:"bundle_digest"`
+	Sections         map[string]Section `json:"sections"`
+	ProjectionDigest string             `json:"projection_digest,omitempty"`
 }
 
 // BuildFromCase constructs a full bundle from a case (payloads stored as digests of JSON).
@@ -80,9 +80,9 @@ func BuildFromCase(c *cases.Case) (*Manifest, error) {
 	sections := map[string]Section{}
 
 	checkout := map[string]string{
-		"base_sha":  c.PullRequest.BaseSHA,
-		"head_sha":  c.ReviewEvent.ReviewedSHA,
-		"repo":      c.Repository.Owner + "/" + c.Repository.Name,
+		"base_sha": c.PullRequest.BaseSHA,
+		"head_sha": c.ReviewEvent.ReviewedSHA,
+		"repo":     c.Repository.Owner + "/" + c.Repository.Name,
 	}
 	if err := putSection(sections, SectionCheckout, "git-refs", checkout); err != nil {
 		return nil, err

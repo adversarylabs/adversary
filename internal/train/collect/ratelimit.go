@@ -44,7 +44,7 @@ func IsRateLimit(err error) bool {
 }
 
 var (
-	rateMu     sync.Mutex
+	rateMu        sync.Mutex
 	rateHoldUntil time.Time
 )
 

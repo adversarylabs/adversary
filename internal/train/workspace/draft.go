@@ -32,8 +32,8 @@ type GoldOutcome struct {
 
 // PackageMeta describes a package available during train.
 type PackageMeta struct {
-	ID       string
-	Role     PackageRole
+	ID   string
+	Role PackageRole
 	// TrainEligible is true for locals included in this run (--adversary filter).
 	TrainEligible bool
 }

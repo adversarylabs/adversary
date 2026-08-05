@@ -19,20 +19,20 @@ import (
 
 // Input is everything needed to write a human-readable run report.
 type Input struct {
-	RunID           string
-	DataRoot        string
-	RunDir          string
-	ExperimentDir   string // also write README here (where people often open first)
-	Fixture         bool
-	Live            bool
-	Scorecard       *score.Scorecard
-	Cases           []*cases.Case
-	Judgments       map[string]*judge.ReviewJudgment
-	NormReviews     map[string]*normalize.Review
-	Hypotheses      []critic.Hypothesis
-	Experiment      *experiment.Report
-	ProposalPatch   string
-	BlockedNote     string
+	RunID         string
+	DataRoot      string
+	RunDir        string
+	ExperimentDir string // also write README here (where people often open first)
+	Fixture       bool
+	Live          bool
+	Scorecard     *score.Scorecard
+	Cases         []*cases.Case
+	Judgments     map[string]*judge.ReviewJudgment
+	NormReviews   map[string]*normalize.Review
+	Hypotheses    []critic.Hypothesis
+	Experiment    *experiment.Report
+	ProposalPatch string
+	BlockedNote   string
 	// LocalIDs are home-grown package ids that may receive train drafts.
 	// When set, suggested issues are only emitted for these owners.
 	LocalIDs map[string]bool

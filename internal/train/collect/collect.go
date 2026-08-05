@@ -181,9 +181,9 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		return nil, err
 	}
 	var prObj struct {
-		Number  int    `json:"number"`
-		Title   string `json:"title"`
-		Base    struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		Base   struct {
 			SHA string `json:"sha"`
 		} `json:"base"`
 		Head struct {
@@ -291,11 +291,11 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		submitted, _ := time.Parse(time.RFC3339, rev.SubmittedAt)
 		if hasBody {
 			revComments = append([]cases.Comment{{
-				ID:      rev.ID,
-				Kind:    "review-body",
-				Author:  rev.User.Login,
-				Body:    rev.Body,
-				CreatedAt: submitted,
+				ID:              rev.ID,
+				Kind:            "review-body",
+				Author:          rev.User.Login,
+				Body:            rev.Body,
+				CreatedAt:       submitted,
 				ApprovedAsLabel: false,
 				Classification:  "unclear",
 			}}, revComments...)

@@ -12,16 +12,16 @@ import (
 
 // Receipt is the durable proof of a factory run.
 type Receipt struct {
-	SchemaVersion int                          `json:"schema_version"`
-	RunID         string                       `json:"run_id"`
-	RunClass      dataroot.ExecutionClass      `json:"run_class"`
-	CaseIDs       []string                     `json:"case_ids,omitempty"`
+	SchemaVersion int                                `json:"schema_version"`
+	RunID         string                             `json:"run_id"`
+	RunClass      dataroot.ExecutionClass            `json:"run_class"`
+	CaseIDs       []string                           `json:"case_ids,omitempty"`
 	Stages        map[string]dataroot.ExecutionClass `json:"stages"`
-	Reviewers     []ReviewerReceipt            `json:"reviewers,omitempty"`
-	Totals        Totals                       `json:"totals"`
-	Timestamps    Timestamps                   `json:"timestamps"`
-	FinalStatus   string                       `json:"final_status"` // success | partial | blocked | failed
-	Notes         string                       `json:"notes,omitempty"`
+	Reviewers     []ReviewerReceipt                  `json:"reviewers,omitempty"`
+	Totals        Totals                             `json:"totals"`
+	Timestamps    Timestamps                         `json:"timestamps"`
+	FinalStatus   string                             `json:"final_status"` // success | partial | blocked | failed
+	Notes         string                             `json:"notes,omitempty"`
 }
 
 type ReviewerReceipt struct {

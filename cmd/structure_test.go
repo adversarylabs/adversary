@@ -38,7 +38,8 @@ func TestCommandConstructorsDoNotCaptureStreams(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range files {
-		if strings.HasSuffix(path, "_test.go") || path == "app.go" || path == "root.go" {
+		// Process-edge helpers may write to the process stderr (not cobra cmd streams).
+		if strings.HasSuffix(path, "_test.go") || path == "app.go" || path == "root.go" || path == "interrupt.go" {
 			continue
 		}
 		data, err := os.ReadFile(path)

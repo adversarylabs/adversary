@@ -8,14 +8,14 @@ import (
 
 // Finding is the canonical per-finding schema used by judges.
 type Finding struct {
-	ID          string `json:"id"`
-	File        string `json:"file,omitempty"`
-	LineStart   int    `json:"line_start,omitempty"`
-	LineEnd     int    `json:"line_end,omitempty"`
-	Severity    string `json:"severity"`
-	Category    string `json:"category"`
-	Claim       string `json:"claim"`
-	Evidence    string `json:"evidence,omitempty"`
+	ID           string `json:"id"`
+	File         string `json:"file,omitempty"`
+	LineStart    int    `json:"line_start,omitempty"`
+	LineEnd      int    `json:"line_end,omitempty"`
+	Severity     string `json:"severity"`
+	Category     string `json:"category"`
+	Claim        string `json:"claim"`
+	Evidence     string `json:"evidence,omitempty"`
 	SuggestedFix string `json:"suggested_fix,omitempty"`
 }
 
@@ -36,13 +36,13 @@ type AdversaryEnvelope struct {
 			Version string `json:"version"`
 		} `json:"adversary"`
 		Findings []struct {
-			ID           string `json:"id"`
-			Title        string `json:"title"`
-			Category     string `json:"category"`
-			Severity     string `json:"severity"`
-			Summary      string `json:"summary"`
+			ID             string `json:"id"`
+			Title          string `json:"title"`
+			Category       string `json:"category"`
+			Severity       string `json:"severity"`
+			Summary        string `json:"summary"`
 			Recommendation string `json:"recommendation"`
-			Evidence     []struct {
+			Evidence       []struct {
 				File    string `json:"file"`
 				Line    int    `json:"line"`
 				EndLine int    `json:"endLine"`
@@ -79,13 +79,13 @@ func FromAdversaryJSON(reviewerID string, raw []byte) (*Review, error) {
 		// Try bare result object
 		var resultOnly struct {
 			Findings []struct {
-				ID       string `json:"id"`
-				Title    string `json:"title"`
-				Category string `json:"category"`
-				Severity string `json:"severity"`
-				Summary  string `json:"summary"`
+				ID             string `json:"id"`
+				Title          string `json:"title"`
+				Category       string `json:"category"`
+				Severity       string `json:"severity"`
+				Summary        string `json:"summary"`
 				Recommendation string `json:"recommendation"`
-				Evidence []struct {
+				Evidence       []struct {
 					File    string `json:"file"`
 					Line    int    `json:"line"`
 					EndLine int    `json:"endLine"`
@@ -106,10 +106,10 @@ func FromAdversaryJSON(reviewerID string, raw []byte) (*Review, error) {
 	}
 	for _, f := range env.Result.Findings {
 		nf := Finding{
-			ID:       f.ID,
-			Severity: normalizeSeverity(f.Severity),
-			Category: f.Category,
-			Claim:    firstNonEmpty(f.Summary, f.Title),
+			ID:           f.ID,
+			Severity:     normalizeSeverity(f.Severity),
+			Category:     f.Category,
+			Claim:        firstNonEmpty(f.Summary, f.Title),
 			SuggestedFix: f.Recommendation,
 		}
 		if len(f.Evidence) > 0 {

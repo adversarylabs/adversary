@@ -35,14 +35,14 @@ import (
 // Options for the first-slice end-to-end path.
 type Options struct {
 	// Context cancels the train run (Ctrl+C / SIGTERM via CLI). nil = background.
-	Context context.Context
-	DataRoot           string
-	RepoRoot           string // train engine root (fixtures)
-	Fixture            bool   // tests only; production path is always live discovery
-	Live               bool   // default true when Fixture is false
-	Owner              string // optional single-repo pin (with Repo)
-	Repo               string
-	PR                 int // optional single PR; 0 = discover live
+	Context  context.Context
+	DataRoot string
+	RepoRoot string // train engine root (fixtures)
+	Fixture  bool   // tests only; production path is always live discovery
+	Live     bool   // default true when Fixture is false
+	Owner    string // optional single-repo pin (with Repo)
+	Repo     string
+	PR       int // optional single PR; 0 = discover live
 	// ReposFile is path to repositories.json (default: <RepoRoot>/config/repositories.json).
 	ReposFile string
 	// CatalogRepos overrides the JSON catalog when non-empty (from adversary.train.yaml sources).
@@ -63,8 +63,8 @@ type Options struct {
 	// Local package `adversary run` stays serialized via a per-path lock.
 	Concurrency int
 	// ResetDiscovery clears seen-PR state for repos we touch before hunting.
-	ResetDiscovery bool
-	AdversarySource    string
+	ResetDiscovery  bool
+	AdversarySource string
 	// LocalPackageDirs are all local package roots to load for routing/grading.
 	// When set, DiscoverRoot/loadPackage is used instead of sibling *-adversary discovery only.
 	LocalPackageDirs []string
@@ -88,7 +88,7 @@ type Options struct {
 	// AuthorOrgs bounds author search (--owner).
 	AuthorOrgs []string
 	// AuthorSince optional date bound (merged-at >=).
-	AuthorSince string
+	AuthorSince        string
 	EngineeringFixture string
 	BaselineFixture    string
 	CaseFixtureDir     string
@@ -108,9 +108,9 @@ type Result struct {
 	CaseIDs     []string
 	// ResultsAdded is how many new inbox rows were written for train results ls.
 	ResultsAdded int
-	ExitCode    int
-	Blocked     *dataroot.BlockedResult
-	Message     string
+	ExitCode     int
+	Blocked      *dataroot.BlockedResult
+	Message      string
 }
 
 // caseRuntime holds per-case artifacts needed for candidate re-run.
@@ -768,20 +768,20 @@ func Run(opts Options) (*Result, error) {
 	// When owner of gold is official and they have matches elsewhere, still no local draft (handled in report).
 
 	human, err := report.Write(report.Input{
-		RunID:         runID,
-		DataRoot:      opts.DataRoot,
-		RunDir:        runDir,
-		ExperimentDir: expDir,
-		Fixture:       opts.Fixture,
-		Live:          opts.Live,
-		Scorecard:     sc,
-		Cases:         usable,
-		Judgments:     judgments,
-		NormReviews:   normByCase,
-		Hypotheses:    hyps,
-		Experiment:    rep,
-		ProposalPatch: prop.PatchPath,
-		BlockedNote:   blockedNote,
+		RunID:                  runID,
+		DataRoot:               opts.DataRoot,
+		RunDir:                 runDir,
+		ExperimentDir:          expDir,
+		Fixture:                opts.Fixture,
+		Live:                   opts.Live,
+		Scorecard:              sc,
+		Cases:                  usable,
+		Judgments:              judgments,
+		NormReviews:            normByCase,
+		Hypotheses:             hyps,
+		Experiment:             rep,
+		ProposalPatch:          prop.PatchPath,
+		BlockedNote:            blockedNote,
 		LocalIDs:               locIDs,
 		OfficialIDs:            offIDs,
 		OfficialCatchByConcern: officialCatch,

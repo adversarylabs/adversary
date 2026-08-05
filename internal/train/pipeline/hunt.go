@@ -377,19 +377,19 @@ feedLoop:
 }
 
 type collectResult struct {
-	kept       []*cases.Case
-	inScopeN   int
-	outScopeN  int
-	blocked    *dataroot.BlockedResult
-	execClass  dataroot.ExecutionClass
-	err        error
-	owner      string
-	name       string
-	ref        collect.PRRef
-	store      *state.DiscoveryStore
-	pinned     bool
-	turn       int
-	noCases    bool
+	kept      []*cases.Case
+	inScopeN  int
+	outScopeN int
+	blocked   *dataroot.BlockedResult
+	execClass dataroot.ExecutionClass
+	err       error
+	owner     string
+	name      string
+	ref       collect.PRRef
+	store     *state.DiscoveryStore
+	pinned    bool
+	turn      int
+	noCases   bool
 }
 
 func collectOnePR(
