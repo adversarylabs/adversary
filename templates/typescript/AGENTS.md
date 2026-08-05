@@ -14,6 +14,8 @@ The adversary should be deterministic, safe to run repeatedly, and produce stabl
 - `test/` contains unit and integration tests.
 - `fixtures/` contains repositories used by tests.
 - `adversary.yaml` describes runtime metadata.
+- `docs/scope.md` is the mission / factory scope contract (in scope vs out of scope). Keep it aligned with rules and prompts.
+- `docs/` holds author-facing documentation for this package.
 
 ## Design Principles
 

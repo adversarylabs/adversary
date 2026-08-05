@@ -24,6 +24,8 @@ npm test
 ## Layout
 
 - `adversary.yaml` declares the adversary manifest.
+- `docs/scope.md` defines **mission and factory scope** (in / out of scope for grading and multi-adversary routing). Edit this before using factory.
+- `docs/README.md` indexes package documentation.
 - `AGENTS.md` gives AI coding agents repository-specific engineering guidance.
 - `src/index.ts` contains the TypeScript SDK adversary.
 - `dist/index.js` is prebuilt so `adversary run . --path ...` works immediately.

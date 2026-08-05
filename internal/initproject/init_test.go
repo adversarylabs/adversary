@@ -195,6 +195,44 @@ func TestCreatePublishesProjectRootMode(t *testing.T) {
 	}
 }
 
+func TestCreateScaffoldsFactoryScopeDocs(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "scope-docs-project")
+	if _, err := Create(Options{Destination: dst}); err != nil {
+		t.Fatal(err)
+	}
+	scopePath := filepath.Join(dst, "docs", "scope.md")
+	raw, err := os.ReadFile(scopePath)
+	if err != nil {
+		t.Fatalf("docs/scope.md missing: %v", err)
+	}
+	text := string(raw)
+	for _, want := range []string{
+		"scope-docs-project", // rendered {{name}}
+		"## Mission",
+		"## In scope",
+		"## Out of scope",
+		"## Factory grading rule",
+		"local/scope-docs-project",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("docs/scope.md missing %q\n\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "{{name}}") {
+		t.Fatal("docs/scope.md still contains unrendered {{name}}")
+	}
+	if _, err := os.Stat(filepath.Join(dst, "docs", "README.md")); err != nil {
+		t.Fatalf("docs/README.md missing: %v", err)
+	}
+	readme, err := os.ReadFile(filepath.Join(dst, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(readme), "docs/scope.md") {
+		t.Fatal("project README should mention docs/scope.md")
+	}
+}
+
 func TestRenderSuccessUsesLocationAndShellQuotes(t *testing.T) {
 	var out bytes.Buffer
 	location := "/tmp/a path/it's-here"
