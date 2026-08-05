@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -16,6 +17,8 @@ type PRRef struct {
 
 // DiscoverOpts controls discovery filtering.
 type DiscoverOpts struct {
+	// Context cancels gh listing (Ctrl+C).
+	Context context.Context
 	// Limit is how many NEW candidates to return (not including skipped).
 	Limit int
 	// Skip PRs already in discovery state (or any other set).
@@ -50,8 +53,15 @@ func DiscoverPRsWithOpts(owner, repo string, opts DiscoverOpts) ([]PRRef, error)
 	if _, err := exec.LookPath("gh"); err != nil {
 		return nil, fmt.Errorf("gh not installed")
 	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("discover interrupted: %w", err)
+	}
 
-	cmd := exec.Command("gh", "pr", "list",
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
 		"--repo", owner+"/"+repo,
 		"--state", "merged",
 		"--limit", fmt.Sprintf("%d", opts.ListLimit),
@@ -59,6 +69,9 @@ func DiscoverPRsWithOpts(owner, repo string, opts DiscoverOpts) ([]PRRef, error)
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("discover interrupted: %w", ctx.Err())
+		}
 		return discoverPRsREST(owner, repo, opts)
 	}
 
@@ -117,10 +130,17 @@ func discoverPRsREST(owner, repo string, opts DiscoverOpts) ([]PRRef, error) {
 	if opts.ListLimit > 0 && opts.ListLimit < perPage {
 		perPage = opts.ListLimit
 	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	api := fmt.Sprintf("repos/%s/%s/pulls?state=closed&per_page=%d&sort=created&direction=desc", owner, repo, perPage)
-	cmd := exec.Command("gh", "api", api)
+	cmd := exec.CommandContext(ctx, "gh", "api", api)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("discover interrupted: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("gh api: %w (%s)", err, sanitize(string(out)))
 	}
 	var prs []struct {

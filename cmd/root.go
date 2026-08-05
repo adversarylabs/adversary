@@ -23,8 +23,8 @@ func Execute() error {
 		return err
 	}
 	root := NewRootCommandWithApp(app)
-	root.SetContext(ctx)
-	runErr := root.Execute()
+	// ExecuteContext so child commands (including train) see cancel on Ctrl+C / SIGTERM.
+	runErr := root.ExecuteContext(ctx)
 	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), telemetryTimeout)
 	app.WaitBackground(drainCtx)
 	cancelDrain()

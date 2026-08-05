@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -27,6 +28,8 @@ type Result struct {
 
 // CollectOptions optional knobs for collect.
 type CollectOptions struct {
+	// Context cancels gh API calls (Ctrl+C).
+	Context context.Context
 	// Scope classifies human comments for a single adversary (legacy).
 	Scope *scope.Classifier
 	// Router picks the best sibling adversary (or none) per comment.
@@ -63,8 +66,16 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		return res, nil
 	}
 
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return res, fmt.Errorf("collect interrupted: %w", err)
+	}
+
 	// PR metadata
-	prJSON, err := ghJSON(owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d", owner, repo, pr))
+	prJSON, err := ghJSON(ctx, owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d", owner, repo, pr))
 	if err != nil {
 		res.ExecutionClass = dataroot.ClassPartial
 		res.Blocked = blockedFromErr("github-api", "collect-pr", err)
@@ -72,7 +83,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 	}
 	_ = os.WriteFile(filepath.Join(cacheDir, "pull.json"), prJSON, 0o644)
 
-	reviewsJSON, err := ghJSON(owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, pr))
+	reviewsJSON, err := ghJSON(ctx, owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, pr))
 	if err != nil {
 		res.Blocked = blockedFromErr("github-api", "collect-reviews", err)
 		res.ExecutionClass = dataroot.ClassPartial
@@ -80,7 +91,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 	}
 	_ = os.WriteFile(filepath.Join(cacheDir, "reviews.json"), reviewsJSON, 0o644)
 
-	commentsJSON, err := ghJSON(owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, pr))
+	commentsJSON, err := ghJSON(ctx, owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, pr))
 	if err != nil {
 		res.Blocked = blockedFromErr("github-api", "collect-comments", err)
 		res.ExecutionClass = dataroot.ClassPartial
@@ -104,10 +115,16 @@ func defaultScope() *scope.Classifier {
 	}
 }
 
-func ghJSON(owner, repo, apiPath string) ([]byte, error) {
-	cmd := exec.Command("gh", "api", apiPath, "--paginate")
+func ghJSON(ctx context.Context, owner, repo, apiPath string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, "gh", "api", apiPath, "--paginate")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("collect interrupted: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("%w: %s", err, sanitize(string(out)))
 	}
 	return out, nil

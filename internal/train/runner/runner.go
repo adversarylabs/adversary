@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -115,6 +116,17 @@ func min(a, b int) int {
 
 // RunEngineeringReview invokes the real adversary CLI when available.
 func RunEngineeringReview(proj *bundle.Projection, outDir, repoPath, baseSHA, headSHA, adversaryRef string, fixturePath string) (*Result, error) {
+	return RunEngineeringReviewContext(context.Background(), proj, outDir, repoPath, baseSHA, headSHA, adversaryRef, fixturePath)
+}
+
+// RunEngineeringReviewContext is RunEngineeringReview with cancelable context (Ctrl+C).
+func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, outDir, repoPath, baseSHA, headSHA, adversaryRef string, fixturePath string) (*Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("adversary run interrupted: %w", err)
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -202,7 +214,7 @@ func RunEngineeringReview(proj *bundle.Projection, outDir, repoPath, baseSHA, he
 		"--model-provider", provider,
 		"--model", model,
 	}
-	cmd := exec.Command(adv, args...)
+	cmd := exec.CommandContext(ctx, adv, args...)
 	// Ensure child sees consistent env even if flags are ignored by older CLIs.
 	cmd.Env = append(os.Environ(),
 		"ADVERSARY_MODEL_PROVIDER="+provider,
@@ -210,6 +222,9 @@ func RunEngineeringReview(proj *bundle.Projection, outDir, repoPath, baseSHA, he
 	)
 	combined, err := cmd.CombinedOutput()
 	latency := time.Since(start).Milliseconds()
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("adversary run interrupted: %w", ctx.Err())
+	}
 	exitCode := 0
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {

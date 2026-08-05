@@ -209,6 +209,7 @@ the state directory. Drafts never target official package ids.`,
 			}
 
 			opts := pipeline.Options{
+				Context:          cmd.Context(),
 				DataRoot:         stateRoot,
 				RepoRoot:         trainRoot,
 				Fixture:          fixture,

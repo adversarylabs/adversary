@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -30,6 +31,8 @@ import (
 
 // Options for the first-slice end-to-end path.
 type Options struct {
+	// Context cancels the train run (Ctrl+C / SIGTERM via CLI). nil = background.
+	Context context.Context
 	DataRoot           string
 	RepoRoot           string // train engine root (fixtures)
 	Fixture            bool   // tests only; production path is always live discovery
@@ -107,6 +110,13 @@ type caseRuntime struct {
 
 // Run executes the first usable slice (fixture or live).
 func Run(opts Options) (*Result, error) {
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("train interrupted: %w", err)
+	}
 	if opts.DataRoot == "" {
 		return nil, fmt.Errorf("data root required")
 	}
@@ -255,6 +265,10 @@ func Run(opts Options) (*Result, error) {
 		}
 
 		tryPR := func(owner, name string, ref collect.PRRef, store *state.DiscoveryStore, pinned bool) {
+			if err := ctx.Err(); err != nil {
+				progress("interrupted")
+				return
+			}
 			turnsUsed++
 			title := ref.Title
 			if title == "" {
@@ -276,6 +290,7 @@ func Run(opts Options) (*Result, error) {
 				}
 			}
 			cres, err := collect.CollectPRWithOptions(opts.DataRoot, owner, name, ref.Number, collect.CollectOptions{
+				Context:  ctx,
 				Scope:    scopeClf,
 				Router:   commentRouter,
 				AuthorOK: authorOK,
@@ -354,6 +369,9 @@ func Run(opts Options) (*Result, error) {
 				URL:    fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, name, opts.PR),
 			}
 			tryPR(owner, name, ref, store, true)
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("train interrupted: %w", err)
+			}
 		} else {
 			langNote := "any language"
 			if len(opts.Languages) > 0 {
@@ -365,6 +383,10 @@ func Run(opts Options) (*Result, error) {
 			// Round-robin repos so we don't burn all turns on one project.
 			repoIdx := 0
 			for turnsUsed < maxTurns && prsWithInScope < targetPRs {
+				if err := ctx.Err(); err != nil {
+					progress("interrupted by signal")
+					return nil, fmt.Errorf("train interrupted: %w", err)
+				}
 				if len(catalogRepos) == 0 {
 					break
 				}
@@ -372,6 +394,10 @@ func Run(opts Options) (*Result, error) {
 				started := repoIdx
 				attempted := false
 				for {
+					if err := ctx.Err(); err != nil {
+						progress("interrupted by signal")
+						return nil, fmt.Errorf("train interrupted: %w", err)
+					}
 					r := catalogRepos[repoIdx%len(catalogRepos)]
 					repoIdx++
 					store, err := storeFor(r.Owner, r.Name)
@@ -384,8 +410,9 @@ func Run(opts Options) (*Result, error) {
 					}
 					progress("Looking for new PRs in %s (seen %d)…", r.FullName(), len(store.SeenSet()))
 					found, err := collect.DiscoverPRsWithOpts(r.Owner, r.Name, collect.DiscoverOpts{
-						Limit: 3,
-						Skip:  store.SeenSet(),
+						Context: ctx,
+						Limit:   3,
+						Skip:    store.SeenSet(),
 					})
 					if err != nil {
 						progress("  no new PRs in %s: %v", r.FullName(), err)
@@ -501,6 +528,14 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	for i, c := range usable {
+		if err := ctx.Err(); err != nil {
+			fmt.Fprintln(os.Stderr, "train interrupted")
+			rcpt.Finish("interrupted")
+			_, _ = receipt.Save(opts.DataRoot, rcpt)
+			out.ExitCode = 130
+			out.Message = "train interrupted"
+			return out, fmt.Errorf("train interrupted: %w", err)
+		}
 		fmt.Fprintf(os.Stderr, "Grading case %d/%d: %s\n", i+1, len(usable), c.ID)
 		if c.Repository.URL != "" {
 			fmt.Fprintf(os.Stderr, "  PR: %s\n", c.Repository.URL)
@@ -545,7 +580,8 @@ func Run(opts Options) (*Result, error) {
 		if repoName == "" {
 			repoName = opts.Repo
 		}
-		co := checkout.PrepareForCase(
+		co := checkout.PrepareForCaseContext(
+			ctx,
 			opts.DataRoot, owner, repoName, c.ID,
 			c.PullRequest.BaseSHA, c.ReviewEvent.ReviewedSHA,
 			opts.Fixture && !opts.Live,
@@ -607,7 +643,7 @@ func Run(opts Options) (*Result, error) {
 				fixturePath = filepath.Join(opts.RepoRoot, "fixtures", "reviews", "engineering-review.json")
 			}
 			fmt.Fprintf(os.Stderr, "  running adversary %s …\n", ownerID)
-			eRes, err := runner.RunEngineeringReview(revProj, revOut, repoPath, baseRef, headRef, advRef, fixturePath)
+			eRes, err := runner.RunEngineeringReviewContext(ctx, revProj, revOut, repoPath, baseRef, headRef, advRef, fixturePath)
 			if err != nil {
 				return nil, err
 			}
@@ -884,6 +920,11 @@ func Run(opts Options) (*Result, error) {
 // remeasureCandidate re-runs engineering-review from the candidate worktree when possible.
 // Returns scorecard, mode ("remeasured"|"identical_to_base"), and execution class for the stage.
 func remeasureCandidate(opts Options, runDir string, build experiment.BuildResult, runtimes []caseRuntime) (*score.Scorecard, string, dataroot.ExecutionClass) {
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_ = ctx // used by RunEngineeringReviewContext below
 	// Need a candidate package path and at least one case with a repo path for real remeasure.
 	if !build.OK || build.WorktreePath == "" {
 		return nil, "identical_to_base", dataroot.ClassFixture
@@ -917,7 +958,7 @@ func remeasureCandidate(opts Options, runDir string, build experiment.BuildResul
 		// Only use fixture for candidate if explicitly requested via EngineeringFixture empty + fixture mode
 		// AND we intentionally skip remeasure (identical). Prefer CLI.
 		_ = useFixture
-		eRes, err := runner.RunEngineeringReview(rt.Proj, outDir, rt.RepoPath, rt.BaseRef, rt.HeadRef, ref, engFix)
+		eRes, err := runner.RunEngineeringReviewContext(ctx, rt.Proj, outDir, rt.RepoPath, rt.BaseRef, rt.HeadRef, ref, engFix)
 		if err != nil || eRes == nil {
 			continue
 		}

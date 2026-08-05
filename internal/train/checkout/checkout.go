@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,6 +21,22 @@ type Result struct {
 
 // PrepareForCase materializes a directory adversary can review with --base/--head.
 func PrepareForCase(dataRoot, owner, repo, caseID, baseSHA, headSHA string, allowSynthetic bool) Result {
+	return PrepareForCaseContext(context.Background(), dataRoot, owner, repo, caseID, baseSHA, headSHA, allowSynthetic)
+}
+
+// PrepareForCaseContext is PrepareForCase with cancelable git/gh work.
+func PrepareForCaseContext(ctx context.Context, dataRoot, owner, repo, caseID, baseSHA, headSHA string, allowSynthetic bool) Result {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{Error: "checkout interrupted: " + err.Error()}
+	}
+	// Delegate to original body by temporarily shadowing — keep single implementation below.
+	return prepareForCase(ctx, dataRoot, owner, repo, caseID, baseSHA, headSHA, allowSynthetic)
+}
+
+func prepareForCase(ctx context.Context, dataRoot, owner, repo, caseID, baseSHA, headSHA string, allowSynthetic bool) Result {
 	res := Result{BaseSHA: baseSHA, HeadSHA: headSHA}
 	if baseSHA == "" || headSHA == "" {
 		res.Error = "missing base or head SHA"
@@ -33,7 +50,7 @@ func PrepareForCase(dataRoot, owner, repo, caseID, baseSHA, headSHA string, allo
 	}
 
 	if owner != "" && repo != "" {
-		if r, err := fetchSHAs(dest, owner, repo, baseSHA, headSHA); err == nil {
+		if r, err := fetchSHAs(ctx, dest, owner, repo, baseSHA, headSHA); err == nil {
 			return r
 		} else {
 			res.Error = err.Error()
@@ -63,16 +80,29 @@ func PrepareForCase(dataRoot, owner, repo, caseID, baseSHA, headSHA string, allo
 	return res
 }
 
-func fetchSHAs(dest, owner, repo, baseSHA, headSHA string) (Result, error) {
+func fetchSHAs(ctx context.Context, dest, owner, repo, baseSHA, headSHA string) (Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, fmt.Errorf("checkout interrupted: %w", err)
+	}
 	url := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return Result{}, err
 	}
 
 	run := func(args ...string) ([]byte, error) {
-		cmd := exec.Command(args[0], args[1:]...)
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("checkout interrupted: %w", err)
+		}
+		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 		cmd.Dir = dest
-		return cmd.CombinedOutput()
+		out, err := cmd.CombinedOutput()
+		if ctx.Err() != nil {
+			return out, fmt.Errorf("checkout interrupted: %w", ctx.Err())
+		}
+		return out, err
 	}
 	must := func(args ...string) error {
 		out, err := run(args...)
