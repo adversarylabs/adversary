@@ -7,3 +7,6 @@ dist/
 result
 .direnv/
 docs/cli-audit.md
+
+# adversary train runtime state
+.adversary-train/

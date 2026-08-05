@@ -1,0 +1,716 @@
+{
+  "schema_version": 1,
+  "description": "Optional discovery catalog for train live mode when sources.repos is not set in adversary.train.yaml.",
+  "repositories": [
+    {
+      "owner": "open-telemetry",
+      "name": "opentelemetry-go",
+      "languages": ["go"],
+      "role": "discovery",
+      "notes": "Go SDK; substantive human review"
+    },
+    {
+      "owner": "tailscale",
+      "name": "tailscale",
+      "languages": ["go"],
+      "role": "discovery",
+      "notes": "Production Go networking"
+    },
+    {
+      "owner": "cli",
+      "name": "cli",
+      "languages": ["go"],
+      "role": "discovery",
+      "notes": "GitHub CLI"
+    },
+    {
+      "owner": "hashicorp",
+      "name": "terraform",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "hashicorp",
+      "name": "consul",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "hashicorp",
+      "name": "vault",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "kubernetes",
+      "name": "kubernetes",
+      "languages": ["go"],
+      "role": "discovery",
+      "notes": "Large; still useful for engineering concerns"
+    },
+    {
+      "owner": "kubernetes",
+      "name": "kubectl",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "prometheus",
+      "name": "prometheus",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "grafana",
+      "name": "loki",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "grafana",
+      "name": "mimir",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "etcd-io",
+      "name": "etcd",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "caddyserver",
+      "name": "caddy",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "traefik",
+      "name": "traefik",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "docker",
+      "name": "compose",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "moby",
+      "name": "moby",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "containerd",
+      "name": "containerd",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "helm",
+      "name": "helm",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "fluxcd",
+      "name": "flux2",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "argoproj",
+      "name": "argo-cd",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "argoproj",
+      "name": "argo-workflows",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "cockroachdb",
+      "name": "cockroach",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "influxdata",
+      "name": "influxdb",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "minio",
+      "name": "minio",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "rclone",
+      "name": "rclone",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "gohugoio",
+      "name": "hugo",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "junegunn",
+      "name": "fzf",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "charmbracelet",
+      "name": "bubbletea",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "spf13",
+      "name": "cobra",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "uber-go",
+      "name": "zap",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "grpc",
+      "name": "grpc-go",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "nats-io",
+      "name": "nats-server",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "syncthing",
+      "name": "syncthing",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "smallstep",
+      "name": "certificates",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+    {
+      "owner": "golang",
+      "name": "go",
+      "languages": ["go"],
+      "role": "discovery",
+      "notes": "Very large; use sparingly"
+    },
+    {
+      "owner": "golang",
+      "name": "tools",
+      "languages": ["go"],
+      "role": "discovery"
+    },
+
+    {
+      "owner": "typescript-eslint",
+      "name": "typescript-eslint",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "vitest-dev",
+      "name": "vitest",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "vitejs",
+      "name": "vite",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "vercel",
+      "name": "next.js",
+      "languages": ["typescript", "javascript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "remix-run",
+      "name": "remix",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "trpc",
+      "name": "trpc",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "nestjs",
+      "name": "nest",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "excalidraw",
+      "name": "excalidraw",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "microsoft",
+      "name": "TypeScript",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "microsoft",
+      "name": "vscode",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "denoland",
+      "name": "deno",
+      "languages": ["typescript", "rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "oven-sh",
+      "name": "bun",
+      "languages": ["typescript", "zig"],
+      "role": "discovery"
+    },
+    {
+      "owner": "prisma",
+      "name": "prisma",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "reduxjs",
+      "name": "redux-toolkit",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "tanstack",
+      "name": "query",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "pmndrs",
+      "name": "zustand",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "colinhacks",
+      "name": "zod",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "shadcn-ui",
+      "name": "ui",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "withastro",
+      "name": "astro",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "nuxt",
+      "name": "nuxt",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "vuejs",
+      "name": "core",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "angular",
+      "name": "angular",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "storybookjs",
+      "name": "storybook",
+      "languages": ["typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "eslint",
+      "name": "eslint",
+      "languages": ["javascript", "typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "prettier",
+      "name": "prettier",
+      "languages": ["javascript", "typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "webpack",
+      "name": "webpack",
+      "languages": ["javascript", "typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "facebook",
+      "name": "react",
+      "languages": ["javascript", "typescript"],
+      "role": "discovery"
+    },
+    {
+      "owner": "nodejs",
+      "name": "node",
+      "languages": ["javascript", "c++"],
+      "role": "discovery"
+    },
+
+    {
+      "owner": "python",
+      "name": "cpython",
+      "languages": ["python", "c"],
+      "role": "discovery"
+    },
+    {
+      "owner": "pallets",
+      "name": "flask",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "encode",
+      "name": "django-rest-framework",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "django",
+      "name": "django",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "tiangolo",
+      "name": "fastapi",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "psf",
+      "name": "requests",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "aio-libs",
+      "name": "aiohttp",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "celery",
+      "name": "celery",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "pytest-dev",
+      "name": "pytest",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "pydantic",
+      "name": "pydantic",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "huggingface",
+      "name": "transformers",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "langchain-ai",
+      "name": "langchain",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "apache",
+      "name": "airflow",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "PrefectHQ",
+      "name": "prefect",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "scrapy",
+      "name": "scrapy",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "Textualize",
+      "name": "textual",
+      "languages": ["python"],
+      "role": "discovery"
+    },
+
+    {
+      "owner": "rust-lang",
+      "name": "rust",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "rust-lang",
+      "name": "cargo",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "tokio-rs",
+      "name": "tokio",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "tokio-rs",
+      "name": "axum",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "seanmonstar",
+      "name": "reqwest",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "serde-rs",
+      "name": "serde",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "clap-rs",
+      "name": "clap",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "BurntSushi",
+      "name": "ripgrep",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "sharkdp",
+      "name": "fd",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "helix-editor",
+      "name": "helix",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "zed-industries",
+      "name": "zed",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+    {
+      "owner": "astral-sh",
+      "name": "ruff",
+      "languages": ["rust", "python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "astral-sh",
+      "name": "uv",
+      "languages": ["rust", "python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "pola-rs",
+      "name": "polars",
+      "languages": ["rust", "python"],
+      "role": "discovery"
+    },
+    {
+      "owner": "firecracker-microvm",
+      "name": "firecracker",
+      "languages": ["rust"],
+      "role": "discovery"
+    },
+
+    {
+      "owner": "spring-projects",
+      "name": "spring-boot",
+      "languages": ["java"],
+      "role": "discovery"
+    },
+    {
+      "owner": "spring-projects",
+      "name": "spring-framework",
+      "languages": ["java"],
+      "role": "discovery"
+    },
+    {
+      "owner": "elastic",
+      "name": "elasticsearch",
+      "languages": ["java"],
+      "role": "discovery"
+    },
+    {
+      "owner": "apache",
+      "name": "kafka",
+      "languages": ["java"],
+      "role": "discovery"
+    },
+    {
+      "owner": "apache",
+      "name": "lucene",
+      "languages": ["java"],
+      "role": "discovery"
+    },
+    {
+      "owner": "netty",
+      "name": "netty",
+      "languages": ["java"],
+      "role": "discovery"
+    },
+    {
+      "owner": "grpc",
+      "name": "grpc-java",
+      "languages": ["java"],
+      "role": "discovery"
+    },
+    {
+      "owner": "micronaut-projects",
+      "name": "micronaut-core",
+      "languages": ["java"],
+      "role": "discovery"
+    },
+
+    {
+      "owner": "dotnet",
+      "name": "runtime",
+      "languages": ["csharp"],
+      "role": "discovery"
+    },
+    {
+      "owner": "dotnet",
+      "name": "aspnetcore",
+      "languages": ["csharp"],
+      "role": "discovery"
+    },
+    {
+      "owner": "dotnet",
+      "name": "efcore",
+      "languages": ["csharp"],
+      "role": "discovery"
+    },
+
+    {
+      "owner": "rails",
+      "name": "rails",
+      "languages": ["ruby"],
+      "role": "discovery"
+    },
+    {
+      "owner": "heartcombo",
+      "name": "devise",
+      "languages": ["ruby"],
+      "role": "discovery"
+    },
+    {
+      "owner": "sidekiq",
+      "name": "sidekiq",
+      "languages": ["ruby"],
+      "role": "discovery"
+    },
+
+    {
+      "owner": "laravel",
+      "name": "framework",
+      "languages": ["php"],
+      "role": "discovery"
+    },
+    {
+      "owner": "symfony",
+      "name": "symfony",
+      "languages": ["php"],
+      "role": "discovery"
+    },
+
+    {
+      "owner": "swiftlang",
+      "name": "swift",
+      "languages": ["swift", "c++"],
+      "role": "discovery"
+    },
+    {
+      "owner": "apple",
+      "name": "swift-nio",
+      "languages": ["swift"],
+      "role": "discovery"
+    },
+
+    {
+      "owner": "ziglang",
+      "name": "zig",
+      "languages": ["zig"],
+      "role": "discovery"
+    },
+    {
+      "owner": "elixir-lang",
+      "name": "elixir",
+      "languages": ["elixir"],
+      "role": "discovery"
+    },
+    {
+      "owner": "phoenixframework",
+      "name": "phoenix",
+      "languages": ["elixir"],
+      "role": "discovery"
+    }
+  ]
+}

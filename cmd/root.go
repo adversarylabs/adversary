@@ -18,13 +18,15 @@ import (
 func Execute() error {
 	ctx, stop := signal.NotifyContext(context.Background(), processSignals()...)
 	defer stop()
+	armSecondInterruptForceExit(ctx)
+
 	app, err := newProcessApp(os.Stdin, os.Stdout, os.Stderr)
 	if err != nil {
 		return err
 	}
 	root := NewRootCommandWithApp(app)
-	root.SetContext(ctx)
-	runErr := root.Execute()
+	// ExecuteContext so child commands (including train) see cancel on Ctrl+C / SIGTERM.
+	runErr := root.ExecuteContext(ctx)
 	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), telemetryTimeout)
 	app.WaitBackground(drainCtx)
 	cancelDrain()
@@ -79,6 +81,7 @@ func newRootCommand(app *application.App) *cobra.Command {
 	cmd.AddCommand(newSearchCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newWhoamiCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newStoreCommand(app))
+	cmd.AddCommand(newTrainCommand(app))
 	cmd.AddCommand(newCompletionCommand(cmd))
 	classifyCommandErrors(cmd)
 	return cmd

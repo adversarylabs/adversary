@@ -1,0 +1,25 @@
+{
+  "summary": "Generic senior-engineer baseline review of the change.",
+  "findings": [
+    {
+      "id": "b1",
+      "file": "sdk/trace/span_processor.go",
+      "line": 142,
+      "severity": "medium",
+      "category": "reliability",
+      "claim": "Shutdown path should ensure worker goroutines cannot outlive the processor.",
+      "evidence": "Changed control flow around stop/shutdown.",
+      "fix": "Tie worker lifecycle to context cancellation on Shutdown."
+    },
+    {
+      "id": "b2",
+      "file": "sdk/trace/span_processor.go",
+      "line": 168,
+      "severity": "low",
+      "category": "correctness",
+      "claim": "Check errors returned from export during shutdown.",
+      "evidence": "Export call site in shutdown path.",
+      "fix": "Propagate or log export errors."
+    }
+  ]
+}

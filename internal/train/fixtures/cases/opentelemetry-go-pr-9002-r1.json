@@ -1,0 +1,88 @@
+{
+  "schema_version": 4,
+  "id": "opentelemetry-go-pr-9002-r1",
+  "repository": {
+    "owner": "open-telemetry",
+    "name": "opentelemetry-go",
+    "url": "https://github.com/open-telemetry/opentelemetry-go/pull/9002"
+  },
+  "pull_request": {
+    "number": 9002,
+    "base_sha": "ddd444eee555fff666aaa111bbbb222ccc333ddd",
+    "initial_head_sha": "eee555fff666aaa111bbbb222ccc333ddd444eee",
+    "title": "metric: fix histogram bound race"
+  },
+  "review_event": {
+    "round_index": 1,
+    "kind": "formal-review",
+    "github_review_ids": [10002],
+    "reviewed_sha": "eee555fff666aaa111bbbb222ccc333ddd444eee",
+    "reviewed_sha_source": "comment.original_commit_id",
+    "submitted_at": "2026-05-10T12:00:00Z",
+    "reviewers": ["reviewer2"],
+    "dismissed": false
+  },
+  "evidence_window": {
+    "opens_at": "2026-05-10T12:00:00Z",
+    "follow_up_commits": []
+  },
+  "comments": [
+    {
+      "id": 21001,
+      "kind": "review-comment",
+      "author": "reviewer2",
+      "body": "There is a data race on the bounds slice when Observe is concurrent with View reconfiguration.",
+      "path": "sdk/metric/histogram.go",
+      "line": 88,
+      "original_commit_id": "eee555fff666aaa111bbbb222ccc333ddd444eee",
+      "created_at": "2026-05-10T12:01:00Z",
+      "classification": "accepted and fixed",
+      "generalized_concern": "Data race on shared metric bounds under concurrent Observe",
+      "approved_as_label": true
+    },
+    {
+      "id": 21002,
+      "kind": "review-comment",
+      "author": "reviewer2",
+      "body": "Nil context passed to attribute filter may panic.",
+      "path": "sdk/metric/histogram.go",
+      "line": 120,
+      "original_commit_id": "eee555fff666aaa111bbbb222ccc333ddd444eee",
+      "created_at": "2026-05-10T12:02:00Z",
+      "classification": "accepted and fixed",
+      "generalized_concern": "Nil context may panic in attribute filter path",
+      "approved_as_label": true
+    }
+  ],
+  "follow_up": {
+    "commits": [],
+    "likely_resolved_concerns": []
+  },
+  "labels": {
+    "expected_concerns": [
+      {
+        "id": "c-race-2",
+        "summary": "Data race on shared metric bounds under concurrent Observe",
+        "importance": "high",
+        "confidence": "high",
+        "source": ["human-review"],
+        "file": "sdk/metric/histogram.go",
+        "approved": true
+      },
+      {
+        "id": "c-nil-1",
+        "summary": "Nil context may panic in attribute filter path",
+        "importance": "medium",
+        "confidence": "high",
+        "source": ["human-review"],
+        "file": "sdk/metric/histogram.go",
+        "approved": true
+      }
+    ]
+  },
+  "metadata": {
+    "created_at": "2026-05-11T00:00:00Z",
+    "reviewed_by_human": true,
+    "split": "discovery"
+  }
+}
