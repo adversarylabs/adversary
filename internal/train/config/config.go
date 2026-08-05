@@ -13,9 +13,9 @@ func DataRoot() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".", ".adversary-factory")
+		return filepath.Join(".", ".adversary-train")
 	}
-	return filepath.Join(home, ".adversary-factory")
+	return filepath.Join(home, ".adversary-train")
 }
 
 // EnsureDataRoot creates the standard layout under the data root.

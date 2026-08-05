@@ -14,6 +14,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/judge"
 	"github.com/adversarylabs/adversary/internal/train/normalize"
 	"github.com/adversarylabs/adversary/internal/train/score"
+	"github.com/adversarylabs/adversary/internal/train/workspace"
 )
 
 // Input is everything needed to write a human-readable run report.
@@ -312,8 +313,8 @@ func renderStory(in Input, verdict, headline string) string {
 		}
 	}
 
-	fmt.Fprintf(&b, "### Run again (always live PRs)\n\n```bash\nmake build && ./bin/factory slice --data-root %s\n```\n\n",
-		or(in.DataRoot, "$HOME/.adversary-factory"))
+	fmt.Fprintf(&b, "### Run again\n\n```bash\nadversary train run\n```\n\nState: `%s`\n\n",
+		or(in.DataRoot, ".adversary-train"))
 
 	if in.BlockedNote != "" {
 		fmt.Fprintf(&b, "## Note about a partial run\n\nSomething external blocked part of the pipeline: %s\n\n", in.BlockedNote)
@@ -765,13 +766,17 @@ func isKnownOfficialID(id string) bool {
 }
 
 func shouldEmitTrainDraft(in Input, concernID, owner string) bool {
+	// Use shared AttributeGold so train draft rules live in one place (workspace).
+	role := workspace.RoleLocalTrainable
 	if !isLocalTrainOwner(in, owner) {
-		return false
+		role = workspace.RoleOfficialJury
 	}
-	if catcher, ok := in.OfficialCatchByConcern[concernID]; ok && catcher != "" {
-		return false
+	catcher := ""
+	if c, ok := in.OfficialCatchByConcern[concernID]; ok {
+		catcher = c
 	}
-	return true
+	out := workspace.AttributeGold(workspace.Config{}, owner, role, true, catcher, isLocalTrainOwner(in, owner))
+	return out.EmitDraft
 }
 
 func classifyConcernClass(summary string) (key, title string) {

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Discovery catalog for adversary-factory. engineering-review may use any language; specialist adversaries filter by languages (e.g. go-security → go).",
+  "description": "Optional discovery catalog for train live mode when sources.repos is not set in adversary.train.yaml.",
   "repositories": [
     {
       "owner": "open-telemetry",
