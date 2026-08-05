@@ -97,3 +97,36 @@ func TestWindowsPathIsNotRegistryReference(t *testing.T) {
 		t.Fatal("Windows path classified as registry reference")
 	}
 }
+
+func TestResolverVersionAliasWithoutDurableVersionRef(t *testing.T) {
+	// Pulls often commit only :latest while rebuildAliases lists name:version.
+	// Resolve("go/concurrency:0.0.10") must still materialize for run/inspect.
+	root := t.TempDir()
+	repoRoot := filepath.Join(root, "repo")
+	_ = os.MkdirAll(repoRoot, 0700)
+	r := Resolver{Repository: repository.Repository{Root: repoRoot}}
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "dist"), 0755)
+	_ = os.WriteFile(filepath.Join(dir, "adversary.yaml"), []byte("name: go/concurrency\nversion: 0.0.10\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "dist/index.js"), []byte("v10"), 0644)
+	a, err := pack.Create(context.Background(), pack.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only durable ref is :latest (no registry…/go/concurrency:0.0.10 file).
+	rec, err := r.Repository.ImportPacked(a, "registry.adversarylabs.ai/go/concurrency:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Resolve("go/concurrency:0.0.10")
+	if err != nil {
+		t.Fatalf("resolve version alias: %v", err)
+	}
+	if got.Digest != rec.Digest || got.Path == "" {
+		t.Fatalf("got digest=%s path=%q, want %s with path", got.Digest, got.Path, rec.Digest)
+	}
+	if got.CanonicalReference == "" {
+		t.Fatal("expected non-empty canonical reference fallback")
+	}
+	makeResolverWritable(repoRoot)
+}
