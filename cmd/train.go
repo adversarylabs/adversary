@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/train/collect"
 	"github.com/adversarylabs/adversary/internal/train/pipeline"
 	"github.com/adversarylabs/adversary/internal/train/repos"
 	"github.com/adversarylabs/adversary/internal/train/results"
@@ -148,6 +149,22 @@ the state directory. Drafts never target official package ids.`,
 			// author_reviews mode needs no catalog (GitHub search by login).
 			discoveryMode := cfg.DiscoveryMode()
 			var catalog []repos.Repo
+			seenRepo := map[string]bool{}
+			addCatalog := func(owner, name string) {
+				owner, name = strings.TrimSpace(owner), strings.TrimSpace(name)
+				if owner == "" || name == "" {
+					return
+				}
+				key := strings.ToLower(owner + "/" + name)
+				if seenRepo[key] {
+					return
+				}
+				seenRepo[key] = true
+				catalog = append(catalog, repos.Repo{
+					Owner: owner, Name: name,
+					Languages: cfg.Sources.Languages, Role: "discovery",
+				})
+			}
 			for _, r := range cfg.Sources.Repos {
 				r = strings.TrimSpace(r)
 				if r == "" {
@@ -157,13 +174,23 @@ the state directory. Drafts never target official package ids.`,
 				if len(parts) != 2 {
 					return fmt.Errorf("invalid sources.repos entry %q (want owner/name)", r)
 				}
-				catalog = append(catalog, repos.Repo{
-					Owner: parts[0], Name: parts[1],
-					Languages: cfg.Sources.Languages, Role: "discovery",
-				})
+				addCatalog(parts[0], parts[1])
 			}
-			if discoveryMode == "repos" && len(catalog) == 0 && strings.TrimSpace(cfg.Sources.Org) != "" {
-				return fmt.Errorf("sources.org without sources.repos is not expanded yet; list repos or use discovery: author_reviews with authors_only")
+			// Expand sources.org (and optional repos_allowlist) via gh for live runs.
+			if discoveryMode == "repos" && !fixture && strings.TrimSpace(cfg.Sources.Org) != "" {
+				orgRepos, err := collect.ListOrgRepos(cmd.Context(), cfg.Sources.Org, cfg.Sources.ReposAllowlist)
+				if err != nil {
+					return fmt.Errorf("expand sources.org %q: %w", cfg.Sources.Org, err)
+				}
+				for _, r := range orgRepos {
+					addCatalog(r.Owner, r.Name)
+				}
+				if len(catalog) == 0 {
+					return fmt.Errorf("sources.org %q expanded to zero repositories (check allowlist and access)", cfg.Sources.Org)
+				}
+			}
+			if discoveryMode == "repos" && !fixture && len(catalog) == 0 {
+				return fmt.Errorf("no repositories to hunt: set sources.repos and/or sources.org")
 			}
 
 			// Local packages: all under root (or single path)

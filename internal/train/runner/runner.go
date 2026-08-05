@@ -13,6 +13,7 @@ import (
 
 	"github.com/adversarylabs/adversary/internal/train/bundle"
 	"github.com/adversarylabs/adversary/internal/train/dataroot"
+	"github.com/adversarylabs/adversary/internal/train/securefs"
 )
 
 // localPackageLocks serializes runs against the same local package directory.
@@ -74,7 +75,7 @@ type Result struct {
 // (no external model required for first slice honesty) labeled as fixture/heuristic
 // unless FACTORY_BASELINE_MODEL is set and a provider is available.
 func RunBaseline(proj *bundle.Projection, outDir string, fixturePath string) (*Result, error) {
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	if err := securefs.MkdirAll(outDir); err != nil {
 		return nil, err
 	}
 	if err := bundle.AssertReviewerIsolation(proj); err != nil {
@@ -87,7 +88,7 @@ func RunBaseline(proj *bundle.Projection, outDir string, fixturePath string) (*R
 			return nil, err
 		}
 		path := filepath.Join(outDir, "baseline.raw.json")
-		_ = os.WriteFile(path, raw, 0o644)
+		_ = securefs.WriteFile(path, raw)
 		return &Result{
 			ReviewerID:     "generic-baseline",
 			Kind:           "baseline",
@@ -104,7 +105,7 @@ func RunBaseline(proj *bundle.Projection, outDir string, fixturePath string) (*R
 		return nil, err
 	}
 	path := filepath.Join(outDir, "baseline.raw.json")
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
+	if err := securefs.WriteFile(path, raw); err != nil {
 		return nil, err
 	}
 	return &Result{
@@ -183,7 +184,7 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 	unlock := lockLocalPackage(adversaryRef)
 	defer unlock()
 
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	if err := securefs.MkdirAll(outDir); err != nil {
 		return nil, err
 	}
 	if err := bundle.AssertReviewerIsolation(proj); err != nil {
@@ -196,7 +197,7 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 			return nil, err
 		}
 		path := filepath.Join(outDir, "engineering-review.raw.json")
-		_ = os.WriteFile(path, raw, 0o644)
+		_ = securefs.WriteFile(path, raw)
 		return &Result{
 			ReviewerID:     "engineering-review",
 			Kind:           "adversary",
@@ -317,7 +318,7 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 			},
 		}, nil
 	}
-	_ = os.WriteFile(outFile, raw, 0o644)
+	_ = securefs.WriteFile(outFile, raw)
 	class := dataroot.ClassReal
 	if exitCode != 0 {
 		class = dataroot.ClassPartial

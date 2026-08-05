@@ -2,7 +2,6 @@ package report
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/judge"
 	"github.com/adversarylabs/adversary/internal/train/normalize"
 	"github.com/adversarylabs/adversary/internal/train/score"
+	"github.com/adversarylabs/adversary/internal/train/securefs"
 	"github.com/adversarylabs/adversary/internal/train/workspace"
 )
 
@@ -58,11 +58,11 @@ func Write(in Input) (*Result, error) {
 	if in.RunDir == "" {
 		return nil, fmt.Errorf("run dir required")
 	}
-	if err := os.MkdirAll(in.RunDir, 0o755); err != nil {
+	if err := securefs.MkdirAll(in.RunDir); err != nil {
 		return nil, err
 	}
 	if in.ExperimentDir != "" {
-		if err := os.MkdirAll(in.ExperimentDir, 0o755); err != nil {
+		if err := securefs.MkdirAll(in.ExperimentDir); err != nil {
 			return nil, err
 		}
 	}
@@ -74,29 +74,29 @@ func Write(in Input) (*Result, error) {
 
 	// Primary: STORY.md in the run (harder to miss than README full of other dirs)
 	primary := filepath.Join(in.RunDir, "STORY.md")
-	if err := os.WriteFile(primary, []byte(story), 0o644); err != nil {
+	if err := securefs.WriteFile(primary, []byte(story)); err != nil {
 		return nil, err
 	}
 	// Also README.md in run
-	_ = os.WriteFile(filepath.Join(in.RunDir, "README.md"), []byte(story), 0o644)
+	_ = securefs.WriteFile(filepath.Join(in.RunDir, "README.md"), []byte(story))
 
 	// Experiments folder is what the user often opens — put the same story there.
 	if in.ExperimentDir != "" {
-		_ = os.WriteFile(filepath.Join(in.ExperimentDir, "README.md"), []byte(story), 0o644)
-		_ = os.WriteFile(filepath.Join(in.ExperimentDir, "STORY.md"), []byte(story), 0o644)
+		_ = securefs.WriteFile(filepath.Join(in.ExperimentDir, "README.md"), []byte(story))
+		_ = securefs.WriteFile(filepath.Join(in.ExperimentDir, "STORY.md"), []byte(story))
 	}
 
 	if in.DataRoot != "" {
-		_ = os.WriteFile(filepath.Join(in.DataRoot, "LATEST_STORY.md"), []byte(story), 0o644)
-		_ = os.WriteFile(filepath.Join(in.DataRoot, "LATEST_RUN_REPORT.md"), []byte(story), 0o644)
+		_ = securefs.WriteFile(filepath.Join(in.DataRoot, "LATEST_STORY.md"), []byte(story))
+		_ = securefs.WriteFile(filepath.Join(in.DataRoot, "LATEST_RUN_REPORT.md"), []byte(story))
 	}
 
 	writeSuggestedIssuesFile(in.ExperimentDir, issues)
 	writeSuggestedIssuesFile(in.RunDir, issues)
 	if in.DataRoot != "" {
 		writeSuggestedIssuesFile(in.DataRoot, issues)
-		_ = os.WriteFile(filepath.Join(in.DataRoot, "LATEST_SUGGESTED_ISSUES.md"),
-			mustSuggestedIssuesBytes(issues), 0o644)
+		_ = securefs.WriteFile(filepath.Join(in.DataRoot, "LATEST_SUGGESTED_ISSUES.md"),
+			mustSuggestedIssuesBytes(issues))
 	}
 
 	openPath := primary
@@ -660,7 +660,7 @@ func writeSuggestedIssuesFile(dir string, issues []SuggestedIssue) {
 		fmt.Fprintf(&all, "## %d. %s\n\nLabels: %s\n\n%s\n\n---\n\n",
 			i+1, iss.Title, strings.Join(iss.Labels, ", "), iss.Body)
 	}
-	_ = os.WriteFile(filepath.Join(dir, "SUGGESTED_ISSUES.md"), []byte(all.String()), 0o644)
+	_ = securefs.WriteFile(filepath.Join(dir, "SUGGESTED_ISSUES.md"), []byte(all.String()))
 }
 
 // suggestIssues builds anonymized, generalized issue drafts from misses.
