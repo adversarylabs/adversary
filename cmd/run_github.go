@@ -89,6 +89,7 @@ func resolvePRRunContext(ctx context.Context, opts *runOptions, progress io.Writ
 		opts.head = ws.HeadSHA
 		opts.path = ws.Path
 		opts.tempPRDir = ws.TempDir
+		opts.worktreeRoot = ws.WorktreeRoot
 		opts.resolvedHeadSHA = ws.HeadSHA
 		return nil
 	}

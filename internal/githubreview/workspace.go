@@ -15,17 +15,18 @@ import (
 
 // WorkspaceResult is the local path prepared for a PR review.
 type WorkspaceResult struct {
-	Path    string // effective --path
-	TempDir string // non-empty if ephemeral clone (caller should cleanup)
-	BaseSHA string
-	HeadSHA string
-	Owner   string
-	Repo    string
-	Number  int
+	Path         string // effective --path (worktree or clone)
+	TempDir      string // non-empty if ephemeral (caller should cleanup)
+	WorktreeRoot string // if set, TempDir is a linked worktree of this repo
+	BaseSHA      string
+	HeadSHA      string
+	Owner        string
+	Repo         string
+	Number       int
 }
 
-// PreparePRWorkspace resolves PR metadata and a local checkout for analysis.
-// lookup is typically os.LookupEnv; pass a stub in tests.
+// PreparePRWorkspace resolves PR metadata and a local tree at the PR head.
+// Never mutates an existing user checkout: uses a detached worktree or clone.
 func PreparePRWorkspace(
 	ctx context.Context,
 	client *githubapi.Client,
@@ -74,20 +75,17 @@ func PreparePRWorkspace(
 	}
 
 	if isGitRepo(path) {
-		if progress != nil {
-			fmt.Fprintf(progress, "Using local clone at %s\n", path)
+		ws, err := prepareWorktree(ctx, path, number, out.HeadSHA, progress)
+		if err != nil {
+			return out, err
 		}
-		_ = exec.CommandContext(ctx, "git", "-C", path, "fetch", "origin",
-			fmt.Sprintf("pull/%d/head:refs/adversary/pr-%d", number, number)).Run()
-		if err := exec.CommandContext(ctx, "git", "-C", path, "checkout", "--detach", out.HeadSHA).Run(); err != nil {
-			if progress != nil {
-				fmt.Fprintf(progress, "warning: could not checkout %s (%v); continuing with worktree\n", shortSHA(out.HeadSHA), err)
-			}
-		}
-		out.Path = path
+		out.Path = ws.path
+		out.TempDir = ws.path
+		out.WorktreeRoot = path
 		return out, nil
 	}
 
+	// Ephemeral clone when not already in a matching git tree.
 	tmp, err := os.MkdirTemp("", "adversary-pr-*")
 	if err != nil {
 		return out, err
@@ -118,11 +116,46 @@ func PreparePRWorkspace(
 	return out, nil
 }
 
-// CleanupTempDir removes an ephemeral PR workspace.
-func CleanupTempDir(dir string) {
-	if strings.TrimSpace(dir) != "" {
-		_ = os.RemoveAll(dir)
+type preparedWorktree struct{ path string }
+
+func prepareWorktree(ctx context.Context, repoPath string, prNumber int, headSHA string, progress io.Writer) (preparedWorktree, error) {
+	tmp, err := os.MkdirTemp("", "adversary-pr-wt-*")
+	if err != nil {
+		return preparedWorktree{}, err
 	}
+	// worktree add wants a non-existent path; MkdirTemp created one — remove it.
+	_ = os.RemoveAll(tmp)
+	if progress != nil {
+		fmt.Fprintf(progress, "Using detached worktree of %s at %s\n", repoPath, tmp)
+	}
+	_ = exec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "origin",
+		fmt.Sprintf("pull/%d/head:refs/adversary/pr-%d", prNumber, prNumber)).Run()
+	if err := exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "add", "--detach", tmp, headSHA).Run(); err != nil {
+		// Fetch tip and retry.
+		_ = exec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "--depth", "200", "origin", headSHA).Run()
+		if err2 := exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "add", "--detach", tmp, headSHA).Run(); err2 != nil {
+			_ = os.RemoveAll(tmp)
+			return preparedWorktree{}, fmt.Errorf("git worktree add: %w", err2)
+		}
+	}
+	return preparedWorktree{path: tmp}, nil
+}
+
+// CleanupWorkspace removes an ephemeral PR workspace.
+// When worktreeRoot is set, removes the linked worktree; otherwise RemoveAll tempDir.
+func CleanupWorkspace(path, tempDir, worktreeRoot string) {
+	if strings.TrimSpace(tempDir) == "" {
+		return
+	}
+	if strings.TrimSpace(worktreeRoot) != "" {
+		_ = exec.Command("git", "-C", worktreeRoot, "worktree", "remove", "--force", tempDir).Run()
+	}
+	_ = os.RemoveAll(tempDir)
+}
+
+// CleanupTempDir removes an ephemeral PR workspace (clone-only helper).
+func CleanupTempDir(dir string) {
+	CleanupWorkspace("", dir, "")
 }
 
 func isGitRepo(path string) bool {

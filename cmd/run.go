@@ -69,6 +69,7 @@ type runOptions struct {
 	// Filled by peel/resolve.
 	prURL           *githubapi.PRRef
 	tempPRDir       string
+	worktreeRoot    string // source repo when tempPRDir is a linked worktree
 	resolvedHeadSHA string
 	envelopes       []githubreview.NamedEnvelope
 }
@@ -195,11 +196,12 @@ review base/head and optional posting context. Posting still requires
 			if closer != nil {
 				defer closer()
 			}
-			if opts.tempPRDir != "" {
-				defer githubreview.CleanupTempDir(opts.tempPRDir)
-			}
 			if err := resolvePRRunContext(cmd.Context(), opts, progressOut); err != nil {
 				return err
+			}
+			// Register cleanup only after resolve may set tempPRDir / worktree root.
+			if opts.tempPRDir != "" {
+				defer githubreview.CleanupWorkspace(opts.path, opts.tempPRDir, opts.worktreeRoot)
 			}
 
 			var runErr error

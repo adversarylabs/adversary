@@ -100,7 +100,6 @@ func projectOne(adversary string, f review.Finding) PlannedComment {
 		if err != nil {
 			placement = "unplaceable"
 			reason = "invalid_path"
-			pathStr = pathStr
 		} else {
 			pathStr = norm
 			if line != nil {

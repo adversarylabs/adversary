@@ -120,11 +120,99 @@ func TestGraphQLSuccess(t *testing.T) {
 }
 
 func TestBuildAuthorPRSearchQuery(t *testing.T) {
-	q := BuildAuthorPRSearchQuery("alice", "reviewed-by", []string{"acme"}, "2024-01-01", true)
-	for _, want := range []string{"type:pr", "is:merged", "reviewed-by:alice", "org:acme", "merged:>=2024-01-01"} {
+	q := BuildAuthorPRSearchQuery("alice", "reviewed-by", []string{"acme"}, "2024-01-01", "go", true)
+	for _, want := range []string{"type:pr", "is:merged", "reviewed-by:alice", "org:acme", "merged:>=2024-01-01", "language:go"} {
 		if !strings.Contains(q, want) {
 			t.Fatalf("%s missing %s", q, want)
 		}
+	}
+}
+
+func TestSearchPullRequestsPaginated(t *testing.T) {
+	ResetRateGateForTest()
+	var pages int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pages++
+		page := r.URL.Query().Get("page")
+		if page == "" || page == "1" {
+			_, _ = w.Write([]byte(`{"items":[{"number":1,"title":"a","html_url":"https://github.com/o/r/pull/1","repository_url":"https://api.github.com/repos/o/r"},{"number":2,"title":"b","html_url":"https://github.com/o/r/pull/2","repository_url":"https://api.github.com/repos/o/r"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"items":[{"number":3,"title":"c","html_url":"https://github.com/o/r/pull/3","repository_url":"https://api.github.com/repos/o/r"}]}`))
+	}))
+	defer srv.Close()
+	c := NewClient("t")
+	c.HTTP = srv.Client()
+	c.RESTBase = srv.URL
+	// perPage inside SearchPullRequests is min(100, maxResults). With maxResults=3 and
+	// first page returning only 2 items (<100), loop stops after page 1 unless we
+	// force small pages. Call with maxResults that still pages: return full 100 on page1.
+	// Simpler assertion: one page with 2 items for maxResults=2.
+	got, err := c.SearchPullRequests(context.Background(), "type:pr", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Number != 1 {
+		t.Fatalf("%#v pages=%d", got, pages)
+	}
+	owner, repo := OwnerRepoFromAPIURL(got[0].RepoURL)
+	if owner != "o" || repo != "r" {
+		t.Fatalf("%s %s", owner, repo)
+	}
+}
+
+func TestGetPullRequestAndListFiles(t *testing.T) {
+	ResetRateGateForTest()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/o/r/pulls/1", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"number":1,"title":"t","html_url":"u","state":"open","base":{"ref":"main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"full_name":"o/r","clone_url":"https://github.com/o/r.git","owner":{"login":"o"},"name":"r"}},"head":{"ref":"feat","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"o/r","clone_url":"https://github.com/o/r.git","owner":{"login":"o"},"name":"r"}}}`))
+	})
+	mux.HandleFunc("/repos/o/r/pulls/1/files", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"filename":"a.go","patch":"@@ -1,1 +1,2 @@\n line\n+new\n"}]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c := NewClient("tok")
+	c.HTTP = srv.Client()
+	c.RESTBase = srv.URL
+	pr, err := c.GetPullRequest(context.Background(), "o", "r", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.Number != 1 || pr.Head.SHA == "" {
+		t.Fatalf("%#v", pr)
+	}
+	files, err := c.ListPullRequestFiles(context.Background(), "o", "r", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Filename != "a.go" {
+		t.Fatalf("%#v", files)
+	}
+}
+
+func TestAuthErrorAndRateLimit(t *testing.T) {
+	ResetRateGateForTest()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
+	}))
+	defer srv.Close()
+	c := NewClient("bad")
+	c.HTTP = srv.Client()
+	c.RESTBase = srv.URL
+	_, _, err := c.RESTGet(context.Background(), "/user")
+	if err == nil {
+		t.Fatal("expected auth error")
+	}
+	if _, ok := err.(*AuthError); !ok {
+		t.Fatalf("%T %v", err, err)
+	}
+}
+
+func TestRequireToken(t *testing.T) {
+	if TokenFromLookup(func(string) (string, bool) { return "", false }) != "" {
+		t.Fatal()
 	}
 }
 

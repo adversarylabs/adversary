@@ -10,44 +10,63 @@ import (
 
 // SearchPR is one issue/PR search hit.
 type SearchPR struct {
-	Number     int    `json:"number"`
-	Title      string `json:"title"`
-	HTMLURL    string `json:"html_url"`
-	Repository struct {
-		FullName string `json:"full_name"`
-	} `json:"repository_url"` // filled manually
-	// REST search returns repository_url like https://api.github.com/repos/o/r
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	HTMLURL string `json:"html_url"`
+	// RepoURL is the REST repository_url (https://api.github.com/repos/o/r).
 	RepoURL string `json:"repository_url"`
 }
 
 // SearchPullRequests runs GET /search/issues with type:pr query.
-func (c *Client) SearchPullRequests(ctx context.Context, q string, perPage int) ([]SearchPR, error) {
-	if perPage <= 0 {
-		perPage = 30
+// maxResults may exceed 100; pages are fetched until enough items or no more.
+func (c *Client) SearchPullRequests(ctx context.Context, q string, maxResults int) ([]SearchPR, error) {
+	if maxResults <= 0 {
+		maxResults = 30
 	}
-	if perPage > 100 {
-		perPage = 100
+	if maxResults > 1000 {
+		// GitHub search API hard-caps around 1000 results.
+		maxResults = 1000
 	}
-	path := fmt.Sprintf("/search/issues?q=%s&per_page=%d", url.QueryEscape(q), perPage)
-	var result struct {
-		Items []struct {
-			Number        int    `json:"number"`
-			Title         string `json:"title"`
-			HTMLURL       string `json:"html_url"`
-			RepositoryURL string `json:"repository_url"`
-		} `json:"items"`
+	perPage := 100
+	if maxResults < perPage {
+		perPage = maxResults
 	}
-	if err := c.RESTGetJSON(ctx, path, &result); err != nil {
-		return nil, err
-	}
-	out := make([]SearchPR, 0, len(result.Items))
-	for _, it := range result.Items {
-		out = append(out, SearchPR{
-			Number:  it.Number,
-			Title:   it.Title,
-			HTMLURL: it.HTMLURL,
-			RepoURL: it.RepositoryURL,
-		})
+	var out []SearchPR
+	for page := 1; len(out) < maxResults; page++ {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		path := fmt.Sprintf("/search/issues?q=%s&per_page=%d&page=%d",
+			url.QueryEscape(q), perPage, page)
+		var result struct {
+			Items []struct {
+				Number        int    `json:"number"`
+				Title         string `json:"title"`
+				HTMLURL       string `json:"html_url"`
+				RepositoryURL string `json:"repository_url"`
+			} `json:"items"`
+			IncompleteResults bool `json:"incomplete_results"`
+		}
+		if err := c.RESTGetJSON(ctx, path, &result); err != nil {
+			return out, err
+		}
+		if len(result.Items) == 0 {
+			break
+		}
+		for _, it := range result.Items {
+			out = append(out, SearchPR{
+				Number:  it.Number,
+				Title:   it.Title,
+				HTMLURL: it.HTMLURL,
+				RepoURL: it.RepositoryURL,
+			})
+			if len(out) >= maxResults {
+				break
+			}
+		}
+		if len(result.Items) < perPage {
+			break
+		}
 	}
 	return out, nil
 }
@@ -68,7 +87,7 @@ func OwnerRepoFromAPIURL(apiURL string) (owner, repo string) {
 }
 
 // BuildAuthorPRSearchQuery builds a GitHub search query for reviewed-by etc.
-func BuildAuthorPRSearchQuery(author, role string, orgs []string, since string, mergedOnly bool) string {
+func BuildAuthorPRSearchQuery(author, role string, orgs []string, since, language string, mergedOnly bool) string {
 	var parts []string
 	parts = append(parts, "type:pr")
 	if mergedOnly {
@@ -87,6 +106,9 @@ func BuildAuthorPRSearchQuery(author, role string, orgs []string, since string, 
 	if since != "" {
 		parts = append(parts, "merged:>="+strings.TrimSpace(since))
 	}
+	if language != "" {
+		parts = append(parts, "language:"+strings.TrimSpace(language))
+	}
 	for _, org := range orgs {
 		org = strings.TrimSpace(org)
 		if org != "" {
@@ -96,5 +118,5 @@ func BuildAuthorPRSearchQuery(author, role string, orgs []string, since string, 
 	return strings.Join(parts, " ")
 }
 
-// MarshalJSON helper unused — keep SearchPR simple.
+// Ensure json is used if we add more types later.
 var _ = json.Marshal

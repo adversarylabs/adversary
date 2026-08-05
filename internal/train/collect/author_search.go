@@ -112,15 +112,8 @@ func DiscoverPRsByAuthor(opts AuthorSearchOpts) ([]AuthorPRRef, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, fmt.Errorf("discover interrupted: %w", err)
 			}
-			q := githubapi.BuildAuthorPRSearchQuery(author, role, opts.Orgs, opts.Since, true)
-			if opts.Language != "" {
-				q += " language:" + strings.TrimSpace(opts.Language)
-			}
-			perPage := opts.ListLimit
-			if perPage > 100 {
-				perPage = 100
-			}
-			hits, err := client.SearchPullRequests(ctx, q, perPage)
+			q := githubapi.BuildAuthorPRSearchQuery(author, role, opts.Orgs, opts.Since, opts.Language, true)
+			hits, err := client.SearchPullRequests(ctx, q, opts.ListLimit)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil, fmt.Errorf("discover interrupted: %w", ctx.Err())
