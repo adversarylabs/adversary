@@ -9,6 +9,12 @@ OCI, API, or runtime structs. Progress, diagnostics, and deprecation warnings
 go to stderr. `--format text` is the default. Invalid formats and conflicting
 legacy/new flags are rejected before command work begins.
 
+**`run` is special.** Single-adversary `adversary run REF --format json` writes the
+review **protocol** envelope (`protocolVersion` + `result`) directly. Multi-adversary
+`adversary run A B --format json` uses the CLI envelope with `command: "run"` and
+`data.results[]` (each item has `adversary`, optional protocol `output`, optional
+`error`). See `docs/fixtures/cli-run-multi-v1.json` and `docs/github-review-posting.md`.
+
 The deprecated `--json` flags remain temporarily available and preserve their
 legacy shapes where one existed. In particular, `pack --json` remains the
 schema-version 1 pack DTO without inventory fields. `pack --format json` emits

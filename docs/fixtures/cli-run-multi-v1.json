@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "command": "run",
+  "data": {
+    "results": [
+      {
+        "adversary": "adversarylabs/go-cli",
+        "output": {
+          "protocolVersion": 1,
+          "result": {
+            "adversary": { "name": "adversarylabs/go-cli" },
+            "target": {},
+            "positives": [],
+            "observations": [],
+            "findings": [],
+            "suppressed": { "observations": 0, "findings": 0 }
+          }
+        }
+      },
+      {
+        "adversary": "adversarylabs/secrets",
+        "error": "adversary execution failed: example"
+      }
+    ]
+  }
+}

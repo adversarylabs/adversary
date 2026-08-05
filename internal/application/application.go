@@ -155,6 +155,8 @@ type AdversaryRunOptions struct {
 	RepoIndexMode  string
 	Stdout, Stderr io.Writer
 	ReviewContext  *detection.Context
+	// OnEnvelope captures the decoded review protocol result for post-run steps.
+	OnEnvelope func(any)
 }
 
 // AdversaryAutoOptions drives automatic adversary selection for `run` with no
@@ -178,6 +180,8 @@ type AdversaryAutoOptions struct {
 	ReportRunStart func(name string, index, total int) error
 	// ReportRunFinish reports progress after each selected adversary finishes.
 	ReportRunFinish func(name string, index, total int, err error) error
+	// OnEnvelope captures decoded review envelopes for post-run projection.
+	OnEnvelope func(name string, envelope any)
 }
 type AdversaryAutoCandidate struct {
 	Name, Reference, Digest string

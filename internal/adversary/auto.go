@@ -11,6 +11,7 @@ import (
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/review"
 )
 
 type AutoOptions struct {
@@ -39,6 +40,9 @@ type AutoOptions struct {
 	// ReportRunFinish is called after each selected adversary finishes. err is nil
 	// on clean success, FindingsError when findings were reported, or a hard error.
 	ReportRunFinish func(name string, index, total int, err error) error
+	// OnEnvelope captures each successful decode for post-run projection.
+	// name is the selected adversary display name.
+	OnEnvelope func(name string, env review.RunEnvelope)
 }
 
 type AutoResult struct {
@@ -172,6 +176,10 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 			// Multi automatic selection keeps a clean progress stream; use
 			// --verbose on explicit single-ref run for identity banners.
 			Verbose: false,
+		}
+		if opts.OnEnvelope != nil {
+			name := selection.Candidate.Name
+			runOpts.OnEnvelope = func(env review.RunEnvelope) { opts.OnEnvelope(name, env) }
 		}
 		if !opts.AllFiles {
 			ctxCopy := reviewContext

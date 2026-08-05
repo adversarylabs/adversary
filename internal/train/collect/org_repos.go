@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
+
+	"github.com/adversarylabs/adversary/internal/githubapi"
 )
 
 // OrgRepo is one repository listed under a GitHub organization (or user).
@@ -19,7 +20,7 @@ func (r OrgRepo) FullName() string {
 	return r.Owner + "/" + r.Name
 }
 
-// ListOrgRepos lists non-archived repositories for a GitHub org (or user) via gh.
+// ListOrgRepos lists non-archived repositories for a GitHub org (or user) via HTTP.
 // When allowlist is non-empty, only repos whose name matches (case-insensitive)
 // are returned. names in allowlist may be bare ("payments-api") or full
 // ("acme/payments-api").
@@ -28,26 +29,24 @@ func ListOrgRepos(ctx context.Context, org string, allowlist []string) ([]OrgRep
 	if org == "" {
 		return nil, fmt.Errorf("org is empty")
 	}
-	if _, err := exec.LookPath("gh"); err != nil {
-		return nil, fmt.Errorf("gh not installed")
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list org repos interrupted: %w", err)
 	}
+	client, err := clientFor(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Prefer organization endpoint; fall back to user repos for personal accounts.
-	raw, err := ghRun(ctx, "api", "--paginate",
-		fmt.Sprintf("orgs/%s/repos?per_page=100&type=all", org))
+	raw, err := client.RESTGetPaginated(ctx, fmt.Sprintf("/orgs/%s/repos?per_page=100&type=all", org))
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("list org repos interrupted: %w", ctx.Err())
 		}
-		// Not an org (or no access) — try user repos.
-		raw2, err2 := ghRun(ctx, "api", "--paginate",
-			fmt.Sprintf("users/%s/repos?per_page=100&type=all", org))
+		raw2, err2 := client.RESTGetPaginated(ctx, fmt.Sprintf("/users/%s/repos?per_page=100&type=all", org))
 		if err2 != nil {
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("list org repos interrupted: %w", ctx.Err())
@@ -64,15 +63,13 @@ func ListOrgRepos(ctx context.Context, org string, allowlist []string) ([]OrgRep
 	return filterOrgRepos(repos, allowlist), nil
 }
 
-// parseOrgReposJSON decodes a GitHub repos list payload (single page or
-// concatenated --paginate pages). Skips archived repositories.
+// parseOrgReposJSON decodes a GitHub repos list payload.
 func parseOrgReposJSON(raw []byte) ([]OrgRepo, error) {
-	// gh --paginate may emit concatenated arrays; normalize to one array.
 	s := strings.TrimSpace(string(raw))
 	if s == "" {
 		return nil, nil
 	}
-	// Concatenated pages look like: [...][...] — merge into one array.
+	// Legacy concatenated pages from gh --paginate still supported for tests.
 	if strings.Contains(s, "][") {
 		s = "[" + strings.ReplaceAll(strings.TrimPrefix(strings.TrimSuffix(s, "]"), "["), "][", ",") + "]"
 	}
@@ -135,3 +132,6 @@ func filterOrgRepos(repos []OrgRepo, allowlist []string) []OrgRepo {
 	}
 	return out
 }
+
+// Ensure githubapi is referenced for clients.
+var _ = githubapi.DefaultRESTBase
