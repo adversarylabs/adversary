@@ -584,9 +584,10 @@ func (r Repository) Resolve(value string) (Record, error) {
 	}
 	if !sameSemantic {
 		// Multiple versions of one package under a short name (engineering-review
-		// → 0.0.5 and 0.0.6) should prefer the newest version. Distinct packages
-		// that only share a short name stay ambiguous.
-		if preferred, ok := r.preferNewestSameRepository(records); ok {
+		// → 0.0.5 and 0.0.6, or go/concurrency from localhost and the official
+		// registry) should prefer the newest version. Distinct packages that
+		// only share a short name stay ambiguous.
+		if preferred, ok := r.preferNewestCompatible(records); ok {
 			return preferred, nil
 		}
 		return Record{}, fmt.Errorf("%w: %q matches multiple packages; use a fully qualified or tagged reference", ErrAmbiguous, value)
@@ -600,6 +601,48 @@ func (r Repository) Resolve(value string) (Record, error) {
 		}
 	}
 	return records[0], nil
+}
+
+// preferNewestCompatible returns the highest-version record when candidates are
+// the same package, either by:
+//   - identical Record.Name (package identity from adversary.yaml / config), or
+//   - identical durable registry/repository path (legacy same-repo check).
+// Distinct package names that only collide on a short alias stay ambiguous.
+func (r Repository) preferNewestCompatible(records []Record) (Record, bool) {
+	if len(records) < 2 {
+		return Record{}, false
+	}
+	if preferred, ok := preferNewestSamePackageName(records); ok {
+		return preferred, true
+	}
+	return r.preferNewestSameRepository(records)
+}
+
+// preferNewestSamePackageName picks the highest semver when every candidate
+// shares the same non-empty package name *and* at least two distinct versions
+// are present (e.g. go/concurrency 0.0.8 from localhost and 0.0.10 from the
+// official registry). Same-name, same-version collisions across publishers stay
+// ambiguous so fail-closed tests and dual-publisher installs do not silently
+// collapse.
+func preferNewestSamePackageName(records []Record) (Record, bool) {
+	if len(records) < 2 {
+		return Record{}, false
+	}
+	name := strings.TrimSpace(records[0].Name)
+	if name == "" {
+		return Record{}, false
+	}
+	versions := map[string]struct{}{}
+	for _, rec := range records {
+		if strings.TrimSpace(rec.Name) != name {
+			return Record{}, false
+		}
+		versions[strings.TrimSpace(rec.Version)] = struct{}{}
+	}
+	if len(versions) < 2 {
+		return Record{}, false
+	}
+	return newestRecord(records), true
 }
 
 // preferNewestSameRepository returns the highest-version record when every
@@ -623,6 +666,10 @@ func (r Repository) preferNewestSameRepository(records []Record) (Record, bool) 
 			return Record{}, false
 		}
 	}
+	return newestRecord(records), true
+}
+
+func newestRecord(records []Record) Record {
 	best := records[0]
 	for _, rec := range records[1:] {
 		if versionPreferred(rec.Version, best.Version) {
@@ -633,7 +680,7 @@ func (r Repository) preferNewestSameRepository(records []Record) (Record, bool) 
 			best = rec
 		}
 	}
-	return best, true
+	return best
 }
 
 // recordRepositoryIdentity returns a stable registry/repository key for a
@@ -736,7 +783,7 @@ func (r Repository) resolveStoredShorthand(value string) (Record, error) {
 		}
 		records = append(records, rec)
 	}
-	if preferred, ok := r.preferNewestSameRepository(records); ok {
+	if preferred, ok := r.preferNewestCompatible(records); ok {
 		return preferred, nil
 	}
 	return Record{}, fmt.Errorf("%w: %q matches multiple packages; use a fully qualified or tagged reference", ErrAmbiguous, value)

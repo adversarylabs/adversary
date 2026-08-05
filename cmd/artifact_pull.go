@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
@@ -115,6 +116,34 @@ func registerExactRef(resolver application.Resolver, ref, digest string) error {
 	return nil
 }
 
+// registerVersionRef also pins registry/name:version when the pulled tag was
+// mutable (e.g. :latest). Without this, alias indexes may list name:version
+// while no durable FQ refs/<hash>.json exists, and run fails looking up the
+// expanded reference.
+func registerVersionRef(resolver application.Resolver, pulled oci.Reference, rec repository.Record) error {
+	version := strings.TrimSpace(rec.Version)
+	if version == "" || strings.EqualFold(version, "latest") {
+		return nil
+	}
+	if pulled.Tag == version && pulled.Digest == "" {
+		// Already registered as the exact version tag.
+		return nil
+	}
+	versionRef := oci.Reference{
+		Registry:   pulled.Registry,
+		Repository: pulled.Repository,
+		Tag:        version,
+	}
+	locator := versionRef.Locator()
+	if locator == "" || locator == pulled.Locator() {
+		return nil
+	}
+	if err := registerExactRef(resolver, locator, rec.Digest); err != nil {
+		return fmt.Errorf("register version reference %s: %w", locator, err)
+	}
+	return nil
+}
+
 type pullResult struct {
 	Record         repository.Record
 	Reference      oci.Reference
@@ -157,6 +186,11 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 		if err := registerExactRef(resolver, ref.Locator(), existing.Digest); err != nil {
 			return pullResult{}, err
 		}
+		// Also pin name:version so `adversary run go/concurrency:0.0.10` has a
+		// durable FQ ref, not only an alias index entry.
+		if err := registerVersionRef(resolver, ref, existing); err != nil {
+			return pullResult{}, err
+		}
 		if !app.Dependencies().Repository.HasVerifiedOfficialSignature(existing.Digest) {
 			if err := fetchAndStoreOfficialSignature(ctx, app, registry, ref, existing.Digest, stderr); err != nil {
 				fmt.Fprintf(stderr, "Warning: official signature not stored (%v)\n", err)
@@ -195,6 +229,9 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	}
 	if err := registerExactRef(resolver, ref.Locator(), unified.Digest); err != nil {
 		return pullResult{}, fmt.Errorf("update local reference %s: %w", ref.Locator(), err)
+	}
+	if err := registerVersionRef(resolver, ref, unified); err != nil {
+		return pullResult{}, err
 	}
 	// Best-effort: fetch and store official signature so host-exec trust works offline.
 	if err := fetchAndStoreOfficialSignature(ctx, app, registry, ref, unified.Digest, stderr); err != nil {

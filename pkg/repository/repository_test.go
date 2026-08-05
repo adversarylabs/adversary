@@ -260,9 +260,9 @@ func TestConcurrentCrossRegistryTaggedAliasFailsClosed(t *testing.T) {
 
 func TestNameOnlyAliasAcrossVersionsFailsClosed(t *testing.T) {
 	r := Repository{Root: t.TempDir()}
-	a, b := artifact(t, "one"), artifact(t, "two")
-	// The immutable configs carry 1.0.0, so use distinct refs with the same
-	// name alias and distinct content to model versions already in old stores.
+	// Distinct package names that only collide on the short alias "test".
+	a := artifactVersioned(t, "acme/one", "1.0.0", "one")
+	b := artifactVersioned(t, "other/two", "2.0.0", "two")
 	if _, err := r.ImportPacked(a, "one.example/team/test:1.0.0"); err != nil {
 		t.Fatal(err)
 	}
@@ -271,6 +271,31 @@ func TestNameOnlyAliasAcrossVersionsFailsClosed(t *testing.T) {
 	}
 	if _, err := r.Resolve("test"); !errors.Is(err, ErrAmbiguous) {
 		t.Fatalf("name-only err=%v", err)
+	}
+}
+
+func TestNameOnlyAliasSamePackageNameAcrossRegistriesPrefersNewest(t *testing.T) {
+	// Models a local dev registry copy and an official pull of the same package.
+	r := Repository{Root: t.TempDir()}
+	older := artifactVersioned(t, "go/concurrency", "0.0.8", "old")
+	newer := artifactVersioned(t, "go/concurrency", "0.0.10", "new")
+	if _, err := r.ImportPacked(older, "localhost:8787/go/concurrency:0.0.8"); err != nil {
+		t.Fatal(err)
+	}
+	newerRec, err := r.ImportPacked(newer, "registry.adversarylabs.ai/go/concurrency:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Resolve("go/concurrency")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got.Digest != newerRec.Digest || got.Version != "0.0.10" {
+		t.Fatalf("got version=%s digest=%s, want 0.0.10 %s", got.Version, got.Digest, newerRec.Digest)
+	}
+	// Untagged latest alias with two digests should also pick newest.
+	if latest, err := r.Resolve("go/concurrency:latest"); err != nil || latest.Digest != newerRec.Digest {
+		t.Fatalf("latest = %+v err=%v", latest, err)
 	}
 }
 

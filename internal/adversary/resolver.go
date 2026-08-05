@@ -83,7 +83,19 @@ func (r Resolver) resolveRepository(value string) (Resolution, error) {
 			canonical, err = value, nil
 		}
 	} else {
+		// Preferred spelling may resolve via alias (go/concurrency:0.0.10) even
+		// when the expanded durable ref (registry…/go/concurrency:0.0.10) was
+		// never written — pulls often only commit :latest. Fall back to any
+		// durable ref for this digest so run does not fail with a missing refs file.
 		canonical, err = r.Repository.CanonicalReferenceFor(rec.Digest, value)
+		if err != nil {
+			if fallback, ferr := r.Repository.CanonicalReference(rec.Digest); ferr == nil {
+				canonical, err = fallback, nil
+			} else if errors.Is(err, fs.ErrNotExist) {
+				// Last resort: keep the caller's resolved spelling.
+				canonical, err = value, nil
+			}
+		}
 	}
 	if err != nil {
 		return Resolution{}, err
