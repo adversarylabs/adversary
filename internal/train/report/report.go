@@ -32,6 +32,14 @@ type Input struct {
 	Experiment      *experiment.Report
 	ProposalPatch   string
 	BlockedNote     string
+	// LocalIDs are home-grown package ids that may receive train drafts.
+	// When set, suggested issues are only emitted for these owners.
+	LocalIDs map[string]bool
+	// OfficialIDs are official jury package ids (never receive train drafts).
+	OfficialIDs map[string]bool
+	// OfficialCatchByConcern maps concernID → official package that matched (if any).
+	// When set, suppresses local drafts for that gold.
+	OfficialCatchByConcern map[string]string
 }
 
 // Result of writing the report.
@@ -631,6 +639,7 @@ func writeSuggestedIssuesFile(dir string, issues []SuggestedIssue) {
 }
 
 // suggestIssues builds anonymized, generalized issue drafts from misses.
+// Only local (train-eligible) owners receive drafts; official jury never does.
 func suggestIssues(in Input) []SuggestedIssue {
 	if in.Scorecard == nil {
 		return nil
@@ -658,14 +667,21 @@ func suggestIssues(in Input) []SuggestedIssue {
 				summary = e.Summary
 			}
 		}
-		owner := "engineering-review"
+		owner := ""
 		if c != nil {
 			if e := concernByID(c, f.ConcernID); e != nil && e.OwnerAdversary != "" {
 				owner = e.OwnerAdversary
 			}
 		}
-		if f.ReviewerID != "" && f.ReviewerID != "engineering-review" && f.ReviewerID != "multi" {
+		if owner == "" && f.ReviewerID != "" && f.ReviewerID != "multi" {
 			owner = f.ReviewerID
+		}
+		if owner == "" {
+			continue
+		}
+		// Train draft gate: local only, no official catch.
+		if !shouldEmitTrainDraft(in, f.ConcernID, owner) {
+			continue
 		}
 		key, title := classifyConcernClass(summary)
 		// Namespace bucket by owner so issues target the right package.
@@ -682,25 +698,7 @@ func suggestIssues(in Input) []SuggestedIssue {
 		}
 	}
 	if len(buckets) == 0 {
-		// Optional: one issue for noisy extras if many
-		extra := 0
-		for _, f := range in.Scorecard.Failures {
-			if f.Kind == "false-positive" || f.Kind == "unsupported-claim" {
-				extra++
-			}
-		}
-		if extra >= 2 {
-			return []SuggestedIssue{{
-				Title:  "engineering-review: reduce weak or unaligned findings",
-				Labels: []string{"factory", "adversary:engineering-review", "noise"},
-				Body: anonymizedIssueBody(
-					"engineering-review",
-					"engineering-review sometimes emits findings that do not line up with issues human reviewers raised on the same change, or findings that lack clear evidence.",
-					[]string{"Speculative claims without file/line evidence", "Style nits graded as high severity"},
-					"When re-run on the factory discovery set, unaligned/weak findings drop without losing catches of real human-raised concerns (lifecycle, races, error handling).",
-				),
-			}}
-		}
+		// Do not emit noise drafts for official packages.
 		return nil
 	}
 	keys := make([]string, 0, len(buckets))
@@ -711,13 +709,16 @@ func suggestIssues(in Input) []SuggestedIssue {
 	var out []SuggestedIssue
 	for _, k := range keys {
 		bkt := buckets[k]
-		owner := "engineering-review"
+		owner := ""
 		if i := strings.Index(bkt.key, "|"); i >= 0 {
 			owner = bkt.key[:i]
 		}
+		if owner == "" || !isLocalTrainOwner(in, owner) {
+			continue
+		}
 		out = append(out, SuggestedIssue{
 			Title:  bkt.title,
-			Labels: []string{"factory", "adversary:" + owner, "miss"},
+			Labels: []string{"train", "adversary:" + owner, "miss"},
 			Body: anonymizedIssueBody(
 				owner,
 				fmt.Sprintf("On live discovery PRs, human reviewers raised concerns that fit **%s**, but that adversary did not surface a matching finding.", owner),
@@ -727,6 +728,50 @@ func suggestIssues(in Input) []SuggestedIssue {
 		})
 	}
 	return out
+}
+
+func isLocalTrainOwner(in Input, owner string) bool {
+	o := strings.ToLower(strings.TrimSpace(owner))
+	if o == "" {
+		return false
+	}
+	if in.OfficialIDs[o] {
+		return false
+	}
+	// Known official short names never receive drafts even without OfficialIDs set.
+	if isKnownOfficialID(o) && !in.LocalIDs[o] {
+		return false
+	}
+	if len(in.LocalIDs) > 0 {
+		return in.LocalIDs[o]
+	}
+	// No local set: treat non-official as local (catalog-author mode with locals only).
+	return !isKnownOfficialID(o)
+}
+
+func isKnownOfficialID(id string) bool {
+	officials := []string{
+		"engineering-review", "go-concurrency", "go-testing", "go-security",
+		"go-http", "go-database", "go-cli", "go-modules", "go",
+		"githubactions", "dockerfile", "terraform", "kustomize", "helm",
+		"secrets", "complexity", "python", "typescript", "nodejs",
+	}
+	for _, x := range officials {
+		if id == x {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldEmitTrainDraft(in Input, concernID, owner string) bool {
+	if !isLocalTrainOwner(in, owner) {
+		return false
+	}
+	if catcher, ok := in.OfficialCatchByConcern[concernID]; ok && catcher != "" {
+		return false
+	}
+	return true
 }
 
 func classifyConcernClass(summary string) (key, title string) {
@@ -785,7 +830,7 @@ func anonymizedIssueBody(owner, problem string, examples []string, acceptance st
 	}
 	var b strings.Builder
 	b.WriteString("## Context\n\n")
-	b.WriteString("From adversary-factory discovery runs (live PR review rounds graded against human review comments).\n\n")
+	b.WriteString("From adversary train runs (live PR review rounds graded against human review comments).\n\n")
 	b.WriteString("## Problem\n\n")
 	b.WriteString(problem)
 	b.WriteString("\n\n")
@@ -809,6 +854,6 @@ func anonymizedIssueBody(owner, problem string, examples []string, acceptance st
 	b.WriteString("## Out of scope\n\n")
 	b.WriteString("- Do not hard-code repository names or PR numbers into the adversary.\n")
 	b.WriteString("- Do not treat “extra” findings as automatically correct without human review.\n\n")
-	b.WriteString("---\n_Drafted by adversary-factory. Not auto-filed._\n")
+	b.WriteString("---\n_Drafted by adversary train. Not auto-filed._\n")
 	return b.String()
 }

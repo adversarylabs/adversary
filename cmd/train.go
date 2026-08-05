@@ -7,6 +7,7 @@ import (
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/train/pipeline"
+	"github.com/adversarylabs/adversary/internal/train/repos"
 	"github.com/adversarylabs/adversary/internal/train/workspace"
 	"github.com/spf13/cobra"
 )
@@ -130,27 +131,114 @@ the state directory. Drafts never target official package ids.`,
 				cfg.Run.MaxTurns = maxTurns
 			}
 
-			advSource := resolveAdversarySource(wsRoot, cfg, adversaryOnly)
+			// History sources from config → pipeline catalog
+			var catalog []repos.Repo
+			for _, r := range cfg.Sources.Repos {
+				r = strings.TrimSpace(r)
+				if r == "" {
+					continue
+				}
+				parts := strings.SplitN(r, "/", 2)
+				if len(parts) != 2 {
+					return fmt.Errorf("invalid sources.repos entry %q (want owner/name)", r)
+				}
+				catalog = append(catalog, repos.Repo{
+					Owner: parts[0], Name: parts[1],
+					Languages: cfg.Sources.Languages, Role: "discovery",
+				})
+			}
+			// org-only without repos still needs live org expansion (not v1); pin owner if --owner/--repo
+
+			// Local packages: all under root (or single path)
+			var localRoot string
+			var localDirs []string
+			var trainOnly []string
+			if adversaryOnly != "" {
+				trainOnly = []string{adversaryOnly}
+			} else if len(cfg.Run.Only) > 0 {
+				trainOnly = cfg.Run.Only
+			}
+			if cfg.Adversaries.Path != "" {
+				p := cfg.Adversaries.Path
+				if !filepath.IsAbs(p) {
+					p = filepath.Join(wsRoot, p)
+				}
+				localDirs = []string{p}
+			} else if cfg.Adversaries.Root != "" {
+				localRoot = cfg.Adversaries.Root
+				if !filepath.IsAbs(localRoot) {
+					localRoot = filepath.Join(wsRoot, localRoot)
+				}
+			}
+
+			// Local ids for draft filtering (from directory names under root)
+			var localIDs []string
+			if localRoot != "" {
+				if names, err := workspace.ListDir(localRoot); err == nil {
+					for _, n := range names {
+						if strings.HasPrefix(n, ".") {
+							continue
+						}
+						localIDs = append(localIDs, n)
+					}
+				}
+			}
+			for _, d := range localDirs {
+				localIDs = append(localIDs, filepath.Base(d))
+			}
+
+			// Official jury ids from include/exclude (exclude-only still marks known official)
+			var officialIDs []string
+			if cfg.OfficialEnabled() {
+				// Explicit include list if set
+				for _, id := range cfg.Official.Include {
+					if cfg.OfficialIncluded(id) {
+						officialIDs = append(officialIDs, id)
+					}
+				}
+			}
+
 			trainRoot := findTrainModuleRoot()
+			advSource := ""
+			if len(localDirs) == 1 {
+				advSource = localDirs[0]
+			} else if localRoot != "" && adversaryOnly != "" {
+				advSource = filepath.Join(localRoot, adversaryOnly)
+			} else if localRoot != "" {
+				advSource = workspace.FirstScopedPackage(localRoot)
+			}
 
 			opts := pipeline.Options{
-				DataRoot:        stateRoot,
-				RepoRoot:        trainRoot,
-				Fixture:         fixture,
-				Live:            !fixture,
-				AdversarySource: advSource,
-				MaxPRs:          cfg.Run.MaxPRs,
-				MaxTurns:        cfg.Run.MaxTurns,
-				ResetDiscovery:  resetDiscovery,
-				PR:              pr,
-				Owner:           owner,
-				Repo:            repo,
+				DataRoot:         stateRoot,
+				RepoRoot:         trainRoot,
+				Fixture:          fixture,
+				Live:             !fixture,
+				AdversarySource:  advSource,
+				LocalPackageRoot: localRoot,
+				LocalPackageDirs: localDirs,
+				TrainOnlyIDs:     trainOnly,
+				LocalIDs:         localIDs,
+				OfficialIDs:      officialIDs,
+				AuthorsOnly:      cfg.Sources.AuthorsOnly,
+				AuthorsIgnore:    cfg.Sources.AuthorsIgnore,
+				Languages:        cfg.Sources.Languages,
+				CatalogRepos:     catalog,
+				MaxPRs:           cfg.Run.MaxPRs,
+				MaxTurns:         cfg.Run.MaxTurns,
+				ResetDiscovery:   resetDiscovery,
+				PR:               pr,
+				Owner:            owner,
+				Repo:             repo,
 			}
 			if opts.MaxPRs == 0 {
 				opts.MaxPRs = 1
 			}
 			if opts.MaxTurns == 0 {
 				opts.MaxTurns = 15
+			}
+			// Pin single repo from config when only one catalog entry and no CLI pin
+			if opts.Owner == "" && opts.Repo == "" && len(catalog) == 1 {
+				opts.Owner, opts.Repo = catalog[0].Owner, catalog[0].Name
 			}
 
 			stderr := cmd.ErrOrStderr()
@@ -161,9 +249,12 @@ the state directory. Drafts never target official package ids.`,
 				fmt.Fprintln(stderr, "  mode:   fixture (hermetic)")
 			} else {
 				fmt.Fprintln(stderr, "  mode:   live history")
+				fmt.Fprintf(stderr, "  sources.repos: %v org: %s\n", cfg.Sources.Repos, cfg.Sources.Org)
 			}
 			if adversaryOnly != "" {
 				fmt.Fprintf(stderr, "  local:  %s only\n", adversaryOnly)
+			} else if localRoot != "" {
+				fmt.Fprintf(stderr, "  locals: all under %s\n", localRoot)
 			}
 			if cfg.OfficialEnabled() && !fixture {
 				fmt.Fprintln(stderr, "  official jury: enabled (drafts for locals only)")
@@ -312,35 +403,6 @@ func resolveStateDir(workspacePath string) (string, error) {
 		return "", err
 	}
 	return workspace.ResolveStateAbs(cfgPath, cfg.StateDirResolved()), nil
-}
-
-func resolveAdversarySource(wsRoot string, cfg workspace.Config, only string) string {
-	if only != "" {
-		if cfg.Adversaries.Root != "" {
-			p := filepath.Join(wsRoot, cfg.Adversaries.Root, only)
-			if workspace.DirExists(p) {
-				return p
-			}
-			if workspace.DirExists(only) {
-				return only
-			}
-		}
-	}
-	if cfg.Adversaries.Path != "" {
-		p := cfg.Adversaries.Path
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(wsRoot, p)
-		}
-		return p
-	}
-	if cfg.Adversaries.Root != "" {
-		root := cfg.Adversaries.Root
-		if !filepath.IsAbs(root) {
-			root = filepath.Join(wsRoot, root)
-		}
-		return workspace.FirstScopedPackage(root)
-	}
-	return ""
 }
 
 func findTrainModuleRoot() string {

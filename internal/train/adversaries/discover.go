@@ -34,7 +34,7 @@ type Package struct {
 }
 
 // DiscoverSiblings finds *-adversary directories next to factoryRoot's parent
-// (…/adversarylabs/adversary-factory → …/adversarylabs/*-adversary).
+// (…/adversarylabs/adversary → …/adversarylabs/*-adversary).
 func DiscoverSiblings(factoryRoot string) ([]Package, error) {
 	abs, err := filepath.Abs(factoryRoot)
 	if err != nil {
@@ -67,6 +67,63 @@ func DiscoverSiblings(factoryRoot string) ([]Package, error) {
 		return nil, fmt.Errorf("no sibling *-adversary packages with docs/scope.md under %s", parent)
 	}
 	return out, nil
+}
+
+// DiscoverRoot loads every child directory under root that has docs/scope.md
+// (customer multi-package workspace: adversaries/*).
+func DiscoverRoot(root string) ([]Package, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return nil, err
+	}
+	var out []Package
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		dir := filepath.Join(abs, e.Name())
+		pkg, err := loadPackage(dir, e.Name())
+		if err != nil {
+			continue
+		}
+		out = append(out, pkg)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	if len(out) == 0 {
+		// Single-package workspace: root itself may be the package.
+		if pkg, err := loadPackage(abs, filepath.Base(abs)); err == nil {
+			return []Package{pkg}, nil
+		}
+		return nil, fmt.Errorf("no packages with docs/scope.md under %s", abs)
+	}
+	return out, nil
+}
+
+// FilterByIDs keeps packages whose ID or DirName matches one of only (empty = all).
+func FilterByIDs(pkgs []Package, only []string) []Package {
+	if len(only) == 0 {
+		return pkgs
+	}
+	want := map[string]bool{}
+	for _, o := range only {
+		o = strings.TrimSpace(strings.ToLower(o))
+		if o != "" {
+			want[o] = true
+		}
+	}
+	var out []Package
+	for _, p := range pkgs {
+		id := strings.ToLower(p.ID)
+		name := strings.ToLower(p.DirName)
+		if want[id] || want[name] || want[strings.ToLower(p.ManifestName)] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func loadPackage(dir, dirName string) (Package, error) {

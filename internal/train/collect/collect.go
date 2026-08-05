@@ -32,6 +32,8 @@ type CollectOptions struct {
 	// Router picks the best sibling adversary (or none) per comment.
 	// When set, takes precedence over Scope.
 	Router *scope.Router
+	// AuthorOK filters gold authors (train config authors_only / authors_ignore).
+	AuthorOK AuthorFilter
 }
 
 // CollectPR fetches PR timeline/reviews/comments via gh and builds case candidates.
@@ -87,7 +89,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 	_ = os.WriteFile(filepath.Join(cacheDir, "review-comments.json"), commentsJSON, 0o644)
 
 	res.ExecutionClass = dataroot.ClassReal
-	built, err := BuildCasesFromCache(owner, repo, pr, cacheDir, opts.Scope, opts.Router)
+	built, err := BuildCasesFromCacheFiltered(owner, repo, pr, cacheDir, opts.Scope, opts.Router, opts.AuthorOK)
 	if err != nil {
 		return res, err
 	}
@@ -143,6 +145,10 @@ func blockedFromErr(dep, op string, err error) *dataroot.BlockedResult {
 
 // BuildCasesFromCache constructs case candidates from cached GitHub JSON.
 func BuildCasesFromCache(owner, repo string, pr int, cacheDir string, clf *scope.Classifier, router *scope.Router) ([]*cases.Case, error) {
+	return BuildCasesFromCacheFiltered(owner, repo, pr, cacheDir, clf, router, nil)
+}
+
+func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, clf *scope.Classifier, router *scope.Router, authorOK AuthorFilter) ([]*cases.Case, error) {
 	if clf == nil && router == nil {
 		clf = defaultScope()
 	}
@@ -272,7 +278,7 @@ func BuildCasesFromCache(owner, repo string, pr int, cacheDir string, clf *scope
 		}
 		// Candidate labels, routed to best adversary (or none).
 		labels := cases.CandidateLabelsFromComments(revComments)
-		applyScope(labels, revComments, clf, router)
+		applyScopeFiltered(labels, revComments, clf, router, authorOK)
 		c := &cases.Case{
 			SchemaVersion: 4,
 			ID:            cases.CaseID(repoSlug, pr, round),
@@ -338,7 +344,7 @@ func BuildCasesFromCache(owner, repo string, pr int, cacheDir string, clf *scope
 		}
 		sha, source, excl := cases.ReconstructReviewedSHA(cases.ReviewSignal{OriginalCommitIDs: origIDs, PRHeadSHA: prObj.Head.SHA})
 		labels := cases.CandidateLabelsFromComments(allComments)
-		applyScope(labels, allComments, clf, router)
+		applyScopeFiltered(labels, allComments, clf, router, authorOK)
 		out = append(out, &cases.Case{
 			SchemaVersion: 4,
 			ID:            cases.CaseID(repoSlug, pr, 1),
@@ -354,8 +360,16 @@ func BuildCasesFromCache(owner, repo string, pr int, cacheDir string, clf *scope
 	return out, nil
 }
 
+// AuthorFilter decides if a comment author may count as gold (train config).
+// nil = allow all (still subject to bot heuristics in scope).
+type AuthorFilter func(login string) bool
+
 // applyScope routes each label to the best adversary (or none).
 func applyScope(labels []cases.ExpectedConcern, comments []cases.Comment, clf *scope.Classifier, router *scope.Router) {
+	applyScopeFiltered(labels, comments, clf, router, nil)
+}
+
+func applyScopeFiltered(labels []cases.ExpectedConcern, comments []cases.Comment, clf *scope.Classifier, router *scope.Router, authorOK AuthorFilter) {
 	if clf == nil && router == nil {
 		clf = defaultScope()
 	}
@@ -380,6 +394,14 @@ func applyScope(labels []cases.ExpectedConcern, comments []cases.Comment, clf *s
 					break
 				}
 			}
+		}
+		if authorOK != nil && !authorOK(author) {
+			labels[i].Scope = string(scope.OutOfScope)
+			labels[i].Approved = false
+			labels[i].OwnerAdversary = ""
+			labels[i].ScopeReason = "author filtered by train config"
+			labels[i].ScopeMethod = "config"
+			continue
 		}
 		if router != nil {
 			route := router.RouteComment(body, path, author)

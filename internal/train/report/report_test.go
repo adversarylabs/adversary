@@ -34,8 +34,8 @@ func TestWriteStoryIsPlainEnglish(t *testing.T) {
 			ApprovedAsLabel:    true,
 		}},
 		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
-			{ID: "c-leak-1", Summary: "Worker goroutine lifecycle not tied to Shutdown", File: "sdk/trace/span_processor.go", Approved: true, Importance: "high"},
-			{ID: "c-miss", Summary: "Export errors ignored during shutdown", Approved: true, Importance: "high"},
+			{ID: "c-leak-1", Summary: "Worker goroutine lifecycle not tied to Shutdown", File: "sdk/trace/span_processor.go", Approved: true, Importance: "high", OwnerAdversary: "engineering-review"},
+			{ID: "c-miss", Summary: "Export errors ignored during shutdown", Approved: true, Importance: "high", OwnerAdversary: "engineering-review"},
 		}},
 		Metadata: cases.Metadata{CreatedAt: time.Now().UTC(), Split: "discovery"},
 	}
@@ -55,19 +55,22 @@ func TestWriteStoryIsPlainEnglish(t *testing.T) {
 		},
 	}
 	sc := score.Aggregate("engineering-review", map[string]*judge.ReviewJudgment{c.ID: j}, []judge.Failure{
-		{CaseID: c.ID, Kind: "missed-concern", ConcernID: "c-miss", Detail: "missed"},
-		{CaseID: c.ID, Kind: "false-positive", FindingID: "er-2", Detail: "fp"},
+		{CaseID: c.ID, Kind: "missed-concern", ConcernID: "c-miss", Detail: "missed", ReviewerID: "engineering-review"},
+		{CaseID: c.ID, Kind: "false-positive", FindingID: "er-2", Detail: "fp", ReviewerID: "engineering-review"},
 	})
 	exp := &experiment.Report{
 		Status: "needs-human-review", CandidateScoresMode: "identical_to_base",
 		BaseFailures: 2, CandidateFailures: 2, Hypothesis: "Tighten claim gates.",
 	}
+	// Catalog-author: local package named engineering-review may receive drafts.
+	// Customer mode would leave LocalIDs empty of this official id and suppress drafts.
 	res, err := Write(Input{
 		RunID: "slice-test", DataRoot: dir, RunDir: runDir, ExperimentDir: expDir,
 		Fixture: true, Scorecard: sc, Cases: []*cases.Case{c},
 		Judgments: map[string]*judge.ReviewJudgment{c.ID: j},
 		NormReviews: map[string]*normalize.Review{c.ID: rev},
 		Experiment: exp, ProposalPatch: filepath.Join(expDir, "exp.patch"),
+		LocalIDs: map[string]bool{"engineering-review": true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -123,5 +126,94 @@ func TestWriteStoryIsPlainEnglish(t *testing.T) {
 	}
 	if strings.Contains(res.CLIBlock, "Precision:") || strings.Contains(res.CLIBlock, "False-positive") {
 		t.Fatalf("CLI still has metrics: %s", res.CLIBlock)
+	}
+}
+
+func TestSuggestIssuesNeverDraftsOfficialOwners(t *testing.T) {
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "runs", "off")
+	expDir := filepath.Join(dir, "experiments", "off")
+	c := &cases.Case{
+		ID: "case-1",
+		Repository: cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r/pull/1"},
+		PullRequest: cases.PullRequest{Number: 1, Title: "t"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
+			{ID: "c1", Summary: "secret in HCL", Approved: true, OwnerAdversary: "go-security", Importance: "high"},
+		}},
+	}
+	sc := score.Aggregate("go-security", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "go-security", ExpectedMissed: []string{"c1"}},
+	}, []judge.Failure{
+		{CaseID: c.ID, Kind: "missed-concern", ConcernID: "c1", ReviewerID: "go-security"},
+	})
+	_, err := Write(Input{
+		RunID: "x", DataRoot: dir, RunDir: runDir, ExperimentDir: expDir,
+		Scorecard: sc, Cases: []*cases.Case{c},
+		// Customer workspace: only my-policy is local; go-security is official.
+		LocalIDs:    map[string]bool{"my-policy": true},
+		OfficialIDs: map[string]bool{"go-security": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(expDir, "SUGGESTED_ISSUES.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if strings.Contains(text, "go-security:") || strings.Contains(text, "Adversary: `go-security`") {
+		t.Fatalf("must not draft for official go-security:\n%s", text)
+	}
+	if strings.Contains(text, "engineering-review:") {
+		t.Fatalf("must not draft for official engineering-review:\n%s", text)
+	}
+}
+
+func TestSuggestIssuesDraftsLocalOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "runs", "loc")
+	expDir := filepath.Join(dir, "experiments", "loc")
+	c := &cases.Case{
+		ID: "case-1",
+		Repository: cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r/pull/1"},
+		PullRequest: cases.PullRequest{Number: 1, Title: "t"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
+			{ID: "c1", Summary: "company policy violated", Approved: true, OwnerAdversary: "my-policy", Importance: "high"},
+		}},
+	}
+	sc := score.Aggregate("my-policy", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "my-policy", ExpectedMissed: []string{"c1"}},
+	}, []judge.Failure{
+		{CaseID: c.ID, Kind: "missed-concern", ConcernID: "c1", ReviewerID: "my-policy"},
+	})
+	_, err := Write(Input{
+		RunID: "x", DataRoot: dir, RunDir: runDir, ExperimentDir: expDir,
+		Scorecard: sc, Cases: []*cases.Case{c},
+		LocalIDs: map[string]bool{"my-policy": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(expDir, "SUGGESTED_ISSUES.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "my-policy:") || !strings.Contains(text, "Adversary: `my-policy`") {
+		t.Fatalf("expected local draft:\n%s", text)
+	}
+	// Official catch suppresses
+	_, err = Write(Input{
+		RunID: "y", DataRoot: dir, RunDir: filepath.Join(dir, "runs", "sup"), ExperimentDir: filepath.Join(dir, "experiments", "sup"),
+		Scorecard: sc, Cases: []*cases.Case{c},
+		LocalIDs:               map[string]bool{"my-policy": true},
+		OfficialCatchByConcern: map[string]string{"c1": "go-testing"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw2, _ := os.ReadFile(filepath.Join(dir, "experiments", "sup", "SUGGESTED_ISSUES.md"))
+	if strings.Contains(string(raw2), "my-policy:") {
+		t.Fatalf("official catch should suppress local draft:\n%s", raw2)
 	}
 }

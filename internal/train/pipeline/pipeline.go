@@ -31,7 +31,7 @@ import (
 // Options for the first-slice end-to-end path.
 type Options struct {
 	DataRoot           string
-	RepoRoot           string // factory repo root
+	RepoRoot           string // train engine root (fixtures)
 	Fixture            bool   // tests only; production path is always live discovery
 	Live               bool   // default true when Fixture is false
 	Owner              string // optional single-repo pin (with Repo)
@@ -39,6 +39,8 @@ type Options struct {
 	PR                 int // optional single PR; 0 = discover live
 	// ReposFile is path to repositories.json (default: <RepoRoot>/config/repositories.json).
 	ReposFile string
+	// CatalogRepos overrides the JSON catalog when non-empty (from adversary.train.yaml sources).
+	CatalogRepos []repos.Repo
 	// Languages filters the catalog (empty = any language; engineering-review uses any).
 	// Example: []string{"go"} for go-security.
 	Languages []string
@@ -52,6 +54,22 @@ type Options struct {
 	// ResetDiscovery clears seen-PR state for repos we touch before hunting.
 	ResetDiscovery bool
 	AdversarySource    string
+	// LocalPackageDirs are all local package roots to load for routing/grading.
+	// When set, DiscoverRoot/loadPackage is used instead of sibling *-adversary discovery only.
+	LocalPackageDirs []string
+	// LocalPackageRoot loads every child with docs/scope.md (workspace adversaries/).
+	LocalPackageRoot string
+	// TrainOnlyIDs limits train-eligible locals (empty = all locals).
+	TrainOnlyIDs []string
+	// LocalIDs marks package ids that may receive train drafts (home-grown).
+	// If empty, inferred from LocalPackageDirs/Root.
+	LocalIDs []string
+	// OfficialIDs marks package ids that are official jury (never receive drafts).
+	// Used by report draft filtering.
+	OfficialIDs []string
+	// AuthorsOnly / AuthorsIgnore filter gold authors (from train config).
+	AuthorsOnly   []string
+	AuthorsIgnore []string
 	EngineeringFixture string
 	BaselineFixture    string
 	CaseFixtureDir     string
@@ -124,9 +142,11 @@ func Run(opts Options) (*Result, error) {
 			maxTurns = 15
 		}
 
-		// Build the set of repos to hunt across.
+		// Build the set of repos to hunt across (config sources first).
 		var catalogRepos []repos.Repo
-		if opts.Owner != "" && opts.Repo != "" {
+		if len(opts.CatalogRepos) > 0 {
+			catalogRepos = opts.CatalogRepos
+		} else if opts.Owner != "" && opts.Repo != "" {
 			catalogRepos = []repos.Repo{{Owner: opts.Owner, Name: opts.Repo, Languages: opts.Languages, Role: "discovery"}}
 		} else {
 			catPath := opts.ReposFile
@@ -134,7 +154,7 @@ func Run(opts Options) (*Result, error) {
 				catPath = repos.DefaultPath(opts.RepoRoot)
 			}
 			if catPath == "" {
-				return nil, fmt.Errorf("no repositories catalog (set RepoRoot or ReposFile)")
+				return nil, fmt.Errorf("no repositories catalog (set sources in adversary.train.yaml, or RepoRoot/ReposFile)")
 			}
 			cat, err := repos.Load(catPath)
 			if err != nil {
@@ -146,12 +166,32 @@ func Run(opts Options) (*Result, error) {
 			}
 		}
 
-		// Discover sibling adversaries and build multi-scope router.
+		// Discover local packages (workspace) and optional monorepo siblings.
 		var scopeClf *scope.Classifier
 		var commentRouter *scope.Router
-		siblingPkgs, err := adversaries.DiscoverSiblings(opts.RepoRoot)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "note: sibling adversary discovery: %v (falling back to engineering-review only)\n", err)
+		var siblingPkgs []adversaries.Package
+		var loadErr error
+		if opts.LocalPackageRoot != "" {
+			siblingPkgs, loadErr = adversaries.DiscoverRoot(opts.LocalPackageRoot)
+		} else if len(opts.LocalPackageDirs) > 0 {
+			for _, d := range opts.LocalPackageDirs {
+				pkg, err := adversaries.DiscoverRoot(d)
+				if err != nil {
+					// try load single package path
+					if one, e2 := loadOnePackage(d); e2 == nil {
+						siblingPkgs = append(siblingPkgs, one)
+					}
+					continue
+				}
+				siblingPkgs = append(siblingPkgs, pkg...)
+			}
+		} else {
+			siblingPkgs, loadErr = adversaries.DiscoverSiblings(opts.RepoRoot)
+		}
+		if loadErr != nil || len(siblingPkgs) == 0 {
+			if loadErr != nil {
+				fmt.Fprintf(os.Stderr, "note: adversary discovery: %v (falling back to single source)\n", loadErr)
+			}
 			scopeClf = &scope.Classifier{AdversaryName: "engineering-review", UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
 			srcForScope := opts.AdversarySource
 			if srcForScope == "" && opts.RepoRoot != "" {
@@ -163,7 +203,15 @@ func Run(opts Options) (*Result, error) {
 			if mission, _, err := scope.LoadMission(srcForScope, opts.RepoRoot, "engineering-review"); err == nil {
 				scopeClf.MissionMarkdown = mission
 			}
+			if srcForScope != "" {
+				if one, err := loadOnePackage(srcForScope); err == nil {
+					siblingPkgs = []adversaries.Package{one}
+				}
+			}
 		} else {
+			if len(opts.TrainOnlyIDs) > 0 {
+				siblingPkgs = adversaries.FilterByIDs(siblingPkgs, opts.TrainOnlyIDs)
+			}
 			var cands []scope.Candidate
 			for _, p := range siblingPkgs {
 				cands = append(cands, scope.Candidate{
@@ -172,7 +220,7 @@ func Run(opts Options) (*Result, error) {
 				})
 			}
 			commentRouter = &scope.Router{Candidates: cands, UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
-			fmt.Fprintf(os.Stderr, "Loaded %d sibling adversaries for comment routing\n", len(siblingPkgs))
+			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing\n", len(siblingPkgs))
 		}
 		advPackages = siblingPkgs
 
@@ -220,9 +268,17 @@ func Run(opts Options) (*Result, error) {
 			progress("  %s", url)
 			progress("  collecting reviews and comments…")
 
+			var authorOK collect.AuthorFilter
+			if len(opts.AuthorsOnly) > 0 || len(opts.AuthorsIgnore) > 0 {
+				only, ignore := opts.AuthorsOnly, opts.AuthorsIgnore
+				authorOK = func(login string) bool {
+					return workspaceAuthorOK(login, only, ignore)
+				}
+			}
 			cres, err := collect.CollectPRWithOptions(opts.DataRoot, owner, name, ref.Number, collect.CollectOptions{
-				Scope:  scopeClf,
-				Router: commentRouter,
+				Scope:    scopeClf,
+				Router:   commentRouter,
+				AuthorOK: authorOK,
 			})
 			if err != nil {
 				store.Record(ref.Number, ref.Title, ref.URL, state.OutcomeBlocked, err.Error())
@@ -636,9 +692,11 @@ func Run(opts Options) (*Result, error) {
 		}
 		expDir := filepath.Join(opts.DataRoot, "experiments", runID)
 		_ = os.MkdirAll(expDir, 0o755)
+		locIDs, offIDs := trainDraftContext(opts, advPackages)
 		human, err := report.Write(report.Input{
 			RunID: runID, DataRoot: opts.DataRoot, RunDir: runDir, ExperimentDir: expDir,
 			Live: true, Cases: usable, BlockedNote: blockedNote,
+			LocalIDs: locIDs, OfficialIDs: offIDs,
 		})
 		if err == nil {
 			out.HumanReport = human
@@ -759,6 +817,26 @@ func Run(opts Options) (*Result, error) {
 	if out.Blocked != nil {
 		blockedNote = out.Blocked.SanitizedError + " — next: " + out.Blocked.NextAction
 	}
+	locIDs, offIDs := trainDraftContext(opts, advPackages)
+	// Also compute official catches from judgments (matching findings on gold).
+	officialCatch := map[string]string{}
+	for caseID, j := range judgments {
+		if j == nil {
+			continue
+		}
+		for _, mid := range j.ExpectedMatched {
+			// If primary reviewer was official and matched, record catch.
+			rev := j.ReviewerID
+			if rev != "" && offIDs[strings.ToLower(rev)] {
+				officialCatch[mid] = rev
+			}
+			// Any matched concern by an official-owned judgment path
+			_ = caseID
+		}
+	}
+	// From failures: if a concern was matched by official in another judgment, suppress.
+	// When owner of gold is official and they have matches elsewhere, still no local draft (handled in report).
+
 	human, err := report.Write(report.Input{
 		RunID:         runID,
 		DataRoot:      opts.DataRoot,
@@ -774,6 +852,9 @@ func Run(opts Options) (*Result, error) {
 		Experiment:    rep,
 		ProposalPatch: prop.PatchPath,
 		BlockedNote:   blockedNote,
+		LocalIDs:               locIDs,
+		OfficialIDs:            offIDs,
+		OfficialCatchByConcern: officialCatch,
 	})
 	if err != nil {
 		return nil, err
@@ -870,6 +951,67 @@ func remeasureCandidate(opts Options, runDir string, build experiment.BuildResul
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+func workspaceAuthorOK(login string, only, ignore []string) bool {
+	// Inline to avoid import cycle with workspace; mirrors workspace.AuthorAllowed.
+	login = strings.ToLower(strings.TrimSpace(login))
+	if login == "" {
+		return false
+	}
+	for _, ig := range ignore {
+		if login == strings.ToLower(strings.TrimSpace(ig)) {
+			return false
+		}
+	}
+	if len(only) == 0 {
+		return true
+	}
+	for _, o := range only {
+		if login == strings.ToLower(strings.TrimSpace(o)) {
+			return true
+		}
+	}
+	return false
+}
+
+func loadOnePackage(dir string) (adversaries.Package, error) {
+	pkgs, err := adversaries.DiscoverRoot(dir)
+	if err != nil {
+		return adversaries.Package{}, err
+	}
+	if len(pkgs) == 0 {
+		return adversaries.Package{}, fmt.Errorf("no package at %s", dir)
+	}
+	// Prefer exact dir match
+	for _, p := range pkgs {
+		if p.Dir == dir {
+			return p, nil
+		}
+	}
+	return pkgs[0], nil
+}
+
+// trainDraftContext builds local/official id sets for report draft filtering.
+func trainDraftContext(opts Options, pkgs []adversaries.Package) (localIDs, officialIDs map[string]bool) {
+	localIDs = map[string]bool{}
+	officialIDs = map[string]bool{}
+	for _, id := range opts.LocalIDs {
+		localIDs[strings.ToLower(id)] = true
+	}
+	for _, id := range opts.OfficialIDs {
+		officialIDs[strings.ToLower(id)] = true
+	}
+	if len(localIDs) == 0 {
+		for _, p := range pkgs {
+			localIDs[strings.ToLower(p.ID)] = true
+			if p.ManifestName != "" {
+				localIDs[strings.ToLower(p.ManifestName)] = true
+			}
+		}
+	}
+	// Explicit official list only; unknowns default to local when listed as packages.
+	return localIDs, officialIDs
 }
 
 func truncate(s string, n int) string {
