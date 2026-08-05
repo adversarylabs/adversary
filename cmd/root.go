@@ -79,6 +79,7 @@ func newRootCommand(app *application.App) *cobra.Command {
 	cmd.AddCommand(newSearchCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newWhoamiCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newStoreCommand(app))
+	cmd.AddCommand(newTrainCommand(app))
 	cmd.AddCommand(newCompletionCommand(cmd))
 	classifyCommandErrors(cmd)
 	return cmd

@@ -1,0 +1,127 @@
+package report
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/adversarylabs/adversary/internal/train/cases"
+	"github.com/adversarylabs/adversary/internal/train/experiment"
+	"github.com/adversarylabs/adversary/internal/train/judge"
+	"github.com/adversarylabs/adversary/internal/train/normalize"
+	"github.com/adversarylabs/adversary/internal/train/score"
+)
+
+func TestWriteStoryIsPlainEnglish(t *testing.T) {
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "runs", "slice-test")
+	expDir := filepath.Join(dir, "experiments", "slice-test")
+	c := &cases.Case{
+		ID: "opentelemetry-go-pr-9001-r1",
+		Repository: cases.Repository{
+			Owner: "open-telemetry", Name: "opentelemetry-go",
+			URL: "https://github.com/open-telemetry/opentelemetry-go/pull/9001",
+		},
+		PullRequest: cases.PullRequest{Number: 9001, Title: "fix leak"},
+		ReviewEvent: cases.ReviewEvent{ReviewedSHA: "bbb", Reviewers: []string{"alice"}},
+		Comments: []cases.Comment{{
+			ID: 20001, Author: "alice",
+			Body:               "This goroutine can leak after Shutdown if the context is not cancelled",
+			Path:               "sdk/trace/span_processor.go", Line: 142,
+			GeneralizedConcern: "Worker goroutine lifecycle not tied to Shutdown",
+			ApprovedAsLabel:    true,
+		}},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
+			{ID: "c-leak-1", Summary: "Worker goroutine lifecycle not tied to Shutdown", File: "sdk/trace/span_processor.go", Approved: true, Importance: "high"},
+			{ID: "c-miss", Summary: "Export errors ignored during shutdown", Approved: true, Importance: "high"},
+		}},
+		Metadata: cases.Metadata{CreatedAt: time.Now().UTC(), Split: "discovery"},
+	}
+	j := &judge.ReviewJudgment{
+		ReviewerID: "engineering-review", ImportantRecall: 0.5, Precision: 0.5,
+		ExpectedMatched: []string{"c-leak-1"}, ExpectedMissed: []string{"c-miss"},
+		Findings: []judge.FindingJudgment{
+			{FindingID: "er-1", MatchesExpectedConcern: "c-leak-1", Valid: true},
+			{FindingID: "er-2", Valid: false},
+		},
+	}
+	rev := &normalize.Review{
+		ReviewerID: "engineering-review",
+		Findings: []normalize.Finding{
+			{ID: "er-1", Severity: "high", Claim: "worker may leak after shutdown", File: "sdk/trace/span_processor.go", LineStart: 142},
+			{ID: "er-2", Severity: "info", Claim: "maybe the API is wrong somewhere"},
+		},
+	}
+	sc := score.Aggregate("engineering-review", map[string]*judge.ReviewJudgment{c.ID: j}, []judge.Failure{
+		{CaseID: c.ID, Kind: "missed-concern", ConcernID: "c-miss", Detail: "missed"},
+		{CaseID: c.ID, Kind: "false-positive", FindingID: "er-2", Detail: "fp"},
+	})
+	exp := &experiment.Report{
+		Status: "needs-human-review", CandidateScoresMode: "identical_to_base",
+		BaseFailures: 2, CandidateFailures: 2, Hypothesis: "Tighten claim gates.",
+	}
+	res, err := Write(Input{
+		RunID: "slice-test", DataRoot: dir, RunDir: runDir, ExperimentDir: expDir,
+		Fixture: true, Scorecard: sc, Cases: []*cases.Case{c},
+		Judgments: map[string]*judge.ReviewJudgment{c.ID: j},
+		NormReviews: map[string]*normalize.Review{c.ID: rev},
+		Experiment: exp, ProposalPatch: filepath.Join(expDir, "exp.patch"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Story in experiment dir (what user opens)
+	raw, err := os.ReadFile(filepath.Join(expDir, "STORY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+
+	// Must be story language (owner-aware: miss narrative names the owning adversary)
+	for _, want := range []string{
+		"Bottom line",
+		"What the human reviewer said",
+		"What `engineering-review` said",
+		"What we concluded",
+		"We missed something a human caught",
+		"Export errors ignored",
+		"Caught by",
+		"https://github.com/open-telemetry/opentelemetry-go/pull/9001",
+		"What should I do next",
+		"Suggested GitHub issue",
+		"engineering-review:",
+		"Nothing was filed",
+		"best-fit adversary",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("story missing %q\n\n%s", want, s[:min(1200, len(s))])
+		}
+	}
+	if _, err := os.Stat(filepath.Join(expDir, "SUGGESTED_ISSUES.md")); err != nil {
+		t.Fatal("expected SUGGESTED_ISSUES.md")
+	}
+
+	// Must NOT lead with scorecard jargon tables
+	for _, bad := range []string{
+		"Important concern recall",
+		"False-positive rate",
+		"Unsupported-claim rate",
+		"execution_class",
+		"candidate_scores_mode",
+	} {
+		if strings.Contains(s, bad) {
+			t.Fatalf("story still has jargon %q", bad)
+		}
+	}
+
+	// CLI block plain
+	if !strings.Contains(res.CLIBlock, "BOTTOM LINE") || !strings.Contains(res.CLIBlock, "Open this file") {
+		t.Fatalf("CLI block: %s", res.CLIBlock)
+	}
+	if strings.Contains(res.CLIBlock, "Precision:") || strings.Contains(res.CLIBlock, "False-positive") {
+		t.Fatalf("CLI still has metrics: %s", res.CLIBlock)
+	}
+}

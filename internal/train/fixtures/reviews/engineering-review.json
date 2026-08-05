@@ -1,0 +1,55 @@
+{
+  "protocolVersion": 1,
+  "result": {
+    "adversary": {
+      "name": "engineering-review",
+      "version": "0.0.11"
+    },
+    "findings": [
+      {
+        "id": "er-1",
+        "title": "Possible goroutine leak after shutdown",
+        "category": "reliability",
+        "severity": "high",
+        "confidence": "high",
+        "summary": "The worker lifecycle is not tied to service cancellation and may outlive the parent process after Shutdown.",
+        "recommendation": "Cancel the worker context in Shutdown and wait for exit.",
+        "evidence": [
+          {
+            "file": "sdk/trace/span_processor.go",
+            "line": 142,
+            "endLine": 150,
+            "message": "goroutine started without shutdown join",
+            "snippet": "go p.worker()"
+          }
+        ]
+      },
+      {
+        "id": "er-2",
+        "title": "Style: naming",
+        "category": "style",
+        "severity": "info",
+        "confidence": "low",
+        "summary": "Engineering Review: consider renaming variable for clarity.",
+        "recommendation": "Rename for readability.",
+        "evidence": [
+          {
+            "file": "sdk/trace/span_processor.go",
+            "line": 20,
+            "message": "short name"
+          }
+        ]
+      },
+      {
+        "id": "er-3",
+        "title": "Unrelated speculative claim",
+        "category": "correctness",
+        "severity": "high",
+        "confidence": "low",
+        "summary": "Maybe the API is wrong somewhere.",
+        "recommendation": "Investigate.",
+        "evidence": []
+      }
+    ]
+  }
+}

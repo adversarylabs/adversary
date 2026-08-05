@@ -206,3 +206,14 @@ exceptions can shorten that window and are called out in the changelog.
 Release, rollback, and provenance policy is in [docs/release.md](docs/release.md).
 
 Security reports: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Train (review history → draft package improvements)
+
+```sh
+adversary train init
+# edit adversary.train.yaml (sources, authors, official jury, local packages)
+adversary train run
+adversary train story
+```
+
+See [docs/train/customer-train-cli.md](docs/train/customer-train-cli.md).

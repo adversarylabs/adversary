@@ -1,0 +1,130 @@
+{
+  "schema_version": 4,
+  "id": "opentelemetry-go-pr-9001-r1",
+  "repository": {
+    "owner": "open-telemetry",
+    "name": "opentelemetry-go",
+    "url": "https://github.com/open-telemetry/opentelemetry-go/pull/9001"
+  },
+  "pull_request": {
+    "number": 9001,
+    "base_sha": "aaa111bbbb222ccc333ddd444eee555fff666aaa",
+    "initial_head_sha": "bbb222ccc333ddd444eee555fff666aaa111bbbb",
+    "final_head_sha": "ccc333ddd444eee555fff666aaa111bbbb222ccc",
+    "title": "fix: prevent span processor goroutine leak on Shutdown"
+  },
+  "review_event": {
+    "round_index": 1,
+    "kind": "formal-review",
+    "github_review_ids": [10001],
+    "reviewed_sha": "bbb222ccc333ddd444eee555fff666aaa111bbbb",
+    "reviewed_sha_source": "review.commit_id",
+    "submitted_at": "2026-05-02T15:04:05Z",
+    "reviewers": ["reviewer1"],
+    "dismissed": false
+  },
+  "evidence_window": {
+    "opens_at": "2026-05-02T15:04:05Z",
+    "closes_at": "2026-05-03T10:00:00Z",
+    "close_reason": "next-review",
+    "follow_up_commits": [
+      {
+        "sha": "ccc333ddd444eee555fff666aaa111bbbb222ccc",
+        "pushed_at": "2026-05-02T18:00:00Z",
+        "via_force_push": false
+      }
+    ]
+  },
+  "comments": [
+    {
+      "id": 20001,
+      "kind": "review-comment",
+      "author": "reviewer1",
+      "body": "This goroutine can leak after Shutdown if the context is not cancelled. The worker lifecycle is not tied to service cancellation.",
+      "path": "sdk/trace/span_processor.go",
+      "line": 142,
+      "original_commit_id": "bbb222ccc333ddd444eee555fff666aaa111bbbb",
+      "created_at": "2026-05-02T15:05:00Z",
+      "classification": "accepted and fixed",
+      "generalized_concern": "Worker goroutine lifecycle not tied to Shutdown/cancellation; risk of leak after stop",
+      "approved_as_label": true
+    },
+    {
+      "id": 20002,
+      "kind": "review-comment",
+      "author": "reviewer1",
+      "body": "Error from exporter.Export is ignored on the shutdown path.",
+      "path": "sdk/trace/span_processor.go",
+      "line": 168,
+      "original_commit_id": "bbb222ccc333ddd444eee555fff666aaa111bbbb",
+      "created_at": "2026-05-02T15:06:00Z",
+      "classification": "accepted and fixed",
+      "generalized_concern": "Export errors ignored during shutdown path",
+      "approved_as_label": true
+    },
+    {
+      "id": 20003,
+      "kind": "review-comment",
+      "author": "reviewer1",
+      "body": "Consider documenting the new option field.",
+      "path": "sdk/trace/span_processor.go",
+      "line": 40,
+      "original_commit_id": "bbb222ccc333ddd444eee555fff666aaa111bbbb",
+      "created_at": "2026-05-02T15:07:00Z",
+      "classification": "style or preference",
+      "approved_as_label": false
+    }
+  ],
+  "follow_up": {
+    "commits": [
+      {
+        "sha": "ccc333ddd444eee555fff666aaa111bbbb222ccc",
+        "pushed_at": "2026-05-02T18:00:00Z",
+        "via_force_push": false
+      }
+    ],
+    "likely_resolved_concerns": [
+      "Worker goroutine lifecycle not tied to Shutdown/cancellation; risk of leak after stop",
+      "Export errors ignored during shutdown path"
+    ]
+  },
+  "labels": {
+    "expected_concerns": [
+      {
+        "id": "c-leak-1",
+        "summary": "Worker goroutine lifecycle not tied to Shutdown/cancellation; risk of leak after stop",
+        "importance": "high",
+        "confidence": "high",
+        "source": ["human-review", "follow-up-fix"],
+        "file": "sdk/trace/span_processor.go",
+        "approved": true
+      },
+      {
+        "id": "c-err-1",
+        "summary": "Export errors ignored during shutdown path",
+        "importance": "high",
+        "confidence": "high",
+        "source": ["human-review", "follow-up-fix"],
+        "file": "sdk/trace/span_processor.go",
+        "approved": true
+      },
+      {
+        "id": "c-race-1",
+        "summary": "Concurrent access to processor state without synchronization after Stop",
+        "importance": "medium",
+        "confidence": "medium",
+        "source": ["human-review"],
+        "file": "sdk/trace/span_processor.go",
+        "approved": true
+      }
+    ],
+    "known_non_issues": [
+      "Missing godoc on unexported helper"
+    ]
+  },
+  "metadata": {
+    "created_at": "2026-05-04T00:00:00Z",
+    "reviewed_by_human": true,
+    "split": "discovery"
+  }
+}
