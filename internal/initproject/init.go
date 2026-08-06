@@ -15,7 +15,7 @@ import (
 
 const (
 	DefaultSDK     = "typescript"
-	DefaultVersion = "0.1.0"
+	DefaultVersion = "0.0.1"
 )
 
 var supportedSDKs = map[string]string{
@@ -93,6 +93,14 @@ func Create(opts Options) (Result, error) {
 		rel, err := filepath.Rel(templateRoot, path)
 		if err != nil {
 			return err
+		}
+		// Never scaffold local install trees or a vendored SDK copy. The
+		// TypeScript template depends on the published @adversarylabs/sdk package.
+		if shouldSkipInitTemplatePath(rel) {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		target := filepath.Join(staging, rel)
 		if rel == "." {
@@ -197,4 +205,17 @@ func writableFileMode(mode fs.FileMode) fs.FileMode {
 		return 0644
 	}
 	return perm | 0600
+}
+
+// shouldSkipInitTemplatePath excludes install/vendor trees that must not ship
+// inside `adversary init` scaffolds (use the published npm SDK instead).
+func shouldSkipInitTemplatePath(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	if rel == "node_modules" || strings.HasPrefix(rel, "node_modules/") {
+		return true
+	}
+	if rel == "vendor/adversary-sdk" || strings.HasPrefix(rel, "vendor/adversary-sdk/") {
+		return true
+	}
+	return false
 }

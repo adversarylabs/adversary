@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/train/cases"
 	"github.com/adversarylabs/adversary/internal/train/dataroot"
 	"github.com/adversarylabs/adversary/internal/train/scope"
@@ -29,7 +29,7 @@ type Result struct {
 
 // CollectOptions optional knobs for collect.
 type CollectOptions struct {
-	// Context cancels gh API calls (Ctrl+C).
+	// Context cancels GitHub API calls (Ctrl+C).
 	Context context.Context
 	// Scope classifies human comments for a single adversary (legacy).
 	Scope *scope.Classifier
@@ -38,9 +38,11 @@ type CollectOptions struct {
 	Router *scope.Router
 	// AuthorOK filters gold authors (train config authors_only / authors_ignore).
 	AuthorOK AuthorFilter
+	// Client optional injected GitHub client (tests).
+	Client *githubapi.Client
 }
 
-// CollectPR fetches PR timeline/reviews/comments via gh and builds case candidates.
+// CollectPR fetches PR timeline/reviews/comments via GitHub HTTP and builds case candidates.
 func CollectPR(dataRoot, owner, repo string, pr int) (*Result, error) {
 	return CollectPRWithOptions(dataRoot, owner, repo, pr, CollectOptions{})
 }
@@ -48,25 +50,10 @@ func CollectPR(dataRoot, owner, repo string, pr int) (*Result, error) {
 // CollectPRWithOptions is CollectPR with scope classification options.
 func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOptions) (*Result, error) {
 	cacheDir := filepath.Join(dataRoot, "github-cache", owner, repo, fmt.Sprintf("pr-%d", pr))
-	// Private review content: user-only dirs/files (not world-readable).
 	if err := securefs.MkdirAll(cacheDir); err != nil {
 		return nil, err
 	}
 	res := &Result{Owner: owner, Repo: repo, PR: pr, CacheDir: cacheDir}
-
-	if _, err := exec.LookPath("gh"); err != nil {
-		res.ExecutionClass = dataroot.ClassPartial
-		res.Blocked = &dataroot.BlockedResult{
-			Dependency:     "gh",
-			Operation:      "collect",
-			Classification: "not-installed",
-			SanitizedError: "gh CLI not found in PATH",
-			StagesNotRun:   []string{"collect"},
-			RetrySafe:      true,
-			NextAction:     "install GitHub CLI (gh) and authenticate",
-		}
-		return res, nil
-	}
 
 	ctx := opts.Context
 	if ctx == nil {
@@ -76,8 +63,26 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		return res, fmt.Errorf("collect interrupted: %w", err)
 	}
 
-	// PR metadata
-	prJSON, err := ghJSON(ctx, owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d", owner, repo, pr))
+	client := opts.Client
+	if client == nil {
+		var err error
+		client, err = clientFor(ctx)
+		if err != nil {
+			res.ExecutionClass = dataroot.ClassPartial
+			res.Blocked = &dataroot.BlockedResult{
+				Dependency:     "github-token",
+				Operation:      "collect",
+				Classification: "not-configured",
+				SanitizedError: err.Error(),
+				StagesNotRun:   []string{"collect"},
+				RetrySafe:      true,
+				NextAction:     "set ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN",
+			}
+			return res, nil
+		}
+	}
+
+	prJSON, _, err := client.RESTGet(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, pr))
 	if err != nil {
 		res.ExecutionClass = dataroot.ClassPartial
 		res.Blocked = blockedFromErr("github-api", "collect-pr", err)
@@ -85,7 +90,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 	}
 	_ = securefs.WriteFile(filepath.Join(cacheDir, "pull.json"), prJSON)
 
-	reviewsJSON, err := ghJSON(ctx, owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, pr))
+	reviewsJSON, err := client.RESTGetPaginated(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", owner, repo, pr))
 	if err != nil {
 		res.Blocked = blockedFromErr("github-api", "collect-reviews", err)
 		res.ExecutionClass = dataroot.ClassPartial
@@ -93,7 +98,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 	}
 	_ = securefs.WriteFile(filepath.Join(cacheDir, "reviews.json"), reviewsJSON)
 
-	commentsJSON, err := ghJSON(ctx, owner, repo, fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, pr))
+	commentsJSON, err := client.RESTGetPaginated(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/comments?per_page=100", owner, repo, pr))
 	if err != nil {
 		res.Blocked = blockedFromErr("github-api", "collect-comments", err)
 		res.ExecutionClass = dataroot.ClassPartial
@@ -117,26 +122,10 @@ func defaultScope() *scope.Classifier {
 	}
 }
 
-func ghJSON(ctx context.Context, owner, repo, apiPath string) ([]byte, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	out, err := ghRun(ctx, "api", apiPath, "--paginate")
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("collect interrupted: %w", ctx.Err())
-		}
-		if IsRateLimit(err) {
-			return nil, err
-		}
-		return nil, err
-	}
-	return out, nil
-}
-
 func sanitize(s string) string {
-	// Avoid leaking tokens if any appear.
 	s = strings.ReplaceAll(s, os.Getenv("GITHUB_TOKEN"), "***")
+	s = strings.ReplaceAll(s, os.Getenv("GH_TOKEN"), "***")
+	s = strings.ReplaceAll(s, os.Getenv("ADVERSARY_GITHUB_TOKEN"), "***")
 	if len(s) > 500 {
 		s = s[:500] + "…"
 	}
@@ -146,11 +135,11 @@ func sanitize(s string) string {
 func blockedFromErr(dep, op string, err error) *dataroot.BlockedResult {
 	class := "outage"
 	msg := err.Error()
-	next := "check gh auth and repository access"
+	next := "check GitHub token and repository access (ADVERSARY_GITHUB_TOKEN / GITHUB_TOKEN / GH_TOKEN)"
 	if IsRateLimit(err) {
 		class = "rate-limit"
 		next = "wait for GitHub rate limit reset, lower run.concurrency (e.g. 1–2), then train run again; partial results stay in results.db"
-	} else if strings.Contains(msg, "401") || strings.Contains(msg, "403") {
+	} else if strings.Contains(msg, "401") || strings.Contains(msg, "403") || strings.Contains(msg, "auth") {
 		class = "auth"
 	} else if strings.Contains(msg, "404") {
 		class = "missing-source"
@@ -432,7 +421,13 @@ func applyScopeFiltered(labels []cases.ExpectedConcern, comments []cases.Comment
 			labels[i].OwnerAdversary = route.OwnerID
 			labels[i].ScopeReason = route.Reason
 			labels[i].ScopeMethod = route.Method
-			if route.OwnerID != "" && route.Decision == scope.InScope && len(strings.TrimSpace(labels[i].Summary)) > 20 {
+			// Broad generalists keep short comments (LGTM, "why?", etc.); specialists
+			// still require a minimal summary so empty stubs are not gold.
+			minLen := 20
+			if route.OwnerID != "" && scope.BroadScopeMission(route.OwnerID, "") {
+				minLen = 1
+			}
+			if route.OwnerID != "" && route.Decision == scope.InScope && len(strings.TrimSpace(labels[i].Summary)) >= minLen {
 				labels[i].Scope = string(scope.InScope)
 				labels[i].Approved = true
 				labels[i].Confidence = "medium"
@@ -450,10 +445,18 @@ func applyScopeFiltered(labels []cases.ExpectedConcern, comments []cases.Comment
 		labels[i].ScopeReason = r.Reason
 		labels[i].ScopeMethod = r.Method
 		labels[i].OwnerAdversary = ""
-		if r.Decision == scope.InScope && len(strings.TrimSpace(labels[i].Summary)) > 20 {
+		minLen := 20
+		if clf != nil && scope.BroadScopeMission(clf.AdversaryName, clf.MissionMarkdown) {
+			minLen = 1
+		}
+		if r.Decision == scope.InScope && len(strings.TrimSpace(labels[i].Summary)) >= minLen {
 			labels[i].Approved = true
 			labels[i].Confidence = "medium"
-			labels[i].OwnerAdversary = "engineering-review"
+			if clf != nil && clf.AdversaryName != "" {
+				labels[i].OwnerAdversary = clf.AdversaryName
+			} else {
+				labels[i].OwnerAdversary = "engineering-review"
+			}
 		} else {
 			labels[i].Approved = false
 		}

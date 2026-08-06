@@ -31,16 +31,15 @@ test("reports expected findings from fixtures", async () => {
   const repo = await mkdtemp(join(tmpdir(), "comment-sentence-fixtures-"));
   await cp(new URL("fixtures", import.meta.url), repo, { recursive: true });
 
-  const output = await createApp().run({
+  const result = await createApp().run({
     input: { source: { path: repo } },
-    write: false,
   });
 
-  assert.equal(output.result.target.filesScanned, 2);
+  assert.equal(result.target.filesScanned, 2);
   assert.deepEqual(
-    output.result.findings.map((finding) => {
+    result.findings.map((finding) => {
       const evidence = finding.evidence[0];
-      return `${evidence.file}:${evidence.line}:${evidence.message}`;
+      return `${evidence.location?.file}:${evidence.location?.line}:${evidence.message}`;
     }),
     [
       "bad.ts:1:// fix later",
@@ -59,11 +58,13 @@ test("ignores generated and dependency directories", async () => {
   await writeFile(join(repo, "dist", "generated.ts"), "// fix later\n");
   await writeFile(join(repo, "node_modules", "dep.ts"), "// fix later\n");
 
-  const output = await createApp().run({
+  const result = await createApp().run({
     input: { source: { path: repo } },
-    write: false,
   });
 
-  assert.equal(output.result.target.filesScanned, 1);
-  assert.deepEqual(output.result.findings.map((finding) => finding.evidence[0].file), ["index.ts"]);
+  assert.equal(result.target.filesScanned, 1);
+  assert.deepEqual(
+    result.findings.map((finding) => finding.evidence[0].location?.file),
+    ["index.ts"],
+  );
 });

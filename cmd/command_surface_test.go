@@ -165,8 +165,8 @@ func TestPublishedCLIOutputFixturesMatchSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fixtures) != 11 {
-		t.Fatalf("got %d CLI fixtures, want 11", len(fixtures))
+	if len(fixtures) != 12 {
+		t.Fatalf("got %d CLI fixtures, want 12", len(fixtures))
 	}
 	for _, path := range fixtures {
 		t.Run(filepath.Base(path), func(t *testing.T) {

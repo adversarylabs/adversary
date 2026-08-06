@@ -249,7 +249,16 @@ func Run(opts Options) (*Result, error) {
 			}
 		} else {
 			if len(opts.TrainOnlyIDs) > 0 {
-				siblingPkgs = adversaries.FilterByIDs(siblingPkgs, opts.TrainOnlyIDs)
+				filtered := adversaries.FilterByIDs(siblingPkgs, opts.TrainOnlyIDs)
+				if len(filtered) == 0 {
+					fmt.Fprintf(os.Stderr, "note: run.only %v matched no loaded packages %v — keeping all loaded\n",
+						opts.TrainOnlyIDs, packageIDs(siblingPkgs))
+				} else {
+					siblingPkgs = filtered
+				}
+			}
+			if len(siblingPkgs) == 0 {
+				return nil, fmt.Errorf("no local adversary packages loaded for train routing")
 			}
 			var cands []scope.Candidate
 			for _, p := range siblingPkgs {
@@ -259,7 +268,7 @@ func Run(opts Options) (*Result, error) {
 				})
 			}
 			commentRouter = &scope.Router{Candidates: cands, UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
-			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing\n", len(siblingPkgs))
+			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing: %v\n", len(siblingPkgs), packageIDs(siblingPkgs))
 		}
 		// Hunt/scorecard primary: loaded packages, not a hard-coded eng-review default.
 		opts.AdversaryName = resolvePrimaryAdversaryName(opts, siblingPkgs)
@@ -941,6 +950,18 @@ func loadOnePackage(dir string) (adversaries.Package, error) {
 		}
 	}
 	return pkgs[0], nil
+}
+
+func packageIDs(pkgs []adversaries.Package) []string {
+	ids := make([]string, 0, len(pkgs))
+	for _, p := range pkgs {
+		if p.ID != "" {
+			ids = append(ids, p.ID)
+		} else if p.DirName != "" {
+			ids = append(ids, p.DirName)
+		}
+	}
+	return ids
 }
 
 // resolvePrimaryAdversaryName picks the hunt/scorecard package id.

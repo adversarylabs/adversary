@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -55,13 +54,6 @@ func TestErrorSchemaIsPublishedAndValidJSON(t *testing.T) {
 	var document any
 	if err := json.Unmarshal(data, &document); err != nil {
 		t.Fatal(err)
-	}
-	vendored, err := os.ReadFile(filepath.Join("..", "..", "templates", "typescript", "vendor", "adversary-sdk", "schemas", "adversary.error.v1.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(data)) != strings.TrimSpace(string(vendored)) {
-		t.Fatal("vendored error schema diverges")
 	}
 	var fixture any
 	fixtureData, err := os.ReadFile(filepath.Join("..", "..", "schema", "fixtures", "adversary.error.v1.valid.json"))

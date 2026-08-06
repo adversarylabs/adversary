@@ -23,7 +23,7 @@ type Package struct {
 	ManifestName string
 	// Description from adversary.yaml.
 	Description string
-	// ScopeMarkdown from docs/scope.md.
+	// ScopeMarkdown from agent/scope.md (or train/docs legacy paths).
 	ScopeMarkdown string
 	// ScopePath filesystem path to scope.md.
 	ScopePath string
@@ -64,17 +64,29 @@ func DiscoverSiblings(factoryRoot string) ([]Package, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	if len(out) == 0 {
-		return nil, fmt.Errorf("no sibling *-adversary packages with docs/scope.md under %s", parent)
+		return nil, fmt.Errorf("no sibling *-adversary packages with agent/scope.md (or legacy docs/scope.md) under %s", parent)
 	}
 	return out, nil
 }
 
-// DiscoverRoot loads every child directory under root that has docs/scope.md
-// (customer multi-package workspace: adversaries/*).
+// DiscoverRoot loads adversary packages under root.
+//
+// Single-package workspace: root has adversary.yaml (+ agent/scope.md) → that one package.
+// Multi-package workspace: each child with adversary.yaml is a package (e.g. adversaries/*).
+//
+// Important: do not treat agent/, docs/, src/ as packages just because they contain a
+// scope.md fragment — on case-insensitive filesystems SCOPE.md matches scope.md and
+// used to mis-discover id=agent, then run.only filtered everything out.
 func DiscoverRoot(root string) ([]Package, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
+	}
+	// Prefer the root itself when it is a real package (adversary.yaml present).
+	if isAdversaryPackageDir(abs) {
+		if pkg, err := loadPackage(abs, filepath.Base(abs)); err == nil {
+			return []Package{pkg}, nil
+		}
 	}
 	entries, err := os.ReadDir(abs)
 	if err != nil {
@@ -86,6 +98,9 @@ func DiscoverRoot(root string) ([]Package, error) {
 			continue
 		}
 		dir := filepath.Join(abs, e.Name())
+		if !isAdversaryPackageDir(dir) {
+			continue
+		}
 		pkg, err := loadPackage(dir, e.Name())
 		if err != nil {
 			continue
@@ -94,13 +109,18 @@ func DiscoverRoot(root string) ([]Package, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	if len(out) == 0 {
-		// Single-package workspace: root itself may be the package.
+		// Last resort: root has scope but no yaml (legacy).
 		if pkg, err := loadPackage(abs, filepath.Base(abs)); err == nil {
 			return []Package{pkg}, nil
 		}
-		return nil, fmt.Errorf("no packages with docs/scope.md under %s", abs)
+		return nil, fmt.Errorf("no packages with adversary.yaml + agent/scope.md (or legacy docs/scope.md) under %s", abs)
 	}
 	return out, nil
+}
+
+func isAdversaryPackageDir(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, "adversary.yaml"))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // FilterByIDs keeps packages whose ID or DirName matches one of only (empty = all).

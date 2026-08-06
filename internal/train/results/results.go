@@ -63,6 +63,7 @@ type Result struct {
 	AppliedAt   time.Time `json:"applied_at,omitempty"`
 	AppliedPath string    `json:"applied_path,omitempty"`
 	Branch      string    `json:"branch,omitempty"`
+	IssueURL    string    `json:"issue_url,omitempty"`
 }
 
 // normalizeKind maps legacy stored values to current vocabulary.
@@ -135,8 +136,7 @@ func Get(stateRoot, id string) (Result, error) {
 	// One-time import of legacy JSON inbox if present and table empty.
 	_ = maybeMigrateLegacyJSON(db, stateRoot)
 
-	row := db.QueryRow(`SELECT `+resultCols+` FROM results WHERE id = ?`, id)
-	r, err := scanResult(row)
+	r, err := getResultDB(db, id)
 	if err == sql.ErrNoRows {
 		return Result{}, fmt.Errorf("result %q not found (run: adversary train results ls)", id)
 	}
@@ -144,6 +144,11 @@ func Get(stateRoot, id string) (Result, error) {
 		return Result{}, err
 	}
 	return r, nil
+}
+
+func getResultDB(db *sql.DB, id string) (Result, error) {
+	row := db.QueryRow(`SELECT `+resultCols+` FROM results WHERE id = ?`, id)
+	return scanResult(row)
 }
 
 // Exists reports whether an id is already in the database.
@@ -195,6 +200,29 @@ func List(stateRoot string, packageFilter, statusFilter string) ([]Result, error
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func isVoicePackage(owner string) bool {
+	o := strings.ToLower(strings.TrimSpace(owner))
+	return strings.Contains(o, "torvalds") || strings.HasPrefix(o, "person-")
+}
+
+func missTitle(owner, summary string) string {
+	spirit := ClassifyCommentSpirit(summary)
+	pkg := owner
+	if pkg == "" {
+		pkg = "package"
+	}
+	switch spirit {
+	case SpiritShip:
+		return soft(fmt.Sprintf("%s: ship/OK signal when change is landable", pkg), 80)
+	case SpiritStyle:
+		return soft(fmt.Sprintf("%s: style/nit judgment in persona voice", pkg), 80)
+	case SpiritDefect:
+		return soft(fmt.Sprintf("%s: catch defect class — %s", pkg, summary), 80)
+	default:
+		return soft(fmt.Sprintf("%s: technical judgment — %s", pkg, summary), 80)
+	}
 }
 
 // SaveResult upserts one result into SQLite.
@@ -327,14 +355,15 @@ func WriteGradedCase(stateRoot, runID string, c *cases.Case, fails []judge.Failu
 		}
 		id := concernResultID(runID, owner, c.ID, e.ID)
 		if _, isMiss := missed[e.ID]; isMiss {
-			body := fmt.Sprintf("## Miss\n\nPackage: `%s`\n\n%s\n\n", owner, e.Summary)
-			if prURL != "" {
-				body += fmt.Sprintf("PR: %s\n", prURL)
-			}
-			if e.File != "" {
-				body += fmt.Sprintf("File: `%s`\n", e.File)
-			}
-			body += "\n_Graded miss — package did not surface a matching finding._\n"
+			body := BuildMissDraft(MissDraftInput{
+				Package:  owner,
+				Summary:  e.Summary,
+				PRURL:    prURL,
+				PRTitle:  c.PullRequest.Title,
+				CaseID:   c.ID,
+				File:     e.File,
+				VoicePkg: isVoicePackage(owner),
+			})
 			r := Result{
 				ID:        id,
 				RunID:     runID,
@@ -342,7 +371,7 @@ func WriteGradedCase(stateRoot, runID string, c *cases.Case, fails []judge.Failu
 				Kind:      KindMiss,
 				Status:    StatusNew,
 				Summary:   soft(e.Summary, 100),
-				Title:     soft(e.Summary, 80),
+				Title:     missTitle(owner, e.Summary),
 				PRURL:     prURL,
 				PRTitle:   c.PullRequest.Title,
 				CaseID:    c.ID,
@@ -350,10 +379,17 @@ func WriteGradedCase(stateRoot, runID string, c *cases.Case, fails []judge.Failu
 				DraftBody: body,
 				CreatedAt: now,
 			}
-			// Preserve created_at if row exists
-			var created string
-			if err := db.QueryRow(`SELECT created_at FROM results WHERE id = ?`, id).Scan(&created); err == nil {
-				r.CreatedAt = parseTime(created)
+			// Preserve user lifecycle (applied/dismissed) across re-grades so
+			// results ls does not flip applied rows back to new.
+			if prev, err := getResultDB(db, id); err == nil {
+				r.CreatedAt = prev.CreatedAt
+				if prev.Status == StatusApplied || prev.Status == StatusDismissed {
+					r.Status = prev.Status
+					r.AppliedAt = prev.AppliedAt
+					r.AppliedPath = prev.AppliedPath
+					r.Branch = prev.Branch
+					r.IssueURL = prev.IssueURL
+				}
 			}
 			if err := upsertResult(db, r); err != nil {
 				return n, err
@@ -564,6 +600,9 @@ func FormatInspect(r Result) string {
 	}
 	if r.Branch != "" {
 		fmt.Fprintf(&b, "Branch:  %s\n", r.Branch)
+	}
+	if r.IssueURL != "" {
+		fmt.Fprintf(&b, "Issue:   %s\n", r.IssueURL)
 	}
 	fmt.Fprintf(&b, "Created: %s\n", r.CreatedAt.Format(time.RFC3339))
 	if r.DraftBody != "" {

@@ -16,6 +16,8 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/githubapi"
+	"github.com/adversarylabs/adversary/internal/githubreview"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/spf13/cobra"
 )
@@ -52,13 +54,33 @@ type runOptions struct {
 	runTimeout               time.Duration
 	buildTimeout             time.Duration
 	repoIndex                string
+
+	// GitHub review (opt-in posting / plan).
+	githubReview      bool
+	githubDryRun      bool
+	githubPlanFile    string
+	githubPR          int
+	githubRepo        string
+	githubSubmit      bool
+	githubMinSeverity string
+	githubAPIURL      string
+	githubRESTURL     string
+
+	// Filled by peel/resolve.
+	prURL           *githubapi.PRRef
+	tempPRDir       string
+	worktreeRoot    string // source repo when tempPRDir is a linked worktree
+	resolvedHeadSHA string
+	envelopes       []githubreview.NamedEnvelope
+	// Local adversary package roots (for agent/voice.md resolution).
+	adversaryPackageRoots []string
 }
 
 func newRunCommand(app *application.App, apiURL, profile *string) *cobra.Command {
 	opts := &runOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "run [adversary-ref...]",
+		Use:   "run [adversary-ref...] | run <github-pr-url> [adversary-ref...]",
 		Short: "Run adversaries against a local source repository",
 		Long: `Run adversaries against a repository.
 
@@ -67,7 +89,11 @@ With one or more adversary references, those adversaries run explicitly.
 With no adversary references, run pulls every adversary you can access (unless
 --no-pull), detects which apply to the resolved review scope, and runs the
 selected set. Use --all to skip detection and run every installed adversary.
-Use --all-files for a whole-repository scan instead of change inference.`,
+Use --all-files for a whole-repository scan instead of change inference.
+
+A GitHub pull request URL may be passed as a positional argument to set the
+review base/head and optional posting context. Posting still requires
+--github-review.`,
 		Example: `  adversary run
   adversary run --all
   adversary run --all-files
@@ -79,7 +105,9 @@ Use --all-files for a whole-repository scan instead of change inference.`,
   adversary run adversarylabs/go-cli adversarylabs/secrets --all-files
   adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id
   adversary run --all --all-files --output-file review.txt
-  adversary run go-cli secrets --format json --output-file results.json`,
+  adversary run go-cli secrets --format json --output-file results.json
+  adversary run https://github.com/owner/repo/pull/123
+  adversary run https://github.com/owner/repo/pull/123 --github-review --github-dry-run`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, opts.format, opts.json)
@@ -89,7 +117,33 @@ Use --all-files for a whole-repository scan instead of change inference.`,
 			if opts.debug && cmd.Flags().Changed("verbose") {
 				return fmt.Errorf("--debug and --verbose cannot be combined")
 			}
-			if opts.allFiles && (opts.base != "" || opts.head != "") {
+			pr, rest, err := peelPRURL(args)
+			if err != nil {
+				return err
+			}
+			opts.prURL = pr
+			args = rest
+			opts.adversaryPackageRoots = githubreview.LocalPackageRoots(args)
+			if opts.githubReview && opts.shell {
+				return fmt.Errorf("--github-review cannot be combined with --shell")
+			}
+			if !opts.githubReview {
+				if opts.githubDryRun || opts.githubPlanFile != "" || opts.githubSubmit || opts.githubMinSeverity != "" {
+					return fmt.Errorf("GitHub review flags require --github-review")
+				}
+				if cmd.Flags().Changed("github-pr") || cmd.Flags().Changed("github-repo") {
+					return fmt.Errorf("--github-pr/--github-repo require --github-review (or pass a PR URL for analysis)")
+				}
+			}
+			// PR URL alone does not require --github-review; pr/repo flags without review only OK with URL path.
+			if opts.githubMinSeverity != "" {
+				switch opts.githubMinSeverity {
+				case "info", "low", "medium", "high", "critical":
+				default:
+					return fmt.Errorf("--github-min-severity must be info, low, medium, high, or critical")
+				}
+			}
+			if opts.allFiles && (opts.base != "" || opts.head != "") && opts.prURL == nil {
 				return fmt.Errorf("--all-files cannot be combined with --base or --head")
 			}
 			if opts.builder != "local" && opts.builder != "docker" {
@@ -145,14 +199,31 @@ Use --all-files for a whole-repository scan instead of change inference.`,
 			if closer != nil {
 				defer closer()
 			}
-
-			if len(args) == 0 {
-				return runAutomaticSelection(cmd, app, opts, apiURL, profile, resultOut, progressOut)
-			}
-			if err := rejectAutomaticOnlyFlags(cmd, opts); err != nil {
+			if err := resolvePRRunContext(cmd.Context(), opts, progressOut); err != nil {
 				return err
 			}
-			return runAdversaries(cmd.Context(), app, opts, args, apiURL, profile, resultOut, progressOut)
+			// Register cleanup only after resolve may set tempPRDir / worktree root.
+			if opts.tempPRDir != "" || (opts.worktreeRoot != "" && opts.githubPR > 0) {
+				prNum := opts.githubPR
+				defer githubreview.CleanupWorkspace(opts.path, opts.tempPRDir, opts.worktreeRoot, prNum)
+			}
+
+			var runErr error
+			if len(args) == 0 {
+				runErr = runAutomaticSelection(cmd, app, opts, apiURL, profile, resultOut, progressOut)
+			} else {
+				if err := rejectAutomaticOnlyFlags(cmd, opts); err != nil {
+					return err
+				}
+				runErr = runAdversaries(cmd.Context(), app, opts, args, apiURL, profile, resultOut, progressOut)
+			}
+			// Still project/post when only findings error.
+			postErr := maybeGitHubReview(cmd.Context(), opts, opts.envelopes, progressOut)
+			if postErr != nil {
+				// Policy A: post failure wins over findings (exit 4).
+				return postErr
+			}
+			return runErr
 		},
 	}
 
@@ -188,6 +259,16 @@ Use --all-files for a whole-repository scan instead of change inference.`,
 	cmd.Flags().DurationVar(&opts.runTimeout, "timeout", 0, "maximum adversary execution time (0 disables the deadline)")
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
 	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "auto", "local repository index for adversary navigation: auto, off, or force")
+
+	cmd.Flags().BoolVar(&opts.githubReview, "github-review", false, "build a GitHub PR comment plan and post (unless --github-dry-run)")
+	cmd.Flags().BoolVar(&opts.githubDryRun, "github-dry-run", false, "with --github-review: plan/place only; never mutate GitHub")
+	cmd.Flags().StringVar(&opts.githubPlanFile, "github-plan-file", "", "write CommentPlan JSON to this path")
+	cmd.Flags().IntVar(&opts.githubPR, "github-pr", 0, "pull request number for posting")
+	cmd.Flags().StringVar(&opts.githubRepo, "github-repo", "", "owner/name repository for posting")
+	cmd.Flags().BoolVar(&opts.githubSubmit, "github-submit", false, "submit the review as informational COMMENT (default leaves pending)")
+	cmd.Flags().StringVar(&opts.githubMinSeverity, "github-min-severity", "", "only plan/post findings at this severity or higher")
+	cmd.Flags().StringVar(&opts.githubAPIURL, "github-api-url", "", "GraphQL endpoint override (default https://api.github.com/graphql)")
+	cmd.Flags().StringVar(&opts.githubRESTURL, "github-rest-url", "", "REST API base override (default https://api.github.com)")
 
 	return cmd
 }
@@ -316,6 +397,9 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 				_, err := fmt.Fprintf(progressOut, "    ✗ %s\n", compactRunFailure(runErr, ""))
 				return err
 			}
+		},
+		OnEnvelope: func(name string, envelope any) {
+			collectEnvelope(&opts.envelopes, name)(envelope)
 		},
 	})
 	// Sanitized usage: CLI version + adversaries that actually ran.
@@ -652,6 +736,7 @@ func runOneAdversary(
 		RepoIndexMode:            opts.repoIndex,
 		Stdout:                   stdout,
 		Stderr:                   stderr,
+		OnEnvelope:               collectEnvelope(&opts.envelopes, ref),
 	}
 	err := app.Dependencies().Runtime.Run(ctx, runOpts)
 	if errors.Is(err, context.Canceled) {

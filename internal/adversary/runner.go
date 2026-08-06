@@ -42,6 +42,9 @@ type RunOptions struct {
 	ReferenceIdentity        string
 	// RepoIndexMode controls local repo index ensure (auto|off|force). Empty = auto.
 	RepoIndexMode string
+	// OnEnvelope is invoked with the decoded protocol envelope after suppression
+	// stripping and before/after rendering. Callers use it for post-run projection.
+	OnEnvelope func(review.RunEnvelope)
 }
 
 const maxRunOutputBytes int64 = 16 << 20
@@ -269,18 +272,21 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 
 	if resolved.Manifest != nil && len(resolved.Manifest.Triggers.FilesChanged) > 0 && (opts.ReviewContext != nil || opts.BaseRef != "" || opts.HeadRef != "") {
 		if !ShouldRunForChangedFiles(resolved.Manifest.Triggers.FilesChanged, changedFiles, opts.Force || opts.AllFiles) {
+			skipped := review.RunEnvelope{
+				ProtocolVersion: review.ProtocolVersion,
+				Result: review.ReviewResult{
+					Adversary:    review.ReviewAdversary{Name: resolved.Name},
+					Target:       review.ReviewTarget{Repository: repoPath},
+					Positives:    []review.Note{},
+					Observations: []review.Note{{Key: "run-skipped", Summary: "No changed files matched triggers.files_changed."}},
+					Findings:     []review.Finding{},
+					Suppressed:   review.Suppressed{},
+				},
+			}
+			if opts.OnEnvelope != nil {
+				opts.OnEnvelope(skipped)
+			}
 			if opts.Format == "json" {
-				skipped := review.RunEnvelope{
-					ProtocolVersion: review.ProtocolVersion,
-					Result: review.ReviewResult{
-						Adversary:    review.ReviewAdversary{Name: resolved.Name},
-						Target:       review.ReviewTarget{Repository: repoPath},
-						Positives:    []review.Note{},
-						Observations: []review.Note{{Key: "run-skipped", Summary: "No changed files matched triggers.files_changed."}},
-						Findings:     []review.Finding{},
-						Suppressed:   review.Suppressed{},
-					},
-				}
 				encoder := json.NewEncoder(stdout)
 				encoder.SetIndent("", "  ")
 				if err := encoder.Encode(skipped); err != nil {
@@ -487,6 +493,9 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	// protocol field; aggregate counts remain available in either mode.
 	if !opts.IncludeSuppressed {
 		envelope.Result.SuppressedFindings = nil
+	}
+	if opts.OnEnvelope != nil {
+		opts.OnEnvelope(envelope)
 	}
 
 	if opts.Format == "json" {

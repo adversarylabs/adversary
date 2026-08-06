@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS results (
   created_at    TEXT NOT NULL,
   applied_at    TEXT NOT NULL DEFAULT '',
   applied_path  TEXT NOT NULL DEFAULT '',
-  branch        TEXT NOT NULL DEFAULT ''
+  branch        TEXT NOT NULL DEFAULT '',
+  issue_url     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_results_status ON results(status);
 CREATE INDEX IF NOT EXISTS idx_results_package ON results(package);
@@ -70,11 +71,13 @@ CREATE INDEX IF NOT EXISTS idx_results_run ON results(run_id);
 	// Rename legacy jargon in place (idempotent).
 	_, _ = db.Exec(`UPDATE results SET kind = 'human' WHERE kind IN ('gold', 'expected', 'label')`)
 	_, _ = db.Exec(`UPDATE results SET kind = 'false-positive' WHERE kind IN ('extra', 'fp', 'false_positive')`)
+	// Additive columns for older DBs.
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN issue_url TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
 const resultCols = `id, run_id, package, kind, status, summary, title, pr_url, pr_title,
-	case_id, concern_id, draft_body, created_at, applied_at, applied_path, branch`
+	case_id, concern_id, draft_body, created_at, applied_at, applied_path, branch, issue_url`
 
 func scanResult(row interface {
 	Scan(dest ...any) error
@@ -84,7 +87,7 @@ func scanResult(row interface {
 	err := row.Scan(
 		&r.ID, &r.RunID, &r.Package, &r.Kind, &r.Status, &r.Summary, &r.Title,
 		&r.PRURL, &r.PRTitle, &r.CaseID, &r.ConcernID, &r.DraftBody,
-		&created, &applied, &r.AppliedPath, &r.Branch,
+		&created, &applied, &r.AppliedPath, &r.Branch, &r.IssueURL,
 	)
 	if err != nil {
 		return Result{}, err
@@ -123,8 +126,8 @@ func upsertResult(db *sql.DB, r Result) error {
 	_, err := db.Exec(`
 INSERT INTO results (
   id, run_id, package, kind, status, summary, title, pr_url, pr_title,
-  case_id, concern_id, draft_body, created_at, applied_at, applied_path, branch
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  case_id, concern_id, draft_body, created_at, applied_at, applied_path, branch, issue_url
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   run_id=excluded.run_id,
   package=excluded.package,
@@ -140,11 +143,12 @@ ON CONFLICT(id) DO UPDATE SET
   created_at=excluded.created_at,
   applied_at=excluded.applied_at,
   applied_path=excluded.applied_path,
-  branch=excluded.branch
+  branch=excluded.branch,
+  issue_url=excluded.issue_url
 `,
 		r.ID, r.RunID, r.Package, r.Kind, r.Status, r.Summary, r.Title,
 		r.PRURL, r.PRTitle, r.CaseID, r.ConcernID, r.DraftBody,
-		formatTime(r.CreatedAt), formatTime(r.AppliedAt), r.AppliedPath, r.Branch,
+		formatTime(r.CreatedAt), formatTime(r.AppliedAt), r.AppliedPath, r.Branch, r.IssueURL,
 	)
 	return err
 }

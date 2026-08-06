@@ -426,26 +426,8 @@ func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, e
 	gz.Name = ""
 	gz.ModTime = time.Unix(0, 0).UTC()
 	tw := tar.NewWriter(gz)
-	err = fs.WalkDir(root.FS(), ".", func(rel string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if rel == "." {
-			return nil
-		}
+	addFile := func(rel string) error {
 		rel = filepath.ToSlash(rel)
-		if rel == manifest.FileName {
-			return nil
-		}
-		if ignore.ignored(rel, entry.IsDir()) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if entry.IsDir() {
-			return nil
-		}
 		before, err := root.Lstat(rel)
 		if err != nil {
 			return err
@@ -483,8 +465,36 @@ func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, e
 		}
 		files = append(files, File{Path: rel, Size: n, SHA256: hex.EncodeToString(h.Sum(nil)), Mode: mode})
 		return nil
+	}
+	err = fs.WalkDir(root.FS(), ".", func(rel string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == manifest.FileName {
+			return nil
+		}
+		if ignore.ignored(rel, entry.IsDir()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		return addFile(rel)
 	})
 	if err != nil {
+		return nil, errors.Join(err, tw.Close(), gz.Close())
+	}
+	// node_modules is ignored by default so packages stay free of dev tooling.
+	// Include the published TypeScript SDK (and its production deps) so packed
+	// artifacts run offline without a vendored copy under vendor/adversary-sdk.
+	if err := appendRuntimeSDKNodeModules(root, addFile); err != nil {
 		return nil, errors.Join(err, tw.Close(), gz.Close())
 	}
 	if err := errors.Join(tw.Close(), gz.Close()); err != nil {
@@ -492,6 +502,117 @@ func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, e
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
+}
+
+// appendRuntimeSDKNodeModules packs the installed published SDK and its production
+// dependency closure from node_modules. Dev tooling (typescript, tsx, etc.) is left out.
+func appendRuntimeSDKNodeModules(root *os.Root, addFile func(string) error) error {
+	roots := []string{
+		"node_modules/@adversarylabs/sdk",
+		"node_modules/@adversary/sdk",
+	}
+	seen := make(map[string]struct{})
+	queue := make([]string, 0, 8)
+	for _, candidate := range roots {
+		if info, err := root.Stat(candidate); err == nil && info.IsDir() {
+			queue = append(queue, candidate)
+		}
+	}
+	if len(queue) == 0 {
+		return nil
+	}
+	for len(queue) > 0 {
+		pkgDir := queue[0]
+		queue = queue[1:]
+		if _, ok := seen[pkgDir]; ok {
+			continue
+		}
+		seen[pkgDir] = struct{}{}
+		if err := fs.WalkDir(root.FS(), pkgDir, func(rel string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			rel = filepath.ToSlash(rel)
+			// Nested dependency trees are resolved via the package queue so we
+			// do not accidentally pull unrelated sibling packages.
+			if entry.IsDir() {
+				if rel != pkgDir && filepath.Base(rel) == "node_modules" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			return addFile(rel)
+		}); err != nil {
+			return err
+		}
+		deps, err := readPackageJSONDependencies(root, pkgDir+"/package.json")
+		if err != nil {
+			return err
+		}
+		for _, dep := range deps {
+			resolved, ok := resolveNodeModule(root, pkgDir, dep)
+			if !ok {
+				continue
+			}
+			if _, ok := seen[resolved]; !ok {
+				queue = append(queue, resolved)
+			}
+		}
+	}
+	return nil
+}
+
+func readPackageJSONDependencies(root *os.Root, packageJSON string) ([]string, error) {
+	data, err := root.ReadFile(packageJSON)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var meta struct {
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", packageJSON, err)
+	}
+	if len(meta.Dependencies) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(meta.Dependencies))
+	for name := range meta.Dependencies {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func resolveNodeModule(root *os.Root, fromPkgDir, name string) (string, bool) {
+	// Nested install first, then walk up through intermediate and project-level node_modules.
+	candidates := []string{
+		filepath.ToSlash(path.Join(fromPkgDir, "node_modules", name)),
+	}
+	dir := filepath.ToSlash(fromPkgDir)
+	for dir != "." && dir != "" {
+		parent := path.Dir(dir)
+		if parent == dir {
+			break
+		}
+		candidates = append(candidates, filepath.ToSlash(path.Join(parent, "node_modules", name)))
+		dir = parent
+	}
+	candidates = append(candidates, filepath.ToSlash(path.Join("node_modules", name)))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		if info, err := root.Stat(candidate); err == nil && info.IsDir() {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 func normalizeNameOverride(name string, parse func(string) (oci.Reference, error)) (string, error) {

@@ -2,6 +2,8 @@ package collect
 
 import (
 	"testing"
+
+	"github.com/adversarylabs/adversary/internal/githubapi"
 )
 
 func TestDiscoverPRsByAuthorValidation(t *testing.T) {
@@ -23,14 +25,14 @@ func TestBuildAuthorSkipSet(t *testing.T) {
 }
 
 func TestIsRateLimitText(t *testing.T) {
-	if !isRateLimitText("API rate limit exceeded for user") {
+	if !IsRateLimit(&githubapi.RateLimitError{Message: "API rate limit exceeded for user"}) {
 		t.Fatal()
 	}
-	if isRateLimitText("no PRs found") {
+	if IsRateLimit(simpleErr("no PRs found")) {
 		t.Fatal()
-	}
-	rl := parseRateLimit([]byte(`{"message":"secondary rate limit"}`))
-	if rl == nil {
-		t.Fatal("secondary")
 	}
 }
+
+type simpleErr string
+
+func (e simpleErr) Error() string { return string(e) }

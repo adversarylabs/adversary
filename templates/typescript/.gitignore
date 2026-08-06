@@ -3,7 +3,5 @@ dist/
 !dist/
 !dist/index.js
 !dist/index.d.ts
-!vendor/adversary-sdk/dist/
-!vendor/adversary-sdk/dist/**
 .adversary/
 npm-debug.log*

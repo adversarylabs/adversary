@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { access } from "node:fs/promises";
 import { join } from "node:path";
-import { Adversary, Finding, Severity, log } from "@adversary/sdk";
+import { pathToFileURL } from "node:url";
+import { Adversary, Severity, log } from "@adversarylabs/sdk";
 export function createApp() {
     const app = new Adversary({
         name: "local/{{name}}",
@@ -10,15 +11,17 @@ export function createApp() {
         log.info("Checking for README.md...");
         const readmePath = join(ctx.repoPath, "README.md");
         if (await exists(readmePath)) {
-            return [];
+            return;
         }
         log.info("README.md was not found.");
-        return new Finding({
+        ctx.finding({
             ruleId: "readme.exists",
+            category: "docs",
             severity: Severity.Low,
+            confidence: "high",
             title: "Repository is missing a README",
-            message: "Add a README.md so developers understand the project.",
-            path: "README.md",
+            summary: "Add a README.md so developers understand the project.",
+            evidence: [{ file: "README.md", message: "README.md is missing at the repository root." }],
             recommendation: "Create a README.md with setup, usage, and testing instructions.",
         });
     });
@@ -33,6 +36,8 @@ async function exists(path) {
         return false;
     }
 }
-if (process.argv[1] !== undefined && import.meta.url === new URL(process.argv[1], "file:").href) {
-    await createApp().run();
+const app = createApp();
+export default app;
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    await app.runFromEnvironment();
 }

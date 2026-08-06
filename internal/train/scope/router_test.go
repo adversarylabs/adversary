@@ -141,3 +141,28 @@ func TestRouterCommitMessageWordingNone(t *testing.T) {
 		t.Fatalf("commit message wording must not be gold: %+v", route)
 	}
 }
+
+func TestRouterBroadGeneralistKeepsNits(t *testing.T) {
+	r := &Router{
+		Candidates: []Candidate{
+			{
+				ID:            "torvalds",
+				AdversaryName: "torvalds",
+				Mission:       "Everything is in scope. Do not exclude nits. Clarity, style, and nits (**all in scope**).",
+			},
+		},
+	}
+	route := r.RouteComment("nit: rename this variable for clarity", "core/qt-ble.cpp", "torvalds")
+	if route.Decision != InScope || route.OwnerID != "torvalds" {
+		t.Fatalf("got owner=%q decision=%s reason=%s", route.OwnerID, route.Decision, route.Reason)
+	}
+	// Technical discussion without eng-review "bug/race" keywords must still land.
+	route = r.RouteComment(
+		"Yeah, a lambda expression is certainly conceptually the right thing. Why not use QList::clear()?",
+		"core/qt-ble.cpp",
+		"torvalds",
+	)
+	if route.Decision != InScope || route.OwnerID != "torvalds" {
+		t.Fatalf("got owner=%q decision=%s reason=%s", route.OwnerID, route.Decision, route.Reason)
+	}
+}

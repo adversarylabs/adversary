@@ -105,7 +105,8 @@ func RewriteTrainDrafts(stateRoot string) error {
 	})
 }
 
-// FirstScopedPackage returns the first child of root with docs/scope.md.
+// FirstScopedPackage returns the first child of root with a scope.md
+// (agent/scope.md preferred; train/ and docs/ accepted).
 func FirstScopedPackage(root string) string {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -116,11 +117,24 @@ func FirstScopedPackage(root string) string {
 			continue
 		}
 		cand := filepath.Join(root, e.Name())
-		if FileExists(filepath.Join(cand, "docs", "scope.md")) {
+		if hasScopeMarkdown(cand) {
 			return cand
 		}
 	}
 	return root
+}
+
+func hasScopeMarkdown(pkgRoot string) bool {
+	for _, rel := range []string{
+		filepath.Join("agent", "scope.md"),
+		filepath.Join("train", "scope.md"),
+		filepath.Join("docs", "scope.md"),
+	} {
+		if FileExists(filepath.Join(pkgRoot, rel)) {
+			return true
+		}
+	}
+	return false
 }
 
 // FindTrainFixturesRoot locates internal/train containing fixtures/cases.

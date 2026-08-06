@@ -37,6 +37,68 @@ func TestShortNitOutOfScope(t *testing.T) {
 	}
 }
 
+func TestBroadMissionNitInScope(t *testing.T) {
+	mission := `# torvalds-adversary
+## In scope
+**Everything technical about the change.** Including nits.
+## Out of scope
+Almost nothing. Only exclude bot noise.
+Default rule: if you are unsure whether something is in scope, it is in scope.
+`
+	c := &Classifier{
+		AdversaryName:   "torvalds",
+		MissionMarkdown: mission,
+		UseLLM:          false,
+	}
+	r := c.Classify("nit: rename this var for clarity", "core/qt-ble.cpp", "torvalds")
+	if r.Decision != InScope {
+		t.Fatalf("broad mission nit should be in scope, got %s (%s)", r.Decision, r.Reason)
+	}
+}
+
+func TestBroadMissionTorvaldsStyleCommentInScope(t *testing.T) {
+	c := &Classifier{
+		AdversaryName:   "torvalds",
+		MissionMarkdown: "Everything is in scope. Do not exclude nits.",
+		UseLLM:          false,
+	}
+	body := "Yeah, a lambda expression is certainly _conceptually_ the right thing to do.\n\nMaybe C++ compilers even do them right these days."
+	r := c.Classify(body, "core/qt-ble.cpp", "torvalds")
+	if r.Decision != InScope {
+		t.Fatalf("got %s (%s)", r.Decision, r.Reason)
+	}
+}
+
+func TestBroadMissionKeepsLGTMAndNits(t *testing.T) {
+	c := &Classifier{
+		AdversaryName:   "torvalds",
+		MissionMarkdown: "Everything is in scope.",
+		UseLLM:          false,
+	}
+	// Person generalist: anything the human wrote is gold (bots still out).
+	if r := c.Classify("LGTM", "foo.go", "torvalds"); r.Decision != InScope {
+		t.Fatalf("LGTM from person author should be in scope, got %s (%s)", r.Decision, r.Reason)
+	}
+	if r := c.Classify("nit: rename this", "foo.go", "torvalds"); r.Decision != InScope {
+		t.Fatalf("nit should be in scope, got %s", r.Decision)
+	}
+	if r := c.Classify("please fix the race", "foo.go", "dependabot[bot]"); r.Decision != OutOfScope {
+		t.Fatalf("bot should stay out, got %s", r.Decision)
+	}
+}
+
+func TestBroadScopeMissionDetection(t *testing.T) {
+	if !BroadScopeMission("torvalds", "") {
+		t.Fatal("torvalds id should be broad")
+	}
+	if BroadScopeMission("engineering-review", "everything is in scope") {
+		t.Fatal("engineering-review must not be broad even if text matches")
+	}
+	if !BroadScopeMission("my-package", "if you are unsure whether something is in scope, it is in scope") {
+		t.Fatal("mission text should mark package broad")
+	}
+}
+
 func TestCopilotOverviewOutOfScope(t *testing.T) {
 	c := &Classifier{AdversaryName: "engineering-review", UseLLM: false}
 	body := `## Pull request overview

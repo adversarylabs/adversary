@@ -53,11 +53,24 @@ func TestInitCommandGeneratesTypeScriptProject(t *testing.T) {
 		"test/index.test.ts",
 		"fixtures/clean/README.md",
 		"fixtures/vulnerable/.gitkeep",
-		"vendor/adversary-sdk/dist/index.js",
 	} {
 		if _, err := os.Stat(filepath.Join(destination, rel)); err != nil {
 			t.Fatalf("expected generated file %s: %v", rel, err)
 		}
+	}
+	// Init must use the published npm SDK, not a vendored copy.
+	if _, err := os.Stat(filepath.Join(destination, "vendor", "adversary-sdk")); !os.IsNotExist(err) {
+		t.Fatalf("init must not vendor the SDK: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("init must not ship node_modules: %v", err)
+	}
+	packageJSON := readFile(t, filepath.Join(destination, "package.json"))
+	if !strings.Contains(packageJSON, `"@adversarylabs/sdk"`) {
+		t.Fatalf("package.json must depend on published @adversarylabs/sdk:\n%s", packageJSON)
+	}
+	if strings.Contains(packageJSON, "file:vendor") || strings.Contains(packageJSON, "@adversary/sdk") {
+		t.Fatalf("package.json must not use a vendored or legacy SDK path:\n%s", packageJSON)
 	}
 
 	distPath := filepath.Join(destination, "dist/index.js")
@@ -638,8 +651,9 @@ func TestPushPullAgainstLocalOCIRegistry(t *testing.T) {
 
 	project := t.TempDir()
 	writeProject(t, project)
-	copyTestTree(t, filepath.Join("..", "templates", "typescript", "vendor", "adversary-sdk"), filepath.Join(project, "vendor", "adversary-sdk"))
-	if err := os.WriteFile(filepath.Join(project, "dist", "index.js"), []byte(`import { parseInput, writeOutput } from "@adversary/sdk";
+	// Pack includes the published SDK from node_modules (no vendor/ copy).
+	writeMinimalPublishedSDK(t, project)
+	if err := os.WriteFile(filepath.Join(project, "dist", "index.js"), []byte(`import { parseInput, writeOutput } from "@adversarylabs/sdk";
 await parseInput();
 await writeOutput({protocolVersion:1,result:{adversary:{name:"local/security-reviewer"},target:{},positives:[],observations:[{key:"sdk-stage",summary:"SDK parse/write executed."}],findings:[],suppressed:{observations:0,findings:0}}});
 `), 0644); err != nil {
@@ -1269,6 +1283,29 @@ writeFileSync(process.env.ADVERSARY_OUTPUT, JSON.stringify({protocolVersion:1,re
 		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// writeMinimalPublishedSDK installs a tiny stand-in for @adversarylabs/sdk under
+// node_modules so pack/run E2E tests exercise the published-package path (not vendor/).
+func writeMinimalPublishedSDK(t *testing.T, dir string) {
+	t.Helper()
+	sdkRoot := filepath.Join(dir, "node_modules", "@adversarylabs", "sdk")
+	if err := os.MkdirAll(filepath.Join(sdkRoot, "dist"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	pkg := `{"name":"@adversarylabs/sdk","version":"0.1.16","type":"module","main":"./dist/index.js"}`
+	if err := os.WriteFile(filepath.Join(sdkRoot, "package.json"), []byte(pkg), 0644); err != nil {
+		t.Fatal(err)
+	}
+	entry := `export async function parseInput() { return { source: { path: process.cwd() } }; }
+export async function writeOutput(output) {
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(process.env.ADVERSARY_OUTPUT, JSON.stringify(output));
+}
+`
+	if err := os.WriteFile(filepath.Join(sdkRoot, "dist", "index.js"), []byte(entry), 0644); err != nil {
+		t.Fatal(err)
 	}
 }
 func copyTestTree(t *testing.T, src, dst string) {
