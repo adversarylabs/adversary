@@ -93,13 +93,12 @@ func Expand(roots []string, load Loader, opts Options) (Result, error) {
 		m, packageDir, err := load.Load(cur.ref)
 		runRef := cur.ref
 		if err == nil && packageDir != "" {
-			if abs, absErr := filepath.Abs(packageDir); absErr == nil {
-				// Alias every path form of this package dir so ./pkg and /abs/pkg
-				// (or uses.path resolving to the same tree) share one seen key.
-				seen[abs] = struct{}{}
+			if canon, canonErr := canonicalPath(packageDir); canonErr == nil {
+				// Alias every path form of this package dir so ./pkg, /abs/pkg,
+				// and symlink paths that resolve to the same tree share one key.
+				seen[canon] = struct{}{}
 				if isFilesystemRef(cur.ref) {
-					runRef = abs
-					// Root may have been keyed relatively before Abs; ensure both.
+					runRef = canon
 					seen[normalizeRefKey(cur.ref)] = struct{}{}
 				}
 			}
@@ -115,11 +114,11 @@ func Expand(roots []string, load Loader, opts Options) (Result, error) {
 			continue
 		}
 		if cur.isRoot && packageDir != "" {
-			abs := packageDir
-			if a, err := filepath.Abs(packageDir); err == nil {
-				abs = a
+			if canon, err := canonicalPath(packageDir); err == nil {
+				out.VoiceRoots = appendUnique(out.VoiceRoots, canon)
+			} else {
+				out.VoiceRoots = appendUnique(out.VoiceRoots, packageDir)
 			}
-			out.VoiceRoots = appendUnique(out.VoiceRoots, abs)
 		}
 		if cur.depth >= maxDepth {
 			continue
@@ -129,10 +128,10 @@ func Expand(roots []string, load Loader, opts Options) (Result, error) {
 			if err != nil {
 				return Result{}, fmt.Errorf("compose: %q uses[%d]: %w", cur.ref, i, err)
 			}
-			// Prefer absolute paths for local members so dedupe matches roots.
+			// Prefer canonical paths for local members so dedupe matches roots.
 			if isFilesystemRef(member) {
-				if abs, err := filepath.Abs(filepath.Clean(member)); err == nil {
-					member = abs
+				if canon, err := canonicalPath(member); err == nil {
+					member = canon
 				}
 			}
 			mk := normalizeRefKey(member)
@@ -148,21 +147,33 @@ func Expand(roots []string, load Loader, opts Options) (Result, error) {
 }
 
 // normalizeRefKey produces a stable dedupe key. Filesystem refs are absolutized
-// so relative CLI roots and uses[].path members that point at the same tree
-// collapse to one run.
+// and symlink-resolved so relative roots, uses[].path, and symlink aliases that
+// point at the same tree collapse to one run.
 func normalizeRefKey(ref string) string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return ""
 	}
 	if isFilesystemRef(ref) {
-		clean := filepath.Clean(ref)
-		if abs, err := filepath.Abs(clean); err == nil {
-			return abs
+		if canon, err := canonicalPath(ref); err == nil {
+			return canon
 		}
-		return clean
+		return filepath.Clean(ref)
 	}
 	return strings.ToLower(ref)
+}
+
+// canonicalPath returns an absolute, symlink-resolved path when possible.
+// EvalSymlinks may fail for a not-yet-created path; then Abs+Clean is used.
+func canonicalPath(p string) (string, error) {
+	abs, err := filepath.Abs(filepath.Clean(p))
+	if err != nil {
+		return "", err
+	}
+	if eval, err := filepath.EvalSymlinks(abs); err == nil {
+		return eval, nil
+	}
+	return abs, nil
 }
 
 // isFilesystemRef reports whether ref is a local path (not a registry name/tag).

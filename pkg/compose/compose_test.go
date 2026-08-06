@@ -73,7 +73,7 @@ func TestExpandFlatUses(t *testing.T) {
 	if len(got.Refs) != 3 {
 		t.Fatalf("refs %#v", got.Refs)
 	}
-	if got.Refs[0] != rootDir {
+	if !samePath(got.Refs[0], rootDir) {
 		t.Fatalf("root first: %#v", got.Refs)
 	}
 	if got.Refs[1] != "review/engineering" || got.Refs[2] != "go/concurrency:0.1.0" {
@@ -82,9 +82,21 @@ func TestExpandFlatUses(t *testing.T) {
 	if !got.Expanded {
 		t.Fatal("expected Expanded")
 	}
-	if len(got.VoiceRoots) != 1 || got.VoiceRoots[0] != rootDir {
+	if len(got.VoiceRoots) != 1 || !samePath(got.VoiceRoots[0], rootDir) {
 		t.Fatalf("voice roots %#v", got.VoiceRoots)
 	}
+}
+
+func samePath(a, b string) bool {
+	ca, err := canonicalPath(a)
+	if err != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	cb, err := canonicalPath(b)
+	if err != nil {
+		return ca == filepath.Clean(b)
+	}
+	return ca == cb
 }
 
 func TestExpandTransitiveMetaPackage(t *testing.T) {
@@ -179,8 +191,8 @@ func TestExpandRelativePath(t *testing.T) {
 	if len(got.Refs) != 2 {
 		t.Fatalf("%#v", got.Refs)
 	}
-	if filepath.Clean(got.Refs[1]) != filepath.Clean(member) {
-		t.Fatalf("member path %#v", got.Refs[1])
+	if !samePath(got.Refs[1], member) {
+		t.Fatalf("member path %#v want %s", got.Refs[1], member)
 	}
 }
 
@@ -291,8 +303,6 @@ func TestExpandDedupeRelativeRootAndUsesPath(t *testing.T) {
 
 func TestNormalizeRefKeyPathAliases(t *testing.T) {
 	dir := t.TempDir()
-	rel := filepath.Join(".", filepath.Base(dir))
-	// Can't join parent easily; compare Abs of dir with itself via Clean+Abs
 	a, err := filepath.Abs(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -304,9 +314,79 @@ func TestNormalizeRefKeyPathAliases(t *testing.T) {
 	if normalizeRefKey(a) != normalizeRefKey(b) {
 		t.Fatalf("%q vs %q", normalizeRefKey(a), normalizeRefKey(b))
 	}
-	_ = rel
 	if normalizeRefKey("go/concurrency") != "go/concurrency" {
 		t.Fatal("registry name should stay lower-case name key")
+	}
+}
+
+func TestExpandDedupeSymlinkAlias(t *testing.T) {
+	root := t.TempDir()
+	realPkg := filepath.Join(root, "real")
+	if err := os.MkdirAll(realPkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkPkg := filepath.Join(root, "link")
+	if err := os.Symlink(realPkg, linkPkg); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	yaml := baseYAML("local/pkg", "")
+	if err := os.WriteFile(filepath.Join(realPkg, "adversary.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Meta package uses both real and symlink paths to the same tree.
+	meta := filepath.Join(root, "meta")
+	if err := os.MkdirAll(meta, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metaYAML := baseYAML("meta", "uses:\n  - path: ../real\n  - path: ../link\n")
+	if err := os.WriteFile(filepath.Join(meta, "adversary.yaml"), []byte(metaYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := loadFunc(func(ref string) (manifest.Manifest, string, error) {
+		abs, err := filepath.Abs(filepath.Clean(ref))
+		if err != nil {
+			return manifest.Manifest{}, "", err
+		}
+		if eval, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = eval
+		}
+		metaAbs, _ := filepath.EvalSymlinks(meta)
+		if ma, err := filepath.Abs(meta); err == nil {
+			if e, err := filepath.EvalSymlinks(ma); err == nil {
+				metaAbs = e
+			} else {
+				metaAbs = ma
+			}
+		}
+		realAbs, _ := filepath.EvalSymlinks(realPkg)
+		if ra, err := filepath.Abs(realPkg); err == nil {
+			if e, err := filepath.EvalSymlinks(ra); err == nil {
+				realAbs = e
+			} else {
+				realAbs = ra
+			}
+		}
+		switch abs {
+		case metaAbs:
+			m, err := manifest.Parse([]byte(metaYAML))
+			return m, metaAbs, err
+		case realAbs:
+			m, err := manifest.Parse([]byte(yaml))
+			return m, realAbs, err
+		default:
+			return manifest.Manifest{}, "", fmt.Errorf("not found: %s", abs)
+		}
+	})
+
+	metaAbs, _ := filepath.Abs(meta)
+	got, err := Expand([]string{metaAbs}, loader, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// meta + one leaf (real and link collapsed)
+	if len(got.Refs) != 2 {
+		t.Fatalf("want 2 (meta + one package), got %#v", got.Refs)
 	}
 }
 
