@@ -3,6 +3,7 @@ package results
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestClassifyShipSignal(t *testing.T) {
@@ -88,9 +89,66 @@ func TestFormatVoiceBankInstructions(t *testing.T) {
 		"Ugh. This is nasty",
 		"libdc/pull/39",
 		"Never emit an example quote unchanged",
+		"synthetic train draft",
 	} {
+		if want == "synthetic train draft" {
+			// present as "Bank synthetic train draft titles"
+			if !strings.Contains(s, "synthetic") {
+				t.Fatalf("missing synthetic warning:\n%s", s)
+			}
+			continue
+		}
 		if !strings.Contains(s, want) {
 			t.Fatalf("missing %q in:\n%s", want, s)
 		}
+	}
+}
+
+func TestTruncateRunesUTF8Safe(t *testing.T) {
+	// Multi-byte runes: each "世" is 3 bytes; 5 runes + ellipsis.
+	s := "世界世界世界世界" // 8 runes
+	got := truncateRunes(s, 5)
+	if !utf8.ValidString(got) {
+		t.Fatalf("invalid utf8: %q", got)
+	}
+	if utf8.RuneCountInString(got) != 5 { // 4 runes + "…" is still 5 runes if ellipsis is one rune
+		// We use maxRunes-1 content + ellipsis → 4 + 1 = 5 runes
+		if utf8.RuneCountInString(got) != 5 {
+			t.Fatalf("rune count %d got %q", utf8.RuneCountInString(got), got)
+		}
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("expected ellipsis: %q", got)
+	}
+}
+
+func TestShouldBankHumanVoice(t *testing.T) {
+	if !ShouldBankHumanVoice(KindMiss) || !ShouldBankHumanVoice(KindHuman) {
+		t.Fatal("miss/human should bank")
+	}
+	if ShouldBankHumanVoice(KindDraft) || ShouldBankHumanVoice(KindFalsePositive) {
+		t.Fatal("draft/fp must not bank")
+	}
+}
+
+func TestFormatIssueBodyDraftDoesNotBankSyntheticSummary(t *testing.T) {
+	r := Result{
+		ID:        "abcd1234",
+		Package:   "torvalds",
+		Kind:      KindDraft,
+		Status:    StatusNew,
+		Summary:   "torvalds: catch lifecycle misses", // synthetic suggested-issue title
+		Title:     "torvalds: catch lifecycle misses",
+		DraftBody: "Improve shutdown detection.\n",
+	}
+	body := formatIssueBody(r, "docs/train-drafts/abcd1234.md", "/pkg")
+	if strings.Contains(body, "Exact entry to add") {
+		t.Fatal("draft kind must not emit voice bank entry")
+	}
+	if !strings.Contains(body, "not human gold") && !strings.Contains(body, "Do **not** bank") {
+		t.Fatalf("expected no-bank instruction:\n%s", body[:800])
+	}
+	if strings.Contains(body, "Human gold (bank in voice") {
+		t.Fatal("must not label draft summary as human gold")
 	}
 }

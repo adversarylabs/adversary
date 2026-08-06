@@ -148,11 +148,12 @@ func BuildMissDraft(in MissDraftInput) string {
 		fmt.Fprintf(&b, "%d. %q\n", i+1, ex)
 	}
 	fmt.Fprintf(&b, "\n")
+	// BuildMissDraft is only used for human-gold misses.
 	b.WriteString(FormatVoiceBankInstructions(in.Summary, spirit, in.PRURL))
 	fmt.Fprintf(&b, "\n### Acceptance for this train item\n\n")
 	fmt.Fprintf(&b, "- [ ] On similar changes, the package emits this **class** of signal (not the exact quote)\n")
 	fmt.Fprintf(&b, "- [ ] Posture matches **when to post** (no rubber-stamp on broken code; no silent ship on real bugs)\n")
-	fmt.Fprintf(&b, "- [ ] Human gold excerpt appended under `%s` → `%s` (style few-shot only)\n", VoiceBankFile, VoiceBankSectionHeading(spirit))
+	fmt.Fprintf(&b, "- [ ] **Human** gold excerpt appended under `%s` → `%s` (style few-shot only)\n", VoiceBankFile, VoiceBankSectionHeading(spirit))
 	fmt.Fprintf(&b, "- [ ] Finding/opinion strings in `src/` stay generic; wording variance comes from voice rewrite\n")
 	fmt.Fprintf(&b, "- [ ] Tests cover the **class**, not a single repository string match\n")
 	return b.String()

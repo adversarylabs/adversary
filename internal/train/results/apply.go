@@ -193,25 +193,36 @@ func issueLabels(r Result) []string {
 
 // formatIssueBody is agent-oriented: spirit, when to post, voice bank path, variance.
 func formatIssueBody(r Result, draftPath, packagePath string) string {
+	kind := normalizeKind(r.Kind)
+	// Only miss/human rows carry real reviewer wording for the voice corpus.
+	bankVoice := ShouldBankHumanVoice(kind)
 	spirit := ClassifyCommentSpirit(r.Summary)
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Task for coding agent\n\n")
 	fmt.Fprintf(&b, "Implement this **adversary train** result in the **`%s`** package.\n\n", r.Package)
-	switch normalizeKind(r.Kind) {
+	switch kind {
 	case KindMiss:
 		fmt.Fprintf(&b, "The human review signal was a **`%s`**. Do two things:\n\n", spirit)
 		fmt.Fprintf(&b, "1. **Detection / behavior** — fire this *class* of signal when appropriate (see brief).\n")
-		fmt.Fprintf(&b, "2. **Voice corpus** — bank the human wording in **`%s`** so CLI rewrite keeps the spirit ", VoiceBankFile)
+		fmt.Fprintf(&b, "2. **Voice corpus** — bank the **human** wording in **`%s`** so CLI rewrite keeps the spirit ", VoiceBankFile)
 		fmt.Fprintf(&b, "(few-shot style only — **not** a hard-coded finding string).\n\n")
+	case KindHuman:
+		fmt.Fprintf(&b, "This row is **human gold** (`%s`). Teach the class and bank the wording in **`%s`**.\n\n", spirit, VoiceBankFile)
 	case KindFalsePositive:
-		fmt.Fprintf(&b, "The package over-fired relative to human review. Quiet or gate this class of finding.\n\n")
+		fmt.Fprintf(&b, "The package over-fired relative to human review. Quiet or gate this class of finding.\n")
+		fmt.Fprintf(&b, "Do **not** append this summary to `%s` (not human gold).\n\n", VoiceBankFile)
+	case KindDraft:
+		fmt.Fprintf(&b, "This is a **synthetic train draft** (suggested package improvement), not a human review quote.\n")
+		fmt.Fprintf(&b, "Implement the behavior change only. Do **not** bank this title/summary into `%s`.\n\n", VoiceBankFile)
 	default:
 		fmt.Fprintf(&b, "Improve the package as described below.\n\n")
 	}
 
 	fmt.Fprintf(&b, "### One-line goal\n\n%s\n\n", strings.TrimSpace(r.Title))
-	if strings.TrimSpace(r.Summary) != "" {
+	if bankVoice && strings.TrimSpace(r.Summary) != "" {
 		fmt.Fprintf(&b, "Human gold (bank in voice; do **not** hard-code in `src/`): _%s_\n\n", soft(collapseWS(r.Summary), 200))
+	} else if !bankVoice && strings.TrimSpace(r.Summary) != "" {
+		fmt.Fprintf(&b, "Summary (synthetic / not for voice bank): _%s_\n\n", soft(collapseWS(r.Summary), 200))
 	}
 	fmt.Fprintf(&b, "### Kind\n\n`%s` — %s\n\n", KindLabel(r.Kind), KindExplain(r.Kind, r.Status))
 	fmt.Fprintf(&b, "### Source\n\n")
@@ -231,38 +242,53 @@ func formatIssueBody(r Result, draftPath, packagePath string) string {
 		fmt.Fprintf(&b, "- PR title: %s\n", r.PRTitle)
 	}
 
-	// Prefer structured draft; rebuild if legacy thin body or missing voice bank section.
+	// Prefer structured draft for human-gold misses; rebuild if thin or missing voice section.
 	draft := strings.TrimSpace(r.DraftBody)
-	if draft == "" || !strings.Contains(draft, "### When to post") || !strings.Contains(draft, VoiceBankFile) {
-		draft = strings.TrimSpace(BuildMissDraft(MissDraftInput{
-			Package:  r.Package,
-			Summary:  r.Summary,
-			PRURL:    r.PRURL,
-			PRTitle:  r.PRTitle,
-			CaseID:   r.CaseID,
-			VoicePkg: isVoicePackage(r.Package),
-		}))
-	}
-	fmt.Fprintf(&b, "\n### Train brief (spirit + when + variance)\n\n")
-	b.WriteString(draft)
-	b.WriteString("\n\n")
-
-	// Always surface voice bank instructions prominently (also inside brief for rebuild path).
-	if !strings.Contains(draft, "### Voice corpus") {
-		b.WriteString(FormatVoiceBankInstructions(r.Summary, spirit, r.PRURL))
+	if bankVoice {
+		if draft == "" || !strings.Contains(draft, "### When to post") || !strings.Contains(draft, VoiceBankFile) {
+			draft = strings.TrimSpace(BuildMissDraft(MissDraftInput{
+				Package:  r.Package,
+				Summary:  r.Summary,
+				PRURL:    r.PRURL,
+				PRTitle:  r.PRTitle,
+				CaseID:   r.CaseID,
+				VoicePkg: isVoicePackage(r.Package),
+			}))
+		}
+		fmt.Fprintf(&b, "\n### Train brief (spirit + when + variance)\n\n")
+		b.WriteString(draft)
+		b.WriteString("\n\n")
+		if !strings.Contains(draft, "### Voice corpus") {
+			b.WriteString(FormatVoiceBankInstructions(r.Summary, spirit, r.PRURL))
+			b.WriteString("\n")
+		}
+	} else if draft != "" {
+		fmt.Fprintf(&b, "\n### Draft body\n\n")
+		b.WriteString(draft)
+		if !strings.HasSuffix(draft, "\n") {
+			b.WriteByte('\n')
+		}
 		b.WriteString("\n")
 	}
 
 	fmt.Fprintf(&b, "### Implementation requirements\n\n")
-	fmt.Fprintf(&b, "1. **Detection:** teach **when** this class fires (see brief). Ship-signals → opinion/positive, not invented defects.\n")
-	fmt.Fprintf(&b, "2. **Voice:** append the human gold excerpt to **`%s`** under **`%s`** (see Voice corpus). ", VoiceBankFile, VoiceBankSectionHeading(spirit))
-	fmt.Fprintf(&b, "This is mandatory for persona packages so wording spirit is preserved.\n")
-	fmt.Fprintf(&b, "3. **Do not** paste the human quote as a constant finding title/summary in `src/`.\n")
-	fmt.Fprintf(&b, "4. **Tests/fixtures** for the **class**, not one PR-specific sentence.\n\n")
+	if bankVoice {
+		fmt.Fprintf(&b, "1. **Detection:** teach **when** this class fires (see brief). Ship-signals → opinion/positive, not invented defects.\n")
+		fmt.Fprintf(&b, "2. **Voice:** append the **human** gold excerpt to **`%s`** under **`%s`** (see Voice corpus). ", VoiceBankFile, VoiceBankSectionHeading(spirit))
+		fmt.Fprintf(&b, "Mandatory for persona packages.\n")
+		fmt.Fprintf(&b, "3. **Do not** paste the human quote as a constant finding title/summary in `src/`.\n")
+		fmt.Fprintf(&b, "4. **Tests/fixtures** for the **class**, not one PR-specific sentence.\n\n")
+	} else {
+		fmt.Fprintf(&b, "1. Implement the package change described in the draft/summary.\n")
+		fmt.Fprintf(&b, "2. **Do not** bank this row into `%s` (not human gold).\n", VoiceBankFile)
+		fmt.Fprintf(&b, "3. Add tests for the behavior change.\n\n")
+	}
 
 	fmt.Fprintf(&b, "### Files to touch\n\n")
 	fmt.Fprintf(&b, "| Path | Why |\n|------|-----|\n")
-	fmt.Fprintf(&b, "| **`%s`** | **Required:** bank human gold as style few-shot under the spirit subsection |\n", VoiceBankFile)
+	if bankVoice {
+		fmt.Fprintf(&b, "| **`%s`** | **Required:** bank **human** gold as style few-shot under the spirit subsection |\n", VoiceBankFile)
+	}
 	fmt.Fprintf(&b, "| `src/` | Rules / opinion / when-to-fire heuristics (generic strings only) |\n")
 	fmt.Fprintf(&b, "| `test/` + `fixtures/` | Class coverage (positive + negative) |\n")
 	fmt.Fprintf(&b, "| `agent/scope.md` | Only if mission/scope must expand |\n")
@@ -270,18 +296,22 @@ func formatIssueBody(r Result, draftPath, packagePath string) string {
 
 	fmt.Fprintf(&b, "### Acceptance\n\n")
 	fmt.Fprintf(&b, "- [ ] Package builds and tests pass\n")
-	switch spirit {
-	case SpiritShip:
-		fmt.Fprintf(&b, "- [ ] Landable changes can emit ship/OK-class signal; broken changes do not rubber-stamp ship\n")
-	case SpiritDefect:
-		fmt.Fprintf(&b, "- [ ] Similar defect class surfaces with evidence; no invented certainty\n")
-	case SpiritStyle:
-		fmt.Fprintf(&b, "- [ ] Style/nit class fires when appropriate without flooding every line\n")
-	default:
-		fmt.Fprintf(&b, "- [ ] Design/approach class surfaces with enough detail for the author to act\n")
+	if bankVoice {
+		switch spirit {
+		case SpiritShip:
+			fmt.Fprintf(&b, "- [ ] Landable changes can emit ship/OK-class signal; broken changes do not rubber-stamp ship\n")
+		case SpiritDefect:
+			fmt.Fprintf(&b, "- [ ] Similar defect class surfaces with evidence; no invented certainty\n")
+		case SpiritStyle:
+			fmt.Fprintf(&b, "- [ ] Style/nit class fires when appropriate without flooding every line\n")
+		default:
+			fmt.Fprintf(&b, "- [ ] Design/approach class surfaces with enough detail for the author to act\n")
+		}
+		fmt.Fprintf(&b, "- [ ] **`%s`** updated with this **human** gold under **`%s`** (deduped, short excerpt)\n", VoiceBankFile, VoiceBankSectionHeading(spirit))
+		fmt.Fprintf(&b, "- [ ] Surface form varies via voice rewrite; not a single fixed string in rules\n")
+	} else {
+		fmt.Fprintf(&b, "- [ ] Behavior change matches the draft; no pollution of `%s` with synthetic text\n", VoiceBankFile)
 	}
-	fmt.Fprintf(&b, "- [ ] **`%s`** updated with this gold under **`%s`** (deduped, short excerpt)\n", VoiceBankFile, VoiceBankSectionHeading(spirit))
-	fmt.Fprintf(&b, "- [ ] Surface form varies via voice rewrite; not a single fixed string in rules\n")
 	fmt.Fprintf(&b, "- [ ] Focused change; no unrelated rewrites\n\n")
 	if draftPath != "" {
 		fmt.Fprintf(&b, "### Local draft copy\n\n`%s`\n\n", RelDraftPath(packagePath, draftPath))
@@ -306,22 +336,35 @@ func formatApplyMarkdown(r Result) string {
 	fmt.Fprintf(&b, "- **Package:** `%s`\n", r.Package)
 	fmt.Fprintf(&b, "- **Kind:** %s — %s\n", KindLabel(r.Kind), KindExplain(r.Kind, r.Status))
 	fmt.Fprintf(&b, "- **Title:** %s\n", r.Title)
-	fmt.Fprintf(&b, "- **Human example:** %s\n", r.Summary)
+	if ShouldBankHumanVoice(r.Kind) {
+		fmt.Fprintf(&b, "- **Human gold:** %s\n", r.Summary)
+	} else {
+		fmt.Fprintf(&b, "- **Summary:** %s\n", r.Summary)
+	}
 	if r.PRURL != "" {
 		fmt.Fprintf(&b, "- **PR:** %s\n", r.PRURL)
 	}
 	fmt.Fprintf(&b, "- **Run:** `%s`\n", r.RunID)
-	fmt.Fprintf(&b, "\n_Applied by `adversary train results apply`. Implement spirit + when-to-post; do not hard-code the human sentence._\n\n")
+	if ShouldBankHumanVoice(r.Kind) {
+		fmt.Fprintf(&b, "\n_Applied by `adversary train results apply`. Implement detection + bank human gold in `%s`._\n\n", VoiceBankFile)
+	} else {
+		fmt.Fprintf(&b, "\n_Applied by `adversary train results apply`. Synthetic draft — do not bank summary into `%s`._\n\n", VoiceBankFile)
+	}
 	draft := strings.TrimSpace(r.DraftBody)
-	if draft == "" || !strings.Contains(draft, "### When to post") {
-		draft = strings.TrimSpace(BuildMissDraft(MissDraftInput{
-			Package:  r.Package,
-			Summary:  r.Summary,
-			PRURL:    r.PRURL,
-			PRTitle:  r.PRTitle,
-			CaseID:   r.CaseID,
-			VoicePkg: isVoicePackage(r.Package),
-		}))
+	if ShouldBankHumanVoice(r.Kind) {
+		if draft == "" || !strings.Contains(draft, "### When to post") || !strings.Contains(draft, VoiceBankFile) {
+			draft = strings.TrimSpace(BuildMissDraft(MissDraftInput{
+				Package:  r.Package,
+				Summary:  r.Summary,
+				PRURL:    r.PRURL,
+				PRTitle:  r.PRTitle,
+				CaseID:   r.CaseID,
+				VoicePkg: isVoicePackage(r.Package),
+			}))
+		}
+	}
+	if draft == "" {
+		draft = "_(no draft body)_\n"
 	}
 	b.WriteString(draft)
 	if !strings.HasSuffix(draft, "\n") {
