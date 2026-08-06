@@ -82,15 +82,32 @@ func Expand(roots []string, load Loader, opts Options) (Result, error) {
 		cur := queue[0]
 		queue = queue[1:]
 		key := normalizeRefKey(cur.ref)
+		if key == "" {
+			continue
+		}
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
 
-		// Always run roots; always run discovered members.
-		out.Refs = append(out.Refs, cur.ref)
-
 		m, packageDir, err := load.Load(cur.ref)
+		runRef := cur.ref
+		if err == nil && packageDir != "" {
+			if abs, absErr := filepath.Abs(packageDir); absErr == nil {
+				// Alias every path form of this package dir so ./pkg and /abs/pkg
+				// (or uses.path resolving to the same tree) share one seen key.
+				seen[abs] = struct{}{}
+				if isFilesystemRef(cur.ref) {
+					runRef = abs
+					// Root may have been keyed relatively before Abs; ensure both.
+					seen[normalizeRefKey(cur.ref)] = struct{}{}
+				}
+			}
+		}
+
+		// Always run roots; always run discovered members.
+		out.Refs = append(out.Refs, runRef)
+
 		if err != nil {
 			// Leave as a leaf: run will pull/resolve and surface errors.
 			// Avoid failing the whole multi-run expand on a missing optional member
@@ -112,6 +129,12 @@ func Expand(roots []string, load Loader, opts Options) (Result, error) {
 			if err != nil {
 				return Result{}, fmt.Errorf("compose: %q uses[%d]: %w", cur.ref, i, err)
 			}
+			// Prefer absolute paths for local members so dedupe matches roots.
+			if isFilesystemRef(member) {
+				if abs, err := filepath.Abs(filepath.Clean(member)); err == nil {
+					member = abs
+				}
+			}
 			mk := normalizeRefKey(member)
 			if _, ok := seen[mk]; ok {
 				continue
@@ -124,29 +147,36 @@ func Expand(roots []string, load Loader, opts Options) (Result, error) {
 	return out, nil
 }
 
+// normalizeRefKey produces a stable dedupe key. Filesystem refs are absolutized
+// so relative CLI roots and uses[].path members that point at the same tree
+// collapse to one run.
 func normalizeRefKey(ref string) string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return ""
 	}
-	// Absolute paths: clean for dedupe.
-	if filepath.IsAbs(ref) || looksLikePath(ref) {
-		return filepath.Clean(ref)
+	if isFilesystemRef(ref) {
+		clean := filepath.Clean(ref)
+		if abs, err := filepath.Abs(clean); err == nil {
+			return abs
+		}
+		return clean
 	}
 	return strings.ToLower(ref)
 }
 
-func looksLikePath(ref string) bool {
-	if strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "../") {
+// isFilesystemRef reports whether ref is a local path (not a registry name/tag).
+// Registry names like go/concurrency stay as names; ./pkg, ../pkg, ., and
+// absolute paths are filesystem refs.
+func isFilesystemRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return false
+	}
+	if filepath.IsAbs(ref) || ref == "." || ref == ".." {
 		return true
 	}
-	if strings.Contains(ref, string(filepath.Separator)) && !strings.Contains(ref, ":") {
-		// Heuristic: local relative path with separators and no tag colon.
-		// name/with/slashes is also a registry name — prefer name form when it
-		// matches nameRE-like. If it starts with . or is abs we already handled.
-		return strings.HasPrefix(ref, ".")
-	}
-	return false
+	return strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "../")
 }
 
 func appendUnique(list []string, v string) []string {

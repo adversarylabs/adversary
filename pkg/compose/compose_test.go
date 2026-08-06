@@ -215,3 +215,101 @@ func TestExpandMissingMemberStaysAsLeaf(t *testing.T) {
 		t.Fatalf("%#v", got.Refs)
 	}
 }
+
+func TestExpandDedupeRelativeRootAndUsesPath(t *testing.T) {
+	// Same package tree via relative CLI root and uses.path: . must run once.
+	root := t.TempDir()
+	member := filepath.Join(root, "leaf")
+	if err := os.MkdirAll(member, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rootYAML := baseYAML("meta/go", "uses:\n  - path: .\n  - path: leaf\n")
+	leafYAML := baseYAML("go/leaf", "")
+	if err := os.WriteFile(filepath.Join(root, "adversary.yaml"), []byte(rootYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(member, "adversary.yaml"), []byte(leafYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberAbs, err := filepath.Abs(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loader := loadFunc(func(ref string) (manifest.Manifest, string, error) {
+		abs, err := filepath.Abs(filepath.Clean(ref))
+		if err != nil {
+			return manifest.Manifest{}, "", err
+		}
+		// EvalSymlinks so /var vs /private/var on macOS still matches TempDir.
+		if eval, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = eval
+		}
+		rootKey := rootAbs
+		if eval, err := filepath.EvalSymlinks(rootAbs); err == nil {
+			rootKey = eval
+		}
+		memberKey := memberAbs
+		if eval, err := filepath.EvalSymlinks(memberAbs); err == nil {
+			memberKey = eval
+		}
+		switch abs {
+		case rootKey:
+			m, err := manifest.Parse([]byte(rootYAML))
+			return m, rootKey, err
+		case memberKey:
+			m, err := manifest.Parse([]byte(leafYAML))
+			return m, memberKey, err
+		default:
+			return manifest.Manifest{}, "", fmt.Errorf("not found: %s (%s)", ref, abs)
+		}
+	})
+
+	// Expand using absolute root and a relative-style uses.path self-reference
+	// (path: .) plus leaf — must not double-run root.
+	got, err := Expand([]string{rootAbs}, loader, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Refs) != 2 {
+		t.Fatalf("want 2 refs (root+leaf once each), got %#v", got.Refs)
+	}
+	if got.Refs[0] != rootAbs && got.Refs[0] != filepath.Clean(rootAbs) {
+		// loader may return eval'd path
+		if a0, e0 := filepath.EvalSymlinks(got.Refs[0]); e0 != nil {
+			t.Fatalf("root ref %#v", got.Refs[0])
+		} else if aR, _ := filepath.EvalSymlinks(rootAbs); a0 != aR {
+			t.Fatalf("root ref %#v want %s", got.Refs[0], rootAbs)
+		}
+	}
+}
+
+func TestNormalizeRefKeyPathAliases(t *testing.T) {
+	dir := t.TempDir()
+	rel := filepath.Join(".", filepath.Base(dir))
+	// Can't join parent easily; compare Abs of dir with itself via Clean+Abs
+	a, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := filepath.Abs(filepath.Clean(dir + string(filepath.Separator) + "."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalizeRefKey(a) != normalizeRefKey(b) {
+		t.Fatalf("%q vs %q", normalizeRefKey(a), normalizeRefKey(b))
+	}
+	_ = rel
+	if normalizeRefKey("go/concurrency") != "go/concurrency" {
+		t.Fatal("registry name should stay lower-case name key")
+	}
+}
+
+type loadFunc func(string) (manifest.Manifest, string, error)
+
+func (f loadFunc) Load(ref string) (manifest.Manifest, string, error) { return f(ref) }

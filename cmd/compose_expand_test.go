@@ -6,7 +6,7 @@ import (
 
 func TestExpandComposeRefsNoCompose(t *testing.T) {
 	refs := []string{"./x", "./y"}
-	got, roots, err := expandComposeRefs(t.Context(), nil, refs, "", "", true, nil)
+	got, roots, err := expandComposeRefs(t.Context(), nil, refs, "", "", true, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

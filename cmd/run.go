@@ -517,7 +517,19 @@ func runAdversaries(
 	apiURL, profile *string,
 	resultOut, progressOut io.Writer,
 ) error {
-	expanded, voiceRoots, err := expandComposeRefs(ctx, app, refs, valueOf(apiURL), valueOf(profile), opts.noCompose, progressOut)
+	// --shell cannot expand to multiple packages. Preflight without pulling so we
+	// never mutate the store before rejecting a multi-ref shell invocation.
+	if opts.shell && !opts.noCompose {
+		preview, _, err := expandComposeRefs(ctx, app, refs, valueOf(apiURL), valueOf(profile), false, false, nil)
+		if err != nil {
+			return err
+		}
+		if len(preview) > 1 {
+			return fmt.Errorf("--shell cannot be combined with composition that expands to multiple adversaries (use --no-compose or a single leaf ref)")
+		}
+	}
+
+	expanded, voiceRoots, err := expandComposeRefs(ctx, app, refs, valueOf(apiURL), valueOf(profile), opts.noCompose, true, progressOut)
 	if err != nil {
 		return err
 	}
