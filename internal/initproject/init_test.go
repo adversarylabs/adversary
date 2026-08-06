@@ -233,6 +233,44 @@ func TestCreateScaffoldsFactoryScopeDocs(t *testing.T) {
 	}
 }
 
+func TestCreateScaffoldsAgentVoice(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "voice-scaffold-project")
+	if _, err := Create(Options{Destination: dst}); err != nil {
+		t.Fatal(err)
+	}
+	voicePath := filepath.Join(dst, "agent", "voice.md")
+	raw, err := os.ReadFile(voicePath)
+	if err != nil {
+		t.Fatalf("agent/voice.md missing: %v", err)
+	}
+	text := string(raw)
+	for _, want := range []string{
+		"voice-scaffold-project", // rendered {{name}}
+		"## Core voice",
+		"## Example maintainer comments (style only)",
+		"### Ship / OK",
+		"### Design / technical judgment",
+		"### Defects / correctness",
+		"### Nits / style",
+		"adversary train results apply",
+		"## Output",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("agent/voice.md missing %q\n\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "{{name}}") {
+		t.Fatal("agent/voice.md still contains unrendered {{name}}")
+	}
+	readme, err := os.ReadFile(filepath.Join(dst, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(readme), "agent/voice.md") {
+		t.Fatal("project README should mention agent/voice.md")
+	}
+}
+
 func TestCreateUsesPublishedSDKNotVendor(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "published-sdk-project")
 	if _, err := Create(Options{Destination: dst}); err != nil {

@@ -25,6 +25,7 @@ npm test
 
 - `adversary.yaml` declares the adversary manifest.
 - `docs/scope.md` defines **mission and factory scope** (in / out of scope for grading and multi-adversary routing). Edit this before using factory.
+- `agent/voice.md` is the **PR comment rewrite voice** (CLI loads this for GitHub enhance). Train apply asks implementers to append real human gold under its example subsections.
 - `docs/README.md` indexes package documentation.
 - `AGENTS.md` gives AI coding agents repository-specific engineering guidance.
 - `src/index.ts` contains the TypeScript SDK adversary.
