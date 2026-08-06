@@ -95,5 +95,6 @@ yet; composition applies to **explicit** references.
 
 ## Related
 
+- [Train home-built adversaries](./train.md) — improve local packages from review history  
 - [Comment voice](./voice.md) — `agent/voice.md`, example banks, rewrite  
 - [GitHub PR review posting](./github-review-posting.md) — posting flags
