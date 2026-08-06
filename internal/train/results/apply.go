@@ -147,7 +147,7 @@ func createApplyIssue(opts ApplyOptions, packagePath string, r Result, draftPath
 	}
 	issue, err := client.CreateIssue(ctx, ref.Owner, ref.Name, githubapi.CreateIssueInput{
 		Title:  issueTitle(r),
-		Body:   formatIssueBody(r, draftPath),
+		Body:   formatIssueBody(r, draftPath, packagePath),
 		Labels: issueLabels(r),
 	})
 	if err != nil {
@@ -191,16 +191,18 @@ func issueLabels(r Result) []string {
 	return labels
 }
 
-// formatIssueBody is agent-oriented: spirit, when to post, variance — not a fixed quote to emit.
-func formatIssueBody(r Result, draftPath string) string {
+// formatIssueBody is agent-oriented: spirit, when to post, voice bank path, variance.
+func formatIssueBody(r Result, draftPath, packagePath string) string {
 	spirit := ClassifyCommentSpirit(r.Summary)
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Task for coding agent\n\n")
 	fmt.Fprintf(&b, "Implement this **adversary train** result in the **`%s`** package.\n\n", r.Package)
 	switch normalizeKind(r.Kind) {
 	case KindMiss:
-		fmt.Fprintf(&b, "The human review signal was a **`%s`**. The package should learn to emit the same *class* of ", spirit)
-		fmt.Fprintf(&b, "feedback in persona voice — **not** the exact human sentence, and not a fake bug if this was a ship/OK signal.\n\n")
+		fmt.Fprintf(&b, "The human review signal was a **`%s`**. Do two things:\n\n", spirit)
+		fmt.Fprintf(&b, "1. **Detection / behavior** — fire this *class* of signal when appropriate (see brief).\n")
+		fmt.Fprintf(&b, "2. **Voice corpus** — bank the human wording in **`%s`** so CLI rewrite keeps the spirit ", VoiceBankFile)
+		fmt.Fprintf(&b, "(few-shot style only — **not** a hard-coded finding string).\n\n")
 	case KindFalsePositive:
 		fmt.Fprintf(&b, "The package over-fired relative to human review. Quiet or gate this class of finding.\n\n")
 	default:
@@ -208,8 +210,8 @@ func formatIssueBody(r Result, draftPath string) string {
 	}
 
 	fmt.Fprintf(&b, "### One-line goal\n\n%s\n\n", strings.TrimSpace(r.Title))
-	if r.Title != r.Summary && strings.TrimSpace(r.Summary) != "" {
-		fmt.Fprintf(&b, "Human example (do **not** hard-code): _%s_\n\n", soft(collapseWS(r.Summary), 200))
+	if strings.TrimSpace(r.Summary) != "" {
+		fmt.Fprintf(&b, "Human gold (bank in voice; do **not** hard-code in `src/`): _%s_\n\n", soft(collapseWS(r.Summary), 200))
 	}
 	fmt.Fprintf(&b, "### Kind\n\n`%s` — %s\n\n", KindLabel(r.Kind), KindExplain(r.Kind, r.Status))
 	fmt.Fprintf(&b, "### Source\n\n")
@@ -229,9 +231,9 @@ func formatIssueBody(r Result, draftPath string) string {
 		fmt.Fprintf(&b, "- PR title: %s\n", r.PRTitle)
 	}
 
-	// Prefer structured draft; rebuild if legacy thin body.
+	// Prefer structured draft; rebuild if legacy thin body or missing voice bank section.
 	draft := strings.TrimSpace(r.DraftBody)
-	if draft == "" || !strings.Contains(draft, "### When to post") {
+	if draft == "" || !strings.Contains(draft, "### When to post") || !strings.Contains(draft, VoiceBankFile) {
 		draft = strings.TrimSpace(BuildMissDraft(MissDraftInput{
 			Package:  r.Package,
 			Summary:  r.Summary,
@@ -245,25 +247,44 @@ func formatIssueBody(r Result, draftPath string) string {
 	b.WriteString(draft)
 	b.WriteString("\n\n")
 
-	fmt.Fprintf(&b, "### Implementation requirements\n\n")
-	fmt.Fprintf(&b, "1. **Do not** paste the human quote as a constant finding string.\n")
-	fmt.Fprintf(&b, "2. Teach **when** this class fires (see brief); ship-signals are opinion/positive, not invented defects.\n")
-	fmt.Fprintf(&b, "3. Use **`agent/voice.md`** (LLM rewrite at emit time) so wording varies while spirit stays stable.\n")
-	fmt.Fprintf(&b, "4. Add tests for the **class**, not one PR-specific sentence.\n\n")
+	// Always surface voice bank instructions prominently (also inside brief for rebuild path).
+	if !strings.Contains(draft, "### Voice corpus") {
+		b.WriteString(FormatVoiceBankInstructions(r.Summary, spirit, r.PRURL))
+		b.WriteString("\n")
+	}
 
-	fmt.Fprintf(&b, "### Likely files\n\n")
-	fmt.Fprintf(&b, "- `src/` — rules / opinion / when-to-ship heuristics\n")
-	fmt.Fprintf(&b, "- `agent/voice.md` — persona tone for rewrite\n")
-	fmt.Fprintf(&b, "- `agent/scope.md` — only if mission should expand\n")
-	fmt.Fprintf(&b, "- `test/` / fixtures — class coverage\n\n")
+	fmt.Fprintf(&b, "### Implementation requirements\n\n")
+	fmt.Fprintf(&b, "1. **Detection:** teach **when** this class fires (see brief). Ship-signals → opinion/positive, not invented defects.\n")
+	fmt.Fprintf(&b, "2. **Voice:** append the human gold excerpt to **`%s`** under **`%s`** (see Voice corpus). ", VoiceBankFile, VoiceBankSectionHeading(spirit))
+	fmt.Fprintf(&b, "This is mandatory for persona packages so wording spirit is preserved.\n")
+	fmt.Fprintf(&b, "3. **Do not** paste the human quote as a constant finding title/summary in `src/`.\n")
+	fmt.Fprintf(&b, "4. **Tests/fixtures** for the **class**, not one PR-specific sentence.\n\n")
+
+	fmt.Fprintf(&b, "### Files to touch\n\n")
+	fmt.Fprintf(&b, "| Path | Why |\n|------|-----|\n")
+	fmt.Fprintf(&b, "| **`%s`** | **Required:** bank human gold as style few-shot under the spirit subsection |\n", VoiceBankFile)
+	fmt.Fprintf(&b, "| `src/` | Rules / opinion / when-to-fire heuristics (generic strings only) |\n")
+	fmt.Fprintf(&b, "| `test/` + `fixtures/` | Class coverage (positive + negative) |\n")
+	fmt.Fprintf(&b, "| `agent/scope.md` | Only if mission/scope must expand |\n")
+	fmt.Fprintf(&b, "| `dist/` | Rebuild if this package tracks compiled output |\n\n")
+
 	fmt.Fprintf(&b, "### Acceptance\n\n")
 	fmt.Fprintf(&b, "- [ ] Package builds and tests pass\n")
-	fmt.Fprintf(&b, "- [ ] On similar landable changes, persona can emit a ship/OK-class signal (if spirit is ship)\n")
-	fmt.Fprintf(&b, "- [ ] Surface form varies (voice/LLM); not a single fixed string\n")
-	fmt.Fprintf(&b, "- [ ] No false defects invented solely to “match” praise\n")
+	switch spirit {
+	case SpiritShip:
+		fmt.Fprintf(&b, "- [ ] Landable changes can emit ship/OK-class signal; broken changes do not rubber-stamp ship\n")
+	case SpiritDefect:
+		fmt.Fprintf(&b, "- [ ] Similar defect class surfaces with evidence; no invented certainty\n")
+	case SpiritStyle:
+		fmt.Fprintf(&b, "- [ ] Style/nit class fires when appropriate without flooding every line\n")
+	default:
+		fmt.Fprintf(&b, "- [ ] Design/approach class surfaces with enough detail for the author to act\n")
+	}
+	fmt.Fprintf(&b, "- [ ] **`%s`** updated with this gold under **`%s`** (deduped, short excerpt)\n", VoiceBankFile, VoiceBankSectionHeading(spirit))
+	fmt.Fprintf(&b, "- [ ] Surface form varies via voice rewrite; not a single fixed string in rules\n")
 	fmt.Fprintf(&b, "- [ ] Focused change; no unrelated rewrites\n\n")
 	if draftPath != "" {
-		fmt.Fprintf(&b, "### Local draft copy\n\n`%s`\n\n", draftPath)
+		fmt.Fprintf(&b, "### Local draft copy\n\n`%s`\n\n", RelDraftPath(packagePath, draftPath))
 	}
 	fmt.Fprintf(&b, "---\n_Opened by `adversary train results apply`._\n")
 	return b.String()
