@@ -47,6 +47,8 @@ func TestInitCommandGeneratesTypeScriptProject(t *testing.T) {
 		"README.md",
 		"AGENTS.md",
 		".gitignore",
+		"agent/voice.md",
+		"docs/scope.md",
 		"dist/index.js",
 		"dist/index.d.ts",
 		"src/index.ts",
