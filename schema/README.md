@@ -4,6 +4,9 @@ These Draft 2020-12 JSON Schemas are the normative contracts for the versioned
 runtime input and review output envelopes. Changes to an existing schema must
 remain backward compatible; incompatible changes require a new versioned file.
 `adversary.manifest.v1.schema.json` is the canonical v1 project manifest schema.
+It includes optional `uses` composition members (other adversaries to run when
+this package is selected). Semantic expansion at `adversary run` time is owned
+by the CLI; see [composition](../docs/composition.md).
 `adversary.detection-context.v1.schema.json` and
 `adversary.detection.v1.schema.json` define the separate detector input and
 result contracts. Detection only decides applicability and cannot emit review

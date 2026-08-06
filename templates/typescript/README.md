@@ -23,7 +23,7 @@ npm test
 
 ## Layout
 
-- `adversary.yaml` declares the adversary manifest.
+- `adversary.yaml` declares the adversary manifest (optional `uses` composition — see CLI docs/composition.md).
 - `docs/scope.md` defines **mission and factory scope** (in / out of scope for grading and multi-adversary routing). Edit this before using factory.
 - `agent/voice.md` is the **PR comment rewrite voice** (CLI loads this for GitHub enhance). Train apply asks implementers to append real human gold under its example subsections.
 - `docs/README.md` indexes package documentation.

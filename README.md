@@ -54,6 +54,8 @@ adversary completion bash
 Run `adversary help <command>` for the canonical command and flag reference.
 See [automatic selection](docs/automatic-detection.md) for change resolution,
 manifest detection declarations, selection policy, and CI behavior.
+See [composition](docs/composition.md) for `adversary.yaml` `uses` (language packs
+and persona entrypoints that expand to specialist adversaries).
 
 ## Automatic review scope
 

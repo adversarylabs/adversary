@@ -52,9 +52,23 @@
             "description": "Local package directory relative to this package (or absolute). Mutually exclusive with name."
           }
         },
-        "oneOf": [
-          { "required": ["name"], "not": { "required": ["path"] } },
-          { "required": ["path"], "not": { "anyOf": [ { "required": ["name"] }, { "required": ["version"] } ] } }
+        "anyOf": [
+          {
+            "required": ["name"],
+            "properties": {
+              "name": true,
+              "version": true,
+              "path": false
+            }
+          },
+          {
+            "required": ["path"],
+            "properties": {
+              "path": true,
+              "name": false,
+              "version": false
+            }
+          }
         ]
       }
     },
