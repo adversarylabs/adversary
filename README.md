@@ -56,6 +56,8 @@ See [automatic selection](docs/automatic-detection.md) for change resolution,
 manifest detection declarations, selection policy, and CI behavior.
 See [composition](docs/composition.md) for `adversary.yaml` `uses` (language packs
 and persona entrypoints that expand to specialist adversaries).
+See [comment voice](docs/voice.md) for `agent/voice.md`, example banks, and GitHub
+rewrite with `--github-review`.
 
 ## Automatic review scope
 

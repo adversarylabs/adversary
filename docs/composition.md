@@ -61,12 +61,13 @@ Compose: expanded 1 → 5 adversaries
 ## Voice
 
 GitHub comment rewrite uses the **CLI entry package** voice (`agent/voice.md`
-and section banks), not each member’s voice.
+with its example bank), not each member’s voice. See **[Comment voice](./voice.md)**
+for file layout, train banking, and rewrite behavior.
 
 | You run | Voice source | Detectors |
 |---------|--------------|-----------|
-| `person/torvalds` | torvalds `agent/voice*` | members in `uses` (+ root if any) |
-| `go` | go package voice if any, else CLI default | go-* members |
+| `person/torvalds` / `./torvalds-adversary` | that package’s `agent/voice.md` | members in `uses` (+ root if any) |
+| `lang/go` | go package voice if any, else CLI default | go-* members |
 | `go/concurrency` | that package only | leaf only |
 
 Findings keep their real adversary id for provenance; bodies can be rewritten
@@ -91,3 +92,8 @@ wording; meta packages only change the default member set.
 
 Automatic selection (`adversary run` with no refs) does **not** expand `uses`
 yet; composition applies to **explicit** references.
+
+## Related
+
+- [Comment voice](./voice.md) — `agent/voice.md`, example banks, rewrite  
+- [GitHub PR review posting](./github-review-posting.md) — posting flags
