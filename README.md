@@ -213,11 +213,17 @@ Security reports: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](C
 
 ## Train (review history → draft package improvements)
 
+Grade **home-built** (local) packages against your team’s PR review history and
+draft improvements. Official catalog packages can act as a read-only jury only.
+
 ```sh
-adversary train init
-# edit adversary.train.yaml (sources, authors, official jury, local packages)
+cd my-adversary
+adversary train init --single-package
+# edit adversary.train.yaml (sources, authors, official jury)
 adversary train run
-adversary train story
+adversary train results ls
+adversary train results apply <id>
 ```
 
-See [docs/train/customer-train-cli.md](docs/train/customer-train-cli.md).
+Guide: **[docs/train.md](docs/train.md)** (home-built workflow).  
+Also: [composition](docs/composition.md), [comment voice](docs/voice.md).

@@ -167,6 +167,7 @@ in `src/` stay generic; wording variance comes from rewrite + the bank.
 
 ## Related
 
+- [Train home-built adversaries](./train.md) — grade locals; bank gold on apply  
 - [GitHub PR review posting](./github-review-posting.md) — flags, auth, placement  
 - [Composition (`uses`)](./composition.md) — entry package owns voice under multi-run  
 - [Automatic detection](./automatic-detection.md) — who runs; separate from voice  
