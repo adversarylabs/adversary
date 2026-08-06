@@ -49,6 +49,8 @@ func EnhanceBodies(ctx context.Context, plan *CommentPlan, opts EnhanceOptions) 
 		timeout = 30 * time.Second
 	}
 	schema := json.RawMessage(bodyOutputSchema)
+	// Always wrap package/CLI voice so Example maintainer comments banks are used.
+	prompt := BuildRewritePrompt(opts.VoicePrompt)
 	enhanced := 0
 	for i := range plan.Comments {
 		if enhanced >= max {
@@ -58,7 +60,7 @@ func EnhanceBodies(ctx context.Context, plan *CommentPlan, opts EnhanceOptions) 
 		if c.Placement == "unplaceable" {
 			continue
 		}
-		body, err := rewriteOne(ctx, opts.Provider, opts.VoicePrompt, *c, schema, timeout)
+		body, err := rewriteOne(ctx, opts.Provider, prompt, *c, schema, timeout)
 		if err != nil || strings.TrimSpace(body) == "" {
 			continue
 		}
@@ -71,7 +73,7 @@ func EnhanceBodies(ctx context.Context, plan *CommentPlan, opts EnhanceOptions) 
 func rewriteOne(
 	ctx context.Context,
 	provider modelreview.Provider,
-	voicePrompt string,
+	rewritePrompt string,
 	c PlannedComment,
 	schema json.RawMessage,
 	timeout time.Duration,
@@ -89,13 +91,15 @@ func rewriteOne(
 		"line":         c.Anchor.Line,
 		"endLine":      c.Anchor.EndLine,
 		"templateBody": c.Body,
+		// Hints for picking a few-shot subsection under the example bank.
+		"exampleBankHint": exampleBankHint(c.Severity, c.Title, c.Body),
 	})
 	if err != nil {
 		return "", err
 	}
 	result, err := provider.Review(reqCtx, modelreview.Request{
 		ProtocolVersion: modelreview.ProtocolVersion,
-		Prompt:          voicePrompt,
+		Prompt:          rewritePrompt,
 		Input:           input,
 		Schema:          schema,
 		Budget: modelreview.Budget{
@@ -128,5 +132,25 @@ func FindingFromComment(c PlannedComment) review.Finding {
 	return review.Finding{
 		ID: c.FindingID, Title: c.Title, Severity: c.Severity, Confidence: c.Confidence,
 		Summary: c.Title, Category: "test", Evidence: []review.Evidence{},
+	}
+}
+
+// exampleBankHint suggests which voice.md subsection few-shots to prefer.
+func exampleBankHint(severity, title, body string) string {
+	blob := strings.ToLower(severity + " " + title + " " + body)
+	switch {
+	case strings.Contains(blob, "ship") || strings.Contains(blob, "landable") ||
+		strings.Contains(blob, "looks fine") || strings.Contains(blob, "no material"):
+		return "Ship / OK"
+	case severity == "info" || strings.Contains(blob, "nit") || strings.Contains(blob, "rename") ||
+		strings.Contains(blob, "style") || strings.Contains(blob, "comment is stale"):
+		return "Nits / style"
+	case severity == "high" || severity == "critical" ||
+		strings.Contains(blob, "race") || strings.Contains(blob, "wrong") ||
+		strings.Contains(blob, "broken") || strings.Contains(blob, "leak") ||
+		strings.Contains(blob, "corrupt"):
+		return "Defects / correctness"
+	default:
+		return "Design / technical judgment"
 	}
 }

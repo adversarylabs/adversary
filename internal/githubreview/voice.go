@@ -59,7 +59,7 @@ func LocalPackageRoots(args []string) []string {
 // ResolveVoice loads a voice prompt from the first existing candidate under roots
 // (package dirs first, then review target). Falls back to the CLI-embedded default.
 func ResolveVoice(roots ...string) (prompt string, info VoiceInfo) {
-	info = VoiceInfo{Source: "cli_default"}
+	info = VoiceInfo{Source: "cli_default", ExampleBank: HasVoiceExampleBank(DefaultVoicePrompt)}
 	prompt = DefaultVoicePrompt
 	for _, root := range roots {
 		root = strings.TrimSpace(root)
@@ -79,9 +79,12 @@ func ResolveVoice(roots ...string) (prompt string, info VoiceInfo) {
 			if len(raw) > maxVoiceBytes || !utf8.Valid(raw) {
 				continue
 			}
-			// Prefer package-relative path in metadata when under a known subdir.
-			display := rel
-			return string(raw), VoiceInfo{Source: "package", Path: display}
+			text := string(raw)
+			return text, VoiceInfo{
+				Source:      "package",
+				Path:        rel,
+				ExampleBank: HasVoiceExampleBank(text),
+			}
 		}
 	}
 	return prompt, info

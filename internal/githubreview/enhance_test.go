@@ -27,8 +27,13 @@ func (f *fakeProvider) Review(_ context.Context, req modelreview.Request) (model
 	if f.fail {
 		return modelreview.Result{}, &modelreview.ProviderError{Code: "fail", Message: "provider down"}
 	}
-	if !strings.Contains(req.Prompt, "Adversary Labs") && !strings.Contains(req.Prompt, "Custom") {
-		return modelreview.Result{}, &modelreview.ProviderError{Code: "bad_prompt", Message: "missing voice prompt"}
+	// Rewrite prompt always wraps package/CLI voice with the CLI task preamble.
+	if !strings.Contains(req.Prompt, "CLI comment rewrite task") {
+		return modelreview.Result{}, &modelreview.ProviderError{Code: "bad_prompt", Message: "missing rewrite preamble"}
+	}
+	if !strings.Contains(req.Prompt, "Adversary Labs") && !strings.Contains(req.Prompt, "Custom") &&
+		!strings.Contains(req.Prompt, "Example maintainer comments") {
+		return modelreview.Result{}, &modelreview.ProviderError{Code: "bad_prompt", Message: "missing voice document"}
 	}
 	var in struct {
 		FindingID string `json:"findingId"`
