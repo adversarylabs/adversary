@@ -40,7 +40,7 @@ then treat the blockquotes under it as **style few-shots**:
 - findingId, adversary, severity, confidence, title
 - path, line, endLine (anchor)
 - templateBody (deterministic draft to rewrite)
-- category (optional finding category)
+- exampleBankHint (preferred example-bank subsection: Ship / OK, Design / technical judgment, Defects / correctness, or Nits / style)
 
 Return only schema-valid JSON with a single "body" string (the PR comment).
 `

@@ -213,7 +213,7 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		}
 		fmt.Fprintf(progress, "GitHub review dry-run: %d comment(s) planned (%d inline, %d body, %d skipped)\n",
 			plan.Summary.Comments, plan.Summary.Inline, plan.Summary.ReviewBody, plan.Summary.Skipped)
-		logVoiceSource(progress, voiceInfo)
+		// Voice source already logged once above (shared with non-dry-run path).
 		if opts.githubPlanFile != "" {
 			if err := githubreview.WritePlanFile(opts.githubPlanFile, plan); err != nil {
 				return err
