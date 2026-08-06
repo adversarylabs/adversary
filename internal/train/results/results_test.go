@@ -3,6 +3,7 @@ package results
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -122,6 +123,82 @@ func (f *fakeIssueClient) CreateIssue(_ context.Context, owner, repo string, in 
 		Title:   in.Title,
 		State:   "open",
 	}, nil
+}
+
+func TestApplyMarksAppliedEvenWhenIssueFails(t *testing.T) {
+	state := t.TempDir()
+	if err := SaveResult(state, Result{
+		ID: "cafe0001", RunID: "r1", Package: "torvalds",
+		Kind: KindMiss, Status: StatusNew,
+		Summary: "Looks fine", CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pkg := t.TempDir()
+	_, err := Apply(state, "cafe0001", ApplyOptions{
+		PackagePath:  pkg,
+		CreateBranch: false,
+		CreateIssue:  true,
+		IssueClient:  failIssueClient{},
+	})
+	if err == nil {
+		t.Fatal("expected issue error")
+	}
+	got, err := Get(state, "cafe0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusApplied {
+		t.Fatalf("status=%s want applied after draft write despite issue failure", got.Status)
+	}
+	if got.AppliedPath == "" {
+		t.Fatal("expected applied_path set")
+	}
+}
+
+type failIssueClient struct{}
+
+func (failIssueClient) CreateIssue(context.Context, string, string, githubapi.CreateIssueInput) (githubapi.Issue, error) {
+	return githubapi.Issue{}, fmt.Errorf("simulated issue API failure")
+}
+
+func TestRegradePreservesAppliedStatus(t *testing.T) {
+	state := t.TempDir()
+	c := &cases.Case{
+		ID:          "c-regrade",
+		Repository:  cases.Repository{Owner: "o", Name: "r", URL: "https://github.com/o/r/pull/1"},
+		PullRequest: cases.PullRequest{Number: 1, Title: "t"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
+			{ID: "g1", Summary: "Looks all reasonable to me", Approved: true, OwnerAdversary: "torvalds"},
+		}},
+	}
+	if _, err := WriteKeptCase(state, "run-1", c); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := List(state, "", "")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	id := rows[0].ID
+	pkg := t.TempDir()
+	if _, err := Apply(state, id, ApplyOptions{PackagePath: pkg, CreateBranch: false, CreateIssue: false}); err != nil {
+		t.Fatal(err)
+	}
+	// Re-grade as miss must not flip applied → new.
+	fails := []judge.Failure{{CaseID: c.ID, Kind: "missed-concern", ConcernID: "g1", ReviewerID: "torvalds"}}
+	if _, err := WriteGradedCase(state, "run-1", c, fails); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Get(state, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusApplied {
+		t.Fatalf("status=%s want applied after regrade", got.Status)
+	}
+	if got.Kind != KindMiss {
+		t.Fatalf("kind=%s want miss (content updated, status preserved)", got.Kind)
+	}
 }
 
 func TestApplyCreatesGitHubIssue(t *testing.T) {

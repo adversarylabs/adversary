@@ -60,7 +60,6 @@ func TestPublishedSchemasAcceptCanonicalContracts(t *testing.T) {
 	}
 }
 
-
 func TestResultValidationAndNormalization(t *testing.T) {
 	result := Result{SchemaVersion: SchemaVersion, Applicable: true, Confidence: ConfidenceHigh, Reasons: []string{"Dockerfile changed", "Dockerfile changed"}, RelevantFiles: []string{"z", "a", "a"}}
 	if err := result.Validate(); err != nil {

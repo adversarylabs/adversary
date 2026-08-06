@@ -97,21 +97,33 @@ func Apply(stateRoot, id string, opts ApplyOptions) (ApplyResult, error) {
 		// git failures are non-fatal: draft file still applied
 	}
 
+	var issueErr error
 	if opts.CreateIssue {
 		issueURL, err := createApplyIssue(opts, abs, r, outPath)
 		if err != nil {
-			return ar, fmt.Errorf("create GitHub issue: %w\n  (draft still written to %s; use --no-issue to skip)", err, outPath)
+			issueErr = err
+		} else {
+			ar.IssueURL = issueURL
 		}
-		ar.IssueURL = issueURL
 	}
 
+	// Always persist applied after the draft is on disk — even if the GitHub
+	// issue step fails — so results ls reflects the user's action.
 	r.Status = StatusApplied
 	r.AppliedAt = time.Now().UTC()
 	r.AppliedPath = outPath
 	r.Branch = ar.Branch
-	r.IssueURL = ar.IssueURL
+	if ar.IssueURL != "" {
+		r.IssueURL = ar.IssueURL
+	}
 	if err := SaveResult(stateRoot, r); err != nil {
+		if issueErr != nil {
+			return ar, fmt.Errorf("save applied status: %w (also create issue: %v)", err, issueErr)
+		}
 		return ar, err
+	}
+	if issueErr != nil {
+		return ar, fmt.Errorf("create GitHub issue: %w\n  (marked applied; draft at %s; re-run apply or open issue manually)", issueErr, outPath)
 	}
 	return ar, nil
 }
@@ -179,20 +191,26 @@ func issueLabels(r Result) []string {
 	return labels
 }
 
-// formatIssueBody is agent-oriented: enough context to implement without the CLI inbox.
+// formatIssueBody is agent-oriented: spirit, when to post, variance — not a fixed quote to emit.
 func formatIssueBody(r Result, draftPath string) string {
+	spirit := ClassifyCommentSpirit(r.Summary)
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Task for coding agent\n\n")
-	fmt.Fprintf(&b, "Implement this **adversary train** result in the **`%s`** package so the adversary ", r.Package)
+	fmt.Fprintf(&b, "Implement this **adversary train** result in the **`%s`** package.\n\n", r.Package)
 	switch normalizeKind(r.Kind) {
 	case KindMiss:
-		fmt.Fprintf(&b, "would catch this class of human review feedback in the future.\n\n")
+		fmt.Fprintf(&b, "The human review signal was a **`%s`**. The package should learn to emit the same *class* of ", spirit)
+		fmt.Fprintf(&b, "feedback in persona voice — **not** the exact human sentence, and not a fake bug if this was a ship/OK signal.\n\n")
 	case KindFalsePositive:
-		fmt.Fprintf(&b, "stops over-firing on this class of finding (human review did not raise it).\n\n")
+		fmt.Fprintf(&b, "The package over-fired relative to human review. Quiet or gate this class of finding.\n\n")
 	default:
-		fmt.Fprintf(&b, "improves as described below.\n\n")
+		fmt.Fprintf(&b, "Improve the package as described below.\n\n")
 	}
-	fmt.Fprintf(&b, "### Goal\n\n%s\n\n", strings.TrimSpace(r.Summary))
+
+	fmt.Fprintf(&b, "### One-line goal\n\n%s\n\n", strings.TrimSpace(r.Title))
+	if r.Title != r.Summary && strings.TrimSpace(r.Summary) != "" {
+		fmt.Fprintf(&b, "Human example (do **not** hard-code): _%s_\n\n", soft(collapseWS(r.Summary), 200))
+	}
 	fmt.Fprintf(&b, "### Kind\n\n`%s` — %s\n\n", KindLabel(r.Kind), KindExplain(r.Kind, r.Status))
 	fmt.Fprintf(&b, "### Source\n\n")
 	fmt.Fprintf(&b, "- Result ID: `%s`\n", r.ID)
@@ -210,30 +228,44 @@ func formatIssueBody(r Result, draftPath string) string {
 	if r.PRTitle != "" {
 		fmt.Fprintf(&b, "- PR title: %s\n", r.PRTitle)
 	}
-	fmt.Fprintf(&b, "\n### What to change\n\n")
-	if strings.TrimSpace(r.DraftBody) != "" {
-		b.WriteString(strings.TrimSpace(r.DraftBody))
-		b.WriteString("\n\n")
-	} else if strings.TrimSpace(r.Title) != "" {
-		fmt.Fprintf(&b, "%s\n\n", r.Title)
-	} else {
-		fmt.Fprintf(&b, "_(No draft body stored — use the human PR and summary.)_\n\n")
+
+	// Prefer structured draft; rebuild if legacy thin body.
+	draft := strings.TrimSpace(r.DraftBody)
+	if draft == "" || !strings.Contains(draft, "### When to post") {
+		draft = strings.TrimSpace(BuildMissDraft(MissDraftInput{
+			Package:  r.Package,
+			Summary:  r.Summary,
+			PRURL:    r.PRURL,
+			PRTitle:  r.PRTitle,
+			CaseID:   r.CaseID,
+			VoicePkg: isVoicePackage(r.Package),
+		}))
 	}
+	fmt.Fprintf(&b, "\n### Train brief (spirit + when + variance)\n\n")
+	b.WriteString(draft)
+	b.WriteString("\n\n")
+
+	fmt.Fprintf(&b, "### Implementation requirements\n\n")
+	fmt.Fprintf(&b, "1. **Do not** paste the human quote as a constant finding string.\n")
+	fmt.Fprintf(&b, "2. Teach **when** this class fires (see brief); ship-signals are opinion/positive, not invented defects.\n")
+	fmt.Fprintf(&b, "3. Use **`agent/voice.md`** (LLM rewrite at emit time) so wording varies while spirit stays stable.\n")
+	fmt.Fprintf(&b, "4. Add tests for the **class**, not one PR-specific sentence.\n\n")
+
 	fmt.Fprintf(&b, "### Likely files\n\n")
-	fmt.Fprintf(&b, "- `src/` — rules and detection logic\n")
-	fmt.Fprintf(&b, "- `agent/scope.md` — only if mission/scope should change\n")
-	fmt.Fprintf(&b, "- `agent/voice.md` — only if tone/persona should change\n")
-	fmt.Fprintf(&b, "- `test/` / fixtures — add coverage for this miss/false-positive class\n\n")
+	fmt.Fprintf(&b, "- `src/` — rules / opinion / when-to-ship heuristics\n")
+	fmt.Fprintf(&b, "- `agent/voice.md` — persona tone for rewrite\n")
+	fmt.Fprintf(&b, "- `agent/scope.md` — only if mission should expand\n")
+	fmt.Fprintf(&b, "- `test/` / fixtures — class coverage\n\n")
 	fmt.Fprintf(&b, "### Acceptance\n\n")
-	fmt.Fprintf(&b, "- [ ] Package builds and tests pass (`npm test` / package scripts)\n")
-	fmt.Fprintf(&b, "- [ ] Behavior addresses the human concern (or quiets the false positive)\n")
-	fmt.Fprintf(&b, "- [ ] Stay aligned with `agent/scope.md` and `agent/voice.md`\n")
-	fmt.Fprintf(&b, "- [ ] Prefer a focused change; do not rewrite unrelated rules\n\n")
+	fmt.Fprintf(&b, "- [ ] Package builds and tests pass\n")
+	fmt.Fprintf(&b, "- [ ] On similar landable changes, persona can emit a ship/OK-class signal (if spirit is ship)\n")
+	fmt.Fprintf(&b, "- [ ] Surface form varies (voice/LLM); not a single fixed string\n")
+	fmt.Fprintf(&b, "- [ ] No false defects invented solely to “match” praise\n")
+	fmt.Fprintf(&b, "- [ ] Focused change; no unrelated rewrites\n\n")
 	if draftPath != "" {
-		rel := draftPath
-		fmt.Fprintf(&b, "### Local draft copy\n\n`%s` (written by `adversary train results apply`)\n\n", rel)
+		fmt.Fprintf(&b, "### Local draft copy\n\n`%s`\n\n", draftPath)
 	}
-	fmt.Fprintf(&b, "---\n_Opened by `adversary train results apply` — do not merge this issue text into prompts without implementing the behavior._\n")
+	fmt.Fprintf(&b, "---\n_Opened by `adversary train results apply`._\n")
 	return b.String()
 }
 
@@ -252,20 +284,27 @@ func formatApplyMarkdown(r Result) string {
 	fmt.Fprintf(&b, "# Train draft %s\n\n", r.ID)
 	fmt.Fprintf(&b, "- **Package:** `%s`\n", r.Package)
 	fmt.Fprintf(&b, "- **Kind:** %s — %s\n", KindLabel(r.Kind), KindExplain(r.Kind, r.Status))
-	fmt.Fprintf(&b, "- **Summary:** %s\n", r.Summary)
+	fmt.Fprintf(&b, "- **Title:** %s\n", r.Title)
+	fmt.Fprintf(&b, "- **Human example:** %s\n", r.Summary)
 	if r.PRURL != "" {
 		fmt.Fprintf(&b, "- **PR:** %s\n", r.PRURL)
 	}
 	fmt.Fprintf(&b, "- **Run:** `%s`\n", r.RunID)
-	fmt.Fprintf(&b, "\n_Applied by `adversary train results apply`. Review before merging into prompts/scope._\n\n")
-	if r.Title != "" {
-		fmt.Fprintf(&b, "## %s\n\n", r.Title)
+	fmt.Fprintf(&b, "\n_Applied by `adversary train results apply`. Implement spirit + when-to-post; do not hard-code the human sentence._\n\n")
+	draft := strings.TrimSpace(r.DraftBody)
+	if draft == "" || !strings.Contains(draft, "### When to post") {
+		draft = strings.TrimSpace(BuildMissDraft(MissDraftInput{
+			Package:  r.Package,
+			Summary:  r.Summary,
+			PRURL:    r.PRURL,
+			PRTitle:  r.PRTitle,
+			CaseID:   r.CaseID,
+			VoicePkg: isVoicePackage(r.Package),
+		}))
 	}
-	if r.DraftBody != "" {
-		b.WriteString(r.DraftBody)
-		if !strings.HasSuffix(r.DraftBody, "\n") {
-			b.WriteByte('\n')
-		}
+	b.WriteString(draft)
+	if !strings.HasSuffix(draft, "\n") {
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
