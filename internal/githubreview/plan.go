@@ -19,8 +19,9 @@ type CommentPlan struct {
 
 // VoiceInfo records which prompt was used for LLM rewrite attempts.
 type VoiceInfo struct {
-	Source string `json:"source"` // cli_default | repo
-	Path   string `json:"path,omitempty"`
+	Source      string `json:"source"` // cli_default | package | repo
+	Path        string `json:"path,omitempty"`
+	ExampleBank bool   `json:"exampleBank,omitempty"` // voice file has train gold few-shots
 }
 
 // PlannedComment is one finding projected for a PR review thread or body.

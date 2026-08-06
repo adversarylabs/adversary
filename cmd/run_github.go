@@ -172,6 +172,8 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 	})
 
 	// Default voice rewrite: try model provider; template remains on failure/missing creds.
+	// BuildRewritePrompt (inside EnhanceBodies) wraps agent/voice.md so Example maintainer
+	// comments banks are used as few-shot style when generating comment text.
 	if provider, err := modelreview.ProviderFromConfig(modelreview.Config{
 		Provider: opts.modelProvider,
 		Model:    opts.model,
@@ -181,6 +183,7 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 			VoicePrompt: voicePrompt,
 		})
 	}
+	logVoiceSource(progress, voiceInfo)
 
 	token := githubapi.TokenFromEnv()
 	client := githubapi.NewClient(token)
@@ -210,7 +213,7 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		}
 		fmt.Fprintf(progress, "GitHub review dry-run: %d comment(s) planned (%d inline, %d body, %d skipped)\n",
 			plan.Summary.Comments, plan.Summary.Inline, plan.Summary.ReviewBody, plan.Summary.Skipped)
-		fmt.Fprintf(progress, "Voice: %s\n", voiceInfo.Source)
+		// Voice source already logged once above (shared with non-dry-run path).
 		if opts.githubPlanFile != "" {
 			if err := githubreview.WritePlanFile(opts.githubPlanFile, plan); err != nil {
 				return err
@@ -249,6 +252,20 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		},
 	})
 	return err
+}
+
+func logVoiceSource(progress io.Writer, voiceInfo githubreview.VoiceInfo) {
+	if progress == nil {
+		return
+	}
+	switch {
+	case voiceInfo.ExampleBank && voiceInfo.Path != "":
+		fmt.Fprintf(progress, "Voice: %s (%s, with example bank)\n", voiceInfo.Source, voiceInfo.Path)
+	case voiceInfo.Path != "":
+		fmt.Fprintf(progress, "Voice: %s (%s)\n", voiceInfo.Source, voiceInfo.Path)
+	default:
+		fmt.Fprintf(progress, "Voice: %s\n", voiceInfo.Source)
+	}
 }
 
 // collectEnvelope adapts OnEnvelope storage.
