@@ -1,5 +1,9 @@
 name: adversarylabs/example
 version: 1.2.3
+uses:
+  - name: go/concurrency
+    version: "0.1.0"
+  - name: review/engineering
 triggers:
   files_changed: ["**/*.go"]
 runtime:

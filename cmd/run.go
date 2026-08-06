@@ -74,6 +74,8 @@ type runOptions struct {
 	envelopes       []githubreview.NamedEnvelope
 	// Local adversary package roots (for agent/voice.md resolution).
 	adversaryPackageRoots []string
+	// noCompose skips expanding adversary.yaml uses (composition).
+	noCompose bool
 }
 
 func newRunCommand(app *application.App, apiURL, profile *string) *cobra.Command {
@@ -85,6 +87,9 @@ func newRunCommand(app *application.App, apiURL, profile *string) *cobra.Command
 		Long: `Run adversaries against a repository.
 
 With one or more adversary references, those adversaries run explicitly.
+If a package lists uses: in adversary.yaml, the CLI expands composition
+(transitively), runs each member, and keeps GitHub comment voice from the
+entry package(s). Use --no-compose to run only the named refs.
 
 With no adversary references, run pulls every adversary you can access (unless
 --no-pull), detects which apply to the resolved review scope, and runs the
@@ -101,6 +106,8 @@ review base/head and optional posting context. Posting still requires
   adversary run --base main
   adversary run adversarylabs/dockerfile
   adversary run ./local-adversary --path ../project
+  adversary run person/torvalds --path ../app
+  adversary run ./go-meta --no-compose
   adversary run adversarylabs/dockerfile --base main --head feature
   adversary run adversarylabs/go-cli adversarylabs/secrets --all-files
   adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id
@@ -123,6 +130,7 @@ review base/head and optional posting context. Posting still requires
 			}
 			opts.prURL = pr
 			args = rest
+			// Voice prefers local entry package dirs; composition may add resolved roots later.
 			opts.adversaryPackageRoots = githubreview.LocalPackageRoots(args)
 			if opts.githubReview && opts.shell {
 				return fmt.Errorf("--github-review cannot be combined with --shell")
@@ -259,6 +267,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().DurationVar(&opts.runTimeout, "timeout", 0, "maximum adversary execution time (0 disables the deadline)")
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
 	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "auto", "local repository index for adversary navigation: auto, off, or force")
+	cmd.Flags().BoolVar(&opts.noCompose, "no-compose", false, "do not expand adversary.yaml uses composition; run only the named refs")
 
 	cmd.Flags().BoolVar(&opts.githubReview, "github-review", false, "build a GitHub PR comment plan and post (unless --github-dry-run)")
 	cmd.Flags().BoolVar(&opts.githubDryRun, "github-dry-run", false, "with --github-review: plan/place only; never mutate GitHub")
@@ -497,6 +506,9 @@ type multiRunDTO struct {
 // Multiple refs concatenate reports (text sections or a JSON results array).
 // When resultOut is an --output-file, progress lines go to progressOut only.
 // Exit policy: first hard error wins after all runs; otherwise FindingsError with total count.
+//
+// Before running, expands adversary.yaml uses (composition) unless --no-compose.
+// Entry package dirs are preferred for GitHub voice rewrite.
 func runAdversaries(
 	ctx context.Context,
 	app *application.App,
@@ -505,6 +517,19 @@ func runAdversaries(
 	apiURL, profile *string,
 	resultOut, progressOut io.Writer,
 ) error {
+	expanded, voiceRoots, err := expandComposeRefs(ctx, app, refs, valueOf(apiURL), valueOf(profile), opts.noCompose, progressOut)
+	if err != nil {
+		return err
+	}
+	if len(voiceRoots) > 0 {
+		// Entry packages first so ResolveVoice prefers persona/meta voice over members.
+		opts.adversaryPackageRoots = append(voiceRoots, opts.adversaryPackageRoots...)
+	}
+	refs = expanded
+	if opts.shell && len(refs) > 1 {
+		return fmt.Errorf("--shell cannot be combined with composition that expands to multiple adversaries (use --no-compose or a single leaf ref)")
+	}
+
 	multi := len(refs) > 1
 	jsonMode := opts.format == "json"
 	toFile := strings.TrimSpace(opts.outputFile) != ""

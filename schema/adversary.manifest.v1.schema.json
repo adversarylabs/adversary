@@ -29,6 +29,35 @@
     "description": {
       "type": "string"
     },
+    "uses": {
+      "type": "array",
+      "description": "Other adversaries to run when this package is selected (composition). Expanded transitively by the CLI. GitHub comment voice comes from the CLI entry package, not members.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)*$",
+            "description": "Registry / short adversary name (e.g. go/concurrency, review/engineering)."
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
+            "description": "Exact tag for name (e.g. 0.1.0 or latest). Semver ranges are not resolved yet."
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[^\\x00\\s](?:[^\\x00]*[^\\x00\\s])?$",
+            "description": "Local package directory relative to this package (or absolute). Mutually exclusive with name."
+          }
+        },
+        "oneOf": [
+          { "required": ["name"], "not": { "required": ["path"] } },
+          { "required": ["path"], "not": { "anyOf": [ { "required": ["name"] }, { "required": ["version"] } ] } }
+        ]
+      }
+    },
     "triggers": {
       "type": "object",
       "additionalProperties": false,

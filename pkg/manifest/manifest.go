@@ -26,14 +26,27 @@ const (
 )
 
 type Manifest struct {
-	Name        string      `yaml:"name" json:"name"`
-	Version     string      `yaml:"version" json:"version"`
-	Description string      `yaml:"description,omitempty" json:"description,omitempty"`
+	Name        string `yaml:"name" json:"name"`
+	Version     string `yaml:"version" json:"version"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	// Uses lists other adversaries to run when this package is selected
+	// (composition). The CLI expands uses transitively, then runs each leaf
+	// (and this package). Voice for GitHub rewrite comes from the CLI entry
+	// package, not from members.
+	Uses        []Use       `yaml:"uses,omitempty" json:"uses,omitempty"`
 	Triggers    Triggers    `yaml:"triggers,omitempty" json:"triggers,omitempty"`
 	Detection   Detection   `yaml:"detection,omitempty" json:"detection,omitempty"`
 	Runtime     Runtime     `yaml:"runtime" json:"runtime"`
 	Permissions Permissions `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	Findings    Findings    `yaml:"findings,omitempty" json:"findings,omitempty"`
+}
+
+// Use is one composition member. Exactly one of Name or Path is required.
+// Version is an optional exact tag for registry refs (name:version).
+type Use struct {
+	Name    string `yaml:"name,omitempty" json:"name,omitempty"`
+	Version string `yaml:"version,omitempty" json:"version,omitempty"`
+	Path    string `yaml:"path,omitempty" json:"path,omitempty"`
 }
 
 type Triggers struct {
@@ -334,7 +347,86 @@ func (m Manifest) Validate() error {
 	if m.Findings.Format != "" && m.Findings.Format != "adversary.review.v1" {
 		return fmt.Errorf("manifest findings.format %q is unsupported", m.Findings.Format)
 	}
+	if err := validateUses(m.Uses); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateUses(uses []Use) error {
+	seen := map[string]struct{}{}
+	for i, u := range uses {
+		name := strings.TrimSpace(u.Name)
+		path := strings.TrimSpace(u.Path)
+		version := strings.TrimSpace(u.Version)
+		hasName, hasPath := name != "", path != ""
+		if hasName == hasPath {
+			return fmt.Errorf("manifest uses[%d] must specify exactly one of name or path", i)
+		}
+		if hasName {
+			if !nameRE.MatchString(name) {
+				return fmt.Errorf("manifest uses[%d].name %q must be a normalized lowercase slash-separated name", i, name)
+			}
+			if version != "" {
+				// Exact tag only for v1 (no ^/~ range resolution yet).
+				if !normalizedNonEmpty(version) {
+					return fmt.Errorf("manifest uses[%d].version must be non-empty when set", i)
+				}
+				if strings.ContainsAny(version, "^~<>*| /@") || strings.Contains(version, "://") {
+					return fmt.Errorf("manifest uses[%d].version %q must be an exact tag (ranges not supported yet)", i, version)
+				}
+			}
+			key := "name:" + name
+			if version != "" {
+				key += ":" + version
+			}
+			if _, dup := seen[key]; dup {
+				return fmt.Errorf("manifest uses[%d] duplicates %q", i, name)
+			}
+			seen[key] = struct{}{}
+			continue
+		}
+		// Path: relative or absolute package directory; no empty, no null bytes.
+		if !normalizedNonEmpty(path) || strings.ContainsRune(path, 0) {
+			return fmt.Errorf("manifest uses[%d].path must be a non-empty path", i)
+		}
+		if version != "" {
+			return fmt.Errorf("manifest uses[%d]: version is only valid with name, not path", i)
+		}
+		key := "path:" + filepath.ToSlash(path)
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("manifest uses[%d] duplicates path %q", i, path)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// UseReference builds the run ref for a composition member declared by a package
+// rooted at packageDir (used to resolve relative path members).
+func UseReference(packageDir string, u Use) (string, error) {
+	name := strings.TrimSpace(u.Name)
+	path := strings.TrimSpace(u.Path)
+	version := strings.TrimSpace(u.Version)
+	if name != "" && path != "" {
+		return "", errors.New("use must specify exactly one of name or path")
+	}
+	if name != "" {
+		if version != "" {
+			return name + ":" + version, nil
+		}
+		return name, nil
+	}
+	if path == "" {
+		return "", errors.New("use requires name or path")
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+	if packageDir == "" {
+		return "", errors.New("relative use path requires package directory")
+	}
+	return filepath.Clean(filepath.Join(packageDir, path)), nil
 }
 
 // validateRuntimeImage validates stable distribution-reference syntax without
