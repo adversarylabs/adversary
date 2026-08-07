@@ -54,6 +54,10 @@ adversary completion bash
 Run `adversary help <command>` for the canonical command and flag reference.
 See [automatic selection](docs/automatic-detection.md) for change resolution,
 manifest detection declarations, selection policy, and CI behavior.
+See [composition](docs/composition.md) for `adversary.yaml` `uses` (language packs
+and persona entrypoints that expand to specialist adversaries).
+See [comment voice](docs/voice.md) for `agent/voice.md`, example banks, and GitHub
+rewrite with `--github-review`.
 
 ## Automatic review scope
 
@@ -209,11 +213,17 @@ Security reports: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](C
 
 ## Train (review history → draft package improvements)
 
+Grade **home-built** (local) packages against your team’s PR review history and
+draft improvements. Official catalog packages can act as a read-only jury only.
+
 ```sh
-adversary train init
-# edit adversary.train.yaml (sources, authors, official jury, local packages)
+cd my-adversary
+adversary train init --single-package
+# edit adversary.train.yaml (sources, authors, official jury)
 adversary train run
-adversary train story
+adversary train results ls
+adversary train results apply <id>
 ```
 
-See [docs/train/customer-train-cli.md](docs/train/customer-train-cli.md).
+Guide: **[docs/train.md](docs/train.md)** (home-built workflow).  
+Also: [composition](docs/composition.md), [comment voice](docs/voice.md).

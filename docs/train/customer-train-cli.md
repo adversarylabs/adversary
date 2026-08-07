@@ -1,10 +1,13 @@
 # Customer `adversary train` CLI — product sketch
 
-**Status:** design only (not implemented).  
-**CLI name:** **`train`** (not `factory`). No backward-compat aliases required.  
-**Goal:** After the internal adversary-factory loop is trustworthy, ship it as first-class `adversary train …` so a customer can improve **their own** adversaries using **their own** PR review history.
+**Status:** largely implemented in the CLI. Prefer the user guide
+**[docs/train.md](../train.md)** for home-built packages (init → run → results apply).
+This file remains a longer product sketch and design rationale.
 
-Related: [goal-factory-iteration.md](./goal-factory-iteration.md) (internal quality bar).
+**CLI name:** **`train`** (not `factory`).  
+**Goal:** Customers improve **their own** adversaries using **their own** PR review history.
+
+Related: [quality-bar.md](./quality-bar.md) (internal factory quality bar).
 
 **What “train” means here:** walk review history, grade local packages against human gold, draft improvements (stories + suggested issues). It does **not** imply silent model-weight fine-tunes in v1 (see non-goals). Help text should stay honest: *train from your team’s review history*.
 
