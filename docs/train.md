@@ -182,6 +182,8 @@ adversary train results apply <id>
 adversary train results apply --all
 adversary train results apply --all --no-issue   # local draft only
 adversary train results apply --all --no-git     # skip branch/commit helpers
+# By default apply opens GitHub issues for misses/FPs only (not every human-gold row).
+adversary train results apply --all --include-human-issues  # also file human-gold issues
 adversary train results dismiss <id>
 ```
 

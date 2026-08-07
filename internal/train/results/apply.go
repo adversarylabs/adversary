@@ -22,6 +22,10 @@ type ApplyOptions struct {
 	Branch string
 	// CreateIssue opens a GitHub issue on the package repo (default true from CLI).
 	CreateIssue bool
+	// IncludeHumanIssues when false (default), KindHuman rows write a local draft
+	// only — they do not open GitHub implement issues. Misses/FPs still open issues
+	// when CreateIssue is true. Set true to restore bulk-human issue filing.
+	IncludeHumanIssues bool
 	// IssueClient is optional; when nil and CreateIssue, a token client is built from env.
 	IssueClient IssueCreator
 	// Context for GitHub API (defaults to Background).
@@ -98,7 +102,12 @@ func Apply(stateRoot, id string, opts ApplyOptions) (ApplyResult, error) {
 	}
 
 	var issueErr error
-	if opts.CreateIssue {
+	wantIssue := opts.CreateIssue
+	// Human-gold rows are not implement backlog by default (scope triage first).
+	if wantIssue && normalizeKind(r.Kind) == KindHuman && !opts.IncludeHumanIssues {
+		wantIssue = false
+	}
+	if wantIssue {
 		issueURL, err := createApplyIssue(opts, abs, r, outPath)
 		if err != nil {
 			issueErr = err

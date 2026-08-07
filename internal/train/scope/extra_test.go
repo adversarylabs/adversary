@@ -21,6 +21,44 @@ func TestClassifierHeuristics(t *testing.T) {
 	}
 }
 
+func TestEngReviewFiltersNoiseFromTrainGold(t *testing.T) {
+	c := &Classifier{
+		AdversaryName:   "engineering-review",
+		UseLLM:          false,
+		MissionMarkdown: "staff engineering completeness contracts ops validation",
+	}
+	outCases := []string{
+		"Not changed in this diff.",
+		"Thanks for the interest in contributing to Django, welcome aboard.",
+		"I'll revert this after a successful build & e2e run",
+		"Please keep the trailing comma.",
+		"This just needs to flip `True` to `False`.",
+		"```suggestion\nbboltcmd.NewRootCommand(),\n```",
+		"Should contain a E2E since this is a basic expected behaviour",
+		"```json\n{ \"event\": \"COMMENT\", \"body\": \"## Code Review: fix\" }\n```",
+		"Good catch, this was real. Reproduced the hang.",
+		"maybe it can be reduced, open to suggestions",
+	}
+	for _, body := range outCases {
+		r := c.Classify(body, "src/x.go", "alice")
+		if r.Decision != OutOfScope {
+			t.Errorf("want out_of_scope for %q: got %s (%s)", body, r.Decision, r.Reason)
+		}
+	}
+	inCases := []string{
+		"I'm not sure it make sense to have the canContinueOnError being set outside the catch — incomplete error contract",
+		"Could you wrap only dest.append in the try-catch block to avoid catching unrelated error?",
+		"directoryListing builds absolute paths while DirFS rejects them — incomplete parity test",
+		"Are there breaking changes between 1.x and 2.x for this API contract?",
+	}
+	for _, body := range inCases {
+		r := c.Classify(body, "src/x.go", "alice")
+		if r.Decision != InScope {
+			t.Errorf("want in_scope for %q: got %s (%s)", body, r.Decision, r.Reason)
+		}
+	}
+}
+
 func TestRouterPreferSpecialist(t *testing.T) {
 	r := &Router{
 		UseLLM: false,

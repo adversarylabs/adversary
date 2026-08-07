@@ -365,6 +365,15 @@ func globalNonDefectOut(body, path string) (reason string, ok bool) {
 	if isProcessOrMergeLogistics(lower) && !heuristicLikelyIn(body, path) {
 		return "process / merge / backlog logistics, not a product defect", true
 	}
+	if isAuthorOrSocialChat(lower) && !heuristicLikelyIn(body, path) {
+		return "social / thanks / author confirmation, not a product defect", true
+	}
+	if isBareSuggestionFence(body) && !heuristicLikelyIn(body, path) {
+		return "bare suggestion/code fence without engineering principle", true
+	}
+	if isGenericTestProcessAsk(lower) {
+		return "generic add-tests / e2e process without named behavior", true
+	}
 	// Commit-message rewording is never product gold (even if body quotes race language).
 	if isCommitMessageWording(lower) {
 		return "commit message / changelog wording, not a product defect", true
@@ -374,7 +383,28 @@ func globalNonDefectOut(body, path string) (reason string, ok bool) {
 	if isDocumentationPath(path) && !heuristicLikelyIn(body, path) {
 		return "documentation path without engineering-risk language", true
 	}
+	// Docs-only suggestion content (rst/md signature flips, True→False in docs)
+	if isDocsOnlySuggestion(body, lower) && !heuristicLikelyIn(body, path) {
+		return "documentation-only suggestion / typo flip", true
+	}
 	return "", false
+}
+
+// isDocsOnlySuggestion: True/False doc flips, rst class:: lines, placeholder URLs in docs.
+func isDocsOnlySuggestion(body, lower string) bool {
+	if strings.Contains(lower, "flip `true` to `false`") || strings.Contains(lower, "flip true to false") {
+		return true
+	}
+	if strings.Contains(body, "```suggestion") {
+		if strings.Contains(lower, ".. class::") || strings.Contains(lower, "placeholder:") ||
+			strings.Contains(lower, "your-reproduction") || strings.Contains(lower, "jsonresponse") {
+			return true
+		}
+	}
+	if strings.Contains(lower, "please keep the trailing comma") {
+		return true
+	}
+	return false
 }
 
 // isCommitMessageWording: reviewer only asks to rephrase the commit message / PR title.
@@ -399,11 +429,24 @@ func isProcessOrMergeLogistics(lower string) bool {
 		"separate pr", "follow-up issue", "can land later", "out of scope for this pr",
 		"merge logistics", "please rebase", "needs rebase", "conflict",
 		"claude suggested", // AI-assistant process note, not human product finding
+		"not changed in this diff", "not in this diff", "out of scope for this change",
+		"welcome aboard", "thanks for the interest", "thanks for the pr",
+		"thanks for contributing", "i'll revert", "i will revert",
+		"after a successful build", "let me know and i can push",
+		"i have a pending fix", "independently discovered",
+		"good catch, this was real", "i was able to confirm the repro",
+		"as mentioned in the issue this is not a fix",
+		"chicken and egg", "if you don't mind, let me know",
 	}
 	for _, p := range process {
 		if strings.Contains(lower, p) {
 			return true
 		}
+	}
+	// Author status / "Fixed:" status replies
+	if strings.HasPrefix(strings.TrimSpace(lower), "fixed:") ||
+		strings.HasPrefix(strings.TrimSpace(lower), "fixed ") {
+		return true
 	}
 	// "If we want this" + deferral without demanding a fix in this change
 	if strings.Contains(lower, "if we want") && (strings.Contains(lower, "todo") ||
@@ -412,6 +455,92 @@ func isProcessOrMergeLogistics(lower string) bool {
 		return true
 	}
 	return false
+}
+
+// isBareSuggestionFence: GitHub suggestion / code fence with almost no prose —
+// not enough to grade as staff engineering gold (no principle stated).
+func isBareSuggestionFence(body string) bool {
+	trim := strings.TrimSpace(body)
+	if !strings.Contains(trim, "```") {
+		return false
+	}
+	// Strip fenced blocks and see if remaining prose is empty/trivial.
+	prose := trim
+	for {
+		start := strings.Index(prose, "```")
+		if start < 0 {
+			break
+		}
+		rest := prose[start+3:]
+		end := strings.Index(rest, "```")
+		if end < 0 {
+			prose = prose[:start]
+			break
+		}
+		prose = prose[:start] + rest[end+3:]
+	}
+	prose = strings.TrimSpace(prose)
+	if prose == "" {
+		return true
+	}
+	// Very short lead-in like "Suggestion:" / "Would something like this work better?"
+	// with no defect keywords still counts as bare if under ~80 chars of non-fence text.
+	if len(prose) < 80 && !heuristicLikelyIn(prose, "") {
+		lower := strings.ToLower(prose)
+		if strings.HasPrefix(lower, "suggestion") || strings.Contains(lower, "work better") ||
+			strings.Contains(lower, "would something like") || strings.Contains(lower, "please use") {
+			return true
+		}
+	}
+	return false
+}
+
+// isAuthorOrSocialChat: thanks / confirmation / welcome without a product defect ask.
+func isAuthorOrSocialChat(lower string) bool {
+	// Pure social openers when the body is short.
+	if len(lower) < 200 {
+		social := []string{
+			"thanks!", "thank you", "welcome aboard", "lgtm", "ship it",
+			"looks good to me", "nice work", "great work",
+		}
+		for _, s := range social {
+			if strings.HasPrefix(strings.TrimSpace(lower), s) && !containsDefectAsk(lower) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isGenericTestProcessAsk: "add tests" / "needs e2e" without naming important behavior.
+func isGenericTestProcessAsk(lower string) bool {
+	generic := []string{
+		"add test cases", "add tests for this", "please also add test",
+		"should contain a e2e", "needs e2e", "needs an e2e", "need e2e",
+		"can we make this test e2e", "move it some other already existing file",
+	}
+	hit := false
+	for _, g := range generic {
+		if strings.Contains(lower, g) {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return false
+	}
+	// If they name a specific behavior/contract, keep as possible gold.
+	named := []string{
+		"assert that", "verify that", "should also undoes", "does nothing",
+		"error string", "status code", "restore previous", "enterwith",
+		"regression coverage", "adapter regression", "important changed",
+	}
+	for _, n := range named {
+		if strings.Contains(lower, n) {
+			return false
+		}
+	}
+	return !heuristicLikelyIn(lower, "")
 }
 
 // isSedStyleRewrite detects s/old/new/ wording rewrites (classic review nits).
@@ -714,6 +843,12 @@ func heuristicLikelyIn(body, path string) bool {
 		"context.background", "cancellation", "timeout", "concurrency",
 		"thread-safe", "mutex", "compatibility", "breaking change",
 		"resource leak", "double-close", "use-after", "memory leak",
+		// Staff engineering signals (eng-review gold classes)
+		"half-done", "half done", "sibling path", "wrong module",
+		"belongs in", "layering", "ownership", "blast radius",
+		"try-catch", "error handling", "unrelated error",
+		"absolute path", "dirfs", "parity test",
+		"breaking changes", "api contract", "incomplete contract",
 	}
 	for _, k := range keywords {
 		if strings.Contains(lower, k) {

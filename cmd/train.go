@@ -446,7 +446,7 @@ func newTrainResultsInspectCommand(app *application.App) *cobra.Command {
 
 func newTrainResultsApplyCommand(app *application.App) *cobra.Command {
 	var path string
-	var noGit, noIssue, applyAll bool
+	var noGit, noIssue, applyAll, includeHumanIssues bool
 	cmd := &cobra.Command{
 		Use:   "apply [<id>...]",
 		Short: "Apply train result(s): local draft + GitHub issue for coding agents",
@@ -454,10 +454,16 @@ func newTrainResultsApplyCommand(app *application.App) *cobra.Command {
 docs/train-drafts/<id>.md and opens a GitHub issue on the package's git remote
 with agent-ready context (goal, source PR, what to change, acceptance).
 
+By default, GitHub issues are opened for **misses** and **false positives** only.
+**Human-gold** rows write a local draft without an issue (triage first; avoid
+flooding the package with every human comment). Use --include-human-issues to
+file human rows too.
+
   adversary train results apply <id>
   adversary train results apply --all
   adversary train results apply --all --no-issue   # draft file only
   adversary train results apply --all --no-git     # skip branch/commit
+  adversary train results apply --all --include-human-issues
 
 Requires ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN with issues:write
 on the package repo (unless --no-issue). Does not open a PR.`,
@@ -504,10 +510,11 @@ on the package repo (unless --no-issue). Does not open a PR.`,
 					return fmt.Errorf("%s: %w", id, err)
 				}
 				ar, err := results.Apply(state, id, results.ApplyOptions{
-					PackagePath:  pkgPath,
-					CreateBranch: !noGit,
-					CreateIssue:  !noIssue,
-					Context:      cmd.Context(),
+					PackagePath:        pkgPath,
+					CreateBranch:       !noGit,
+					CreateIssue:        !noIssue,
+					IncludeHumanIssues: includeHumanIssues,
+					Context:            cmd.Context(),
 				})
 				if err != nil {
 					return err
@@ -540,6 +547,7 @@ on the package repo (unless --no-issue). Does not open a PR.`,
 	cmd.Flags().StringVar(&path, "path", "", "workspace with adversary.train.yaml")
 	cmd.Flags().BoolVar(&noGit, "no-git", false, "only write draft file; skip git branch/commit")
 	cmd.Flags().BoolVar(&noIssue, "no-issue", false, "skip GitHub issue creation (local draft only)")
+	cmd.Flags().BoolVar(&includeHumanIssues, "include-human-issues", false, "also open GitHub issues for human-gold rows (default: misses/FPs only)")
 	cmd.Flags().BoolVar(&applyAll, "all", false, "apply all results with status=new")
 	return cmd
 }
