@@ -517,11 +517,15 @@ func runAdversaries(
 	apiURL, profile *string,
 	resultOut, progressOut io.Writer,
 ) error {
-	// Never pull during --shell composition expand: a later multi-ref reject must
-	// not leave members (or an uninstalled root graph) installed as a side effect.
-	// Shell always targets a single ref; missing members stay unresolved leaves.
-	allowPull := !opts.shell
-	expanded, voiceRoots, err := expandComposeRefs(ctx, app, refs, valueOf(apiURL), valueOf(profile), opts.noCompose, allowPull, progressOut)
+	// --shell is a single interactive package session. Skip uses expansion entirely
+	// so we never pull a composition graph, never re-expand after auto-install, and
+	// never launch a shell into a multi-member product by accident. Name a leaf
+	// explicitly (or use --no-compose) when you want shell into one specialist.
+	noCompose := opts.noCompose || opts.shell
+	if opts.shell && !opts.noCompose && progressOut != nil {
+		fmt.Fprintln(progressOut, "Note: --shell skips adversary.yaml uses expansion (single package only).")
+	}
+	expanded, voiceRoots, err := expandComposeRefs(ctx, app, refs, valueOf(apiURL), valueOf(profile), noCompose, true, progressOut)
 	if err != nil {
 		return err
 	}
@@ -531,7 +535,7 @@ func runAdversaries(
 	}
 	refs = expanded
 	if opts.shell && len(refs) > 1 {
-		return fmt.Errorf("--shell cannot be combined with composition that expands to multiple adversaries (use --no-compose or a single leaf ref)")
+		return fmt.Errorf("--shell requires exactly one adversary reference")
 	}
 
 	multi := len(refs) > 1
