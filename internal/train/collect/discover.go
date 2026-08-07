@@ -63,13 +63,15 @@ func DiscoverPRsWithOpts(owner, repo string, opts DiscoverOpts) ([]PRRef, error)
 		return nil, err
 	}
 
-	// Closed PRs sorted by created; filter merged_at client-side.
+	// Single page only — do NOT use RESTGetPaginated here. Full pagination on
+	// kubernetes/golang-scale repos downloads the entire closed-PR history (GB of
+	// JSON) and appears hung for tens of minutes. ListLimit is a window cap.
 	perPage := opts.ListLimit
 	if perPage > 100 {
 		perPage = 100
 	}
-	path := fmt.Sprintf("/repos/%s/%s/pulls?state=closed&per_page=%d&sort=created&direction=desc", owner, repo, perPage)
-	raw, err := client.RESTGetPaginated(ctx, path)
+	path := fmt.Sprintf("/repos/%s/%s/pulls?state=closed&per_page=%d&sort=updated&direction=desc", owner, repo, perPage)
+	raw, _, err := client.RESTGet(ctx, path)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("discover interrupted: %w", ctx.Err())
