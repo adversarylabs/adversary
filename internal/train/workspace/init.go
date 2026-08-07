@@ -26,7 +26,9 @@ adversaries:
   # overrides:
   #   go/security: my-security
 
-# Official catalog — grade-only jury (never trained).
+# Official catalog — optional grade-only jury (never trained).
+# When disabled, train still expands each local package's adversary.yaml uses
+# (composition is part of the product under train, not the jury).
 official:
   enabled: true
   # auto_pull: true

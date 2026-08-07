@@ -153,8 +153,12 @@ func FromBaselineJSON(raw []byte) (*Review, error) {
 	return r, nil
 }
 
-// FromAnyJSON tries adversary envelope then baseline.
+// FromAnyJSON tries multi-run CLI output (composition), then single adversary
+// envelope, then baseline.
 func FromAnyJSON(reviewerID string, raw []byte) (*Review, error) {
+	if r, err := FromMultiRunJSON(reviewerID, raw); err == nil {
+		return r, nil
+	}
 	if r, err := FromAdversaryJSON(reviewerID, raw); err == nil && (len(r.Findings) > 0 || strings.Contains(string(raw), "protocolVersion")) {
 		return r, nil
 	}
@@ -163,6 +167,71 @@ func FromAnyJSON(reviewerID string, raw []byte) (*Review, error) {
 		return r, nil
 	}
 	return FromAdversaryJSON(reviewerID, raw)
+}
+
+// FromMultiRunJSON merges CLI multi-adversary JSON (composition expand) into one
+// review under reviewerID. Accepts either a bare {"results":[...]} object or the
+// cmd writeJSON envelope {"command":"run","data":{"results":[...]}}.
+func FromMultiRunJSON(reviewerID string, raw []byte) (*Review, error) {
+	type item struct {
+		Adversary string          `json:"adversary"`
+		Output    json.RawMessage `json:"output"`
+		Error     string          `json:"error"`
+	}
+	var results []item
+
+	var envelope struct {
+		Data *struct {
+			Results []item `json:"results"`
+		} `json:"data"`
+		Results []item `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, err
+	}
+	switch {
+	case envelope.Data != nil && len(envelope.Data.Results) > 0:
+		results = envelope.Data.Results
+	case len(envelope.Results) > 0:
+		results = envelope.Results
+	default:
+		return nil, fmt.Errorf("not multi-run json")
+	}
+
+	merged := &Review{
+		ReviewerID: stripToolIdentity(reviewerID),
+		Source:     "adversary",
+		Findings:   nil,
+	}
+	// Prefer multi only when there are 2+ members or at least one nested output —
+	// a single empty results array is not multi.
+	gotAny := false
+	for _, it := range results {
+		if len(it.Output) == 0 {
+			continue
+		}
+		part, err := FromAdversaryJSON(reviewerID, it.Output)
+		if err != nil {
+			// Nested output may itself be wrapped; try again via protocol strip.
+			continue
+		}
+		gotAny = true
+		for _, f := range part.Findings {
+			// Prefix id when colliding across members.
+			if it.Adversary != "" && f.ID != "" {
+				f.ID = it.Adversary + "/" + f.ID
+			}
+			merged.Findings = append(merged.Findings, f)
+		}
+	}
+	if !gotAny && len(results) < 2 {
+		return nil, fmt.Errorf("not multi-run json")
+	}
+	// Multi with only errors still counts as multi product result (zero findings).
+	if len(results) >= 2 || gotAny {
+		return merged, nil
+	}
+	return nil, fmt.Errorf("not multi-run json")
 }
 
 func normalizeSeverity(s string) string {
