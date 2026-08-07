@@ -31,6 +31,20 @@ type Package struct {
 	Languages []string
 	// FileGlobs from triggers.files_changed.
 	FileGlobs []string
+	// Uses are composition members from adversary.yaml (name/version or path).
+	// Always expanded when this local package is run for train grading — independent
+	// of official jury enable/disable.
+	Uses []UseSpec
+	// CompositionOnly is true when this package was loaded only as a uses member
+	// of a local package (not a train draft target unless also listed as local).
+	CompositionOnly bool
+}
+
+// UseSpec is one adversary.yaml uses entry.
+type UseSpec struct {
+	Name    string
+	Version string
+	Path    string
 }
 
 // DiscoverSiblings finds *-adversary directories next to factoryRoot's parent
@@ -160,13 +174,18 @@ func loadPackage(dir, dirName string) (Package, error) {
 		ScopePath:     scopePath,
 		Languages:     []string{"any"},
 	}
-	// Parse adversary.yaml for name/description/globs.
+	// Parse adversary.yaml for name/description/globs/uses.
 	raw, err := os.ReadFile(filepath.Join(dir, "adversary.yaml"))
 	if err == nil {
 		var y struct {
 			Name        string `yaml:"name"`
 			Description string `yaml:"description"`
-			Triggers    struct {
+			Uses        []struct {
+				Name    string `yaml:"name"`
+				Version string `yaml:"version"`
+				Path    string `yaml:"path"`
+			} `yaml:"uses"`
+			Triggers struct {
 				FilesChanged []string `yaml:"files_changed"`
 			} `yaml:"triggers"`
 			Detection struct {
@@ -181,6 +200,13 @@ func loadPackage(dir, dirName string) (Package, error) {
 				pkg.FileGlobs = y.Detection.Files
 			}
 			pkg.Languages = languagesFromGlobs(pkg.FileGlobs, id)
+			for _, u := range y.Uses {
+				pkg.Uses = append(pkg.Uses, UseSpec{
+					Name:    strings.TrimSpace(u.Name),
+					Version: strings.TrimSpace(u.Version),
+					Path:    strings.TrimSpace(u.Path),
+				})
+			}
 		}
 	}
 	if pkg.ManifestName == "" {
