@@ -116,6 +116,21 @@ func (c *Classifier) Classify(commentBody, path, author string) Result {
 		}
 	}
 
+	if isEngineeringReview(strings.ToLower(c.AdversaryName)) {
+		if engineeringReviewLikelyIn(body, path) {
+			return Result{
+				Decision: InScope,
+				Reason:   "heuristic: material, actionable engineering principle with concrete impact",
+				Method:   "heuristic",
+			}
+		}
+		return Result{
+			Decision: OutOfScope,
+			Reason:   "heuristic: engineering-review requires materiality, actionability, and a general engineering principle",
+			Method:   "heuristic",
+		}
+	}
+
 	if heuristicLikelyIn(body, path) {
 		return Result{
 			Decision: InScope,
@@ -365,6 +380,15 @@ func globalNonDefectOut(body, path string) (reason string, ok bool) {
 	if isProcessOrMergeLogistics(lower) && !heuristicLikelyIn(body, path) {
 		return "process / merge / backlog logistics, not a product defect", true
 	}
+	if isAuthorOrSocialChat(lower) && !heuristicLikelyIn(body, path) {
+		return "social / thanks / author confirmation, not a product defect", true
+	}
+	if isBareSuggestionFence(body) && !heuristicLikelyIn(body, path) {
+		return "bare suggestion/code fence without engineering principle", true
+	}
+	if isGenericTestProcessAsk(lower) {
+		return "generic add-tests / e2e process without named behavior", true
+	}
 	// Commit-message rewording is never product gold (even if body quotes race language).
 	if isCommitMessageWording(lower) {
 		return "commit message / changelog wording, not a product defect", true
@@ -374,7 +398,26 @@ func globalNonDefectOut(body, path string) (reason string, ok bool) {
 	if isDocumentationPath(path) && !heuristicLikelyIn(body, path) {
 		return "documentation path without engineering-risk language", true
 	}
+	// Docs-only suggestion content without a product contract or behavioral risk.
+	if isDocsOnlySuggestion(body, lower) && !heuristicLikelyIn(body, path) {
+		return "documentation-only suggestion / typo flip", true
+	}
 	return "", false
+}
+
+// isDocsOnlySuggestion recognizes fenced documentation edits even when the
+// collector did not retain a documentation path.
+func isDocsOnlySuggestion(body, lower string) bool {
+	if !strings.Contains(body, "```suggestion") {
+		return false
+	}
+	docMarkers := []string{".. class::", "placeholder", "example url", "readme", "documentation", "docstring"}
+	for _, marker := range docMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // isCommitMessageWording: reviewer only asks to rephrase the commit message / PR title.
@@ -405,6 +448,14 @@ func isProcessOrMergeLogistics(lower string) bool {
 			return true
 		}
 	}
+	// Author status / "Fixed:" status replies
+	if strings.HasPrefix(strings.TrimSpace(lower), "fixed:") ||
+		strings.HasPrefix(strings.TrimSpace(lower), "fixed ") {
+		return true
+	}
+	if referencesOutsideChange(lower) || isContributionChatter(lower) || isAuthorStatusUpdate(lower) {
+		return true
+	}
 	// "If we want this" + deferral without demanding a fix in this change
 	if strings.Contains(lower, "if we want") && (strings.Contains(lower, "todo") ||
 		strings.Contains(lower, "later") || strings.Contains(lower, "list") ||
@@ -412,6 +463,123 @@ func isProcessOrMergeLogistics(lower string) bool {
 		return true
 	}
 	return false
+}
+
+func referencesOutsideChange(lower string) bool {
+	outside := []string{"not changed", "not introduced", "outside this change", "out of scope for this", "pre-existing", "preexisting"}
+	for _, marker := range outside {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isContributionChatter(lower string) bool {
+	thanks := strings.Contains(lower, "thanks for") || strings.Contains(lower, "thank you for") || strings.Contains(lower, "welcome")
+	coordination := strings.Contains(lower, "let me know") || strings.Contains(lower, "i can push") || strings.Contains(lower, "pending fix")
+	return (thanks || coordination) && !containsDefectAsk(lower)
+}
+
+func isAuthorStatusUpdate(lower string) bool {
+	trim := strings.TrimSpace(lower)
+	statusStart := []string{"fixed", "done", "resolved", "reproduced", "confirmed"}
+	for _, marker := range statusStart {
+		if hasStatusPrefix(trim, marker) && !containsDefectAsk(lower) {
+			return true
+		}
+	}
+	return (strings.Contains(lower, "i'll revert") || strings.Contains(lower, "i will revert")) && !containsDefectAsk(lower)
+}
+
+func hasStatusPrefix(s, marker string) bool {
+	if !strings.HasPrefix(s, marker) {
+		return false
+	}
+	if len(s) == len(marker) {
+		return true
+	}
+	next := s[len(marker)]
+	return next == ':' || next == ' ' || next == '.'
+}
+
+// isBareSuggestionFence: GitHub suggestion / code fence with almost no prose —
+// not enough to grade as staff engineering gold (no principle stated).
+func isBareSuggestionFence(body string) bool {
+	trim := strings.TrimSpace(body)
+	if !strings.Contains(trim, "```") {
+		return false
+	}
+	// Strip fenced blocks and see if remaining prose is empty/trivial.
+	prose := trim
+	for {
+		start := strings.Index(prose, "```")
+		if start < 0 {
+			break
+		}
+		rest := prose[start+3:]
+		end := strings.Index(rest, "```")
+		if end < 0 {
+			prose = prose[:start]
+			break
+		}
+		prose = prose[:start] + rest[end+3:]
+	}
+	prose = strings.TrimSpace(prose)
+	if prose == "" {
+		return true
+	}
+	// Very short lead-in like "Suggestion:" / "Would something like this work better?"
+	// with no defect keywords still counts as bare if under ~80 chars of non-fence text.
+	if len(prose) < 80 && !heuristicLikelyIn(prose, "") {
+		lower := strings.ToLower(prose)
+		if strings.HasPrefix(lower, "suggestion") || strings.Contains(lower, "work better") ||
+			strings.Contains(lower, "would something like") || strings.Contains(lower, "please use") {
+			return true
+		}
+	}
+	return false
+}
+
+// isAuthorOrSocialChat: thanks / confirmation / welcome without a product defect ask.
+func isAuthorOrSocialChat(lower string) bool {
+	// Pure social openers when the body is short.
+	if len(lower) < 200 {
+		social := []string{
+			"thanks!", "thank you", "welcome aboard", "lgtm", "ship it",
+			"looks good to me", "nice work", "great work",
+		}
+		for _, s := range social {
+			if strings.HasPrefix(strings.TrimSpace(lower), s) && !containsDefectAsk(lower) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isGenericTestProcessAsk: "add tests" / "needs e2e" without naming important behavior.
+func isGenericTestProcessAsk(lower string) bool {
+	mentionsValidation := containsWordASCII(lower, "test") || containsWordASCII(lower, "tests") ||
+		containsWordASCII(lower, "coverage") || containsWordASCII(lower, "e2e")
+	asksForValidation := strings.Contains(lower, "add ") || strings.Contains(lower, "need") ||
+		strings.Contains(lower, "should") || strings.Contains(lower, "please") || strings.Contains(lower, "can we")
+	if !mentionsValidation || !asksForValidation {
+		return false
+	}
+	// A concrete oracle, trigger, state transition, or failure mode is an
+	// engineering validation concern rather than generic process coverage.
+	named := []string{
+		"assert", "verify", "reproduce", "original failure", "regression",
+		"error string", "status code", "restore", "idempot", "cycle",
+		"transition", "after shutdown", "before shutdown", "when ", " if ",
+	}
+	for _, n := range named {
+		if strings.Contains(lower, n) {
+			return false
+		}
+	}
+	return true
 }
 
 // isSedStyleRewrite detects s/old/new/ wording rewrites (classic review nits).
@@ -714,6 +882,11 @@ func heuristicLikelyIn(body, path string) bool {
 		"context.background", "cancellation", "timeout", "concurrency",
 		"thread-safe", "mutex", "compatibility", "breaking change",
 		"resource leak", "double-close", "use-after", "memory leak",
+		// Cross-language engineering signals.
+		"half-done", "half done", "sibling path", "layering", "ownership",
+		"boundary", "blast radius", "error handling", "breaking changes",
+		"api contract", "incomplete contract", "downstream", "source of truth",
+		"regression", "assert", "verify", "externally visible", "unrelated error",
 	}
 	for _, k := range keywords {
 		if strings.Contains(lower, k) {
@@ -727,9 +900,73 @@ func heuristicLikelyIn(body, path string) bool {
 	return false
 }
 
+// engineeringReviewLikelyIn is intentionally higher precision than the shared
+// defect heuristic. Ambiguous technical comments fall through to the router's
+// scope-aware LLM pass instead of becoming engineering-review gold by default.
+func engineeringReviewLikelyIn(body, path string) bool {
+	lower := strings.ToLower(strings.TrimSpace(body))
+	if lower == "" || referencesOutsideChange(lower) || !heuristicLikelyIn(body, path) {
+		return false
+	}
+
+	// Obvious specialist vocabulary must not fall into engineering-review merely
+	// because the consequence is severe. A configured specialist may claim it;
+	// otherwise it is better left unowned than used as generalist training gold.
+	specialistPrimary := []string{
+		"sql injection", "command injection", "cross-site scripting", "xss", "csrf",
+		"data race", "mutex", "goroutine", "atomic operation", "thread-safe",
+		"typescript compiler", "go compiler", "eslint", "golangci-lint",
+	}
+	for _, marker := range specialistPrimary {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+
+	principles := []string{
+		"contract", "caller", "downstream", "adapter", "sibling path", "boundary",
+		"ownership", "layering", "duplicate", "source of truth", "rollback",
+		"compatibility", "state transition", "stale state", "unused work",
+		"error handling", "unrelated error", "regression", "externally visible",
+		"changed invariant", "original failure", "parity", "validation",
+	}
+	actions := []string{
+		"please", "should", "must", "need", "could we", "could you", "can we", "instead",
+		"assert", "verify", "reproduce", "move ", "use ", "remove ", "avoid ",
+	}
+	materialImpact := []string{
+		"data loss", "will fail", "incorrect", "broken", "blast radius",
+		"breaking change", "incomplete ", "ignored error", "partially usable",
+	}
+	hasPrinciple, hasAction, hasMaterialImpact := false, false, false
+	for _, marker := range principles {
+		if strings.Contains(lower, marker) {
+			hasPrinciple = true
+			break
+		}
+	}
+	for _, marker := range actions {
+		if strings.Contains(lower, marker) {
+			hasAction = true
+			break
+		}
+	}
+	for _, marker := range materialImpact {
+		if strings.Contains(lower, marker) {
+			hasMaterialImpact = true
+			break
+		}
+	}
+	return hasPrinciple && (hasAction || hasMaterialImpact)
+}
+
 type llmOut struct {
-	Decision string `json:"decision"`
-	Reason   string `json:"reason"`
+	Decision        string `json:"decision"`
+	Reason          string `json:"reason"`
+	Material        bool   `json:"material"`
+	Actionable      bool   `json:"actionable"`
+	ChangeLocal     bool   `json:"change_local"`
+	SpecialistOwned bool   `json:"specialist_owned"`
 }
 
 func (c *Classifier) classifyLLM(body, path, author string) (Result, error) {
@@ -747,13 +984,16 @@ Body:
 %s
 ---
 
-Return ONLY JSON: {"decision":"in_scope"|"out_of_scope"|"unclear","reason":"one short sentence"}
+Return ONLY JSON: {"decision":"in_scope"|"out_of_scope"|"unclear","reason":"one short sentence","material":true|false,"actionable":true|false,"change_local":true|false,"specialist_owned":true|false}
 Rules:
 - Bot authors (copilot, dependabot, etc.) → out_of_scope
 - PR overview / "Pull request overview" summary dumps → out_of_scope
 - Docs/comment wording, style nits, GitHub suggestion-only comment rewrites → out_of_scope
 - CI/GitHub Actions/workflow YAML concerns → out_of_scope for engineering-review (specialist)
-- Correctness, completeness, maintainability risk, operational risk in application code → in_scope
+- In scope requires a concrete present-day consequence, a proportionate action, and a concern introduced/expanded/relied on by this change
+- Pre-existing observations, hypothetical future traps, explanatory notes, and generic requests for tests → out_of_scope
+- Set specialist_owned=true when language mechanics, framework conventions, security, observability, infrastructure, pure complexity, or detailed test technique is the primary concern
+- For engineering-review, in_scope only when specialist_owned=false and the broader issue is contract integrity, ownership/boundaries, duplicated policy, fit-for-purpose work, lifecycle/state authority, compatibility/operations, or proof of an important changed invariant
 - If unsure → unclear
 `, c.AdversaryName, c.MissionMarkdown, author, path, body)
 
@@ -770,6 +1010,14 @@ Rules:
 		}
 	}
 	d := Decision(strings.ToLower(strings.TrimSpace(out.Decision)))
+	if d == InScope && isEngineeringReview(strings.ToLower(c.AdversaryName)) &&
+		(!out.Material || !out.Actionable || !out.ChangeLocal || out.SpecialistOwned) {
+		return Result{
+			Decision: OutOfScope,
+			Reason:   "llm gate: engineering-review requires material, actionable, change-local, non-specialist gold",
+			Method:   "llm",
+		}, nil
+	}
 	switch d {
 	case InScope, OutOfScope, Unclear:
 		return Result{Decision: d, Reason: out.Reason, Method: "llm"}, nil

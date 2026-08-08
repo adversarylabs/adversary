@@ -136,10 +136,11 @@ func TestApplyMarksAppliedEvenWhenIssueFails(t *testing.T) {
 	}
 	pkg := t.TempDir()
 	_, err := Apply(state, "cafe0001", ApplyOptions{
-		PackagePath:  pkg,
-		CreateBranch: false,
-		CreateIssue:  true,
-		IssueClient:  failIssueClient{},
+		PackagePath:             pkg,
+		CreateBranch:            false,
+		CreateIssue:             true,
+		IncludeIndividualIssues: true,
+		IssueClient:             failIssueClient{},
 	})
 	if err == nil {
 		t.Fatal("expected issue error")
@@ -221,10 +222,11 @@ func TestApplyCreatesGitHubIssue(t *testing.T) {
 
 	fake := &fakeIssueClient{}
 	ar, err := Apply(state, "deadbeef", ApplyOptions{
-		PackagePath:  pkg,
-		CreateBranch: false,
-		CreateIssue:  true,
-		IssueClient:  fake,
+		PackagePath:             pkg,
+		CreateBranch:            false,
+		CreateIssue:             true,
+		IncludeIndividualIssues: true,
+		IssueClient:             fake,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -244,6 +246,45 @@ func TestApplyCreatesGitHubIssue(t *testing.T) {
 	}
 	if got.IssueURL != ar.IssueURL {
 		t.Fatalf("stored issue %q", got.IssueURL)
+	}
+}
+
+func TestApplyIssueEligibilityDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		kind      string
+		wantIssue bool
+	}{
+		{name: "individual miss stays local", kind: KindMiss},
+		{name: "ungraded human stays local", kind: KindHuman},
+		{name: "clustered draft opens issue", kind: KindDraft, wantIssue: true},
+		{name: "false positive opens issue", kind: KindFalsePositive, wantIssue: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := t.TempDir()
+			if err := SaveResult(state, Result{
+				ID: "eligibility", RunID: "r1", Package: "engineering-review",
+				Kind: tc.kind, Status: StatusNew,
+				Summary:   "The changed contract is not propagated to its adapter.",
+				CreatedAt: time.Now().UTC(),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			pkg := t.TempDir()
+			_ = exec.Command("git", "init", pkg).Run()
+			_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/engineering-review-adversary.git").Run()
+			fake := &fakeIssueClient{}
+			ar, err := Apply(state, "eligibility", ApplyOptions{
+				PackagePath: pkg, CreateIssue: true, IssueClient: fake,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotIssue := ar.IssueURL != "" || fake.lastTitle != ""
+			if gotIssue != tc.wantIssue {
+				t.Fatalf("issue=%v want %v: %+v title=%q", gotIssue, tc.wantIssue, ar, fake.lastTitle)
+			}
+		})
 	}
 }
 
@@ -356,6 +397,28 @@ func TestProgressiveKeptThenGraded(t *testing.T) {
 	rows2, _ := List(state, "go-concurrency", "caught")
 	if len(rows2) < 1 {
 		t.Fatal("expected caught status")
+	}
+}
+
+func TestHumanGoldPreservesFullSummaryForTriage(t *testing.T) {
+	state := t.TempDir()
+	summary := strings.Repeat("material contract detail ", 12) + "final actionable recommendation"
+	c := &cases.Case{
+		ID:         "full-summary",
+		Repository: cases.Repository{Owner: "o", Name: "r"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "g1", Summary: summary, Approved: true, OwnerAdversary: "engineering-review",
+		}}},
+	}
+	if _, err := WriteKeptCase(state, "run-1", c); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := List(state, "engineering-review", StatusNew)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	if rows[0].Summary != summary {
+		t.Fatalf("summary was truncated: got %d bytes want %d", len(rows[0].Summary), len(summary))
 	}
 }
 

@@ -708,7 +708,7 @@ func suggestIssues(in Input) []SuggestedIssue {
 		if !shouldEmitTrainDraft(in, f.ConcernID, owner) {
 			continue
 		}
-		key, title := classifyConcernClass(summary)
+		key, title := classifyConcernClass(owner, summary)
 		// Namespace bucket by owner so issues target the right package.
 		bkey := owner + "|" + key
 		bkt := buckets[bkey]
@@ -803,8 +803,41 @@ func shouldEmitTrainDraft(in Input, concernID, owner string) bool {
 	return out.EmitDraft
 }
 
-func classifyConcernClass(summary string) (key, title string) {
+func classifyConcernClass(owner, summary string) (key, title string) {
 	s := strings.ToLower(summary)
+	owner = strings.ToLower(strings.TrimSpace(owner))
+	if strings.Contains(owner, "engineering-review") || strings.Contains(owner, "engineering_review") {
+		switch {
+		case strings.Contains(s, "test") || strings.Contains(s, "coverage") ||
+			strings.Contains(s, "assert") || strings.Contains(s, "verify") ||
+			strings.Contains(s, "reproduc") || strings.Contains(s, "regression"):
+			return "meaningful-validation", "make validation prove the important changed invariant"
+		case strings.Contains(s, "duplicate") || strings.Contains(s, "two places") ||
+			strings.Contains(s, "single source") || strings.Contains(s, "repeat the same"):
+			return "source-of-truth", "keep behavior that must evolve together behind one source of truth"
+		case strings.Contains(s, "private") || strings.Contains(s, "trait") ||
+			strings.Contains(s, "belongs") || strings.Contains(s, "part of the") ||
+			strings.Contains(s, "ownership") || strings.Contains(s, "boundary"):
+			return "ownership-boundaries", "protect ownership and abstraction boundaries"
+		case strings.Contains(s, "serializ") || strings.Contains(s, "unused") ||
+			strings.Contains(s, "not used") || strings.Contains(s, "heavy") ||
+			strings.Contains(s, "expensive") || strings.Contains(s, "o(n)") ||
+			strings.Contains(s, "light-weight") || strings.Contains(s, "lightweight"):
+			return "proportional-work", "use the narrowest adequate operation and avoid unused work"
+		case strings.Contains(s, "contract") || strings.Contains(s, "adapter") ||
+			strings.Contains(s, "downstream") || strings.Contains(s, "caller") ||
+			strings.Contains(s, "breaking change") || strings.Contains(s, "partially usable") ||
+			strings.Contains(s, "still rejects") || strings.Contains(s, "still restricts"):
+			return "contract-integrity", "propagate contract changes through every related layer"
+		case strings.Contains(s, "asynchronous") || strings.Contains(s, "stale") ||
+			strings.Contains(s, "state transition") || strings.Contains(s, "restore") ||
+			strings.Contains(s, "race condition"):
+			return "state-lifecycle", "reason about authoritative state across asynchronous lifecycles"
+		case strings.Contains(s, "rollback") || strings.Contains(s, "blast radius") ||
+			strings.Contains(s, "major version") || strings.Contains(s, "compatibility"):
+			return "compatibility-operations", "assess compatibility, rollout, and blast radius"
+		}
+	}
 	// Word-aware for short tokens that appear inside other words
 	// (e.g. "race" inside "trace" must not become a concurrency issue title).
 	hasRace := containsWholeWord(s, "race") || strings.Contains(s, "data race") || strings.Contains(s, "race condition") || strings.Contains(s, "race-free")

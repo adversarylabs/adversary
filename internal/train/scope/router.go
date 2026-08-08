@@ -1,6 +1,7 @@
 package scope
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,15 @@ type Route struct {
 type Router struct {
 	Candidates []Candidate
 	UseLLM     bool
+}
+
+type routeDecision struct {
+	OwnerID            string `json:"owner_id"`
+	Reason             string `json:"reason"`
+	Material           bool   `json:"material"`
+	Actionable         bool   `json:"actionable"`
+	ChangeLocal        bool   `json:"change_local"`
+	EngineeringPrimary bool   `json:"engineering_primary"`
 }
 
 // RouteComment selects the single best adversary or none.
@@ -373,7 +383,7 @@ Comment:
 Adversaries (id → scope excerpt):
 %s
 
-Return ONLY JSON: {"owner_id":"<id or empty>","reason":"one sentence"}
+Return ONLY JSON: {"owner_id":"<id or empty>","reason":"one sentence","material":true|false,"actionable":true|false,"change_local":true|false,"engineering_primary":true|false}
 Rules:
 - Prefer the most specific specialist over engineering-review when both fit
 - Bot overviews → owner_id empty
@@ -385,7 +395,10 @@ Rules:
 - Comments on pure documentation paths (.md, /docs/, book pages) that are wording/reference edits → empty (not product gold)
 - Path/file name containing a specialist keyword is NOT enough — comment must match that specialist's mission (e.g. kustomize = mutable images/secrets/dangerous patches, not docs wording)
 - engineering-review only for staff residual judgment no specialist owns; never dump leftovers there
-- When unsure whether this is a real defect → empty (prefer no false miss)
+- Any non-empty owner requires a concrete present-day consequence, a proportionate action, and a concern introduced/expanded/relied on by this change
+- Pre-existing observations, hypothetical future traps, explanatory notes, and generic requests for tests → empty
+- Set engineering_primary=true only when the primary issue is a broader engineering principle rather than language mechanics, framework convention, security, observability, infrastructure, pure complexity, or detailed test technique
+- When unsure whether this is material and actionable → empty (prefer no false miss)
 - If none fit → empty owner_id
 Valid ids: %s or empty
 `, author, path, body, scopes.String(), strings.Join(ids, ", "))
@@ -394,38 +407,41 @@ Valid ids: %s or empty
 	if err != nil {
 		return Route{}, err
 	}
-	// minimal parse
-	s := string(raw)
-	owner := ""
-	if i := strings.Index(s, `"owner_id"`); i >= 0 {
-		rest := s[i:]
-		// "owner_id": "foo"
-		if j := strings.Index(rest, `"`); j >= 0 {
-			rest = rest[j+1:]
-			// skip owner_id
-			if k := strings.Index(rest, `"`); k >= 0 {
-				rest = rest[k+1:]
-				if m := strings.Index(rest, `"`); m >= 0 {
-					rest = rest[m+1:]
-					if n := strings.Index(rest, `"`); n >= 0 {
-						owner = strings.TrimSpace(rest[:n])
-					}
-				}
+	var out routeDecision
+	if err := json.Unmarshal(raw, &out); err != nil {
+		if i := strings.IndexByte(string(raw), '{'); i >= 0 {
+			if j := strings.LastIndexByte(string(raw), '}'); j > i {
+				_ = json.Unmarshal(raw[i:j+1], &out)
 			}
 		}
 	}
-	// simpler: look for known ids in response
-	if owner == "" {
-		low := strings.ToLower(s)
-		for _, c := range r.Candidates {
-			if strings.Contains(low, `"`+c.ID+`"`) {
-				owner = c.ID
-				break
-			}
-		}
-	}
+	return routeFromLLMDecision(out, r.Candidates), nil
+}
+
+func routeFromLLMDecision(out routeDecision, candidates []Candidate) Route {
+	owner := strings.TrimSpace(out.OwnerID)
 	if owner == "" || owner == "empty" || owner == "none" || owner == "null" {
-		return Route{Decision: OutOfScope, Reason: "llm: no owner", Method: "llm"}, nil
+		return Route{Decision: OutOfScope, Reason: "llm: no owner", Method: "llm"}
 	}
-	return Route{OwnerID: owner, Decision: InScope, Reason: "llm routing", Method: "llm"}, nil
+	validOwner := false
+	for _, candidate := range candidates {
+		if owner == candidate.ID {
+			validOwner = true
+			break
+		}
+	}
+	if !validOwner {
+		return Route{Decision: OutOfScope, Reason: "llm: unknown owner", Method: "llm"}
+	}
+	if !out.Material || !out.Actionable || !out.ChangeLocal {
+		return Route{Decision: OutOfScope, Reason: "llm gate: concern is not material, actionable, and change-local", Method: "llm"}
+	}
+	if isGeneralist(owner) && strings.Contains(strings.ToLower(owner), "engineering") && !out.EngineeringPrimary {
+		return Route{Decision: OutOfScope, Reason: "llm gate: engineering-review is not the primary owner", Method: "llm"}
+	}
+	reason := strings.TrimSpace(out.Reason)
+	if reason == "" {
+		reason = "llm routing passed gold-quality gates"
+	}
+	return Route{OwnerID: owner, Decision: InScope, Reason: reason, Method: "llm"}
 }

@@ -17,6 +17,15 @@ func TestClassifyShipSignal(t *testing.T) {
 	if ClassifyCommentSpirit("nit: rename this variable") != SpiritStyle {
 		t.Fatal("expected style")
 	}
+	qualified := []string{
+		"The implementation seems reasonable but this needs regression coverage before merge.",
+		"The new path looks okay. Please also assert that the actual response was flushed.",
+	}
+	for _, summary := range qualified {
+		if got := ClassifyCommentSpirit(summary); got == SpiritShip {
+			t.Fatalf("qualified concern classified as ship signal: %q", summary)
+		}
+	}
 }
 
 func TestBuildMissDraftShipHasWhenAndVariance(t *testing.T) {
@@ -123,11 +132,28 @@ func TestTruncateRunesUTF8Safe(t *testing.T) {
 }
 
 func TestShouldBankHumanVoice(t *testing.T) {
-	if !ShouldBankHumanVoice(KindMiss) || !ShouldBankHumanVoice(KindHuman) {
-		t.Fatal("miss/human should bank")
+	if !ShouldBankHumanVoice(KindMiss, "torvalds") || !ShouldBankHumanVoice(KindHuman, "person-alice") {
+		t.Fatal("persona miss/human should bank")
 	}
-	if ShouldBankHumanVoice(KindDraft) || ShouldBankHumanVoice(KindFalsePositive) {
-		t.Fatal("draft/fp must not bank")
+	if ShouldBankHumanVoice(KindMiss, "engineering-review") || ShouldBankHumanVoice(KindHuman, "go-concurrency") {
+		t.Fatal("policy and specialist packages must not bank every concern")
+	}
+	if ShouldBankHumanVoice(KindDraft, "torvalds") || ShouldBankHumanVoice(KindFalsePositive, "torvalds") {
+		t.Fatal("draft/fp must not bank even for personas")
+	}
+}
+
+func TestPolicyMissDraftKeepsHumanTextOutOfVoice(t *testing.T) {
+	body := BuildMissDraft(MissDraftInput{
+		Package:  "engineering-review",
+		Summary:  "The public contract changes here but the adapter still rejects the new value.",
+		VoicePkg: false,
+	})
+	if strings.Contains(body, "Exact entry to add") || strings.Contains(body, "### Voice corpus") {
+		t.Fatalf("policy miss must not request voice banking:\n%s", body)
+	}
+	if !strings.Contains(body, "training evidence only") || !strings.Contains(body, "not expanded") {
+		t.Fatalf("expected evidence-only guidance:\n%s", body)
 	}
 }
 

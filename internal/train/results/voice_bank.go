@@ -28,15 +28,22 @@ func VoiceBankSectionHeading(spirit CommentSpirit) string {
 	}
 }
 
-// ShouldBankHumanVoice is true only for rows that carry real human review text.
-// KindDraft / false-positive summaries are synthetic and must not pollute the corpus.
-func ShouldBankHumanVoice(kind string) bool {
+// CarriesHumanGold reports whether the result contains real human review text.
+func CarriesHumanGold(kind string) bool {
 	switch normalizeKind(kind) {
 	case KindMiss, KindHuman:
 		return true
 	default:
 		return false
 	}
+}
+
+// ShouldBankHumanVoice restricts per-comment voice banking to persona packages.
+// Policy and specialist packages learn detection from human gold, but appending
+// every concern to their rewrite prompt couples voice to detector content and
+// eventually overfits the package.
+func ShouldBankHumanVoice(kind, packageID string) bool {
+	return CarriesHumanGold(kind) && isVoicePackage(packageID)
 }
 
 // truncateRunes trims s to at most maxRunes runes without splitting UTF-8 sequences.
