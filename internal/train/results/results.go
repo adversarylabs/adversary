@@ -204,7 +204,8 @@ func List(stateRoot string, packageFilter, statusFilter string) ([]Result, error
 
 func isVoicePackage(owner string) bool {
 	o := strings.ToLower(strings.TrimSpace(owner))
-	return strings.Contains(o, "torvalds") || strings.HasPrefix(o, "person-")
+	return strings.Contains(o, "torvalds") || strings.Contains(o, "persona") ||
+		strings.HasPrefix(o, "person-") || strings.HasPrefix(o, "person/")
 }
 
 func missTitle(owner, summary string) string {
@@ -300,7 +301,7 @@ func WriteKeptCase(stateRoot, runID string, c *cases.Case) (int, error) {
 			Package:   owner,
 			Kind:      KindHuman,
 			Status:    StatusNew,
-			Summary:   soft(e.Summary, 100),
+			Summary:   strings.TrimSpace(e.Summary),
 			Title:     soft(e.Summary, 80),
 			PRURL:     prURL,
 			PRTitle:   c.PullRequest.Title,
@@ -370,7 +371,7 @@ func WriteGradedCase(stateRoot, runID string, c *cases.Case, fails []judge.Failu
 				Package:   owner,
 				Kind:      KindMiss,
 				Status:    StatusNew,
-				Summary:   soft(e.Summary, 100),
+				Summary:   strings.TrimSpace(e.Summary),
 				Title:     missTitle(owner, e.Summary),
 				PRURL:     prURL,
 				PRTitle:   c.PullRequest.Title,
@@ -404,7 +405,7 @@ func WriteGradedCase(stateRoot, runID string, c *cases.Case, fails []judge.Failu
 			// Never stored as human-row but matched — record as caught.
 			r := Result{
 				ID: id, RunID: runID, Package: owner, Kind: KindHuman, Status: StatusCaught,
-				Summary: soft(e.Summary, 100), Title: soft(e.Summary, 80),
+				Summary: strings.TrimSpace(e.Summary), Title: soft(e.Summary, 80),
 				PRURL: prURL, PRTitle: c.PullRequest.Title, CaseID: c.ID, ConcernID: e.ID,
 				DraftBody: fmt.Sprintf("## Caught\n\nPackage matched this human concern:\n\n%s\n", e.Summary),
 				CreatedAt: now,
@@ -422,7 +423,7 @@ func WriteGradedCase(stateRoot, runID string, c *cases.Case, fails []judge.Failu
 			continue
 		}
 		_, err = db.Exec(`UPDATE results SET kind = ?, status = ?, summary = ? WHERE id = ?`,
-			KindHuman, StatusCaught, soft(e.Summary, 100), id)
+			KindHuman, StatusCaught, strings.TrimSpace(e.Summary), id)
 		if err != nil {
 			return n, err
 		}
@@ -521,7 +522,7 @@ func WriteFromRun(stateRoot string, in WriteInput) (int, error) {
 			Package:   pkg,
 			Kind:      KindMiss,
 			Status:    StatusNew,
-			Summary:   soft(summary, 100),
+			Summary:   strings.TrimSpace(summary),
 			Title:     soft(summary, 80),
 			PRURL:     prURL,
 			PRTitle:   prTitle,

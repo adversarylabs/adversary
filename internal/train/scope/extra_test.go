@@ -38,6 +38,9 @@ func TestEngReviewFiltersNoiseFromTrainGold(t *testing.T) {
 		"```json\n{ \"event\": \"COMMENT\", \"body\": \"## Code Review: fix\" }\n```",
 		"Good catch, this was real. Reproduced the hang.",
 		"maybe it can be reduced, open to suggestions",
+		"This mutex is not held while the goroutine updates the map, causing a data race.",
+		"This query permits SQL injection through the unescaped parameter.",
+		"The TypeScript compiler rejects this generic constraint.",
 	}
 	for _, body := range outCases {
 		r := c.Classify(body, "src/x.go", "alice")
@@ -50,6 +53,9 @@ func TestEngReviewFiltersNoiseFromTrainGold(t *testing.T) {
 		"Could you wrap only dest.append in the try-catch block to avoid catching unrelated error?",
 		"directoryListing builds absolute paths while DirFS rejects them — incomplete parity test",
 		"Are there breaking changes between 1.x and 2.x for this API contract?",
+		"The implementation seems reasonable but this needs regression coverage that reproduces the original cycle.",
+		"The new path looks okay. Please verify the externally visible flush instead of only the wrapper call.",
+		"Please move the shared policy behind one source of truth so both adapters keep the same contract.",
 	}
 	for _, body := range inCases {
 		r := c.Classify(body, "src/x.go", "alice")

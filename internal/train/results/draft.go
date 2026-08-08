@@ -33,7 +33,7 @@ func ClassifyCommentSpirit(summary string) CommentSpirit {
 	if s == "" {
 		return SpiritJudgment
 	}
-	if isShipSignalText(s) {
+	if isShipSignalText(s) && !hasUnresolvedReviewAsk(s) {
 		return SpiritShip
 	}
 	// Explicit nit / style
@@ -50,6 +50,23 @@ func ClassifyCommentSpirit(summary string) CommentSpirit {
 		return SpiritDefect
 	}
 	return SpiritJudgment
+}
+
+// hasUnresolvedReviewAsk prevents qualified praise from becoming a ship signal.
+// Reviewers commonly lead with "looks reasonable" and then state the blocking
+// gap. The classifier cares about the unresolved clause, not the polite opener.
+func hasUnresolvedReviewAsk(s string) bool {
+	markers := []string{
+		" but ", " however", " although", "please ", "needs ", "need to ",
+		"must ", "should ", "could we ", "can we ", "before merge",
+		"before landing", "not actually", "does not ", "doesn't ",
+	}
+	for _, marker := range markers {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isShipSignalText(s string) bool {
@@ -141,20 +158,33 @@ func BuildMissDraft(in MissDraftInput) string {
 
 	fmt.Fprintf(&b, "\n### Wording: keep spirit, vary surface form\n\n")
 	fmt.Fprintf(&b, "The package must **not** hard-code the human sentence above in rules. ")
-	fmt.Fprintf(&b, "Bank the human gold in **`%s`** (see Voice corpus section in the issue) ", VoiceBankFile)
-	fmt.Fprintf(&b, "so CLI LLM rewrite can few-shot the persona. Same judgment, different words each run.\n\n")
-	fmt.Fprintf(&b, "Synthetic phrasings in the same spirit (optional; real gold in voice.md is better):\n\n")
+	if in.VoicePkg {
+		fmt.Fprintf(&b, "Bank the human gold in **`%s`** (see Voice corpus section in the issue) ", VoiceBankFile)
+		fmt.Fprintf(&b, "so CLI LLM rewrite can few-shot the persona. Same judgment, different words each run.\n\n")
+	} else {
+		fmt.Fprintf(&b, "For this policy/specialist package, keep the wording as training evidence only; do **not** append each concern to `%s`.\n\n", VoiceBankFile)
+	}
+	if in.VoicePkg {
+		fmt.Fprintf(&b, "Synthetic phrasings in the same spirit (optional; real gold in voice.md is better):\n\n")
+	} else {
+		fmt.Fprintf(&b, "Possible paraphrases for the same reasoning class (evidence only, not voice-bank entries):\n\n")
+	}
 	for i, ex := range examplePhrasings(spirit, in.Summary) {
 		fmt.Fprintf(&b, "%d. %q\n", i+1, ex)
 	}
 	fmt.Fprintf(&b, "\n")
-	// BuildMissDraft is only used for human-gold misses.
-	b.WriteString(FormatVoiceBankInstructions(in.Summary, spirit, in.PRURL))
+	if in.VoicePkg {
+		b.WriteString(FormatVoiceBankInstructions(in.Summary, spirit, in.PRURL))
+	}
 	fmt.Fprintf(&b, "\n### Acceptance for this train item\n\n")
 	fmt.Fprintf(&b, "- [ ] On similar changes, the package emits this **class** of signal (not the exact quote)\n")
 	fmt.Fprintf(&b, "- [ ] Posture matches **when to post** (no rubber-stamp on broken code; no silent ship on real bugs)\n")
-	fmt.Fprintf(&b, "- [ ] **Human** gold excerpt appended under `%s` → `%s` (style few-shot only)\n", VoiceBankFile, VoiceBankSectionHeading(spirit))
-	fmt.Fprintf(&b, "- [ ] Finding/opinion strings in `src/` stay generic; wording variance comes from voice rewrite\n")
+	if in.VoicePkg {
+		fmt.Fprintf(&b, "- [ ] **Human** gold excerpt appended under `%s` → `%s` (style few-shot only)\n", VoiceBankFile, VoiceBankSectionHeading(spirit))
+		fmt.Fprintf(&b, "- [ ] Finding/opinion strings in `src/` stay generic; wording variance comes from voice rewrite\n")
+	} else {
+		fmt.Fprintf(&b, "- [ ] Human wording remains evidence only; `%s` is not expanded for this item\n", VoiceBankFile)
+	}
 	fmt.Fprintf(&b, "- [ ] Tests cover the **class**, not a single repository string match\n")
 	return b.String()
 }
