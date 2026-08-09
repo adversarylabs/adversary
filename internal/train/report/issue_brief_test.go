@@ -68,6 +68,10 @@ func TestModelIssueBriefWriterSynthesizesIntent(t *testing.T) {
 	if !strings.Contains(provider.request.Prompt, "untrusted evidence") {
 		t.Fatalf("prompt does not protect against evidence injection:\n%s", provider.request.Prompt)
 	}
+	if !strings.Contains(provider.request.Prompt, "package_scope is only an ownership boundary") ||
+		!strings.Contains(provider.request.Prompt, "same causal mechanism") {
+		t.Fatalf("prompt does not require evidence-grounded generalization:\n%s", provider.request.Prompt)
+	}
 	if !strings.Contains(string(provider.request.Input), "Staff-level review") {
 		t.Fatalf("package scope missing from model input: %s", provider.request.Input)
 	}
@@ -76,6 +80,37 @@ func TestModelIssueBriefWriterSynthesizesIntent(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered brief missing %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestSuggestIssuesUsesFullSourceCommentAsBriefEvidence(t *testing.T) {
+	const fullComment = "This value is already masked on every path it takes. The trace manager masks logs and the issue recorder masks annotations. The new helper is only for protocol payloads that bypass both paths, so it is not applicable here."
+	c := &cases.Case{
+		ID:          "case-masking",
+		PullRequest: cases.PullRequest{Title: "Report a debugger infrastructure failure"},
+		Comments:    []cases.Comment{{ID: 42, Body: fullComment, Path: "debugger.cs"}},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "c-42-0", Summary: "This value is already masked on every path it takes…", File: "debugger.cs",
+			Importance: "medium", OwnerAdversary: "nits", Approved: true,
+		}}},
+	}
+	failure := judge.Failure{CaseID: c.ID, Kind: "missed-concern", ConcernID: "c-42-0", ReviewerID: "nits"}
+	sc := score.Aggregate("nits", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "nits", ExpectedMissed: []string{"c-42-0"}},
+	}, []judge.Failure{failure})
+	writer := &captureBriefWriter{}
+	issues := suggestIssues(Input{
+		Context: context.Background(), Scorecard: sc, Cases: []*cases.Case{c},
+		LocalIDs: map[string]bool{"nits": true}, IssueBriefWriter: writer,
+	})
+	if len(issues) != 1 {
+		t.Fatalf("issues=%d %#v", len(issues), issues)
+	}
+	if writer.input.ConcernClass != "redundant-operation" {
+		t.Fatalf("concern class=%q", writer.input.ConcernClass)
+	}
+	if got := writer.input.Evidence[0].Concern; got != fullComment {
+		t.Fatalf("brief evidence was truncated:\n%s", got)
 	}
 }
 

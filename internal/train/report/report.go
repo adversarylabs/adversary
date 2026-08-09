@@ -733,7 +733,7 @@ func suggestIssues(in Input) []SuggestedIssue {
 		}
 		bkt.count++
 		if len(bkt.evidence) < 3 {
-			ev := IssueBriefEvidence{Concern: softWrap(summary, 500)}
+			ev := IssueBriefEvidence{Concern: softWrap(sourceConcernBody(c, concern, summary), 1_200)}
 			if c != nil {
 				ev.PRTitle = softWrap(c.PullRequest.Title, 240)
 			}
@@ -819,6 +819,28 @@ func suggestIssues(in Input) []SuggestedIssue {
 		})
 	}
 	return out
+}
+
+// sourceConcernBody keeps the full human explanation when the normalized gold
+// summary was truncated. The comment id is part of discovered concern ids, so
+// prefer that exact source before falling back to a same-file prefix match.
+func sourceConcernBody(c *cases.Case, concern *cases.ExpectedConcern, fallback string) string {
+	if c == nil || concern == nil {
+		return fallback
+	}
+	for _, comment := range c.Comments {
+		if strings.HasPrefix(concern.ID, fmt.Sprintf("c-%d-", comment.ID)) && strings.TrimSpace(comment.Body) != "" {
+			return comment.Body
+		}
+	}
+	needle := strings.TrimSuffix(strings.TrimSpace(concern.Summary), "…")
+	for _, comment := range c.Comments {
+		body := strings.TrimSpace(comment.Body)
+		if body != "" && comment.Path == concern.File && needle != "" && strings.HasPrefix(body, needle) {
+			return body
+		}
+	}
+	return fallback
 }
 
 func fallbackIssueBrief(owner, title string, evidence []IssueBriefEvidence) IssueBrief {
@@ -943,6 +965,8 @@ func classifyConcernClass(owner, summary string) (key, title string) {
 	hasConcurrentAPI := strings.Contains(s, "overlapping") && (strings.Contains(s, "export") || strings.Contains(s, "flush") || strings.Contains(s, "shutdown")) ||
 		strings.Contains(s, "concurrency invariant") || strings.Contains(s, "exporter-serialization") || strings.Contains(s, "serialization guarantee")
 	switch {
+	case strings.Contains(s, "already") && (strings.Contains(s, "every path") || strings.Contains(s, "downstream")):
+		return "redundant-operation", "avoid operations already guaranteed on every downstream path"
 	case hasConcurrentAPI || (hasRace && (strings.Contains(s, "test") || strings.Contains(s, "coverage") || strings.Contains(s, "assert"))):
 		return "concurrent-api-tests", "catch missing tests for concurrent API guarantees (overlapping Export/Flush/Shutdown)"
 	case hasRace || strings.Contains(s, "concurrent") || strings.Contains(s, "mutex") || strings.Contains(s, "synchron"):
