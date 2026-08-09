@@ -83,6 +83,55 @@ func TestModelIssueBriefWriterSynthesizesIntent(t *testing.T) {
 	}
 }
 
+type fixtureRefinementProvider struct {
+	requests []modelreview.Request
+}
+
+func (p *fixtureRefinementProvider) Name() string  { return "fixture" }
+func (p *fixtureRefinementProvider) Model() string { return "fixture" }
+func (p *fixtureRefinementProvider) Review(_ context.Context, request modelreview.Request) (modelreview.Result, error) {
+	p.requests = append(p.requests, request)
+	if len(p.requests) == 1 {
+		return modelreview.Result{Output: json.RawMessage(`{
+  "title": "Avoid redundant masking before Trace.Error",
+  "intent": "Detect calls to MaskUserVisibleText when Trace.Error and ExecutionContext already guarantee that the same value is masked downstream.",
+  "why": "Duplicating the operation obscures which layer owns the guarantee and leaves unnecessary code in the changed path.",
+  "examples": ["Trace.Error receives an already masked value.", "ExecutionContext masks the same annotation twice."],
+  "counterexamples": ["A direct client payload bypasses the normal masking path."],
+  "acceptance": ["Remove MaskUserVisibleText from this path.", "Keep the direct payload masking path unchanged."]
+}`)}, nil
+	}
+	return modelreview.Result{Output: json.RawMessage(`{
+  "title": "Flag operations already guaranteed by every downstream path",
+  "intent": "Detect a newly added transformation when every route from that call site already performs the same transformation, and explain the existing guarantee that makes the new call redundant.",
+  "why": "Keeping ownership of a cross-cutting guarantee in one layer makes the data flow easier to reason about and avoids misleading future maintainers about which call is required.",
+  "examples": ["A web handler escapes a value before passing it to a renderer that escapes every interpolation.", "A storage adapter normalizes a key before calling an API that normalizes all accepted keys."],
+  "counterexamples": ["A value is sent through a direct transport that bypasses the normal transformation layer."],
+  "acceptance": ["A positive fixture emits a focused finding when all downstream routes already perform the operation.", "A negative fixture stays quiet when one route bypasses the downstream guarantee."]
+}`)}, nil
+}
+
+func TestModelIssueBriefWriterRefinesSourceSpecificDraft(t *testing.T) {
+	provider := &fixtureRefinementProvider{}
+	writer := &modelIssueBriefWriter{provider: provider}
+	brief, err := writer.WriteIssueBrief(context.Background(), IssueBriefInput{
+		Package: "nits", PackageScope: "Non-blocking maintainer cleanup.", ConcernClass: "redundant-operation",
+		Evidence: []IssueBriefEvidence{{Concern: "`Trace.Error` already masks this value through `ExecutionContext`; `MaskUserVisibleText` is only for bypass paths."}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("model calls=%d want 2", len(provider.requests))
+	}
+	if briefUsesSourceIdentifiers(brief, sourceIdentifiers([]IssueBriefEvidence{{Concern: "`Trace.Error` `ExecutionContext` `MaskUserVisibleText`"}})) {
+		t.Fatalf("refined brief retained source identifiers: %#v", brief)
+	}
+	if !strings.Contains(brief.Acceptance[0], "fixture emits") || !strings.Contains(provider.requests[1].Prompt, "observable adversary behavior") {
+		t.Fatalf("refinement did not target adversary behavior: %#v\n%s", brief, provider.requests[1].Prompt)
+	}
+}
+
 func TestSuggestIssuesUsesFullSourceCommentAsBriefEvidence(t *testing.T) {
 	const fullComment = "This value is already masked on every path it takes. The trace manager masks logs and the issue recorder masks annotations. The new helper is only for protocol payloads that bypass both paths, so it is not applicable here."
 	c := &cases.Case{
