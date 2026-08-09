@@ -237,39 +237,12 @@ func containsFold(values []string, want string) bool {
 // taste. The shared classifier intentionally recognizes material defects across
 // languages, which is exactly what this package must not absorb.
 func classifyNitsCandidate(body, path string) Result {
-	lower := strings.ToLower(body)
-	if nitsMaterialConcern(lower) {
-		return Result{Decision: OutOfScope, Reason: "material correctness/operations concern, not a nit", Method: "heuristic"}
+	_, _ = body, path
+	return Result{
+		Decision: OutOfScope,
+		Reason:   "nits ownership requires scope-aware LLM confirmation of non-blocking intent",
+		Method:   "heuristic",
 	}
-	if isExplicitNit(lower) {
-		return Result{Decision: InScope, Reason: "explicit non-blocking nit", Method: "heuristic"}
-	}
-	for _, marker := range []string{
-		"non-blocking", "nonblocking", "pure cleanup", "style-only", "style only",
-		"naming only", "comment-only", "comment only",
-	} {
-		if strings.Contains(lower, marker) {
-			return Result{Decision: InScope, Reason: "explicitly non-blocking maintainer taste", Method: "heuristic"}
-		}
-	}
-	return Result{Decision: OutOfScope, Reason: "no non-blocking naming/comment/cleanup signal", Method: "heuristic"}
-}
-
-func nitsMaterialConcern(lower string) bool {
-	markers := []string{
-		"data race", "deadlock", "panic", "crash", "data loss", "security",
-		"injection", "incorrect behavior", "incorrect output", "incorrect result",
-		"wrong behavior", "wrong output", "wrong result", "broken", " bug", "bug ",
-		"will fail", "causes a failure", "server error", "unhandled error", "unhandled exception",
-		"resource leak", "breaking change", "incomplete fix", "regression", "data corruption",
-		"startup failure", "startup abort", "process-level exception",
-	}
-	for _, marker := range markers {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func isGeneralist(id string) bool {

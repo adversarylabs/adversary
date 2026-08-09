@@ -170,7 +170,7 @@ func TestRouterRejectsSpecialistOutsideDeclaredFileSurface(t *testing.T) {
 	}
 }
 
-func TestRouterNitsOwnsTasteButNotCorrectness(t *testing.T) {
+func TestRouterNitsFailsClosedWithoutLLM(t *testing.T) {
 	r := &Router{
 		Candidates: []Candidate{
 			{ID: "engineering-review", AdversaryName: "engineering-review", Mission: "staff eng", Languages: []string{"any"}},
@@ -179,13 +179,13 @@ func TestRouterNitsOwnsTasteButNotCorrectness(t *testing.T) {
 	}
 
 	nit := r.RouteComment("Nit: rename this variable for consistency with the sibling helper.", "src/cache.java", "alice")
-	if nit.OwnerID != "nits" {
-		t.Fatalf("explicit taste feedback should route to nits: %+v", nit)
+	if nit.OwnerID == "nits" {
+		t.Fatalf("keyword-only taste feedback must not route to nits: %+v", nit)
 	}
 
 	redundant := r.RouteComment("Non-blocking: this masking is already applied by the downstream recorder, so this call is redundant noise.", "src/log.go", "alice")
-	if redundant.OwnerID != "nits" {
-		t.Fatalf("redundant cleanup should route to nits: %+v", redundant)
+	if redundant.OwnerID == "nits" {
+		t.Fatalf("keyword-only cleanup must not route to nits: %+v", redundant)
 	}
 
 	crash := r.RouteComment("This unguarded validation can crash startup when third-party metadata is malformed; please preserve error handling.", "provider_manager.py", "bob")
@@ -325,13 +325,14 @@ func TestRouteFromLLMDecisionEnforcesNitsSemanticGate(t *testing.T) {
 	}
 }
 
-func TestNitsMaterialGateBeatsCleanupMarkers(t *testing.T) {
+func TestNitsHeuristicAlwaysFailsClosed(t *testing.T) {
 	cases := []string{
 		"This redundant branch is broken and returns incorrect behavior.",
 		"Cleanup is needed because this duplicate write causes a failure.",
 		"This unused guard leaves an unhandled exception during startup.",
 		"This duplicate write charges the customer twice.",
 		"TODO: the refund is never issued when capture fails.",
+		"Nit: this duplicate write charges the customer twice.",
 	}
 	for _, body := range cases {
 		got := classifyNitsCandidate(body, "src/service.go")
