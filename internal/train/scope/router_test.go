@@ -270,6 +270,16 @@ func TestCandidatePathEligibleTreatsAnyAndUnsetAsLanguageNeutral(t *testing.T) {
 	}); ok {
 		t.Fatal("language-specific package must fail closed without file evidence")
 	}
+	if ok, _ := candidatePathEligible("", Candidate{
+		ID: "complexity", Languages: []string{"any"}, FileGlobs: []string{"**/*.ts", "**/*.js"},
+	}); ok {
+		t.Fatal("pathless comment must not bypass restrictive file globs")
+	}
+	if ok, reason := candidatePathEligible("", Candidate{
+		ID: "nits", Languages: []string{"any"}, FileGlobs: []string{"**/*"},
+	}); !ok {
+		t.Fatalf("universal file surface should accept a pathless comment: %s", reason)
+	}
 }
 
 func TestRouteFromLLMDecisionRejectsOwnerOutsideDeclaredFileSurface(t *testing.T) {
@@ -311,5 +321,19 @@ func TestRouteFromLLMDecisionEnforcesNitsSemanticGate(t *testing.T) {
 	)
 	if got.OwnerID != "nits" || got.Decision != InScope {
 		t.Fatalf("LLM-selected nits owner should keep non-blocking cleanup: %+v", got)
+	}
+}
+
+func TestNitsMaterialGateBeatsCleanupMarkers(t *testing.T) {
+	cases := []string{
+		"This redundant branch is broken and returns incorrect behavior.",
+		"Cleanup is needed because this duplicate write causes a failure.",
+		"This unused guard leaves an unhandled exception during startup.",
+	}
+	for _, body := range cases {
+		got := classifyNitsCandidate(body, "src/service.go")
+		if got.Decision != OutOfScope {
+			t.Fatalf("material defect routed to nits: %q => %+v", body, got)
+		}
 	}
 }

@@ -191,6 +191,9 @@ func isNitsCandidate(id string) bool {
 // retained path, only language-neutral or legacy candidates remain eligible.
 func candidatePathEligible(path string, cand Candidate) (bool, string) {
 	if strings.TrimSpace(path) == "" {
+		if len(cand.FileGlobs) > 0 && !hasUniversalFileGlob(cand.FileGlobs) {
+			return false, fmt.Sprintf("no file path evidence for declared file globs %v", cand.FileGlobs)
+		}
 		if len(cand.Languages) == 0 || containsFold(cand.Languages, "any") {
 			return true, ""
 		}
@@ -208,6 +211,16 @@ func candidatePathEligible(path string, cand Candidate) (bool, string) {
 		return true, ""
 	}
 	return false, fmt.Sprintf("path %q has no matching declared file surface %v", path, cand.Languages)
+}
+
+func hasUniversalFileGlob(patterns []string) bool {
+	for _, pattern := range patterns {
+		switch strings.TrimSpace(pattern) {
+		case "*", "**", "**/*":
+			return true
+		}
+	}
+	return false
 }
 
 func containsFold(values []string, want string) bool {
@@ -246,8 +259,11 @@ func classifyNitsCandidate(body, path string) Result {
 func nitsMaterialConcern(lower string) bool {
 	markers := []string{
 		"data race", "deadlock", "panic", "crash", "data loss", "security",
-		"injection", "incorrect result", "server error", "resource leak",
-		"breaking change", "startup failure", "startup abort", "process-level exception",
+		"injection", "incorrect behavior", "incorrect output", "incorrect result",
+		"wrong behavior", "wrong output", "wrong result", "broken", "this is a bug",
+		"will fail", "causes a failure", "server error", "unhandled error", "unhandled exception",
+		"resource leak", "breaking change", "incomplete fix", "regression", "data corruption",
+		"startup failure", "startup abort", "process-level exception",
 	}
 	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
