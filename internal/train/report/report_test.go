@@ -95,7 +95,7 @@ func TestWriteStoryIsPlainEnglish(t *testing.T) {
 		"https://github.com/open-telemetry/opentelemetry-go/pull/9001",
 		"What should I do next",
 		"Suggested GitHub issue",
-		"engineering-review:",
+		"Export errors ignored",
 		"Nothing was filed",
 		"best-fit adversary",
 	} {
@@ -199,7 +199,7 @@ func TestSuggestIssuesDraftsLocalOwnerOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if !strings.Contains(text, "my-policy:") || !strings.Contains(text, "Adversary: `my-policy`") {
+	if !strings.Contains(text, "What we want to improve") || !strings.Contains(text, "Teach `my-policy`") {
 		t.Fatalf("expected local draft:\n%s", text)
 	}
 	// Official catch suppresses
@@ -213,7 +213,7 @@ func TestSuggestIssuesDraftsLocalOwnerOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw2, _ := os.ReadFile(filepath.Join(dir, "experiments", "sup", "SUGGESTED_ISSUES.md"))
-	if strings.Contains(string(raw2), "my-policy:") {
+	if strings.Contains(string(raw2), "Teach `my-policy`") {
 		t.Fatalf("official catch should suppress local draft:\n%s", raw2)
 	}
 }

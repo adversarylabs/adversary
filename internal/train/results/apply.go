@@ -186,7 +186,13 @@ func createApplyIssue(opts ApplyOptions, packagePath string, r Result, draftPath
 }
 
 func issueMarker(r Result) string {
-	identity := strings.ToLower(collapseWS(strings.TrimSpace(r.Title)))
+	identity := ""
+	if normalizeKind(r.Kind) == KindDraft {
+		identity = strings.ToLower(collapseWS(strings.TrimSpace(r.ConcernID)))
+	}
+	if identity == "" {
+		identity = strings.ToLower(collapseWS(strings.TrimSpace(r.Title)))
+	}
 	if identity == "" {
 		identity = strings.ToLower(collapseWS(strings.TrimSpace(r.Summary)))
 	}
@@ -206,6 +212,9 @@ func issueTitle(r Result) string {
 	base = soft(base, 72)
 	if base == "" {
 		return fmt.Sprintf("train: %s for %s (%s)", kind, pkg, r.ID)
+	}
+	if normalizeKind(r.Kind) == KindDraft {
+		return soft(base, 100)
 	}
 	return fmt.Sprintf("train/%s: %s — %s", pkg, kind, base)
 }
@@ -231,6 +240,9 @@ func issueLabels(r Result) []string {
 // formatIssueBody is agent-oriented: spirit, when to post, voice bank path, variance.
 func formatIssueBody(r Result, draftPath, packagePath string) string {
 	kind := normalizeKind(r.Kind)
+	if kind == KindDraft {
+		return formatDraftIssueBody(r, draftPath, packagePath)
+	}
 	humanGold := CarriesHumanGold(kind)
 	bankVoice := ShouldBankHumanVoice(kind, r.Package)
 	spirit := ClassifyCommentSpirit(r.Summary)
@@ -365,6 +377,28 @@ func formatIssueBody(r Result, draftPath, packagePath string) string {
 		fmt.Fprintf(&b, "### Local draft copy\n\n`%s`\n\n", RelDraftPath(packagePath, draftPath))
 	}
 	fmt.Fprintf(&b, "---\n_Opened by `adversary train`._\n")
+	return b.String()
+}
+
+func formatDraftIssueBody(r Result, draftPath, packagePath string) string {
+	draft := strings.TrimSpace(r.DraftBody)
+	if draft == "" {
+		draft = strings.TrimSpace(r.Summary)
+	}
+	var b strings.Builder
+	b.WriteString(draft)
+	if draft != "" && !strings.HasSuffix(draft, "\n") {
+		b.WriteByte('\n')
+	}
+	b.WriteString("\n> Implement the general review capability described above and cover both a positive example and a clean counterexample. This brief is synthetic; do not add its wording to the package voice corpus.\n\n")
+	b.WriteString("<details>\n<summary>Training provenance</summary>\n\n")
+	fmt.Fprintf(&b, "- Package: `%s`\n", r.Package)
+	fmt.Fprintf(&b, "- Result: `%s`\n", r.ID)
+	fmt.Fprintf(&b, "- Run: `%s`\n", r.RunID)
+	if draftPath != "" {
+		fmt.Fprintf(&b, "- Local evidence: `%s`\n", RelDraftPath(packagePath, draftPath))
+	}
+	b.WriteString("\n</details>\n")
 	return b.String()
 }
 

@@ -315,8 +315,8 @@ func TestAutoIssueRunDeduplicatesAndDoesNotWriteDrafts(t *testing.T) {
 	_ = exec.Command("git", "init", pkg).Run()
 	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/engineering-review-adversary.git").Run()
 	for _, row := range []Result{
-		{ID: "run1draft", RunID: "run-1", Package: "engineering-review", Kind: KindDraft, Status: StatusNew, Title: "Detect cross-layer contract drift", CreatedAt: time.Now().UTC()},
-		{ID: "run2draft", RunID: "run-2", Package: "engineering-review", Kind: KindDraft, Status: StatusNew, Title: "Detect cross-layer contract drift", CreatedAt: time.Now().UTC()},
+		{ID: "run1draft", RunID: "run-1", Package: "engineering-review", Kind: KindDraft, Status: StatusNew, Title: "Detect cross-layer contract drift", ConcernID: "engineering-review|contract-integrity", CreatedAt: time.Now().UTC()},
+		{ID: "run2draft", RunID: "run-2", Package: "engineering-review", Kind: KindDraft, Status: StatusNew, Title: "Catch incomplete contract propagation", ConcernID: "engineering-review|contract-integrity", CreatedAt: time.Now().UTC()},
 		{ID: "run2miss", RunID: "run-2", Package: "engineering-review", Kind: KindMiss, Status: StatusNew, Title: "Individual evidence", CreatedAt: time.Now().UTC()},
 	} {
 		if err := SaveResult(state, row); err != nil {

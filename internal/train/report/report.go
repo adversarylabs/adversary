@@ -1,7 +1,9 @@
 package report
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -19,6 +21,7 @@ import (
 
 // Input is everything needed to write a human-readable run report.
 type Input struct {
+	Context       context.Context
 	RunID         string
 	DataRoot      string
 	RunDir        string
@@ -41,6 +44,11 @@ type Input struct {
 	// OfficialCatchByConcern maps concernID → official package that matched (if any).
 	// When set, suppresses local drafts for that gold.
 	OfficialCatchByConcern map[string]string
+	// PackageScopes gives the issue writer the owning package's actual mission.
+	PackageScopes map[string]string
+	// IssueBriefWriter synthesizes maintainer-quality issue intent from misses.
+	// Nil uses a concise deterministic fallback (fixtures and credential-less runs).
+	IssueBriefWriter IssueBriefWriter
 }
 
 // Result of writing the report.
@@ -642,6 +650,9 @@ func or(a, b string) string {
 
 // SuggestedIssue is a draft GitHub issue for human review (not filed).
 type SuggestedIssue struct {
+	// Key is the stable owner/class identity used for deduplication. Titles are
+	// model-written and may legitimately vary between runs.
+	Key    string
 	Title  string
 	Labels []string
 	Body   string
@@ -671,10 +682,11 @@ func suggestIssues(in Input) []SuggestedIssue {
 	}
 	// Group missed concerns by a coarse class from summary keywords.
 	type bucket struct {
-		key      string
-		title    string
-		examples []string
-		count    int
+		key           string
+		classKey      string
+		fallbackTitle string
+		evidence      []IssueBriefEvidence
+		count         int
 	}
 	buckets := map[string]*bucket{}
 	caseByID := map[string]*cases.Case{}
@@ -687,8 +699,10 @@ func suggestIssues(in Input) []SuggestedIssue {
 		}
 		c := caseByID[f.CaseID]
 		summary := f.ConcernID
+		var concern *cases.ExpectedConcern
 		if c != nil {
 			if e := concernByID(c, f.ConcernID); e != nil {
+				concern = e
 				summary = e.Summary
 			}
 		}
@@ -713,13 +727,21 @@ func suggestIssues(in Input) []SuggestedIssue {
 		bkey := owner + "|" + key
 		bkt := buckets[bkey]
 		if bkt == nil {
-			bkt = &bucket{key: bkey, title: owner + ": " + title}
+			bkt = &bucket{key: bkey, classKey: key, fallbackTitle: title}
 			buckets[bkey] = bkt
 		}
 		bkt.count++
-		if len(bkt.examples) < 3 {
-			ex := softWrap(summary, 160)
-			bkt.examples = append(bkt.examples, ex)
+		if len(bkt.evidence) < 3 {
+			ev := IssueBriefEvidence{Concern: softWrap(summary, 500)}
+			if c != nil {
+				ev.PRTitle = softWrap(c.PullRequest.Title, 240)
+			}
+			if concern != nil {
+				ev.File = concern.File
+				ev.Importance = concern.Importance
+				ev.ScopeWhy = softWrap(concern.ScopeReason, 300)
+			}
+			bkt.evidence = append(bkt.evidence, ev)
 		}
 	}
 	if len(buckets) == 0 {
@@ -741,18 +763,65 @@ func suggestIssues(in Input) []SuggestedIssue {
 		if owner == "" || !isLocalTrainOwner(in, owner) {
 			continue
 		}
+		brief := fallbackIssueBrief(owner, bkt.fallbackTitle, bkt.evidence)
+		if in.IssueBriefWriter != nil {
+			ctx := in.Context
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			generated, err := in.IssueBriefWriter.WriteIssueBrief(ctx, IssueBriefInput{
+				Package:      owner,
+				PackageScope: in.PackageScopes[strings.ToLower(owner)],
+				ConcernClass: bkt.classKey,
+				Evidence:     bkt.evidence,
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: train issue brief for %s: %v (using concise fallback)\n", owner, err)
+			} else {
+				brief = generated
+			}
+		}
 		out = append(out, SuggestedIssue{
-			Title:  bkt.title,
+			Key:    bkt.key,
+			Title:  brief.Title,
 			Labels: []string{"train", "adversary:" + owner, "miss"},
-			Body: anonymizedIssueBody(
-				owner,
-				fmt.Sprintf("On live discovery PRs, human reviewers raised concerns that fit **%s**, but that adversary did not surface a matching finding.", owner),
-				bkt.examples,
-				fmt.Sprintf("%s should detect this class of issue with evidence (file/line) on similar changes, without hard-coding a single repository or PR.", owner),
-			),
+			Body:   renderIssueBrief(brief),
 		})
 	}
 	return out
+}
+
+func fallbackIssueBrief(owner, title string, evidence []IssueBriefEvidence) IssueBrief {
+	if title == "" {
+		title = "Improve review coverage for this engineering concern"
+	}
+	if title[0] >= 'a' && title[0] <= 'z' {
+		title = strings.ToUpper(title[:1]) + title[1:]
+	}
+	intent := fmt.Sprintf("Teach `%s` to %s, using concrete source evidence and the reasoning behind the concern rather than matching one reviewer's wording.", owner, title)
+	why := "This review signal should transfer to similar changes without turning a single comment into a repository-specific rule or broadening the adversary beyond its mission."
+	examples := make([]string, 0, len(evidence))
+	for _, ev := range evidence {
+		if strings.TrimSpace(ev.Concern) != "" {
+			examples = append(examples, "A similar change exhibits this concern: "+strings.TrimSpace(ev.Concern))
+		}
+	}
+	for len(examples) < 2 {
+		examples = append(examples, "A different codebase presents the same reasoning pattern with clear file and line evidence.")
+	}
+	return IssueBrief{
+		Title:    title,
+		Intent:   intent,
+		Why:      why,
+		Examples: examples,
+		Counterexamples: []string{
+			"Do not flag changes based only on similar words, file names, or repository-specific conventions.",
+		},
+		Acceptance: []string{
+			"A focused positive fixture demonstrates the generalized concern with concrete evidence.",
+			"A clean counterexample stays quiet and protects the package's existing scope boundaries.",
+		},
+	}
 }
 
 func isLocalTrainOwner(in Input, owner string) bool {
@@ -884,38 +953,4 @@ func containsWholeWord(s, w string) bool {
 
 func isASCIIWordChar(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
-}
-
-func anonymizedIssueBody(owner, problem string, examples []string, acceptance string) string {
-	if owner == "" {
-		owner = "engineering-review"
-	}
-	var b strings.Builder
-	b.WriteString("## Context\n\n")
-	b.WriteString("From adversary train runs (live PR review rounds graded against human review comments).\n\n")
-	b.WriteString("## Problem\n\n")
-	b.WriteString(problem)
-	b.WriteString("\n\n")
-	if len(examples) > 0 {
-		b.WriteString("## Example concern classes (paraphrased, no private data)\n\n")
-		for _, ex := range examples {
-			fmt.Fprintf(&b, "- %s\n", ex)
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("## Target\n\n")
-	fmt.Fprintf(&b, "- Adversary: `%s`\n", owner)
-	b.WriteString("- Prefer a **general** prompt/rule/analysis improvement, not a one-off for a single PR.\n")
-	if owner == "engineering-review" {
-		b.WriteString("- **Best-owner check:** only file here if no specialist owns this class; dump-to-eng-review is a factory failure mode.\n")
-	}
-	b.WriteString("\n")
-	b.WriteString("## Acceptance idea\n\n")
-	b.WriteString(acceptance)
-	b.WriteString("\n\n")
-	b.WriteString("## Out of scope\n\n")
-	b.WriteString("- Do not hard-code repository names or PR numbers into the adversary.\n")
-	b.WriteString("- Do not treat “extra” findings as automatically correct without human review.\n\n")
-	b.WriteString("---\n_Drafted by adversary train. Not auto-filed._\n")
-	return b.String()
 }

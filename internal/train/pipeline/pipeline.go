@@ -649,10 +649,13 @@ func Run(opts Options) (*Result, error) {
 		expDir := filepath.Join(opts.DataRoot, "experiments", runID)
 		_ = securefs.MkdirAll(expDir)
 		locIDs, offIDs := trainDraftContext(opts, advPackages)
+		briefWriter, packageScopes := trainIssueBriefContext(opts, advPackages)
 		human, err := report.Write(report.Input{
-			RunID: runID, DataRoot: opts.DataRoot, RunDir: runDir, ExperimentDir: expDir,
+			Context: ctx,
+			RunID:   runID, DataRoot: opts.DataRoot, RunDir: runDir, ExperimentDir: expDir,
 			Live: true, Cases: usable, BlockedNote: blockedNote,
 			LocalIDs: locIDs, OfficialIDs: offIDs,
+			PackageScopes: packageScopes, IssueBriefWriter: briefWriter,
 		})
 		if err == nil {
 			out.HumanReport = human
@@ -781,6 +784,7 @@ func Run(opts Options) (*Result, error) {
 		blockedNote = out.Blocked.SanitizedError + " — next: " + out.Blocked.NextAction
 	}
 	locIDs, offIDs := trainDraftContext(opts, advPackages)
+	briefWriter, packageScopes := trainIssueBriefContext(opts, advPackages)
 	// Also compute official catches from judgments (matching findings on gold).
 	officialCatch := map[string]string{}
 	for caseID, j := range judgments {
@@ -801,6 +805,7 @@ func Run(opts Options) (*Result, error) {
 	// When owner of gold is official and they have matches elsewhere, still no local draft (handled in report).
 
 	human, err := report.Write(report.Input{
+		Context:                ctx,
 		RunID:                  runID,
 		DataRoot:               opts.DataRoot,
 		RunDir:                 runDir,
@@ -818,6 +823,8 @@ func Run(opts Options) (*Result, error) {
 		LocalIDs:               locIDs,
 		OfficialIDs:            offIDs,
 		OfficialCatchByConcern: officialCatch,
+		PackageScopes:          packageScopes,
+		IssueBriefWriter:       briefWriter,
 	})
 	if err != nil {
 		return nil, err
@@ -1070,6 +1077,27 @@ func trainDraftContext(opts Options, pkgs []adversaries.Package) (localIDs, offi
 	}
 	// Explicit official list only; unknowns default to local when listed as packages.
 	return localIDs, officialIDs
+}
+
+func trainIssueBriefContext(opts Options, pkgs []adversaries.Package) (report.IssueBriefWriter, map[string]string) {
+	scopes := map[string]string{}
+	for _, p := range pkgs {
+		if id := strings.ToLower(strings.TrimSpace(p.ID)); id != "" {
+			scopes[id] = p.ScopeMarkdown
+		}
+		if name := strings.ToLower(strings.TrimSpace(p.ManifestName)); name != "" {
+			scopes[name] = p.ScopeMarkdown
+		}
+	}
+	if opts.Fixture {
+		return nil, scopes
+	}
+	writer, err := report.NewModelIssueBriefWriterFromEnvironment(os.LookupEnv, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: train issue briefs will use concise fallback: %v\n", err)
+		return nil, scopes
+	}
+	return writer, scopes
 }
 
 func truncate(s string, n int) string {

@@ -461,7 +461,11 @@ func WriteFromRun(stateRoot string, in WriteInput) (int, error) {
 		if pkg == "" {
 			pkg = packageFromTitle(iss.Title)
 		}
-		id := shortID(in.RunID, KindDraft, pkg, iss.Title)
+		identity := strings.TrimSpace(iss.Key)
+		if identity == "" {
+			identity = iss.Title
+		}
+		id := shortID(in.RunID, KindDraft, pkg, identity)
 		added = append(added, Result{
 			ID:        id,
 			RunID:     in.RunID,
@@ -470,6 +474,7 @@ func WriteFromRun(stateRoot string, in WriteInput) (int, error) {
 			Status:    StatusNew,
 			Summary:   soft(iss.Title, 100),
 			Title:     iss.Title,
+			ConcernID: iss.Key,
 			DraftBody: iss.Body,
 			CreatedAt: now,
 		})
