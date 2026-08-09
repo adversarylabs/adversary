@@ -41,6 +41,7 @@ type routeDecision struct {
 	Actionable         bool   `json:"actionable"`
 	ChangeLocal        bool   `json:"change_local"`
 	EngineeringPrimary bool   `json:"engineering_primary"`
+	NonBlocking        bool   `json:"non_blocking"`
 }
 
 // RouteComment selects the single best adversary or none.
@@ -60,17 +61,24 @@ func (r *Router) RouteComment(body, path, author string) Route {
 	// Broad generalists skip these entirely — their mission owns every human comment
 	// that reaches routing (bots already rejected above; empty already rejected).
 	hasBroad := false
+	hasNits := false
 	for _, cand := range r.Candidates {
 		if BroadScopeMission(cand.ID, cand.Mission) {
 			hasBroad = true
-			break
+		}
+		if isNitsCandidate(cand.ID) {
+			hasNits = true
 		}
 	}
 	if !hasBroad {
 		// Do not run eng-review-specific CI outs here — specialists must still own those.
 		// Do not let LLM "rescue" non-defects into engineering-review false gold.
 		if reason, ok := globalNonDefectOut(body, path); ok {
-			return Route{Decision: OutOfScope, Reason: reason, Method: "heuristic"}
+			// Explicit nits are valid gold when the dedicated nits package is loaded.
+			// Its candidate classifier below still rejects defect-shaped comments.
+			if !(hasNits && reason == "explicit nit / style-process feedback") {
+				return Route{Decision: OutOfScope, Reason: reason, Method: "heuristic"}
+			}
 		}
 	}
 
@@ -84,6 +92,11 @@ func (r *Router) RouteComment(body, path, author string) Route {
 	var rejected []string
 
 	for _, cand := range r.Candidates {
+		if ok, reason := candidatePathEligible(path, cand); !ok {
+			rejected = append(rejected, cand.ID+": "+reason)
+			continue
+		}
+
 		clf := &Classifier{
 			MissionMarkdown: cand.Mission,
 			AdversaryName:   cand.AdversaryName,
@@ -91,17 +104,11 @@ func (r *Router) RouteComment(body, path, author string) Route {
 		}
 		// Hard path affinity for specialists
 		pathBoost := pathAffinity(path, cand)
-		res := clf.Classify(body, path, author)
-		if res.Decision != InScope && pathBoost < 50 {
-			// Still allow strong path match to force specialist ownership even if generic heuristic said out
-			if pathBoost >= 50 {
-				// re-check with path-aware force for CI etc.
-				if isCIPath(strings.ToLower(path)) && strings.Contains(strings.ToLower(cand.ID), "githubactions") {
-					res = Result{Decision: InScope, Reason: "workflow path → github-actions", Method: "heuristic"}
-				} else if strings.HasSuffix(strings.ToLower(path), ".go") && strings.HasPrefix(cand.ID, "go-") {
-					// don't force all go specialists in-scope
-				}
-			}
+		var res Result
+		if isNitsCandidate(cand.ID) {
+			res = classifyNitsCandidate(body, path)
+		} else {
+			res = clf.Classify(body, path, author)
 		}
 		if res.Decision != InScope {
 			// Path-forced specialists:
@@ -128,6 +135,16 @@ func (r *Router) RouteComment(body, path, author string) Route {
 			Reason:   "no adversary claimed this comment (or only out-of-scope)",
 			Method:   "heuristic",
 			Rejected: rejected,
+		}
+	}
+
+	// Generic defect heuristics deliberately cast a wide net and several
+	// same-language specialists may claim the same comment. When model routing is
+	// available, use the actual mission texts as final arbitration. Broad persona
+	// packages retain their explicit "everything" semantics without this gate.
+	if r.UseLLM && !hasBroad {
+		if route, err := r.routeLLM(body, path, author); err == nil {
+			return route
 		}
 	}
 
@@ -161,6 +178,70 @@ func (r *Router) RouteComment(body, path, author string) Route {
 		Reason:   fmt.Sprintf("%s (score %d): %s", best.id, best.score, best.reason),
 		Method:   "heuristic",
 		Rejected: rejected,
+	}
+}
+
+func isNitsCandidate(id string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
+	return id == "nits" || strings.HasSuffix(id, "/nits") || strings.HasSuffix(id, "-nits")
+}
+
+// candidatePathEligible enforces the package's declared file surfaces before
+// generic defect heuristics get a chance to claim a comment. Declared file
+// globs are authoritative even when language inference says "any". Without a
+// retained path, only language-neutral or legacy candidates remain eligible.
+func candidatePathEligible(path string, cand Candidate) (bool, string) {
+	if strings.TrimSpace(path) == "" {
+		if len(cand.FileGlobs) > 0 && !hasUniversalFileGlob(cand.FileGlobs) {
+			return false, fmt.Sprintf("no file path evidence for declared file globs %v", cand.FileGlobs)
+		}
+		if len(cand.Languages) == 0 || containsFold(cand.Languages, "any") {
+			return true, ""
+		}
+		return false, fmt.Sprintf("no file path evidence for declared surfaces %v", cand.Languages)
+	}
+	if len(cand.FileGlobs) > 0 {
+		for _, pattern := range cand.FileGlobs {
+			if globMatch(pattern, path) {
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("path %q does not match declared file globs", path)
+	}
+	if len(cand.Languages) == 0 || containsFold(cand.Languages, "any") {
+		return true, ""
+	}
+	return false, fmt.Sprintf("path %q has no matching declared file surface %v", path, cand.Languages)
+}
+
+func hasUniversalFileGlob(patterns []string) bool {
+	for _, pattern := range patterns {
+		switch strings.TrimSpace(pattern) {
+		case "*", "**", "**/*":
+			return true
+		}
+	}
+	return false
+}
+
+func containsFold(values []string, want string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), want) {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyNitsCandidate keeps review/nits focused on non-blocking maintainer
+// taste. The shared classifier intentionally recognizes material defects across
+// languages, which is exactly what this package must not absorb.
+func classifyNitsCandidate(body, path string) Result {
+	_, _ = body, path
+	return Result{
+		Decision: OutOfScope,
+		Reason:   "nits ownership requires scope-aware LLM confirmation of non-blocking intent",
+		Method:   "heuristic",
 	}
 }
 
@@ -364,10 +445,22 @@ func globMatch(pattern, path string) bool {
 }
 
 func (r *Router) routeLLM(body, path, author string) (Route, error) {
-	// Build id list
+	// Build the prompt only from candidates compatible with the retained file
+	// evidence. This keeps an LLM from selecting an owner the deterministic
+	// router already knows cannot inspect the changed surface.
+	var eligible []Candidate
+	for _, candidate := range r.Candidates {
+		if ok, _ := candidatePathEligible(path, candidate); ok {
+			eligible = append(eligible, candidate)
+		}
+	}
+	if len(eligible) == 0 {
+		return Route{Decision: OutOfScope, Reason: "no adversary matches the retained file surface", Method: "llm"}, nil
+	}
+
 	var ids []string
 	var scopes strings.Builder
-	for _, c := range r.Candidates {
+	for _, c := range eligible {
 		ids = append(ids, c.ID)
 		fmt.Fprintf(&scopes, "### %s\n%s\n\n", c.ID, truncate(c.Mission, 800))
 	}
@@ -383,18 +476,19 @@ Comment:
 Adversaries (id → scope excerpt):
 %s
 
-Return ONLY JSON: {"owner_id":"<id or empty>","reason":"one sentence","material":true|false,"actionable":true|false,"change_local":true|false,"engineering_primary":true|false}
+Return ONLY JSON: {"owner_id":"<id or empty>","reason":"one sentence","material":true|false,"actionable":true|false,"change_local":true|false,"engineering_primary":true|false,"non_blocking":true|false}
 Rules:
 - Prefer the most specific specialist over engineering-review when both fit
 - Bot overviews → owner_id empty
 - CI/workflow → githubactions (if present)
 - Go concurrency races/lifecycle → go-concurrency (NOT eng-review)
 - LGTM / "looks good" / "I'm more satisfied" / praise without a defect → empty
-- Explicit nits, package docs, godoc wording, s/old/new/ rewrites → empty
+- Explicit non-blocking taste → nits when present; package docs, godoc wording, and s/old/new/ rewrites → empty
 - Soft OK notes ("I think its ok", "seems fine") without asking for a fix → empty
 - Comments on pure documentation paths (.md, /docs/, book pages) that are wording/reference edits → empty (not product gold)
 - Path/file name containing a specialist keyword is NOT enough — comment must match that specialist's mission (e.g. kustomize = mutable images/secrets/dangerous patches, not docs wording)
 - engineering-review only for staff residual judgment no specialist owns; never dump leftovers there
+- nits only for pure maintainer taste with no correctness, security, API, or operational consequence; set non_blocking=true only for that case
 - Any non-empty owner requires a concrete present-day consequence, a proportionate action, and a concern introduced/expanded/relied on by this change
 - Pre-existing observations, hypothetical future traps, explanatory notes, and generic requests for tests → empty
 - Set engineering_primary=true only when the primary issue is a broader engineering principle rather than language mechanics, framework convention, security, observability, infrastructure, pure complexity, or detailed test technique
@@ -415,7 +509,24 @@ Valid ids: %s or empty
 			}
 		}
 	}
-	return routeFromLLMDecision(out, r.Candidates), nil
+	return routeFromLLMDecisionForPath(out, eligible, path), nil
+}
+
+func routeFromLLMDecisionForPath(out routeDecision, candidates []Candidate, path string) Route {
+	route := routeFromLLMDecision(out, candidates)
+	if route.OwnerID == "" {
+		return route
+	}
+	for _, candidate := range candidates {
+		if candidate.ID != route.OwnerID {
+			continue
+		}
+		if ok, reason := candidatePathEligible(path, candidate); !ok {
+			return Route{Decision: OutOfScope, Reason: "llm owner outside declared file surface: " + reason, Method: "llm"}
+		}
+		return route
+	}
+	return Route{Decision: OutOfScope, Reason: "llm: unknown owner", Method: "llm"}
 }
 
 func routeFromLLMDecision(out routeDecision, candidates []Candidate) Route {
@@ -435,6 +546,9 @@ func routeFromLLMDecision(out routeDecision, candidates []Candidate) Route {
 	}
 	if !out.Material || !out.Actionable || !out.ChangeLocal {
 		return Route{Decision: OutOfScope, Reason: "llm gate: concern is not material, actionable, and change-local", Method: "llm"}
+	}
+	if isNitsCandidate(owner) && !out.NonBlocking {
+		return Route{Decision: OutOfScope, Reason: "llm gate: nits owner is not explicitly non-blocking", Method: "llm"}
 	}
 	if isGeneralist(owner) && strings.Contains(strings.ToLower(owner), "engineering") && !out.EngineeringPrimary {
 		return Route{Decision: OutOfScope, Reason: "llm gate: engineering-review is not the primary owner", Method: "llm"}
