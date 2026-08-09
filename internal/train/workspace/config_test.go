@@ -247,3 +247,32 @@ func TestInitWritesStub(t *testing.T) {
 		t.Fatal("user config was clobbered")
 	}
 }
+
+func TestInitAllAdversariesWritesSiblingRootAndTorvaldsExclusion(t *testing.T) {
+	dir := t.TempDir()
+	res, err := Init(InitOptions{Path: dir, AllAdversaries: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(res.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "  root: .") || !strings.Contains(text, "  exclude: [torvalds]") {
+		t.Fatalf("all-adversary stub missing root/exclusion:\n%s", text)
+	}
+	if !strings.Contains(text, "issues:\n  enabled: true") {
+		t.Fatalf("all-adversary stub missing automatic issues:\n%s", text)
+	}
+}
+
+func TestIssuesEnabledDefaultsTrue(t *testing.T) {
+	if !(Config{}).IssuesEnabled() {
+		t.Fatal("issues should default enabled")
+	}
+	disabled := false
+	if (Config{Issues: IssuesConfig{Enabled: &disabled}}).IssuesEnabled() {
+		t.Fatal("explicit false should disable issues")
+	}
+}

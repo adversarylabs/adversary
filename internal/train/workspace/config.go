@@ -22,6 +22,7 @@ type Config struct {
 	Official    OfficialConfig    `yaml:"official"`
 	Sources     SourcesConfig     `yaml:"sources"`
 	Run         RunConfig         `yaml:"run"`
+	Issues      IssuesConfig      `yaml:"issues"`
 	StateDir    string            `yaml:"state_dir"`
 }
 
@@ -66,6 +67,12 @@ type RunConfig struct {
 	// Local package runs stay serialized under a per-path lock.
 	Concurrency int      `yaml:"concurrency"`
 	Only        []string `yaml:"only"`
+	Exclude     []string `yaml:"exclude"`
+}
+
+type IssuesConfig struct {
+	// Enabled defaults to true. Set false to keep eligible results local.
+	Enabled *bool `yaml:"enabled"`
 }
 
 // OfficialEnabled returns whether the official jury is on (default true).
@@ -74,6 +81,15 @@ func (c Config) OfficialEnabled() bool {
 		return true
 	}
 	return *c.Official.Enabled
+}
+
+// IssuesEnabled reports whether successful live runs should create GitHub
+// issues for consolidated drafts and false-positive fixes (default true).
+func (c Config) IssuesEnabled() bool {
+	if c.Issues.Enabled == nil {
+		return true
+	}
+	return *c.Issues.Enabled
 }
 
 // StateDirResolved returns state dir relative to workspace.

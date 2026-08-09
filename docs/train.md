@@ -32,31 +32,25 @@ Related design notes (internal quality bar, full product sketch):
 
 1. **Local package(s)** with `adversary.yaml` and a scope file:
    - Prefer `agent/scope.md` or `docs/scope.md` (mission: what is a fair miss).
-2. **GitHub token** for history and (optionally) apply issues:
+2. **GitHub token** for history and automatic improvement issues:
    - `ADVERSARY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`
-   - Read access to orgs/repos you train on; `issues:write` on the **package**
-     repo if you use `train results apply` without `--no-issue`.
+   - Read access to orgs/repos you train on; `issues:write` on each **package**
+     repo. Use `train run --no-issues` for a local-only run.
 3. Packages you care about are **local checkouts**, not only catalog pulls.
 
 ## End-to-end workflow
 
 ```text
-  adversary train init [--single-package]
+  adversary train init [--single-package | --all-adversaries]
            │
            ▼
   Edit adversary.train.yaml   ← commit this (policy)
            │
            ▼
-  adversary train run         ← grades locals vs human gold
+  adversary train run         ← routes gold, grades locals, opens deduped issues
            │
            ▼
-  adversary train results ls / inspect <id>
-           │
-           ▼
-  adversary train results apply <id>
-           │
-           ├── docs/train-drafts/<id>.md in the package
-           └── GitHub issue (agent-ready) on the package remote
+  adversary train results ls / inspect <id>  ← evidence + manual controls
            │
            ▼
   Implement detection + bank voice gold → re-run train
@@ -89,6 +83,19 @@ adversary train init
 ```
 
 Config gets `adversaries.root: ./adversaries`.
+
+### Sibling adversary repositories
+
+When the workspace directory contains many sibling `*-adversary` repositories:
+
+```sh
+cd ~/work/adversarylabs
+adversary train init --all-adversaries
+```
+
+This writes `adversaries.root: .` and `run.exclude: [torvalds]`. One history
+discovery pass routes each human comment to the best matching local adversary,
+or to none when no scope is a good fit.
 
 `train init` also creates `.adversary-train/` and adds it to `.gitignore`.
 
@@ -124,6 +131,11 @@ run:
   max_prs: 50
   max_turns: 200
   concurrency: 4
+  # only: [engineering-review]
+  # exclude: [torvalds]
+
+issues:
+  enabled: true             # default; false keeps eligible results local
 
 state_dir: .adversary-train
 ```
@@ -162,6 +174,9 @@ adversary train run
 # Only one local package id
 adversary train run --adversary my-policy
 
+# Explicitly route across every local package except selected exclusions
+adversary train run --all-adversaries --exclude-adversary torvalds
+
 # Cap work / debug one PR
 adversary train run --max-prs 10
 adversary train run --owner acme --repo service --pr 123
@@ -175,14 +190,18 @@ What happens:
 
 1. Discover PRs from config (repos or author_reviews).  
 2. Collect human review comments (gold).  
-3. Run local packages (and optional official jury) against the change.  
-4. Grade: miss / match / false positive style signals for **locals**.  
-5. Write results into the train inbox (SQLite under `.adversary-train/`).  
+3. Route each comment to the single best matching local package, or none.
+4. Run the selected local packages (and optional official jury) against the change.
+5. Grade and write evidence into SQLite under `.adversary-train/`.
+6. Open deduplicated issues for consolidated drafts and false-positive fixes.
+
+Raw human rows and individual misses never auto-open issues. They remain local
+evidence for clustering and inspection. `--no-issues` disables all issue writes.
 
 Official catches **suppress** local “miss” drafts for that concern (don’t train
 your package to clone the catalog).
 
-## 4. Results inbox
+## 4. Results inbox and manual controls
 
 ```sh
 adversary train results ls
@@ -279,13 +298,13 @@ adversary train reset              # clear seen-PR discovery (re-hunt)
 | Everything out of scope | Scope missing or package not discovered (`path` / `root` wrong) |
 | Drafts want you to clone `go/security` | Official jury off, or local scope steals catalog gold — enable jury / narrow scope |
 | Voice bank polluted | Applied policy/specialist gold or synthetic rows; only persona packages bank **human** wording |
-| Apply issue fails | Token lacks `issues:write` on package remote — use `--no-issue` for local draft |
+| Automatic issue creation fails | Token lacks `issues:write` on a package remote — fix access and rerun/apply, or use `train run --no-issues` |
 
 ## Command cheat sheet
 
 ```sh
-adversary train init [--single-package] [--path DIR] [--force]
-adversary train run [--adversary ID] [--max-prs N] [--reset-discovery] [--path DIR]
+adversary train init [--single-package | --all-adversaries] [--path DIR] [--force]
+adversary train run [--adversary ID | --all-adversaries] [--exclude-adversary ID] [--no-issues] [--path DIR]
 adversary train results ls|inspect|apply|dismiss
 adversary train status
 adversary train story

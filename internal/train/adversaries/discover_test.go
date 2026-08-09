@@ -49,6 +49,10 @@ func TestDiscoverRootAndByID(t *testing.T) {
 	if len(FilterByIDs(pkgs, nil)) != 2 {
 		t.Fatal("empty only")
 	}
+	remaining := FilterExcludedIDs(pkgs, []string{"go-concurrency"})
+	if len(remaining) != 1 || remaining[0].ID != "go-testing" {
+		t.Fatalf("exclude by manifest name: %+v", remaining)
+	}
 }
 
 func TestDiscoverRootSinglePackageWorkspace(t *testing.T) {

@@ -157,6 +157,29 @@ func FilterByIDs(pkgs []Package, only []string) []Package {
 	return out
 }
 
+// FilterExcludedIDs removes packages whose ID, directory name, or manifest
+// name matches an excluded identifier.
+func FilterExcludedIDs(pkgs []Package, excluded []string) []Package {
+	if len(excluded) == 0 {
+		return pkgs
+	}
+	blocked := map[string]bool{}
+	for _, value := range excluded {
+		value = strings.TrimSpace(strings.ToLower(value))
+		if value != "" {
+			blocked[value] = true
+		}
+	}
+	out := make([]Package, 0, len(pkgs))
+	for _, p := range pkgs {
+		if blocked[strings.ToLower(p.ID)] || blocked[strings.ToLower(p.DirName)] || blocked[strings.ToLower(p.ManifestName)] {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 func loadPackage(dir, dirName string) (Package, error) {
 	scopeText, scopePath, err := scope.LoadMissionFromAdversary(dir)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/train/collect"
+	"github.com/adversarylabs/adversary/internal/train/dataroot"
 	"github.com/adversarylabs/adversary/internal/train/pipeline"
 	"github.com/adversarylabs/adversary/internal/train/repos"
 	"github.com/adversarylabs/adversary/internal/train/results"
@@ -25,7 +26,7 @@ Workflow:
   adversary train run
   adversary train results ls
   adversary train results inspect <id>
-  adversary train results apply <id>
+  adversary train results apply <id>  # optional manual control
   adversary train reset          # forget seen PRs and re-hunt
 
 It does not fine-tune model weights. Official catalog packages (when enabled)
@@ -50,6 +51,7 @@ func newTrainInitCommand(app *application.App) *cobra.Command {
 	var path string
 	var force bool
 	var single bool
+	var allAdversaries bool
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Scaffold adversary.train.yaml, state dir, and gitignore",
@@ -57,10 +59,14 @@ func newTrainInitCommand(app *application.App) *cobra.Command {
 .adversary-train/ state directory. Edit the YAML to set sources (org/repos),
 authors, local packages, and official jury include/exclude before train run.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if single && allAdversaries {
+				return fmt.Errorf("--single-package and --all-adversaries cannot be combined")
+			}
 			res, err := workspace.Init(workspace.InitOptions{
-				Path:          path,
-				Force:         force,
-				SinglePackage: single,
+				Path:           path,
+				Force:          force,
+				SinglePackage:  single,
+				AllAdversaries: allAdversaries,
 			})
 			if err != nil {
 				return err
@@ -82,6 +88,7 @@ authors, local packages, and official jury include/exclude before train run.`,
 	cmd.Flags().StringVar(&path, "path", "", "workspace directory (default: current directory)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing adversary.train.yaml")
 	cmd.Flags().BoolVar(&single, "single-package", false, "stub config for a single package at workspace root")
+	cmd.Flags().BoolVar(&allAdversaries, "all-adversaries", false, "stub config for all sibling adversary repositories (excludes torvalds)")
 	return cmd
 }
 
@@ -89,6 +96,9 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 	var (
 		workspacePath  string
 		adversaryOnly  string
+		allAdversaries bool
+		excluded       []string
+		noIssues       bool
 		maxPRs         int
 		maxTurns       int
 		concurrency    int
@@ -100,11 +110,15 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Walk history (or fixtures), grade packages, draft local improvements",
+		Short: "Route review history, grade packages, and create improvement issues",
 		Long: `Read adversary.train.yaml, resume discovery state, grade local packages
-(and optional official jury), and write stories plus suggested issues under
-the state directory. Drafts never target official package ids.`,
+(and optional official jury), write local evidence, and create deduplicated
+issues for consolidated improvements. Drafts never target official package ids.
+Use --no-issues for a local-only run.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if adversaryOnly != "" && allAdversaries {
+				return fmt.Errorf("--adversary and --all-adversaries cannot be combined")
+			}
 			ws := workspacePath
 			if ws == "" {
 				wd, err := workspace.WorkingDir()
@@ -199,9 +213,11 @@ the state directory. Drafts never target official package ids.`,
 			var trainOnly []string
 			if adversaryOnly != "" {
 				trainOnly = []string{adversaryOnly}
-			} else if len(cfg.Run.Only) > 0 {
+			} else if !allAdversaries && len(cfg.Run.Only) > 0 {
 				trainOnly = cfg.Run.Only
 			}
+			trainExclude := append([]string{}, cfg.Run.Exclude...)
+			trainExclude = append(trainExclude, excluded...)
 			if cfg.Adversaries.Path != "" {
 				p := cfg.Adversaries.Path
 				if !filepath.IsAbs(p) {
@@ -278,6 +294,7 @@ the state directory. Drafts never target official package ids.`,
 				LocalPackageRoot: localRoot,
 				LocalPackageDirs: localDirs,
 				TrainOnlyIDs:     trainOnly,
+				TrainExcludeIDs:  trainExclude,
 				LocalIDs:         localIDs,
 				OfficialIDs:      officialIDs,
 				AuthorsOnly:      cfg.Sources.AuthorsOnly,
@@ -328,6 +345,9 @@ the state directory. Drafts never target official package ids.`,
 			} else if localRoot != "" {
 				fmt.Fprintf(stderr, "  locals: all under %s\n", localRoot)
 			}
+			if len(trainExclude) > 0 {
+				fmt.Fprintf(stderr, "  exclude: %v\n", trainExclude)
+			}
 			if cfg.OfficialEnabled() && !fixture {
 				fmt.Fprintln(stderr, "  official jury: enabled (drafts for locals only)")
 			} else {
@@ -348,7 +368,7 @@ the state directory. Drafts never target official package ids.`,
 					fmt.Fprintf(out, "  grade:   %d failure(s) scored\n", res.Scorecard.FailureCount)
 				}
 				fmt.Fprintf(out, "  results: %d row(s) written this run\n", res.ResultsAdded)
-				fmt.Fprintf(out, "  next:    adversary train results ls\n")
+				fmt.Fprintf(out, "  evidence: adversary train results ls\n")
 				if res.HumanReport != nil && res.HumanReport.READMEPath != "" {
 					fmt.Fprintf(out, "  story:   %s\n", res.HumanReport.READMEPath)
 				}
@@ -358,12 +378,40 @@ the state directory. Drafts never target official package ids.`,
 				if err2 := workspace.RewriteTrainDrafts(stateRoot); err2 != nil {
 					fmt.Fprintf(stderr, "warning: draft rewrite: %v\n", err2)
 				}
+				if err == nil && !fixture && res.ExitCode == dataroot.ExitSuccess {
+					if noIssues || !cfg.IssuesEnabled() {
+						fmt.Fprintln(out, "  issues:  disabled (eligible results kept local)")
+					} else {
+						applied, issueErr := results.AutoIssueRun(stateRoot, res.RunID, results.AutoIssueOptions{
+							Context: cmd.Context(),
+							ResolvePackage: func(packageID string) (string, error) {
+								return resolvePackagePath(wsRoot, cfg, packageID)
+							},
+						})
+						if issueErr != nil {
+							return fmt.Errorf("train completed, but automatic issue creation failed: %w (retry with train results apply, or use --no-issues)", issueErr)
+						}
+						created, reused := 0, 0
+						for _, item := range applied {
+							if item.IssueReused {
+								reused++
+							} else {
+								created++
+							}
+							fmt.Fprintf(out, "    %s\n", item.IssueURL)
+						}
+						fmt.Fprintf(out, "  issues:  %d created, %d reused\n", created, reused)
+					}
+				}
 			}
 			return err
 		},
 	}
 	cmd.Flags().StringVar(&workspacePath, "path", "", "workspace with adversary.train.yaml")
 	cmd.Flags().StringVar(&adversaryOnly, "adversary", "", "train only this local package id")
+	cmd.Flags().BoolVar(&allAdversaries, "all-adversaries", false, "route each comment to the best matching local adversary")
+	cmd.Flags().StringSliceVar(&excluded, "exclude-adversary", nil, "exclude a local adversary id (repeatable or comma-separated)")
+	cmd.Flags().BoolVar(&noIssues, "no-issues", false, "keep results local instead of creating GitHub issues")
 	cmd.Flags().IntVar(&maxPRs, "max-prs", 0, "override run.max_prs")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 0, "override run.concurrency (parallel PR collect; default 2)")

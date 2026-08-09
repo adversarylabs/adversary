@@ -211,10 +211,11 @@ Release, rollback, and provenance policy is in [docs/release.md](docs/release.md
 
 Security reports: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Train (review history → draft package improvements)
+## Train (review history → package improvement issues)
 
 Grade **home-built** (local) packages against your team’s PR review history and
-draft improvements. Official catalog packages can act as a read-only jury only.
+file deduplicated improvement issues. Official catalog packages can act as a
+read-only jury only.
 
 ```sh
 cd my-adversary
@@ -222,8 +223,11 @@ adversary train init --single-package
 # edit adversary.train.yaml (sources, authors, official jury)
 adversary train run
 adversary train results ls
-adversary train results apply <id>
 ```
+
+`train run` opens issues for consolidated drafts and false-positive fixes by
+default. Individual misses remain in the local results database as evidence.
+Use `--no-issues` when you want a local-only run.
 
 Guide: **[docs/train.md](docs/train.md)** (home-built workflow).  
 Also: [composition](docs/composition.md), [comment voice](docs/voice.md).
