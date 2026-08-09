@@ -41,6 +41,7 @@ type routeDecision struct {
 	Actionable         bool   `json:"actionable"`
 	ChangeLocal        bool   `json:"change_local"`
 	EngineeringPrimary bool   `json:"engineering_primary"`
+	NonBlocking        bool   `json:"non_blocking"`
 }
 
 // RouteComment selects the single best adversary or none.
@@ -240,17 +241,16 @@ func classifyNitsCandidate(body, path string) Result {
 	if nitsMaterialConcern(lower) {
 		return Result{Decision: OutOfScope, Reason: "material correctness/operations concern, not a nit", Method: "heuristic"}
 	}
-	markers := []string{
-		"nit:", "nit;", "nit,", "style", "rename", "naming", "comment",
-		"todo", "fixme", "unnecessary", "noise",
-	}
-	for _, marker := range markers {
-		if strings.Contains(lower, marker) {
-			return Result{Decision: InScope, Reason: "non-blocking maintainer-taste signal", Method: "heuristic"}
-		}
-	}
 	if isExplicitNit(lower) {
 		return Result{Decision: InScope, Reason: "explicit non-blocking nit", Method: "heuristic"}
+	}
+	for _, marker := range []string{
+		"non-blocking", "nonblocking", "pure cleanup", "style-only", "style only",
+		"naming only", "comment-only", "comment only",
+	} {
+		if strings.Contains(lower, marker) {
+			return Result{Decision: InScope, Reason: "explicitly non-blocking maintainer taste", Method: "heuristic"}
+		}
 	}
 	return Result{Decision: OutOfScope, Reason: "no non-blocking naming/comment/cleanup signal", Method: "heuristic"}
 }
@@ -503,18 +503,19 @@ Comment:
 Adversaries (id → scope excerpt):
 %s
 
-Return ONLY JSON: {"owner_id":"<id or empty>","reason":"one sentence","material":true|false,"actionable":true|false,"change_local":true|false,"engineering_primary":true|false}
+Return ONLY JSON: {"owner_id":"<id or empty>","reason":"one sentence","material":true|false,"actionable":true|false,"change_local":true|false,"engineering_primary":true|false,"non_blocking":true|false}
 Rules:
 - Prefer the most specific specialist over engineering-review when both fit
 - Bot overviews → owner_id empty
 - CI/workflow → githubactions (if present)
 - Go concurrency races/lifecycle → go-concurrency (NOT eng-review)
 - LGTM / "looks good" / "I'm more satisfied" / praise without a defect → empty
-- Explicit nits, package docs, godoc wording, s/old/new/ rewrites → empty
+- Explicit non-blocking taste → nits when present; package docs, godoc wording, and s/old/new/ rewrites → empty
 - Soft OK notes ("I think its ok", "seems fine") without asking for a fix → empty
 - Comments on pure documentation paths (.md, /docs/, book pages) that are wording/reference edits → empty (not product gold)
 - Path/file name containing a specialist keyword is NOT enough — comment must match that specialist's mission (e.g. kustomize = mutable images/secrets/dangerous patches, not docs wording)
 - engineering-review only for staff residual judgment no specialist owns; never dump leftovers there
+- nits only for pure maintainer taste with no correctness, security, API, or operational consequence; set non_blocking=true only for that case
 - Any non-empty owner requires a concrete present-day consequence, a proportionate action, and a concern introduced/expanded/relied on by this change
 - Pre-existing observations, hypothetical future traps, explanatory notes, and generic requests for tests → empty
 - Set engineering_primary=true only when the primary issue is a broader engineering principle rather than language mechanics, framework convention, security, observability, infrastructure, pure complexity, or detailed test technique
@@ -535,15 +536,7 @@ Valid ids: %s or empty
 			}
 		}
 	}
-	return routeFromLLMDecisionForComment(out, eligible, path, body), nil
-}
-
-func routeFromLLMDecisionForComment(out routeDecision, candidates []Candidate, path, body string) Route {
-	route := routeFromLLMDecisionForPath(out, candidates, path)
-	if route.OwnerID != "" && isNitsCandidate(route.OwnerID) && classifyNitsCandidate(body, path).Decision != InScope {
-		return Route{Decision: OutOfScope, Reason: "llm nits owner failed non-blocking semantic gate", Method: "llm"}
-	}
-	return route
+	return routeFromLLMDecisionForPath(out, eligible, path), nil
 }
 
 func routeFromLLMDecisionForPath(out routeDecision, candidates []Candidate, path string) Route {
@@ -580,6 +573,9 @@ func routeFromLLMDecision(out routeDecision, candidates []Candidate) Route {
 	}
 	if !out.Material || !out.Actionable || !out.ChangeLocal {
 		return Route{Decision: OutOfScope, Reason: "llm gate: concern is not material, actionable, and change-local", Method: "llm"}
+	}
+	if isNitsCandidate(owner) && !out.NonBlocking {
+		return Route{Decision: OutOfScope, Reason: "llm gate: nits owner is not explicitly non-blocking", Method: "llm"}
 	}
 	if isGeneralist(owner) && strings.Contains(strings.ToLower(owner), "engineering") && !out.EngineeringPrimary {
 		return Route{Decision: OutOfScope, Reason: "llm gate: engineering-review is not the primary owner", Method: "llm"}

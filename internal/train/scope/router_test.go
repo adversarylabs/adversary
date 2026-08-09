@@ -183,7 +183,7 @@ func TestRouterNitsOwnsTasteButNotCorrectness(t *testing.T) {
 		t.Fatalf("explicit taste feedback should route to nits: %+v", nit)
 	}
 
-	redundant := r.RouteComment("This masking is already applied by the downstream recorder, so this call is redundant noise.", "src/log.go", "alice")
+	redundant := r.RouteComment("Non-blocking: this masking is already applied by the downstream recorder, so this call is redundant noise.", "src/log.go", "alice")
 	if redundant.OwnerID != "nits" {
 		t.Fatalf("redundant cleanup should route to nits: %+v", redundant)
 	}
@@ -303,21 +303,22 @@ func TestRouteFromLLMDecisionEnforcesNitsSemanticGate(t *testing.T) {
 		OwnerID: "nits", Reason: "startup behavior", Material: true,
 		Actionable: true, ChangeLocal: true,
 	}
-	got := routeFromLLMDecisionForComment(
+	got := routeFromLLMDecisionForPath(
 		decision,
 		candidates,
 		"provider_manager.py",
-		"This unguarded validation can crash startup when third-party metadata is malformed.",
 	)
 	if got.OwnerID != "" || got.Decision != OutOfScope {
 		t.Fatalf("LLM-selected nits owner must reject correctness concerns: %+v", got)
 	}
 
-	got = routeFromLLMDecisionForComment(
-		decision,
+	got = routeFromLLMDecisionForPath(
+		func() routeDecision {
+			decision.NonBlocking = true
+			return decision
+		}(),
 		candidates,
 		"src/log.go",
-		"This masking is already applied downstream, so this call is redundant noise.",
 	)
 	if got.OwnerID != "nits" || got.Decision != InScope {
 		t.Fatalf("LLM-selected nits owner should keep non-blocking cleanup: %+v", got)
@@ -330,6 +331,7 @@ func TestNitsMaterialGateBeatsCleanupMarkers(t *testing.T) {
 		"Cleanup is needed because this duplicate write causes a failure.",
 		"This unused guard leaves an unhandled exception during startup.",
 		"This duplicate write charges the customer twice.",
+		"TODO: the refund is never issued when capture fails.",
 	}
 	for _, body := range cases {
 		got := classifyNitsCandidate(body, "src/service.go")
