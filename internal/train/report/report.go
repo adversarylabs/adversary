@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/train/cases"
@@ -753,7 +754,12 @@ func suggestIssues(in Input) []SuggestedIssue {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	var out []SuggestedIssue
+	type issueCandidate struct {
+		owner string
+		bkt   *bucket
+		brief IssueBrief
+	}
+	var candidates []issueCandidate
 	for _, k := range keys {
 		bkt := buckets[k]
 		owner := ""
@@ -763,29 +769,53 @@ func suggestIssues(in Input) []SuggestedIssue {
 		if owner == "" || !isLocalTrainOwner(in, owner) {
 			continue
 		}
-		brief := fallbackIssueBrief(owner, bkt.fallbackTitle, bkt.evidence)
-		if in.IssueBriefWriter != nil {
-			ctx := in.Context
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			generated, err := in.IssueBriefWriter.WriteIssueBrief(ctx, IssueBriefInput{
-				Package:      owner,
-				PackageScope: in.PackageScopes[strings.ToLower(owner)],
-				ConcernClass: bkt.classKey,
-				Evidence:     bkt.evidence,
-			})
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: train issue brief for %s: %v (using concise fallback)\n", owner, err)
-			} else {
-				brief = generated
-			}
+		candidates = append(candidates, issueCandidate{
+			owner: owner,
+			bkt:   bkt,
+			brief: fallbackIssueBrief(owner, bkt.fallbackTitle, bkt.evidence),
+		})
+	}
+	if in.IssueBriefWriter != nil && len(candidates) > 0 {
+		ctx := in.Context
+		if ctx == nil {
+			ctx = context.Background()
 		}
+		workers := min(4, len(candidates))
+		jobs := make(chan int)
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range jobs {
+					candidate := &candidates[i]
+					generated, err := in.IssueBriefWriter.WriteIssueBrief(ctx, IssueBriefInput{
+						Package:      candidate.owner,
+						PackageScope: in.PackageScopes[strings.ToLower(candidate.owner)],
+						ConcernClass: candidate.bkt.classKey,
+						Evidence:     candidate.bkt.evidence,
+					})
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "warning: train issue brief for %s: %v (using concise fallback)\n", candidate.owner, err)
+						continue
+					}
+					candidate.brief = generated
+				}
+			}()
+		}
+		for i := range candidates {
+			jobs <- i
+		}
+		close(jobs)
+		wg.Wait()
+	}
+	out := make([]SuggestedIssue, 0, len(candidates))
+	for _, candidate := range candidates {
 		out = append(out, SuggestedIssue{
-			Key:    bkt.key,
-			Title:  brief.Title,
-			Labels: []string{"train", "adversary:" + owner, "miss"},
-			Body:   renderIssueBrief(brief),
+			Key:    candidate.bkt.key,
+			Title:  candidate.brief.Title,
+			Labels: []string{"train", "adversary:" + candidate.owner, "miss"},
+			Body:   renderIssueBrief(candidate.brief),
 		})
 	}
 	return out

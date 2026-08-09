@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/internal/train/cases"
@@ -139,5 +141,68 @@ func TestSuggestIssuesUsesModelBriefAndPackageScope(t *testing.T) {
 	}
 	if len(writer.input.Evidence) != 1 || writer.input.Evidence[0].PRTitle != "fix operator precedence" {
 		t.Fatalf("source context not passed to writer: %#v", writer.input)
+	}
+}
+
+type barrierBriefWriter struct {
+	mu      sync.Mutex
+	started int
+	release chan struct{}
+}
+
+func (w *barrierBriefWriter) WriteIssueBrief(_ context.Context, _ IssueBriefInput) (IssueBrief, error) {
+	w.mu.Lock()
+	w.started++
+	if w.started == 2 {
+		close(w.release)
+	}
+	w.mu.Unlock()
+	<-w.release
+	return IssueBrief{
+		Title:  "Improve this review capability",
+		Intent: "Recognize the generalized concern from concrete changed-code evidence without matching one comment's surface wording.",
+		Why:    "The signal should transfer across repositories while preserving the package's existing ownership and confidence boundaries.",
+		Examples: []string{
+			"A changed path demonstrates the material concern with a concrete consequence.",
+			"A different implementation exposes the same reasoning class with source evidence.",
+		},
+		Counterexamples: []string{"A superficially similar change lacks the consequence that makes the concern material."},
+		Acceptance: []string{
+			"A positive fixture demonstrates the generalized concern.",
+			"A clean counterexample remains quiet.",
+		},
+	}, nil
+}
+
+func TestSuggestIssuesGeneratesIndependentBriefsConcurrently(t *testing.T) {
+	c := &cases.Case{
+		ID: "case-concurrent",
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
+			{ID: "validation", Summary: "The test reaches the branch but does not assert the result.", OwnerAdversary: "engineering-review", Approved: true},
+			{ID: "contract", Summary: "The public contract changes but the downstream adapter still rejects the value.", OwnerAdversary: "engineering-review", Approved: true},
+		}},
+	}
+	failures := []judge.Failure{
+		{CaseID: c.ID, Kind: "missed-concern", ConcernID: "validation", ReviewerID: "engineering-review"},
+		{CaseID: c.ID, Kind: "missed-concern", ConcernID: "contract", ReviewerID: "engineering-review"},
+	}
+	sc := score.Aggregate("engineering-review", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "engineering-review", ExpectedMissed: []string{"validation", "contract"}},
+	}, failures)
+	writer := &barrierBriefWriter{release: make(chan struct{})}
+	done := make(chan []SuggestedIssue, 1)
+	go func() {
+		done <- suggestIssues(Input{
+			Scorecard: sc, Cases: []*cases.Case{c},
+			LocalIDs: map[string]bool{"engineering-review": true}, IssueBriefWriter: writer,
+		})
+	}()
+	select {
+	case issues := <-done:
+		if len(issues) != 2 {
+			t.Fatalf("issues=%d %#v", len(issues), issues)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("issue briefs were generated serially")
 	}
 }
