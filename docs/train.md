@@ -193,7 +193,14 @@ What happens:
 3. Route each comment to the single best matching local package, or none.
 4. Run the selected local packages (and optional official jury) against the change.
 5. Grade and write evidence into SQLite under `.adversary-train/`.
-6. Open deduplicated issues for consolidated drafts and false-positive fixes.
+6. Use the configured review model to turn clustered misses into concise,
+   maintainer-style briefs: the intended capability, why it matters, generalized
+   examples, counterexamples, and observable acceptance criteria.
+7. Open deduplicated issues for consolidated drafts and false-positive fixes.
+
+If no model credential is available, train keeps working with a concise
+deterministic fallback. It does not fall back to the old comment-shaped issue
+template.
 
 Raw human rows and individual misses never auto-open issues. They remain local
 evidence for clustering and inspection. `--no-issues` disables all issue writes.
@@ -230,7 +237,7 @@ For each applied result:
 | Artifact | Purpose |
 |----------|---------|
 | `docs/train-drafts/<id>.md` | Local miss brief: spirit, when to post, variance |
-| GitHub issue on **package** remote | Agent-ready task for eligible rows (unless `--no-issue`) |
+| GitHub issue on **package** remote | The synthesized brief nearly verbatim, plus a compact provenance footer (unless `--no-issue`) |
 
 Human wording is detection evidence for policy and specialist packages. Only
 persona packages bank a short excerpt in `agent/voice.md`; automatically
