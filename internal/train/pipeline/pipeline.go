@@ -584,8 +584,7 @@ func Run(opts Options) (*Result, error) {
 			}
 			nRev, err := normalize.FromAnyJSON(ownerID, eRes.RawJSON)
 			if err != nil {
-				reviewBlocked = true
-				continue
+				return nil, fmt.Errorf("normalize review for %s on case %s: %w", ownerID, c.ID, err)
 			}
 			nRev.ReviewerID = ownerID
 			normPath := filepath.Join(runDir, "normalized", c.ID+"-"+ownerID+".json")
@@ -1039,7 +1038,8 @@ func packageIDFromName(name string) string {
 }
 
 // trainDraftContext builds local/official id sets for report draft filtering.
-// Composition-only packages (uses members) are not train draft targets.
+// Composition members are not loaded into pkgs, so only explicit local package
+// roots can become draft targets.
 func trainDraftContext(opts Options, pkgs []adversaries.Package) (localIDs, officialIDs map[string]bool) {
 	localIDs = map[string]bool{}
 	officialIDs = map[string]bool{}
@@ -1054,11 +1054,7 @@ func trainDraftContext(opts Options, pkgs []adversaries.Package) (localIDs, offi
 	}
 	// Merge loaded **local** package ids so drafts match router owner ids
 	// (e.g. go-concurrency) even when CLI LocalIDs used directory basenames.
-	// Skip CompositionOnly members — they are product deps, not draft owners.
 	for _, p := range pkgs {
-		if p.CompositionOnly {
-			continue
-		}
 		localIDs[strings.ToLower(p.ID)] = true
 		if p.ManifestName != "" {
 			localIDs[strings.ToLower(p.ManifestName)] = true

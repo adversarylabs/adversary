@@ -247,7 +247,9 @@ the product; specialists should not dump leftovers onto a random sibling.
 
 When train runs `adversary run <local-package>`, the CLI expands that package’s
 `uses` and merges findings for the grade. Multi-member JSON is folded into one
-review for the local owner.
+review for the local owner. If any composition member fails or returns unusable
+output, train fails that review instead of grading the remaining members as a
+complete product.
 
 Train drafts improve **your** package tree. Shipping still uses `pack` / `push`
 when you publish.

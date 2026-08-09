@@ -35,9 +35,6 @@ type Package struct {
 	// Always expanded when this local package is run for train grading — independent
 	// of official jury enable/disable.
 	Uses []UseSpec
-	// CompositionOnly is true when this package was loaded only as a uses member
-	// of a local package (not a train draft target unless also listed as local).
-	CompositionOnly bool
 }
 
 // UseSpec is one adversary.yaml uses entry.
