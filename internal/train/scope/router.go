@@ -242,8 +242,7 @@ func classifyNitsCandidate(body, path string) Result {
 	}
 	markers := []string{
 		"nit:", "nit;", "nit,", "style", "rename", "naming", "comment",
-		"todo", "fixme", "cleanup", "redundant", "duplicate", "duplicated",
-		"consisten", "dead code", "unused", "unnecessary", "noise",
+		"todo", "fixme", "unnecessary", "noise",
 	}
 	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
@@ -260,7 +259,7 @@ func nitsMaterialConcern(lower string) bool {
 	markers := []string{
 		"data race", "deadlock", "panic", "crash", "data loss", "security",
 		"injection", "incorrect behavior", "incorrect output", "incorrect result",
-		"wrong behavior", "wrong output", "wrong result", "broken", "this is a bug",
+		"wrong behavior", "wrong output", "wrong result", "broken", " bug", "bug ",
 		"will fail", "causes a failure", "server error", "unhandled error", "unhandled exception",
 		"resource leak", "breaking change", "incomplete fix", "regression", "data corruption",
 		"startup failure", "startup abort", "process-level exception",

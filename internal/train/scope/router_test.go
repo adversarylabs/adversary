@@ -329,6 +329,7 @@ func TestNitsMaterialGateBeatsCleanupMarkers(t *testing.T) {
 		"This redundant branch is broken and returns incorrect behavior.",
 		"Cleanup is needed because this duplicate write causes a failure.",
 		"This unused guard leaves an unhandled exception during startup.",
+		"This duplicate write charges the customer twice.",
 	}
 	for _, body := range cases {
 		got := classifyNitsCandidate(body, "src/service.go")
