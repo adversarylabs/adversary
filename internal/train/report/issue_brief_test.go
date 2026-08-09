@@ -87,11 +87,15 @@ func TestModelIssueBriefWriterSynthesizesIntent(t *testing.T) {
 		t.Fatalf("prompt does not protect against evidence injection:\n%s", provider.request.Prompt)
 	}
 	if !strings.Contains(provider.request.Prompt, "package_scope is only an ownership boundary") ||
-		!strings.Contains(provider.request.Prompt, "same causal mechanism") {
+		!strings.Contains(provider.request.Prompt, "same causal mechanism") ||
+		!strings.Contains(provider.request.Prompt, "at most 45 words") {
 		t.Fatalf("prompt does not require evidence-grounded generalization:\n%s", provider.request.Prompt)
 	}
 	if !strings.Contains(string(provider.request.Input), "Staff-level review") {
 		t.Fatalf("package scope missing from model input: %s", provider.request.Input)
+	}
+	if provider.request.Budget.MaximumOutputTokens != issueBriefMaximumOutputTokens || issueBriefMaximumOutputTokens < 4_000 {
+		t.Fatalf("issue brief budget=%d is too small for reasoning models", provider.request.Budget.MaximumOutputTokens)
 	}
 	rendered := renderIssueBrief(brief)
 	for _, want := range []string{"What we want to improve", "Why this matters", "Examples", "Keep it focused", "Done when"} {
