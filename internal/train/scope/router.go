@@ -60,17 +60,24 @@ func (r *Router) RouteComment(body, path, author string) Route {
 	// Broad generalists skip these entirely — their mission owns every human comment
 	// that reaches routing (bots already rejected above; empty already rejected).
 	hasBroad := false
+	hasNits := false
 	for _, cand := range r.Candidates {
 		if BroadScopeMission(cand.ID, cand.Mission) {
 			hasBroad = true
-			break
+		}
+		if isNitsCandidate(cand.ID) {
+			hasNits = true
 		}
 	}
 	if !hasBroad {
 		// Do not run eng-review-specific CI outs here — specialists must still own those.
 		// Do not let LLM "rescue" non-defects into engineering-review false gold.
 		if reason, ok := globalNonDefectOut(body, path); ok {
-			return Route{Decision: OutOfScope, Reason: reason, Method: "heuristic"}
+			// Explicit nits are valid gold when the dedicated nits package is loaded.
+			// Its candidate classifier below still rejects defect-shaped comments.
+			if !(hasNits && reason == "explicit nit / style-process feedback") {
+				return Route{Decision: OutOfScope, Reason: reason, Method: "heuristic"}
+			}
 		}
 	}
 
@@ -84,6 +91,11 @@ func (r *Router) RouteComment(body, path, author string) Route {
 	var rejected []string
 
 	for _, cand := range r.Candidates {
+		if ok, reason := candidatePathEligible(path, cand); !ok {
+			rejected = append(rejected, cand.ID+": "+reason)
+			continue
+		}
+
 		clf := &Classifier{
 			MissionMarkdown: cand.Mission,
 			AdversaryName:   cand.AdversaryName,
@@ -91,17 +103,11 @@ func (r *Router) RouteComment(body, path, author string) Route {
 		}
 		// Hard path affinity for specialists
 		pathBoost := pathAffinity(path, cand)
-		res := clf.Classify(body, path, author)
-		if res.Decision != InScope && pathBoost < 50 {
-			// Still allow strong path match to force specialist ownership even if generic heuristic said out
-			if pathBoost >= 50 {
-				// re-check with path-aware force for CI etc.
-				if isCIPath(strings.ToLower(path)) && strings.Contains(strings.ToLower(cand.ID), "githubactions") {
-					res = Result{Decision: InScope, Reason: "workflow path → github-actions", Method: "heuristic"}
-				} else if strings.HasSuffix(strings.ToLower(path), ".go") && strings.HasPrefix(cand.ID, "go-") {
-					// don't force all go specialists in-scope
-				}
-			}
+		var res Result
+		if isNitsCandidate(cand.ID) {
+			res = classifyNitsCandidate(body, path)
+		} else {
+			res = clf.Classify(body, path, author)
 		}
 		if res.Decision != InScope {
 			// Path-forced specialists:
@@ -128,6 +134,16 @@ func (r *Router) RouteComment(body, path, author string) Route {
 			Reason:   "no adversary claimed this comment (or only out-of-scope)",
 			Method:   "heuristic",
 			Rejected: rejected,
+		}
+	}
+
+	// Generic defect heuristics deliberately cast a wide net and several
+	// same-language specialists may claim the same comment. When model routing is
+	// available, use the actual mission texts as final arbitration. Broad persona
+	// packages retain their explicit "everything" semantics without this gate.
+	if r.UseLLM && !hasBroad {
+		if route, err := r.routeLLM(body, path, author); err == nil {
+			return route
 		}
 	}
 
@@ -162,6 +178,83 @@ func (r *Router) RouteComment(body, path, author string) Route {
 		Method:   "heuristic",
 		Rejected: rejected,
 	}
+}
+
+func isNitsCandidate(id string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
+	return id == "nits" || strings.HasSuffix(id, "/nits") || strings.HasSuffix(id, "-nits")
+}
+
+// candidatePathEligible enforces the package's declared file surfaces before
+// generic defect heuristics get a chance to claim a comment. Declared file
+// globs are authoritative even when language inference says "any". Without a
+// retained path, only language-neutral or legacy candidates remain eligible.
+func candidatePathEligible(path string, cand Candidate) (bool, string) {
+	if strings.TrimSpace(path) == "" {
+		if len(cand.Languages) == 0 || containsFold(cand.Languages, "any") {
+			return true, ""
+		}
+		return false, fmt.Sprintf("no file path evidence for declared surfaces %v", cand.Languages)
+	}
+	if len(cand.FileGlobs) > 0 {
+		for _, pattern := range cand.FileGlobs {
+			if globMatch(pattern, path) {
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("path %q does not match declared file globs", path)
+	}
+	if len(cand.Languages) == 0 || containsFold(cand.Languages, "any") {
+		return true, ""
+	}
+	return false, fmt.Sprintf("path %q has no matching declared file surface %v", path, cand.Languages)
+}
+
+func containsFold(values []string, want string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), want) {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyNitsCandidate keeps review/nits focused on non-blocking maintainer
+// taste. The shared classifier intentionally recognizes material defects across
+// languages, which is exactly what this package must not absorb.
+func classifyNitsCandidate(body, path string) Result {
+	lower := strings.ToLower(body)
+	if nitsMaterialConcern(lower) {
+		return Result{Decision: OutOfScope, Reason: "material correctness/operations concern, not a nit", Method: "heuristic"}
+	}
+	markers := []string{
+		"nit:", "nit;", "nit,", "style", "rename", "naming", "comment",
+		"todo", "fixme", "cleanup", "redundant", "duplicate", "duplicated",
+		"consisten", "dead code", "unused", "unnecessary", "noise",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return Result{Decision: InScope, Reason: "non-blocking maintainer-taste signal", Method: "heuristic"}
+		}
+	}
+	if isExplicitNit(lower) {
+		return Result{Decision: InScope, Reason: "explicit non-blocking nit", Method: "heuristic"}
+	}
+	return Result{Decision: OutOfScope, Reason: "no non-blocking naming/comment/cleanup signal", Method: "heuristic"}
+}
+
+func nitsMaterialConcern(lower string) bool {
+	markers := []string{
+		"data race", "deadlock", "panic", "crash", "data loss", "security",
+		"injection", "incorrect result", "server error", "resource leak",
+		"breaking change", "startup failure", "startup abort", "process-level exception",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isGeneralist(id string) bool {
@@ -364,10 +457,22 @@ func globMatch(pattern, path string) bool {
 }
 
 func (r *Router) routeLLM(body, path, author string) (Route, error) {
-	// Build id list
+	// Build the prompt only from candidates compatible with the retained file
+	// evidence. This keeps an LLM from selecting an owner the deterministic
+	// router already knows cannot inspect the changed surface.
+	var eligible []Candidate
+	for _, candidate := range r.Candidates {
+		if ok, _ := candidatePathEligible(path, candidate); ok {
+			eligible = append(eligible, candidate)
+		}
+	}
+	if len(eligible) == 0 {
+		return Route{Decision: OutOfScope, Reason: "no adversary matches the retained file surface", Method: "llm"}, nil
+	}
+
 	var ids []string
 	var scopes strings.Builder
-	for _, c := range r.Candidates {
+	for _, c := range eligible {
 		ids = append(ids, c.ID)
 		fmt.Fprintf(&scopes, "### %s\n%s\n\n", c.ID, truncate(c.Mission, 800))
 	}
@@ -415,7 +520,32 @@ Valid ids: %s or empty
 			}
 		}
 	}
-	return routeFromLLMDecision(out, r.Candidates), nil
+	return routeFromLLMDecisionForComment(out, eligible, path, body), nil
+}
+
+func routeFromLLMDecisionForComment(out routeDecision, candidates []Candidate, path, body string) Route {
+	route := routeFromLLMDecisionForPath(out, candidates, path)
+	if route.OwnerID != "" && isNitsCandidate(route.OwnerID) && classifyNitsCandidate(body, path).Decision != InScope {
+		return Route{Decision: OutOfScope, Reason: "llm nits owner failed non-blocking semantic gate", Method: "llm"}
+	}
+	return route
+}
+
+func routeFromLLMDecisionForPath(out routeDecision, candidates []Candidate, path string) Route {
+	route := routeFromLLMDecision(out, candidates)
+	if route.OwnerID == "" {
+		return route
+	}
+	for _, candidate := range candidates {
+		if candidate.ID != route.OwnerID {
+			continue
+		}
+		if ok, reason := candidatePathEligible(path, candidate); !ok {
+			return Route{Decision: OutOfScope, Reason: "llm owner outside declared file surface: " + reason, Method: "llm"}
+		}
+		return route
+	}
+	return Route{Decision: OutOfScope, Reason: "llm: unknown owner", Method: "llm"}
 }
 
 func routeFromLLMDecision(out routeDecision, candidates []Candidate) Route {

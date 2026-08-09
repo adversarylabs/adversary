@@ -142,6 +142,58 @@ func TestRouterCommitMessageWordingNone(t *testing.T) {
 	}
 }
 
+func TestRouterRejectsSpecialistOutsideDeclaredFileSurface(t *testing.T) {
+	r := &Router{
+		Candidates: []Candidate{
+			{ID: "engineering-review", AdversaryName: "engineering-review", Mission: "staff eng", Languages: []string{"any"}},
+			{ID: "go-testing", AdversaryName: "go-testing", Mission: "Go tests only; non-Go is out of scope", Languages: []string{"go"}, FileGlobs: []string{"**/*_test.go"}},
+			{ID: "typescript", AdversaryName: "typescript", Mission: "TypeScript and JavaScript only", Languages: []string{"typescript"}, FileGlobs: []string{"**/*.ts", "**/*.tsx"}},
+		},
+	}
+
+	java := r.RouteComment(
+		"This regression test is incomplete: please assert the invalid enum returns the expected error.",
+		"app/src/test/java/example/DataContractsResourceTest.java",
+		"alice",
+	)
+	if java.OwnerID == "go-testing" {
+		t.Fatalf("Java test must not route to go-testing: %+v", java)
+	}
+
+	python := r.RouteComment(
+		"This validation is incomplete and allows an incorrect runtime schema.",
+		"airflow/provider_manager.py",
+		"bob",
+	)
+	if python.OwnerID == "typescript" {
+		t.Fatalf("Python must not route to typescript: %+v", python)
+	}
+}
+
+func TestRouterNitsOwnsTasteButNotCorrectness(t *testing.T) {
+	r := &Router{
+		Candidates: []Candidate{
+			{ID: "engineering-review", AdversaryName: "engineering-review", Mission: "staff eng", Languages: []string{"any"}},
+			{ID: "nits", AdversaryName: "nits", Mission: "non-blocking maintainer taste", Languages: []string{"any"}, FileGlobs: []string{"**/*"}},
+		},
+	}
+
+	nit := r.RouteComment("Nit: rename this variable for consistency with the sibling helper.", "src/cache.java", "alice")
+	if nit.OwnerID != "nits" {
+		t.Fatalf("explicit taste feedback should route to nits: %+v", nit)
+	}
+
+	redundant := r.RouteComment("This masking is already applied by the downstream recorder, so this call is redundant noise.", "src/log.go", "alice")
+	if redundant.OwnerID != "nits" {
+		t.Fatalf("redundant cleanup should route to nits: %+v", redundant)
+	}
+
+	crash := r.RouteComment("This unguarded validation can crash startup when third-party metadata is malformed; please preserve error handling.", "provider_manager.py", "bob")
+	if crash.OwnerID == "nits" {
+		t.Fatalf("runtime correctness concern must not route to nits: %+v", crash)
+	}
+}
+
 func TestRouterBroadGeneralistKeepsNits(t *testing.T) {
 	r := &Router{
 		Candidates: []Candidate{
@@ -191,5 +243,73 @@ func TestRouteLLMDecisionRequiresGoldQualityGates(t *testing.T) {
 				t.Fatalf("gate accepted %+v", got)
 			}
 		})
+	}
+}
+
+func TestCandidatePathEligibleTreatsAnyAndUnsetAsLanguageNeutral(t *testing.T) {
+	for _, candidate := range []Candidate{
+		{ID: "legacy"},
+		{ID: "engineering-review", Languages: []string{"any"}},
+	} {
+		if ok, reason := candidatePathEligible("src/example.java", candidate); !ok {
+			t.Fatalf("%s should be language-neutral: %s", candidate.ID, reason)
+		}
+	}
+	if ok, _ := candidatePathEligible("src/example.java", Candidate{
+		ID: "complexity", Languages: []string{"any"}, FileGlobs: []string{"**/*.ts", "**/*.js"},
+	}); ok {
+		t.Fatal("an inferred 'any' must not bypass declared file globs")
+	}
+	if ok, _ := candidatePathEligible("src/example.java", Candidate{
+		ID: "go-testing", Languages: []string{"go"}, FileGlobs: []string{"**/*_test.go"},
+	}); ok {
+		t.Fatal("go-testing must reject a Java path")
+	}
+	if ok, _ := candidatePathEligible("", Candidate{
+		ID: "go-testing", Languages: []string{"go"}, FileGlobs: []string{"**/*_test.go"},
+	}); ok {
+		t.Fatal("language-specific package must fail closed without file evidence")
+	}
+}
+
+func TestRouteFromLLMDecisionRejectsOwnerOutsideDeclaredFileSurface(t *testing.T) {
+	candidates := []Candidate{
+		{ID: "typescript", Languages: []string{"typescript"}, FileGlobs: []string{"**/*.ts", "**/*.tsx"}},
+		{ID: "engineering-review", Languages: []string{"any"}},
+	}
+	decision := routeDecision{
+		OwnerID: "typescript", Reason: "schema strictness", Material: true,
+		Actionable: true, ChangeLocal: true,
+	}
+	got := routeFromLLMDecisionForPath(decision, candidates, "airflow/provider.yaml.schema.json")
+	if got.OwnerID != "" || got.Decision != OutOfScope {
+		t.Fatalf("LLM-selected TypeScript owner must be rejected for JSON schema: %+v", got)
+	}
+}
+
+func TestRouteFromLLMDecisionEnforcesNitsSemanticGate(t *testing.T) {
+	candidates := []Candidate{{ID: "nits", Languages: []string{"any"}, FileGlobs: []string{"**/*"}}}
+	decision := routeDecision{
+		OwnerID: "nits", Reason: "startup behavior", Material: true,
+		Actionable: true, ChangeLocal: true,
+	}
+	got := routeFromLLMDecisionForComment(
+		decision,
+		candidates,
+		"provider_manager.py",
+		"This unguarded validation can crash startup when third-party metadata is malformed.",
+	)
+	if got.OwnerID != "" || got.Decision != OutOfScope {
+		t.Fatalf("LLM-selected nits owner must reject correctness concerns: %+v", got)
+	}
+
+	got = routeFromLLMDecisionForComment(
+		decision,
+		candidates,
+		"src/log.go",
+		"This masking is already applied downstream, so this call is redundant noise.",
+	)
+	if got.OwnerID != "nits" || got.Decision != InScope {
+		t.Fatalf("LLM-selected nits owner should keep non-blocking cleanup: %+v", got)
 	}
 }
