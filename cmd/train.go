@@ -331,7 +331,7 @@ the state directory. Drafts never target official package ids.`,
 			if cfg.OfficialEnabled() && !fixture {
 				fmt.Fprintln(stderr, "  official jury: enabled (drafts for locals only)")
 			} else {
-				fmt.Fprintln(stderr, "  official jury: disabled")
+				fmt.Fprintln(stderr, "  official jury: disabled (catalog jury only — local uses composition still expands)")
 			}
 
 			res, err := pipeline.Run(opts)

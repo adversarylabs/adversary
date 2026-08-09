@@ -10,11 +10,20 @@ specialists, personas) and want them to learn from how *your team* already revie
 | Role | Who | Graded? | Gets train drafts? |
 |------|-----|---------|---------------------|
 | **Local (home-grown)** | Packages under your workspace | Yes | **Yes** |
-| **Official catalog** | Registry packages (`go/security`, …) | Optional **jury** | **No** — never trained |
+| **Local composition (`uses`)** | Members declared in a local package’s `adversary.yaml` | Yes (always with that product) | **No** (unless also a local train package) |
+| **Official catalog jury** | Registry packages via `official.enabled` | Optional **jury** | **No** — never trained |
 
-Official packages may still **run** so gold is not mis-attributed to your local
-package when the catalog already covers it. Drafts and apply issues only target
-**local** package ids.
+**Official jury** (`official.enabled`) is only the optional catalog corpus so gold
+is not mis-attributed when a published specialist already covers it. Turning it
+**off** focuses train (no extra catalog packages).
+
+**Composition is separate:** each local package’s `adversary.yaml` `uses` graph is
+**always** expanded when that package is graded — independent of
+`official.enabled`. Persona / language packs (e.g. torvalds + `lang/go`, or
+`lang/go` + `go/*`) are graded as **products**. Drafts still target the **local**
+owner, never registry composition leaves.
+
+Drafts and apply issues only target **local** package ids.
 
 Related design notes (internal quality bar, full product sketch):
 [docs/train/](./train/). This page is the **user guide for implemented CLI**.
@@ -232,9 +241,15 @@ the product; specialists should not dump leftovers onto a random sibling.
 
 | Feature | Role in train |
 |---------|----------------|
-| **`uses` composition** | Run entrypoints expand members for *product* review; train still grades **local package ids** that own scope/drafts |
+| **`uses` composition** | **Always** expanded when grading a local package that declares `uses` (product run). Not gated by `official.enabled`. |
 | **`agent/voice.md`** | Persona packages bank human cadence; policy/specialist packages keep gold as detection evidence |
-| **Official jury** | Catches gold so you don’t re-implement catalog specialists locally |
+| **Official jury** | Optional catalog packages for catch/suppress only; disable to focus |
+
+When train runs `adversary run <local-package>`, the CLI expands that package’s
+`uses` and merges findings for the grade. Multi-member JSON is folded into one
+review for the local owner. If any composition member fails or returns unusable
+output, train fails that review instead of grading the remaining members as a
+complete product.
 
 Train drafts improve **your** package tree. Shipping still uses `pack` / `push`
 when you publish.

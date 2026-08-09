@@ -269,6 +269,21 @@ func Run(opts Options) (*Result, error) {
 			}
 			commentRouter = &scope.Router{Candidates: cands, UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
 			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing: %v\n", len(siblingPkgs), packageIDs(siblingPkgs))
+			// Always expand each local package's adversary.yaml uses for product
+			// grading. This is independent of official jury enable/disable —
+			// uses are part of the package under train, not the catalog jury.
+			for _, p := range siblingPkgs {
+				if len(p.Uses) == 0 {
+					continue
+				}
+				refs, err := adversaries.ExpandUsesRefs(p)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "note: composition expand for %s: %v\n", p.ID, err)
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "  composition %s uses: %s → %d run ref(s)\n",
+					p.ID, adversaries.FormatUsesSummary(p), len(refs))
+			}
 		}
 		// Hunt/scorecard primary: loaded packages, not a hard-coded eng-review default.
 		opts.AdversaryName = resolvePrimaryAdversaryName(opts, siblingPkgs)
@@ -530,7 +545,12 @@ func Run(opts Options) (*Result, error) {
 			if opts.Fixture && !opts.Live && ownerID == "engineering-review" {
 				fixturePath = filepath.Join(opts.RepoRoot, "fixtures", "reviews", "engineering-review.json")
 			}
-			fmt.Fprintf(os.Stderr, "  running adversary %s …\n", ownerID)
+			if p, ok := pkgByID[ownerID]; ok && len(p.Uses) > 0 {
+				fmt.Fprintf(os.Stderr, "  running adversary %s (with composition uses) …\n", ownerID)
+			} else {
+				fmt.Fprintf(os.Stderr, "  running adversary %s …\n", ownerID)
+			}
+			// Product run expands adversary.yaml uses via CLI (not gated by official jury).
 			eRes, err := runner.RunEngineeringReviewContext(ctx, revProj, revOut, repoPath, baseRef, headRef, advRef, fixturePath)
 			if err != nil {
 				return nil, err
@@ -564,8 +584,7 @@ func Run(opts Options) (*Result, error) {
 			}
 			nRev, err := normalize.FromAnyJSON(ownerID, eRes.RawJSON)
 			if err != nil {
-				reviewBlocked = true
-				continue
+				return nil, fmt.Errorf("normalize review for %s on case %s: %w", ownerID, c.ID, err)
 			}
 			nRev.ReviewerID = ownerID
 			normPath := filepath.Join(runDir, "normalized", c.ID+"-"+ownerID+".json")
@@ -1019,6 +1038,8 @@ func packageIDFromName(name string) string {
 }
 
 // trainDraftContext builds local/official id sets for report draft filtering.
+// Composition members are not loaded into pkgs, so only explicit local package
+// roots can become draft targets.
 func trainDraftContext(opts Options, pkgs []adversaries.Package) (localIDs, officialIDs map[string]bool) {
 	localIDs = map[string]bool{}
 	officialIDs = map[string]bool{}
@@ -1031,7 +1052,7 @@ func trainDraftContext(opts Options, pkgs []adversaries.Package) (localIDs, offi
 	for _, id := range opts.OfficialIDs {
 		officialIDs[strings.ToLower(id)] = true
 	}
-	// Always merge loaded package ids so drafts match router owner ids
+	// Merge loaded **local** package ids so drafts match router owner ids
 	// (e.g. go-concurrency) even when CLI LocalIDs used directory basenames.
 	for _, p := range pkgs {
 		localIDs[strings.ToLower(p.ID)] = true

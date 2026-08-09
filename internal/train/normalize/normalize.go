@@ -1,6 +1,7 @@
 package normalize
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -153,8 +154,12 @@ func FromBaselineJSON(raw []byte) (*Review, error) {
 	return r, nil
 }
 
-// FromAnyJSON tries adversary envelope then baseline.
+// FromAnyJSON tries multi-run CLI output (composition), then single adversary
+// envelope, then baseline.
 func FromAnyJSON(reviewerID string, raw []byte) (*Review, error) {
+	if r, recognized, err := fromMultiRunJSON(reviewerID, raw); recognized {
+		return r, err
+	}
 	if r, err := FromAdversaryJSON(reviewerID, raw); err == nil && (len(r.Findings) > 0 || strings.Contains(string(raw), "protocolVersion")) {
 		return r, nil
 	}
@@ -163,6 +168,129 @@ func FromAnyJSON(reviewerID string, raw []byte) (*Review, error) {
 		return r, nil
 	}
 	return FromAdversaryJSON(reviewerID, raw)
+}
+
+// FromMultiRunJSON merges CLI multi-adversary JSON (composition expand) into one
+// review under reviewerID. Accepts either a bare {"results":[...]} object or the
+// cmd writeJSON envelope {"command":"run","data":{"results":[...]}}.
+func FromMultiRunJSON(reviewerID string, raw []byte) (*Review, error) {
+	r, recognized, err := fromMultiRunJSON(reviewerID, raw)
+	if !recognized {
+		return nil, fmt.Errorf("not multi-run json")
+	}
+	return r, err
+}
+
+type multiRunItem struct {
+	Adversary string          `json:"adversary"`
+	Output    json.RawMessage `json:"output"`
+	Error     string          `json:"error"`
+}
+
+// fromMultiRunJSON distinguishes "not this shape" from "recognized but
+// incomplete". Once composition output is recognized, callers must not fall
+// back to a permissive single-review parser: doing so would turn member
+// failures into an empty successful review and manufacture train misses.
+func fromMultiRunJSON(reviewerID string, raw []byte) (*Review, bool, error) {
+	results, recognized, err := decodeMultiRunItems(raw)
+	if !recognized {
+		return nil, false, err
+	}
+	if err != nil {
+		return nil, true, err
+	}
+	if len(results) == 0 {
+		return nil, true, fmt.Errorf("composition review contains no members")
+	}
+
+	merged := &Review{
+		ReviewerID: stripToolIdentity(reviewerID),
+		Source:     "adversary",
+		Findings:   []Finding{},
+	}
+	for i, it := range results {
+		member := strings.TrimSpace(it.Adversary)
+		if member == "" {
+			member = fmt.Sprintf("member %d", i+1)
+		}
+		if msg := strings.TrimSpace(it.Error); msg != "" {
+			return nil, true, fmt.Errorf("composition review failed for %s: %s", member, msg)
+		}
+		output := bytes.TrimSpace(it.Output)
+		if len(output) == 0 || bytes.Equal(output, []byte("null")) {
+			return nil, true, fmt.Errorf("composition review missing output for %s", member)
+		}
+		if !isAdversaryReviewJSON(output) {
+			return nil, true, fmt.Errorf("composition review returned invalid output for %s", member)
+		}
+		part, err := FromAdversaryJSON(reviewerID, output)
+		if err != nil {
+			return nil, true, fmt.Errorf("composition review could not parse output for %s: %w", member, err)
+		}
+		for _, f := range part.Findings {
+			// Prefix id when colliding across members.
+			if it.Adversary != "" && f.ID != "" {
+				f.ID = it.Adversary + "/" + f.ID
+			}
+			merged.Findings = append(merged.Findings, f)
+		}
+	}
+	return merged, true, nil
+}
+
+func decodeMultiRunItems(raw []byte) ([]multiRunItem, bool, error) {
+	var envelope struct {
+		Command string          `json:"command"`
+		Data    json.RawMessage `json:"data"`
+		Results json.RawMessage `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, false, err
+	}
+
+	resultsRaw := envelope.Results
+	recognized := len(resultsRaw) > 0
+	if strings.EqualFold(strings.TrimSpace(envelope.Command), "run") {
+		recognized = true
+		var data struct {
+			Results json.RawMessage `json:"results"`
+		}
+		if len(bytes.TrimSpace(envelope.Data)) == 0 || bytes.Equal(bytes.TrimSpace(envelope.Data), []byte("null")) {
+			return nil, true, fmt.Errorf("composition run envelope is missing data")
+		}
+		if err := json.Unmarshal(envelope.Data, &data); err != nil {
+			return nil, true, fmt.Errorf("composition run data: %w", err)
+		}
+		if len(data.Results) == 0 {
+			return nil, true, fmt.Errorf("composition run envelope is missing results")
+		}
+		resultsRaw = data.Results
+	}
+	if !recognized {
+		return nil, false, nil
+	}
+
+	var results []multiRunItem
+	if err := json.Unmarshal(resultsRaw, &results); err != nil {
+		return nil, true, fmt.Errorf("composition results: %w", err)
+	}
+	return results, true, nil
+}
+
+func isAdversaryReviewJSON(raw []byte) bool {
+	var shape struct {
+		ProtocolVersion int             `json:"protocolVersion"`
+		Result          json.RawMessage `json:"result"`
+		Findings        json.RawMessage `json:"findings"`
+	}
+	if err := json.Unmarshal(raw, &shape); err != nil {
+		return false
+	}
+	result := bytes.TrimSpace(shape.Result)
+	findings := bytes.TrimSpace(shape.Findings)
+	hasResult := len(result) > 0 && !bytes.Equal(result, []byte("null")) && result[0] == '{'
+	hasFindings := len(findings) > 0 && !bytes.Equal(findings, []byte("null")) && findings[0] == '['
+	return (shape.ProtocolVersion > 0 && hasResult) || hasFindings
 }
 
 func normalizeSeverity(s string) string {
