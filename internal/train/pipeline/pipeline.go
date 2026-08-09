@@ -72,6 +72,8 @@ type Options struct {
 	LocalPackageRoot string
 	// TrainOnlyIDs limits train-eligible locals (empty = all locals).
 	TrainOnlyIDs []string
+	// TrainExcludeIDs removes locals from routing after TrainOnlyIDs is applied.
+	TrainExcludeIDs []string
 	// LocalIDs marks package ids that may receive train drafts (home-grown).
 	// If empty, inferred from LocalPackageDirs/Root.
 	LocalIDs []string
@@ -257,8 +259,11 @@ func Run(opts Options) (*Result, error) {
 					siblingPkgs = filtered
 				}
 			}
+			if len(opts.TrainExcludeIDs) > 0 {
+				siblingPkgs = adversaries.FilterExcludedIDs(siblingPkgs, opts.TrainExcludeIDs)
+			}
 			if len(siblingPkgs) == 0 {
-				return nil, fmt.Errorf("no local adversary packages loaded for train routing")
+				return nil, fmt.Errorf("no local adversary packages remain for train routing (only=%v exclude=%v)", opts.TrainOnlyIDs, opts.TrainExcludeIDs)
 			}
 			var cands []scope.Candidate
 			for _, p := range siblingPkgs {

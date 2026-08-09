@@ -22,6 +22,9 @@ type ApplyOptions struct {
 	Branch string
 	// CreateIssue opens a GitHub issue on the package repo (default true from CLI).
 	CreateIssue bool
+	// SkipDraft creates only the GitHub issue and does not write into the package
+	// checkout. Train run uses this to avoid dirtying every routed package.
+	SkipDraft bool
 	// IncludeHumanIssues allows ungraded KindHuman rows to open GitHub issues.
 	// It is false by default because human comments require grading and triage.
 	IncludeHumanIssues bool
@@ -30,14 +33,15 @@ type ApplyOptions struct {
 	// implementation backlog while each miss remains traceable local evidence.
 	IncludeIndividualIssues bool
 	// IssueClient is optional; when nil and CreateIssue, a token client is built from env.
-	IssueClient IssueCreator
+	IssueClient IssueClient
 	// Context for GitHub API (defaults to Background).
 	Context context.Context
 }
 
-// IssueCreator creates a GitHub issue (usually *githubapi.Client).
-type IssueCreator interface {
+// IssueClient finds and creates GitHub issues (usually *githubapi.Client).
+type IssueClient interface {
 	CreateIssue(ctx context.Context, owner, repo string, in githubapi.CreateIssueInput) (githubapi.Issue, error)
+	FindIssueByMarker(ctx context.Context, owner, repo, marker string) (githubapi.Issue, bool, error)
 }
 
 // ApplyResult is what apply wrote.
@@ -48,6 +52,7 @@ type ApplyResult struct {
 	IssueURL    string
 	Committed   bool
 	AlreadyDone bool
+	IssueReused bool
 }
 
 // Apply writes the draft into the package and marks the result applied.
@@ -76,14 +81,17 @@ func Apply(stateRoot, id string, opts ApplyOptions) (ApplyResult, error) {
 		return ApplyResult{}, fmt.Errorf("package path not a directory: %s", abs)
 	}
 
-	draftDir := filepath.Join(abs, "docs", "train-drafts")
-	if err := os.MkdirAll(draftDir, 0o755); err != nil {
-		return ApplyResult{}, err
-	}
-	outPath := filepath.Join(draftDir, r.ID+".md")
-	body := formatApplyMarkdown(r)
-	if err := os.WriteFile(outPath, []byte(body), 0o644); err != nil {
-		return ApplyResult{}, err
+	outPath := ""
+	if !opts.SkipDraft {
+		draftDir := filepath.Join(abs, "docs", "train-drafts")
+		if err := os.MkdirAll(draftDir, 0o755); err != nil {
+			return ApplyResult{}, err
+		}
+		outPath = filepath.Join(draftDir, r.ID+".md")
+		body := formatApplyMarkdown(r)
+		if err := os.WriteFile(outPath, []byte(body), 0o644); err != nil {
+			return ApplyResult{}, err
+		}
 	}
 
 	ar := ApplyResult{ID: r.ID, Path: outPath}
@@ -96,7 +104,7 @@ func Apply(stateRoot, id string, opts ApplyOptions) (ApplyResult, error) {
 		branch = fmt.Sprintf("train/%s/%s", sanitizeBranch(pkg), r.ID)
 	}
 
-	if opts.CreateBranch {
+	if opts.CreateBranch && !opts.SkipDraft {
 		if committed, b, err := gitCommitDraft(abs, branch, outPath, r); err == nil {
 			ar.Committed = committed
 			ar.Branch = b
@@ -115,16 +123,19 @@ func Apply(stateRoot, id string, opts ApplyOptions) (ApplyResult, error) {
 		}
 	}
 	if wantIssue {
-		issueURL, err := createApplyIssue(opts, abs, r, outPath)
+		issueURL, reused, err := createApplyIssue(opts, abs, r, outPath)
 		if err != nil {
 			issueErr = err
 		} else {
 			ar.IssueURL = issueURL
+			ar.IssueReused = reused
 		}
 	}
+	if issueErr != nil {
+		return ar, fmt.Errorf("create GitHub issue: %w (result remains new and can be retried)", issueErr)
+	}
 
-	// Always persist applied after the draft is on disk — even if the GitHub
-	// issue step fails — so results ls reflects the user's action.
+	// Persist applied only after every requested durable output succeeds.
 	r.Status = StatusApplied
 	r.AppliedAt = time.Now().UTC()
 	r.AppliedPath = outPath
@@ -133,18 +144,12 @@ func Apply(stateRoot, id string, opts ApplyOptions) (ApplyResult, error) {
 		r.IssueURL = ar.IssueURL
 	}
 	if err := SaveResult(stateRoot, r); err != nil {
-		if issueErr != nil {
-			return ar, fmt.Errorf("save applied status: %w (also create issue: %v)", err, issueErr)
-		}
 		return ar, err
-	}
-	if issueErr != nil {
-		return ar, fmt.Errorf("create GitHub issue: %w\n  (marked applied; draft at %s; re-run apply or open issue manually)", issueErr, outPath)
 	}
 	return ar, nil
 }
 
-func createApplyIssue(opts ApplyOptions, packagePath string, r Result, draftPath string) (string, error) {
+func createApplyIssue(opts ApplyOptions, packagePath string, r Result, draftPath string) (string, bool, error) {
 	ctx := opts.Context
 	if ctx == nil {
 		ctx = context.Background()
@@ -153,23 +158,39 @@ func createApplyIssue(opts ApplyOptions, packagePath string, r Result, draftPath
 	if client == nil {
 		tok, err := githubapi.RequireToken()
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		client = githubapi.NewClient(tok)
 	}
 	ref, err := githubapi.ResolvePackageGitHubRepo(packagePath)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
+	marker := issueMarker(r)
+	if issue, ok, err := client.FindIssueByMarker(ctx, ref.Owner, ref.Name, marker); err != nil {
+		return "", false, fmt.Errorf("check existing issues: %w", err)
+	} else if ok {
+		return issue.HTMLURL, true, nil
+	}
+	body := formatIssueBody(r, draftPath, packagePath)
+	body += "\n" + marker + "\n"
 	issue, err := client.CreateIssue(ctx, ref.Owner, ref.Name, githubapi.CreateIssueInput{
 		Title:  issueTitle(r),
-		Body:   formatIssueBody(r, draftPath, packagePath),
+		Body:   body,
 		Labels: issueLabels(r),
 	})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	return issue.HTMLURL, nil
+	return issue.HTMLURL, false, nil
+}
+
+func issueMarker(r Result) string {
+	identity := strings.ToLower(collapseWS(strings.TrimSpace(r.Title)))
+	if identity == "" {
+		identity = strings.ToLower(collapseWS(strings.TrimSpace(r.Summary)))
+	}
+	return fmt.Sprintf("<!-- adversary-train-key:%s -->", shortID("github-issue", normalizeKind(r.Kind), strings.ToLower(r.Package), identity))
 }
 
 func issueTitle(r Result) string {
@@ -343,7 +364,7 @@ func formatIssueBody(r Result, draftPath, packagePath string) string {
 	if draftPath != "" {
 		fmt.Fprintf(&b, "### Local draft copy\n\n`%s`\n\n", RelDraftPath(packagePath, draftPath))
 	}
-	fmt.Fprintf(&b, "---\n_Opened by `adversary train results apply`._\n")
+	fmt.Fprintf(&b, "---\n_Opened by `adversary train`._\n")
 	return b.String()
 }
 

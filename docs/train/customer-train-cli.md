@@ -281,6 +281,10 @@ run:
   max_turns: 200
   # history_order: newest_first   # or oldest_first
   # only: []                      # default: all packages under adversaries.root / path
+  # exclude: [torvalds]
+
+issues:
+  enabled: true                   # successful runs file consolidated issues
 
 # Runtime state (do not commit).
 state_dir: .adversary-train
@@ -456,6 +460,9 @@ cd ~/work/my-adversaries
 # All adversaries from config; history from config sources
 adversary train run
 
+# Explicit all-local routing with an exclusion
+adversary train run --all-adversaries --exclude-adversary torvalds
+
 # One adversary only (domain owner)
 adversary train run --adversary go-database
 
@@ -474,9 +481,11 @@ adversary train run --pr 4242 --repo acme/payments-api
 - Read **`adversary.train.yaml`** (fail clearly if missing or empty sources).  
 - Ensure **official catalog** is available per `official.*` (pull/cache); run them as grade-only jury.  
 - Walk **unseen** history for configured sources until budget.  
-- **Train-eligible** set: one local (`--adversary`) or all locals (default).  
+- **Train-eligible** set: one local (`--adversary`) or all locals (default / `--all-adversaries`), minus config and CLI exclusions.
+- Route each human comment to the best matching eligible local, or none.
 - Draft suggested issues **only** for train-eligible locals that missed gold **not** already caught by an included official.  
-- Append story + issues; update **gitignored** state.
+- Create deduplicated GitHub issues for consolidated drafts and false-positive fixes; individual misses remain local evidence.
+- Append story + update **gitignored** state. `--no-issues` skips GitHub writes.
 
 ### Inspect
 

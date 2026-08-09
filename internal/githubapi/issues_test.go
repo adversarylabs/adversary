@@ -50,6 +50,33 @@ func TestCreateIssue(t *testing.T) {
 	}
 }
 
+func TestFindIssueByMarker(t *testing.T) {
+	const marker = "<!-- adversary-train-key:deadbeef -->"
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_ = json.NewEncoder(w).Encode([]Issue{
+			{Number: 1, HTMLURL: "https://github.com/acme/pkg/issues/1", Body: "unrelated", State: "open"},
+			{Number: 2, HTMLURL: "https://github.com/acme/pkg/issues/2", Body: "task\n" + marker, State: "open"},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient("tok")
+	c.RESTBase = srv.URL
+	c.HTTP = srv.Client()
+	issue, ok, err := c.FindIssueByMarker(context.Background(), "acme", "pkg", marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || issue.Number != 2 {
+		t.Fatalf("issue=%+v ok=%v", issue, ok)
+	}
+	if gotQuery != "state=all&per_page=100" {
+		t.Fatalf("query=%q", gotQuery)
+	}
+}
+
 func TestParseGitRemoteURL(t *testing.T) {
 	cases := []struct {
 		in, owner, name string

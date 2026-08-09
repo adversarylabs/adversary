@@ -111,21 +111,36 @@ func TestSQLiteWriteListInspectApply(t *testing.T) {
 type fakeIssueClient struct {
 	lastOwner, lastRepo, lastTitle, lastBody string
 	labels                                   []string
+	issues                                   []githubapi.Issue
+	createCount                              int
+}
+
+func (f *fakeIssueClient) FindIssueByMarker(_ context.Context, _, _, marker string) (githubapi.Issue, bool, error) {
+	for _, issue := range f.issues {
+		if strings.Contains(issue.Body, marker) {
+			return issue, true, nil
+		}
+	}
+	return githubapi.Issue{}, false, nil
 }
 
 func (f *fakeIssueClient) CreateIssue(_ context.Context, owner, repo string, in githubapi.CreateIssueInput) (githubapi.Issue, error) {
+	f.createCount++
 	f.lastOwner, f.lastRepo = owner, repo
 	f.lastTitle, f.lastBody = in.Title, in.Body
 	f.labels = append([]string{}, in.Labels...)
-	return githubapi.Issue{
+	issue := githubapi.Issue{
 		Number:  7,
 		HTMLURL: "https://github.com/" + owner + "/" + repo + "/issues/7",
 		Title:   in.Title,
+		Body:    in.Body,
 		State:   "open",
-	}, nil
+	}
+	f.issues = append(f.issues, issue)
+	return issue, nil
 }
 
-func TestApplyMarksAppliedEvenWhenIssueFails(t *testing.T) {
+func TestApplyKeepsResultRetryableWhenIssueFails(t *testing.T) {
 	state := t.TempDir()
 	if err := SaveResult(state, Result{
 		ID: "cafe0001", RunID: "r1", Package: "torvalds",
@@ -135,6 +150,8 @@ func TestApplyMarksAppliedEvenWhenIssueFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	pkg := t.TempDir()
+	_ = exec.Command("git", "init", pkg).Run()
+	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/torvalds-adversary.git").Run()
 	_, err := Apply(state, "cafe0001", ApplyOptions{
 		PackagePath:             pkg,
 		CreateBranch:            false,
@@ -149,15 +166,19 @@ func TestApplyMarksAppliedEvenWhenIssueFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusApplied {
-		t.Fatalf("status=%s want applied after draft write despite issue failure", got.Status)
+	if got.Status != StatusNew {
+		t.Fatalf("status=%s want new after issue failure", got.Status)
 	}
-	if got.AppliedPath == "" {
-		t.Fatal("expected applied_path set")
+	if got.AppliedPath != "" {
+		t.Fatalf("applied_path=%q want empty while retryable", got.AppliedPath)
 	}
 }
 
 type failIssueClient struct{}
+
+func (failIssueClient) FindIssueByMarker(context.Context, string, string, string) (githubapi.Issue, bool, error) {
+	return githubapi.Issue{}, false, nil
+}
 
 func (failIssueClient) CreateIssue(context.Context, string, string, githubapi.CreateIssueInput) (githubapi.Issue, error) {
 	return githubapi.Issue{}, fmt.Errorf("simulated issue API failure")
@@ -285,6 +306,45 @@ func TestApplyIssueEligibilityDefaults(t *testing.T) {
 				t.Fatalf("issue=%v want %v: %+v title=%q", gotIssue, tc.wantIssue, ar, fake.lastTitle)
 			}
 		})
+	}
+}
+
+func TestAutoIssueRunDeduplicatesAndDoesNotWriteDrafts(t *testing.T) {
+	state := t.TempDir()
+	pkg := t.TempDir()
+	_ = exec.Command("git", "init", pkg).Run()
+	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/engineering-review-adversary.git").Run()
+	for _, row := range []Result{
+		{ID: "run1draft", RunID: "run-1", Package: "engineering-review", Kind: KindDraft, Status: StatusNew, Title: "Detect cross-layer contract drift", CreatedAt: time.Now().UTC()},
+		{ID: "run2draft", RunID: "run-2", Package: "engineering-review", Kind: KindDraft, Status: StatusNew, Title: "Detect cross-layer contract drift", CreatedAt: time.Now().UTC()},
+		{ID: "run2miss", RunID: "run-2", Package: "engineering-review", Kind: KindMiss, Status: StatusNew, Title: "Individual evidence", CreatedAt: time.Now().UTC()},
+	} {
+		if err := SaveResult(state, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake := &fakeIssueClient{}
+	resolve := func(string) (string, error) { return pkg, nil }
+	first, err := AutoIssueRun(state, "run-1", AutoIssueOptions{ResolvePackage: resolve, IssueClient: fake})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := AutoIssueRun(state, "run-2", AutoIssueOptions{ResolvePackage: resolve, IssueClient: fake})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || len(second) != 1 || !second[0].IssueReused || fake.createCount != 1 {
+		t.Fatalf("first=%+v second=%+v creates=%d", first, second, fake.createCount)
+	}
+	if _, err := os.Stat(filepath.Join(pkg, "docs", "train-drafts")); !os.IsNotExist(err) {
+		t.Fatalf("automatic issue creation wrote local drafts: %v", err)
+	}
+	miss, err := Get(state, "run2miss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if miss.Status != StatusNew {
+		t.Fatalf("individual miss status=%s want new evidence", miss.Status)
 	}
 }
 

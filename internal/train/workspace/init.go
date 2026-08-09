@@ -64,6 +64,13 @@ run:
   # Parallel PR collect (GitHub HTTP API). Default 4; raise carefully to avoid rate limits.
   # Local package runs stay serialized (safe to edit drafts in another turn).
   concurrency: 4
+  # only: [engineering-review]
+  # exclude: [torvalds]
+
+# Successful live runs open deduplicated GitHub issues for consolidated drafts
+# and false-positive fixes. Individual misses remain local evidence.
+issues:
+  enabled: true
 
 state_dir: .adversary-train
 `
@@ -76,6 +83,8 @@ type InitOptions struct {
 	Force bool
 	// SinglePackage sets adversaries.path: . instead of root: ./adversaries.
 	SinglePackage bool
+	// AllAdversaries scans sibling package repositories under the workspace.
+	AllAdversaries bool
 }
 
 // InitResult summarizes what was written.
@@ -116,8 +125,18 @@ func Init(opts InitOptions) (InitResult, error) {
 				"  # root: ./adversaries\n  path: .",
 				1)
 		}
+		if opts.AllAdversaries {
+			body = strings.Replace(body,
+				"  root: ./adversaries",
+				"  root: .",
+				1)
+			body = strings.Replace(body,
+				"  # exclude: [torvalds]",
+				"  exclude: [torvalds]",
+				1)
+		}
 		// Detect single package if adversary.yaml at root
-		if !opts.SinglePackage {
+		if !opts.SinglePackage && !opts.AllAdversaries {
 			if _, e := os.Stat(filepath.Join(abs, "adversary.yaml")); e == nil {
 				if _, e2 := os.Stat(filepath.Join(abs, "adversaries")); e2 != nil {
 					body = strings.Replace(body,
