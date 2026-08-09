@@ -78,7 +78,7 @@ func NewModelIssueBriefWriterFromEnvironment(lookup modelreview.LookupEnv, clien
 		case "fireworks":
 			model = "accounts/fireworks/models/llama-v3p1-70b-instruct"
 		default:
-			model = "gpt-4o-mini"
+			model = "gpt-5-mini"
 		}
 	}
 	provider, err := modelreview.ProviderFromConfig(modelreview.Config{
@@ -145,13 +145,12 @@ Return only the requested structured JSON.`,
 	if err := validateIssueBrief(brief); err != nil {
 		return IssueBrief{}, err
 	}
+	// Always give the brief a final editorial pass. Identifier reuse is one
+	// symptom of overfitting, but live drafts can remain source-specific while
+	// replacing exact symbols with near-synonyms.
 	identifiers := sourceIdentifiers(in.Evidence)
-	if briefUsesSourceIdentifiers(brief, identifiers) {
-		// Refinement improves portability, but the grounded first draft is still
-		// preferable to the generic deterministic fallback if this edit fails.
-		if refined, err := w.refineIssueBrief(ctx, in, brief, identifiers); err == nil {
-			brief = refined
-		}
+	if refined, err := w.refineIssueBrief(ctx, in, brief, identifiers); err == nil {
+		brief = refined
 	}
 	return brief, nil
 }
@@ -171,7 +170,7 @@ func (w *modelIssueBriefWriter) refineIssueBrief(ctx context.Context, in IssueBr
 	}
 	result, err := w.provider.Review(ctx, modelreview.Request{
 		ProtocolVersion: modelreview.ProtocolVersion,
-		Prompt: `Edit a draft GitHub issue for a code-review adversary. The draft was rejected because it copied source-specific code identifiers instead of expressing a reusable review capability.
+		Prompt: `Perform the final editorial pass on a draft GitHub issue for a code-review adversary. Turn one source discovery into a narrow, reusable review capability rather than a description of the source comment or repository.
 
 Return a revised brief that:
 - preserves the evidence's exact causal mechanism and stays inside the package scope;

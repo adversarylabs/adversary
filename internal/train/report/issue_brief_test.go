@@ -18,10 +18,28 @@ type fixtureBriefProvider struct {
 	request modelreview.Request
 }
 
+func TestIssueBriefWriterDefaultsToHigherQualityOpenAIModel(t *testing.T) {
+	writer, err := NewModelIssueBriefWriterFromEnvironment(func(key string) (string, bool) {
+		if key == modelreview.OpenAIKeyEnv {
+			return "test-key", true
+		}
+		return "", false
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelWriter, ok := writer.(*modelIssueBriefWriter)
+	if !ok || modelWriter.provider.Model() != "gpt-5-mini" {
+		t.Fatalf("default issue brief model=%T/%q", writer, modelWriter.provider.Model())
+	}
+}
+
 func (p *fixtureBriefProvider) Name() string  { return "fixture" }
 func (p *fixtureBriefProvider) Model() string { return "fixture" }
 func (p *fixtureBriefProvider) Review(_ context.Context, request modelreview.Request) (modelreview.Result, error) {
-	p.request = request
+	if p.request.Prompt == "" {
+		p.request = request
+	}
 	return modelreview.Result{Output: json.RawMessage(`{
   "title": "Flag unrelated behavior that makes a change unsafe to roll back",
   "intent": "Review the changed code as one engineering unit and call out behavior that has no necessary relationship to the main implementation story.",
