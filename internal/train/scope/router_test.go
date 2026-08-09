@@ -166,3 +166,30 @@ func TestRouterBroadGeneralistKeepsNits(t *testing.T) {
 		t.Fatalf("got owner=%q decision=%s reason=%s", route.OwnerID, route.Decision, route.Reason)
 	}
 }
+
+func TestRouteLLMDecisionRequiresGoldQualityGates(t *testing.T) {
+	candidates := []Candidate{{ID: "engineering-review"}, {ID: "go-concurrency"}}
+	base := routeDecision{
+		OwnerID: "engineering-review", Material: true, Actionable: true,
+		ChangeLocal: true, EngineeringPrimary: true,
+	}
+	if got := routeFromLLMDecision(base, candidates); got.OwnerID != "engineering-review" || got.Decision != InScope {
+		t.Fatalf("valid engineering route rejected: %+v", got)
+	}
+
+	for name, mutate := range map[string]func(*routeDecision){
+		"immaterial":         func(d *routeDecision) { d.Material = false },
+		"not-actionable":     func(d *routeDecision) { d.Actionable = false },
+		"pre-existing":       func(d *routeDecision) { d.ChangeLocal = false },
+		"specialist-primary": func(d *routeDecision) { d.EngineeringPrimary = false },
+	} {
+		t.Run(name, func(t *testing.T) {
+			decision := base
+			mutate(&decision)
+			got := routeFromLLMDecision(decision, candidates)
+			if got.OwnerID != "" || got.Decision != OutOfScope {
+				t.Fatalf("gate accepted %+v", got)
+			}
+		})
+	}
+}

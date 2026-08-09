@@ -217,3 +217,24 @@ func TestSuggestIssuesDraftsLocalOwnerOnly(t *testing.T) {
 		t.Fatalf("official catch should suppress local draft:\n%s", raw2)
 	}
 }
+
+func TestEngineeringReviewConcernClassesClusterByPrinciple(t *testing.T) {
+	cases := []struct {
+		summary string
+		wantKey string
+	}{
+		{"The same validation regex is duplicated in two places.", "source-of-truth"},
+		{"This serializes every manifest although the result is not used.", "proportional-work"},
+		{"The public contract changes but the downstream adapter still rejects the value.", "contract-integrity"},
+		{"This bypasses the private boundary instead of using the trait.", "ownership-boundaries"},
+		{"The asynchronous refresh can consume stale state in a race condition.", "state-lifecycle"},
+		{"The test reaches the branch but does not assert the externally visible result.", "meaningful-validation"},
+		{"This major version update has no compatibility analysis.", "compatibility-operations"},
+	}
+	for _, tc := range cases {
+		key, _ := classifyConcernClass("engineering-review", tc.summary)
+		if key != tc.wantKey {
+			t.Errorf("summary %q: key=%q want %q", tc.summary, key, tc.wantKey)
+		}
+	}
+}

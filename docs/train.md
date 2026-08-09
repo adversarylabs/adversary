@@ -182,6 +182,9 @@ adversary train results apply <id>
 adversary train results apply --all
 adversary train results apply --all --no-issue   # local draft only
 adversary train results apply --all --no-git     # skip branch/commit helpers
+# Bulk apply opens clustered draft / false-positive issues, not one issue per comment.
+adversary train results apply --all --include-individual-issues  # also file each miss
+adversary train results apply --all --include-human-issues  # also file human-gold issues
 adversary train results dismiss <id>
 ```
 
@@ -199,17 +202,17 @@ For each applied result:
 | Artifact | Purpose |
 |----------|---------|
 | `docs/train-drafts/<id>.md` | Local miss brief: spirit, when to post, variance |
-| GitHub issue on **package** remote | Agent-ready task (unless `--no-issue`) |
+| GitHub issue on **package** remote | Agent-ready task for eligible rows (unless `--no-issue`) |
 
-For **human** miss/human gold, issues also require **voice banking**: append a
-short human excerpt to `agent/voice.md` example bank (style few-shot only)—not
-a hard-coded finding string in `src/`. See [comment voice](./voice.md).
+Human wording is detection evidence for policy and specialist packages. Only
+persona packages bank a short excerpt in `agent/voice.md`; automatically
+appending every policy miss would couple detector content to rewrite voice.
 
 Implement:
 
-1. **Detection** — fire this *class* when appropriate (scope + rules/tests).  
-2. **Voice** — bank human wording for rewrite cadence (persona packages).  
-3. **Tests/fixtures** for the class, not one PR-specific sentence.  
+1. **Detection** — fire this *class* when appropriate (scope + rules/tests).
+2. **Voice** — bank human wording for rewrite cadence only for persona packages.
+3. **Tests/fixtures** for the class, not one PR-specific sentence.
 
 Do **not** bank synthetic train draft titles or false-positive rows into voice.
 
@@ -230,7 +233,7 @@ the product; specialists should not dump leftovers onto a random sibling.
 | Feature | Role in train |
 |---------|----------------|
 | **`uses` composition** | Run entrypoints expand members for *product* review; train still grades **local package ids** that own scope/drafts |
-| **`agent/voice.md`** | Bank human gold on apply; CLI rewrite uses voice at `--github-review` time |
+| **`agent/voice.md`** | Persona packages bank human cadence; policy/specialist packages keep gold as detection evidence |
 | **Official jury** | Catches gold so you don’t re-implement catalog specialists locally |
 
 Train drafts improve **your** package tree. Shipping still uses `pack` / `push`
@@ -260,7 +263,7 @@ adversary train reset              # clear seen-PR discovery (re-hunt)
 | No in-scope gold | Scope too narrow, or authors/repos filters exclude real reviews |
 | Everything out of scope | Scope missing or package not discovered (`path` / `root` wrong) |
 | Drafts want you to clone `go/security` | Official jury off, or local scope steals catalog gold — enable jury / narrow scope |
-| Voice bank polluted | Applied draft/FP rows; only bank **human** miss/human gold |
+| Voice bank polluted | Applied policy/specialist gold or synthetic rows; only persona packages bank **human** wording |
 | Apply issue fails | Token lacks `issues:write` on package remote — use `--no-issue` for local draft |
 
 ## Command cheat sheet

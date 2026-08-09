@@ -12,7 +12,7 @@ func TestHeuristicSuggestionDocOutOfScope(t *testing.T) {
 }
 
 func TestHeuristicRaceInScope(t *testing.T) {
-	c := &Classifier{AdversaryName: "engineering-review", UseLLM: false}
+	c := &Classifier{AdversaryName: "go-concurrency", UseLLM: false}
 	body := "There is a data race on the bounds slice when Observe is concurrent with View reconfiguration."
 	r := c.Classify(body, "sdk/metric/histogram.go", "alice")
 	if r.Decision != InScope {
@@ -21,7 +21,7 @@ func TestHeuristicRaceInScope(t *testing.T) {
 }
 
 func TestHeuristicNilLeakInScope(t *testing.T) {
-	c := &Classifier{AdversaryName: "engineering-review", UseLLM: false}
+	c := &Classifier{AdversaryName: "go-concurrency", UseLLM: false}
 	body := "This goroutine can leak after Shutdown if the context is not cancelled."
 	r := c.Classify(body, "sdk/trace/span_processor.go", "bob")
 	if r.Decision != InScope {
