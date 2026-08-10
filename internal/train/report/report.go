@@ -510,6 +510,16 @@ func writePRSection(b *strings.Builder, c *cases.Case, j *judge.ReviewJudgment, 
 
 	if len(approved) == 0 {
 		b.WriteString("No human concerns were **in scope** for engineering-review on this PR (so we do not grade misses here).\n\n")
+	} else if j == nil {
+		fmt.Fprintf(b, "Human supplied **%d** potential in-scope concern(s), but the routed adversary review did not complete:\n\n", len(approved))
+		for _, e := range approved {
+			owner := e.OwnerAdversary
+			if owner == "" {
+				owner = "engineering-review"
+			}
+			fmt.Fprintf(b, "- **Ungraded for `%s`.** Human concern: %s\n", owner, e.Summary)
+		}
+		b.WriteString("\nThese concerns remain evidence only; they are not misses and cannot justify an adversary improvement until a review executes successfully.\n\n")
 	} else {
 		fmt.Fprintf(b, "Human raised **%d** in-scope issue(s) (routed to an adversary):\n\n", len(approved))
 		for _, e := range approved {

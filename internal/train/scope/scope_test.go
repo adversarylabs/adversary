@@ -87,6 +87,27 @@ func TestBroadMissionRejectsPraiseButKeepsNits(t *testing.T) {
 	}
 }
 
+func TestAutomatedReviewArtifactBehindHumanAccountIsOutOfScope(t *testing.T) {
+	c := &Classifier{AdversaryName: "nits", UseLLM: false}
+	body := "This is a correct, minimal fix applied consistently across all handlers.\n\n- Worth a grep for any remaining copy.\n\n<!-- hermes-pr-review da4eaa1 -->"
+	r := c.Classify(body, "toolbar.tsx", "human-maintainer")
+	if r.Decision != OutOfScope {
+		t.Fatalf("embedded automation marker should prevent gold, got %s (%s)", r.Decision, r.Reason)
+	}
+}
+
+func TestDeclarativePraiseSummaryIsOutOfScope(t *testing.T) {
+	for _, body := range []string{
+		"This is a correct, minimal fix applied consistently across all handlers.",
+		"The fix is sound and well-scoped.",
+		"The change is a safe cleanup with no behavior change.",
+	} {
+		if reason, ok := NonActionableHumanComment(body); !ok {
+			t.Errorf("praise remained actionable: %q (%s)", body, reason)
+		}
+	}
+}
+
 func TestBroadScopeMissionDetection(t *testing.T) {
 	if !BroadScopeMission("torvalds", "") {
 		t.Fatal("torvalds id should be broad")
