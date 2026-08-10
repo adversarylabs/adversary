@@ -35,6 +35,15 @@ func AdversaryCyclePath(dataRoot string) string {
 
 // LoadAdversaryCycle loads or initializes the durable target scheduler.
 func LoadAdversaryCycle(dataRoot string) (*AdversaryCycleState, error) {
+	lock, err := publock.Acquire(dataRoot, "adversary-train-cycle")
+	if err != nil {
+		return nil, fmt.Errorf("lock adversary cycle state: %w", err)
+	}
+	defer lock.Close()
+	return loadAdversaryCycleUnlocked(dataRoot)
+}
+
+func loadAdversaryCycleUnlocked(dataRoot string) (*AdversaryCycleState, error) {
 	path := AdversaryCyclePath(dataRoot)
 	state := &AdversaryCycleState{
 		SchemaVersion: 1,
@@ -102,7 +111,7 @@ func (s *AdversaryCycleState) Select(ids []string, runID string) (string, error)
 
 	// Reload while holding the cross-process lock. Callers may have loaded an
 	// earlier snapshot before another train process selected its target.
-	fresh, err := LoadAdversaryCycle(dataRoot)
+	fresh, err := loadAdversaryCycleUnlocked(dataRoot)
 	if err != nil {
 		return "", err
 	}
@@ -116,7 +125,7 @@ func (s *AdversaryCycleState) Select(ids []string, runID string) (string, error)
 	record.LastRun = runID
 	fresh.Targets[id] = record
 	fresh.LastTarget = id
-	if err := fresh.Save(); err != nil {
+	if err := fresh.saveUnlocked(); err != nil {
 		return "", err
 	}
 	*s = *fresh
@@ -128,6 +137,16 @@ func (s *AdversaryCycleState) Save() error {
 	if s == nil || s.path == "" {
 		return fmt.Errorf("nil adversary cycle state")
 	}
+	dataRoot := filepath.Dir(filepath.Dir(s.path))
+	lock, err := publock.Acquire(dataRoot, "adversary-train-cycle")
+	if err != nil {
+		return fmt.Errorf("lock adversary cycle state: %w", err)
+	}
+	defer lock.Close()
+	return s.saveUnlocked()
+}
+
+func (s *AdversaryCycleState) saveUnlocked() error {
 	raw, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
