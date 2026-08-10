@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,25 @@ import (
 
 type fixtureBriefProvider struct {
 	request modelreview.Request
+}
+
+type fixtureAssessmentProvider struct {
+	request    modelreview.Request
+	detectable bool
+	abstract   bool
+}
+
+func (p *fixtureAssessmentProvider) Name() string  { return "fixture" }
+func (p *fixtureAssessmentProvider) Model() string { return "fixture" }
+func (p *fixtureAssessmentProvider) Review(_ context.Context, request modelreview.Request) (modelreview.Result, error) {
+	p.request = request
+	return modelreview.Result{Output: json.RawMessage(fmt.Sprintf(`{
+  "should_abstract": %t,
+  "reason": "The finding identifies a transferable changed-code mechanism rather than a repository preference.",
+  "causal_mechanism": "A newly added operation duplicates a guarantee already provided on every downstream route and obscures ownership.",
+  "transfer_test": "The same issue appears in rendering and storage pipelines, while a bypass route is a counterexample.",
+  "detectable_in_diff": %t
+}`, p.abstract, p.detectable))}, nil
 }
 
 func TestIssueBriefWriterDefaultsToHigherQualityOpenAIModel(t *testing.T) {
@@ -102,6 +122,43 @@ func TestModelIssueBriefWriterSynthesizesIntent(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered brief missing %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestModelIssueAbstractionJudgeAdmitsReusableSingleton(t *testing.T) {
+	provider := &fixtureAssessmentProvider{abstract: true, detectable: true}
+	writer := &modelIssueBriefWriter{provider: provider}
+	assessment, err := writer.AssessIssueAbstraction(context.Background(), IssueBriefInput{
+		Package:      "engineering-review",
+		PackageScope: "Staff-level review of correctness and maintainability.",
+		ConcernClass: "redundant-operation",
+		Evidence:     []IssueBriefEvidence{{Concern: "Every downstream route already performs this transformation."}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !assessment.ShouldAbstract || !assessment.DetectableInDiff {
+		t.Fatalf("reusable singleton rejected: %#v", assessment)
+	}
+	if !strings.Contains(provider.request.Prompt, "One source PR is sufficient") ||
+		!strings.Contains(provider.request.Prompt, "two concrete hypothetical examples") ||
+		!strings.Contains(provider.request.Prompt, "changed head-side code") {
+		t.Fatalf("abstraction prompt is missing admission safeguards:\n%s", provider.request.Prompt)
+	}
+}
+
+func TestModelIssueAbstractionJudgeRejectsUnavailableInput(t *testing.T) {
+	provider := &fixtureAssessmentProvider{abstract: true, detectable: false}
+	writer := &modelIssueBriefWriter{provider: provider}
+	assessment, err := writer.AssessIssueAbstraction(context.Background(), IssueBriefInput{
+		Package:  "engineering-review",
+		Evidence: []IssueBriefEvidence{{Concern: "The PR description promised behavior absent from the implementation."}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.ShouldAbstract {
+		t.Fatalf("metadata-dependent singleton admitted: %#v", assessment)
 	}
 }
 
@@ -207,6 +264,54 @@ func (w *captureBriefWriter) WriteIssueBrief(_ context.Context, in IssueBriefInp
 			"A cohesive cross-layer change remains quiet.",
 		},
 	}, nil
+}
+
+type judgingBriefWriter struct {
+	captureBriefWriter
+	assessment IssueAbstractionAssessment
+	writes     int
+}
+
+func (w *judgingBriefWriter) AssessIssueAbstraction(_ context.Context, _ IssueBriefInput) (IssueAbstractionAssessment, error) {
+	return w.assessment, nil
+}
+
+func (w *judgingBriefWriter) WriteIssueBrief(ctx context.Context, in IssueBriefInput) (IssueBrief, error) {
+	w.writes++
+	return w.captureBriefWriter.WriteIssueBrief(ctx, in)
+}
+
+func TestSuggestIssuesLetsAbstractionJudgeDecideSingletons(t *testing.T) {
+	c := &cases.Case{
+		ID:         "case-singleton",
+		Repository: cases.Repository{URL: "https://github.com/acme/one/pull/1"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "redundant", Summary: "Every downstream route already performs this transformation.",
+			OwnerAdversary: "engineering-review", Approved: true,
+		}}},
+	}
+	failure := judge.Failure{CaseID: c.ID, Kind: "missed-concern", ConcernID: "redundant", ReviewerID: "engineering-review"}
+	sc := score.Aggregate("engineering-review", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "engineering-review", ExpectedMissed: []string{"redundant"}},
+	}, []judge.Failure{failure})
+
+	accepted := &judgingBriefWriter{assessment: IssueAbstractionAssessment{
+		ShouldAbstract: true, DetectableInDiff: true, Reason: "reusable", CausalMechanism: "duplicate guarantee", TransferTest: "two domains",
+	}}
+	issues := suggestIssues(Input{Scorecard: sc, Cases: []*cases.Case{c}, LocalIDs: map[string]bool{"engineering-review": true}, IssueBriefWriter: accepted})
+	if len(issues) != 1 || accepted.writes != 1 || len(accepted.input.Evidence) != 1 {
+		t.Fatalf("accepted singleton did not produce one issue: issues=%#v writer=%#v", issues, accepted)
+	}
+
+	rejected := &judgingBriefWriter{assessment: IssueAbstractionAssessment{
+		ShouldAbstract: false, DetectableInDiff: true, Reason: "one-off preference", CausalMechanism: "none", TransferTest: "does not transfer",
+	}}
+	if issues := suggestIssues(Input{Scorecard: sc, Cases: []*cases.Case{c}, LocalIDs: map[string]bool{"engineering-review": true}, IssueBriefWriter: rejected}); len(issues) != 0 {
+		t.Fatalf("rejected singleton produced an issue: %#v", issues)
+	}
+	if rejected.writes != 0 {
+		t.Fatalf("rejected singleton still invoked brief writer %d time(s)", rejected.writes)
+	}
 }
 
 type unavailableInputBriefWriter struct{}

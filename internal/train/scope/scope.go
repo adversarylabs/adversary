@@ -616,13 +616,28 @@ func isContributionChatter(lower string) bool {
 
 func isAuthorStatusUpdate(lower string) bool {
 	trim := strings.TrimSpace(lower)
+	if hasReviewRequest(lower) {
+		return false
+	}
 	statusStart := []string{"fixed", "updated", "addressed", "implemented", "done", "resolved", "reproduced", "confirmed"}
 	for _, marker := range statusStart {
-		if hasStatusPrefix(trim, marker) && !hasReviewRequest(lower) {
+		if hasStatusPrefix(trim, marker) {
 			return true
 		}
 	}
-	return (strings.Contains(lower, "i'll revert") || strings.Contains(lower, "i will revert")) && !hasReviewRequest(lower)
+	firstPersonCompletions := []string{
+		"i fixed ", "i've fixed ", "i have fixed ",
+		"i updated ", "i've updated ", "i have updated ",
+		"i addressed ", "i've addressed ", "i have addressed ",
+		"i implemented ", "i've implemented ", "i have implemented ",
+		"i added test", "i've added test", "i have added test",
+	}
+	for _, marker := range firstPersonCompletions {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return strings.Contains(lower, "i'll revert") || strings.Contains(lower, "i will revert")
 }
 
 func hasStatusPrefix(s, marker string) bool {

@@ -51,14 +51,15 @@ type Input struct {
 	// Nil uses a concise deterministic fallback (fixtures and credential-less runs).
 	IssueBriefWriter IssueBriefWriter
 	// PriorMisses are individual, locally persisted misses from earlier runs.
-	// They may corroborate a current miss, but never produce a draft by
-	// themselves. This lets --max-prs 1 accumulate evidence safely over time.
+	// They may enrich a current candidate, but never produce a draft by
+	// themselves. A live abstraction judge decides whether one or more examples
+	// express a reusable capability.
 	PriorMisses []MissEvidence
 }
 
 // MissEvidence is the durable subset of an individual missed concern used to
-// decide whether a reusable improvement is corroborated across pull requests.
-// Individual miss rows remain the source of truth; this is only a report input.
+// enrich a reusable-improvement decision. Individual miss rows remain the
+// source of truth; this is only a report input.
 type MissEvidence struct {
 	Package string
 	Summary string
@@ -777,9 +778,8 @@ func suggestIssues(in Input) []SuggestedIssue {
 		addCorroboratingEvidence(bkt, reviewLink(c), ev)
 	}
 
-	// A single review comment is useful local evidence, but it is not enough to
-	// open maintainer work. Only prior misses with the same package and intent
-	// may corroborate a bucket touched by this run.
+	// Prior misses with the same package and intent enrich a bucket touched by
+	// this run. They are useful evidence, but are no longer a hard admission gate.
 	for _, prior := range in.PriorMisses {
 		owner := strings.ToLower(strings.TrimSpace(prior.Package))
 		if owner == "" || strings.TrimSpace(prior.Summary) == "" ||
@@ -809,11 +809,13 @@ func suggestIssues(in Input) []SuggestedIssue {
 		owner string
 		bkt   *issueBucket
 		brief IssueBrief
+		emit  bool
 	}
 	var candidates []issueCandidate
+	_, hasAbstractionJudge := in.IssueBriefWriter.(IssueAbstractionJudge)
 	for _, k := range keys {
 		bkt := buckets[k]
-		if !bkt.touched || len(bkt.sources) < 2 {
+		if !bkt.touched || (len(bkt.sources) < 2 && !hasAbstractionJudge) {
 			continue
 		}
 		owner := ""
@@ -827,6 +829,7 @@ func suggestIssues(in Input) []SuggestedIssue {
 			owner: owner,
 			bkt:   bkt,
 			brief: fallbackIssueBrief(owner, bkt.fallbackTitle, bkt.evidence),
+			emit:  true,
 		})
 	}
 	if in.IssueBriefWriter != nil && len(candidates) > 0 {
@@ -843,14 +846,34 @@ func suggestIssues(in Input) []SuggestedIssue {
 				defer wg.Done()
 				for i := range jobs {
 					candidate := &candidates[i]
-					generated, err := in.IssueBriefWriter.WriteIssueBrief(ctx, IssueBriefInput{
+					briefInput := IssueBriefInput{
 						Package:      candidate.owner,
 						PackageScope: in.PackageScopes[strings.ToLower(candidate.owner)],
 						ConcernClass: candidate.bkt.classKey,
 						Evidence:     candidate.bkt.evidence,
-					})
+					}
+					if abstractionJudge, ok := in.IssueBriefWriter.(IssueAbstractionJudge); ok {
+						assessment, err := abstractionJudge.AssessIssueAbstraction(ctx, briefInput)
+						if err != nil {
+							candidate.emit = false
+							fmt.Fprintf(os.Stderr, "warning: train abstraction judgment for %s: %v (candidate kept as local evidence)\n", candidate.owner, err)
+							continue
+						}
+						if !assessment.ShouldAbstract {
+							candidate.emit = false
+							fmt.Fprintf(os.Stderr, "note: train abstraction judgment for %s rejected candidate: %s\n", candidate.owner, softWrap(assessment.Reason, 240))
+							continue
+						}
+						fmt.Fprintf(os.Stderr, "note: train abstraction judgment for %s admitted candidate: %s\n", candidate.owner, softWrap(assessment.Reason, 240))
+					}
+					generated, err := in.IssueBriefWriter.WriteIssueBrief(ctx, briefInput)
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "warning: train issue brief for %s: %v (using concise fallback)\n", candidate.owner, err)
+						if len(candidate.bkt.sources) < 2 {
+							candidate.emit = false
+							fmt.Fprintf(os.Stderr, "warning: train issue brief for %s: %v (singleton kept as local evidence)\n", candidate.owner, err)
+							continue
+						}
+						fmt.Fprintf(os.Stderr, "warning: train issue brief for %s: %v (using corroborated fallback)\n", candidate.owner, err)
 						continue
 					}
 					candidate.brief = generated
@@ -865,7 +888,7 @@ func suggestIssues(in Input) []SuggestedIssue {
 	}
 	out := make([]SuggestedIssue, 0, len(candidates))
 	for _, candidate := range candidates {
-		if unavailableIssueBriefReason(candidate.brief) != "" {
+		if !candidate.emit || unavailableIssueBriefReason(candidate.brief) != "" {
 			continue
 		}
 		out = append(out, SuggestedIssue{
