@@ -9,6 +9,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/adversaries"
 	"github.com/adversarylabs/adversary/internal/train/cases"
 	"github.com/adversarylabs/adversary/internal/train/receipt"
+	"github.com/adversarylabs/adversary/internal/train/results"
 )
 
 func TestResolvePrimaryAdversaryName(t *testing.T) {
@@ -95,6 +96,29 @@ func TestGradeOwnersRunsOnlyRoutedPackages(t *testing.T) {
 	}
 	if _, ok := owners["engineering-review"]; ok {
 		t.Fatalf("unrouted package must not run: %#v", owners)
+	}
+}
+
+func TestEligiblePriorMissRejectsLegacyConversationNoise(t *testing.T) {
+	base := results.Result{
+		Kind:    results.KindMiss,
+		Status:  results.StatusNew,
+		PRURL:   "https://github.com/acme/project/pull/1",
+		Summary: "The parser accepts an invalid empty identifier.",
+	}
+	if !eligiblePriorMiss(base) {
+		t.Fatal("actionable historical miss should remain eligible")
+	}
+	for _, summary := range []string{
+		"Fixed in 5fbd67d.",
+		"Overall: this is a correct, behavior-preserving cleanup.",
+		"We don't need to worry because this is working as intended.",
+	} {
+		row := base
+		row.Summary = summary
+		if eligiblePriorMiss(row) {
+			t.Errorf("legacy conversation noise remained eligible: %q", summary)
+		}
 	}
 }
 
