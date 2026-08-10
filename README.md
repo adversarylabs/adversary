@@ -225,6 +225,14 @@ adversary train run
 adversary train results ls
 ```
 
+In a workspace of sibling packages, repeat the following for durable
+round-robin coverage. Each target gets independent discovery memory; the
+separately trained `torvalds` package is excluded automatically.
+
+```sh
+adversary train run --cycle-adversaries --max-prs 1
+```
+
 `train run` opens issues for consolidated drafts and false-positive fixes by
 default. Individual misses remain in the local results database as evidence.
 Use `--no-issues` when you want a local-only run.

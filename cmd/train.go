@@ -12,6 +12,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/pipeline"
 	"github.com/adversarylabs/adversary/internal/train/repos"
 	"github.com/adversarylabs/adversary/internal/train/results"
+	trainstate "github.com/adversarylabs/adversary/internal/train/state"
 	"github.com/adversarylabs/adversary/internal/train/workspace"
 	"github.com/spf13/cobra"
 )
@@ -95,19 +96,20 @@ authors, local packages, and official jury include/exclude before train run.`,
 
 func newTrainRunCommand(app *application.App) *cobra.Command {
 	var (
-		workspacePath  string
-		adversaryOnly  string
-		allAdversaries bool
-		excluded       []string
-		noIssues       bool
-		maxPRs         int
-		maxTurns       int
-		concurrency    int
-		resetDiscovery bool
-		fixture        bool
-		pr             int
-		owner          string
-		repo           string
+		workspacePath    string
+		adversaryOnly    string
+		allAdversaries   bool
+		cycleAdversaries bool
+		excluded         []string
+		noIssues         bool
+		maxPRs           int
+		maxTurns         int
+		concurrency      int
+		resetDiscovery   bool
+		fixture          bool
+		pr               int
+		owner            string
+		repo             string
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -119,6 +121,12 @@ Use --no-issues for a local-only run.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if adversaryOnly != "" && allAdversaries {
 				return fmt.Errorf("--adversary and --all-adversaries cannot be combined")
+			}
+			if adversaryOnly != "" && cycleAdversaries {
+				return fmt.Errorf("--adversary and --cycle-adversaries cannot be combined")
+			}
+			if allAdversaries && cycleAdversaries {
+				return fmt.Errorf("--all-adversaries and --cycle-adversaries cannot be combined")
 			}
 			ws := workspacePath
 			if ws == "" {
@@ -219,6 +227,10 @@ Use --no-issues for a local-only run.`,
 			}
 			trainExclude := append([]string{}, cfg.Run.Exclude...)
 			trainExclude = append(trainExclude, excluded...)
+			if cycleAdversaries {
+				// The Torvalds persona has a separate, intentionally bespoke trainer.
+				trainExclude = append(trainExclude, "torvalds")
+			}
 			if cfg.Adversaries.Path != "" {
 				p := cfg.Adversaries.Path
 				if !filepath.IsAbs(p) {
@@ -296,6 +308,7 @@ Use --no-issues for a local-only run.`,
 				LocalPackageDirs: localDirs,
 				TrainOnlyIDs:     trainOnly,
 				TrainExcludeIDs:  trainExclude,
+				CycleAdversaries: cycleAdversaries,
 				LocalIDs:         localIDs,
 				OfficialIDs:      officialIDs,
 				AuthorsOnly:      cfg.Sources.AuthorsOnly,
@@ -348,6 +361,9 @@ Use --no-issues for a local-only run.`,
 			}
 			if len(trainExclude) > 0 {
 				fmt.Fprintf(stderr, "  exclude: %v\n", trainExclude)
+			}
+			if cycleAdversaries {
+				fmt.Fprintln(stderr, "  targeting: persistent adversary round-robin (one package this run)")
 			}
 			if cfg.OfficialEnabled() && !fixture {
 				fmt.Fprintln(stderr, "  official jury: enabled (drafts for locals only)")
@@ -411,6 +427,7 @@ Use --no-issues for a local-only run.`,
 	cmd.Flags().StringVar(&workspacePath, "path", "", "workspace with adversary.train.yaml")
 	cmd.Flags().StringVar(&adversaryOnly, "adversary", "", "train only this local package id")
 	cmd.Flags().BoolVar(&allAdversaries, "all-adversaries", false, "route each comment to the best matching local adversary")
+	cmd.Flags().BoolVar(&cycleAdversaries, "cycle-adversaries", false, "target the next least-trained local adversary (one package per run; excludes torvalds)")
 	cmd.Flags().StringSliceVar(&excluded, "exclude-adversary", nil, "exclude a local adversary id (repeatable or comma-separated)")
 	cmd.Flags().BoolVar(&noIssues, "no-issues", false, "keep results local instead of creating GitHub issues")
 	cmd.Flags().IntVar(&maxPRs, "max-prs", 0, "override run.max_prs")
@@ -834,6 +851,35 @@ func newTrainStatusCommand(app *application.App) *cobra.Command {
 			fmt.Fprintf(out, "sources.authors_only: %v\n", cfg.Sources.AuthorsOnly)
 			fmt.Fprintf(out, "sources.authors_ignore: %v\n", cfg.Sources.AuthorsIgnore)
 			fmt.Fprintf(out, "run.max_prs: %d max_turns: %d\n", cfg.Run.MaxPRs, cfg.Run.MaxTurns)
+			wsRoot := filepath.Dir(cfgPath)
+			var cyclePackages []adversaries.Package
+			if cfg.Adversaries.Root != "" {
+				root := cfg.Adversaries.Root
+				if !filepath.IsAbs(root) {
+					root = filepath.Join(wsRoot, root)
+				}
+				cyclePackages, _ = adversaries.DiscoverRoot(root)
+			} else if cfg.Adversaries.Path != "" {
+				packagePath := cfg.Adversaries.Path
+				if !filepath.IsAbs(packagePath) {
+					packagePath = filepath.Join(wsRoot, packagePath)
+				}
+				cyclePackages, _ = adversaries.DiscoverRoot(packagePath)
+			}
+			cyclePackages = adversaries.FilterExcludedIDs(cyclePackages, append(append([]string{}, cfg.Run.Exclude...), "torvalds"))
+			if len(cyclePackages) > 0 {
+				cycle, cycleErr := trainstate.LoadAdversaryCycle(workspace.ResolveStateAbs(cfgPath, cfg.StateDirResolved()))
+				if cycleErr == nil {
+					ids := make([]string, 0, len(cyclePackages))
+					coverage := make([]string, 0, len(cyclePackages))
+					for _, pkg := range cyclePackages {
+						ids = append(ids, pkg.ID)
+						coverage = append(coverage, fmt.Sprintf("%s=%d", pkg.ID, cycle.Targets[pkg.ID].Selections))
+					}
+					fmt.Fprintf(out, "cycle.next: %s\n", cycle.Peek(ids))
+					fmt.Fprintf(out, "cycle.coverage: %s\n", strings.Join(coverage, " "))
+				}
+			}
 			if err := cfg.Validate(); err != nil {
 				fmt.Fprintf(out, "validate: ERROR: %v\n", err)
 			} else {

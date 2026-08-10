@@ -97,6 +97,11 @@ This writes `adversaries.root: .` and `run.exclude: [torvalds]`. One history
 discovery pass routes each human comment to the best matching local adversary,
 or to none when no scope is a good fit.
 
+For continuous, balanced improvement, add `--cycle-adversaries` to a run. Each
+invocation selects the least-trained eligible package, routes only against that
+scope, and stores seen-PR history separately for that target. This lets every
+specialist evaluate a source PR even when another package examined it earlier.
+
 `train init` also creates `.adversary-train/` and adds it to `.gitignore`.
 
 ## 2. Edit `adversary.train.yaml`
@@ -177,6 +182,10 @@ adversary train run --adversary my-policy
 # Explicitly route across every local package except selected exclusions
 adversary train run --all-adversaries --exclude-adversary torvalds
 
+# Persistent round-robin: target one least-trained package this invocation.
+# Repeat this command for continuous fair coverage; torvalds is always excluded.
+adversary train run --cycle-adversaries --max-prs 1
+
 # Cap work / debug one PR
 adversary train run --max-prs 10
 adversary train run --owner acme --repo service --pr 123
@@ -188,7 +197,7 @@ adversary train run --reset-discovery
 
 What happens:
 
-1. Discover PRs from config (repos or author_reviews).  
+1. Select the next target first in cycle mode, then discover PRs from config (repos or author_reviews).
 2. Collect human review comments (gold).  
 3. Route each comment to the single best matching local package, or none.
 4. Run the selected local packages (and optional official jury) against the change.
@@ -311,7 +320,7 @@ adversary train reset              # clear seen-PR discovery (re-hunt)
 
 ```sh
 adversary train init [--single-package | --all-adversaries] [--path DIR] [--force]
-adversary train run [--adversary ID | --all-adversaries] [--exclude-adversary ID] [--no-issues] [--path DIR]
+adversary train run [--adversary ID | --all-adversaries | --cycle-adversaries] [--exclude-adversary ID] [--no-issues] [--path DIR]
 adversary train results ls|inspect|apply|dismiss
 adversary train status
 adversary train story

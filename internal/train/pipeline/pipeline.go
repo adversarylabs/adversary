@@ -30,6 +30,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/scope"
 	"github.com/adversarylabs/adversary/internal/train/score"
 	"github.com/adversarylabs/adversary/internal/train/securefs"
+	"github.com/adversarylabs/adversary/internal/train/state"
 )
 
 // Options for the first-slice end-to-end path.
@@ -74,6 +75,12 @@ type Options struct {
 	TrainOnlyIDs []string
 	// TrainExcludeIDs removes locals from routing after TrainOnlyIDs is applied.
 	TrainExcludeIDs []string
+	// CycleAdversaries selects one least-trained local package for this run.
+	// Selection is durable across invocations and uses per-target PR memory.
+	CycleAdversaries bool
+	// DiscoveryNamespace isolates seen-PR state. Cycle mode sets this to the
+	// selected package id so every specialist can examine the same source PR.
+	DiscoveryNamespace string
 	// LocalIDs marks package ids that may receive train drafts (home-grown).
 	// If empty, inferred from LocalPackageDirs/Root.
 	LocalIDs []string
@@ -264,6 +271,23 @@ func Run(opts Options) (*Result, error) {
 			}
 			if len(siblingPkgs) == 0 {
 				return nil, fmt.Errorf("no local adversary packages remain for train routing (only=%v exclude=%v)", opts.TrainOnlyIDs, opts.TrainExcludeIDs)
+			}
+			if opts.CycleAdversaries {
+				cycle, err := state.LoadAdversaryCycle(opts.DataRoot)
+				if err != nil {
+					return nil, fmt.Errorf("load adversary cycle: %w", err)
+				}
+				targetID, err := cycle.Select(packageIDs(siblingPkgs), runID)
+				if err != nil {
+					return nil, err
+				}
+				siblingPkgs = adversaries.FilterByIDs(siblingPkgs, []string{targetID})
+				if len(siblingPkgs) != 1 {
+					return nil, fmt.Errorf("round-robin target %q is not available locally", targetID)
+				}
+				opts.AdversaryName = targetID
+				opts.DiscoveryNamespace = targetID
+				fmt.Fprintf(os.Stderr, "Round-robin target: %s (target-scoped discovery state)\n", targetID)
 			}
 			var cands []scope.Candidate
 			for _, p := range siblingPkgs {

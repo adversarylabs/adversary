@@ -89,7 +89,7 @@ func runParallelHunt(
 				return out
 			}
 		}
-		store, err := state.LoadDiscovery(dataRoot, owner, name)
+		store, err := state.LoadDiscoveryForTarget(dataRoot, opts.DiscoveryNamespace, owner, name)
 		if err != nil {
 			out.interrupted = err
 			return out
@@ -135,7 +135,7 @@ func runParallelHunt(
 		if s, ok := stores[key]; ok {
 			return s, nil
 		}
-		s, err := state.LoadDiscovery(dataRoot, owner, name)
+		s, err := state.LoadDiscoveryForTarget(dataRoot, opts.DiscoveryNamespace, owner, name)
 		if err != nil {
 			return nil, err
 		}

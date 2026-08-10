@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,9 +55,29 @@ func PathFor(dataRoot, owner, repo string) string {
 	return filepath.Join(dataRoot, "state", "discovery", owner+"__"+repo+".json")
 }
 
+// PathForTarget returns the discovery state path for one target adversary.
+// Target-scoped state lets the same PR be considered independently by each
+// specialist instead of a broad package consuming it for the whole workspace.
+func PathForTarget(dataRoot, target, owner, repo string) string {
+	target = safeStateComponent(target)
+	if target == "" {
+		return PathFor(dataRoot, owner, repo)
+	}
+	return filepath.Join(dataRoot, "state", "discovery", "targets", target, owner+"__"+repo+".json")
+}
+
 // LoadDiscovery loads or creates an empty store for owner/repo.
 func LoadDiscovery(dataRoot, owner, repo string) (*DiscoveryStore, error) {
-	path := PathFor(dataRoot, owner, repo)
+	return loadDiscoveryAt(PathFor(dataRoot, owner, repo), owner, repo)
+}
+
+// LoadDiscoveryForTarget loads discovery memory isolated to target. Empty
+// target preserves the legacy workspace-wide discovery behavior.
+func LoadDiscoveryForTarget(dataRoot, target, owner, repo string) (*DiscoveryStore, error) {
+	return loadDiscoveryAt(PathForTarget(dataRoot, target, owner, repo), owner, repo)
+}
+
+func loadDiscoveryAt(path, owner, repo string) (*DiscoveryStore, error) {
 	s := &DiscoveryStore{
 		SchemaVersion: 1,
 		Owner:         owner,
@@ -81,6 +102,14 @@ func LoadDiscovery(dataRoot, owner, repo string) (*DiscoveryStore, error) {
 	s.Owner = owner
 	s.Repo = repo
 	return s, nil
+}
+
+func safeStateComponent(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, "/", "-")
+	value = strings.ReplaceAll(value, "\\", "-")
+	value = strings.ReplaceAll(value, "..", "-")
+	return value
 }
 
 // Seen returns true if we should skip this PR in normal discovery.

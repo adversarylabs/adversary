@@ -86,7 +86,7 @@ func runAuthorHunt(
 		if s, ok := stores[key]; ok {
 			return s, nil
 		}
-		s, err := state.LoadDiscovery(dataRoot, owner, name)
+		s, err := state.LoadDiscoveryForTarget(dataRoot, opts.DiscoveryNamespace, owner, name)
 		if err != nil {
 			return nil, err
 		}
