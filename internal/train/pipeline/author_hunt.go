@@ -140,8 +140,8 @@ func runAuthorHunt(
 				if ctx.Err() != nil {
 					if res.inScopeN > 0 && len(res.kept) > 0 {
 						mu.Lock()
-						applyCollectResult(&out, res, job.pinned)
-						if onKeep != nil {
+						accepted := applyCollectResult(&out, res, job.pinned, targetPRs)
+						if accepted && onKeep != nil {
 							out.resultsAdded += onKeep(res.kept)
 						}
 						mu.Unlock()
@@ -149,8 +149,8 @@ func runAuthorHunt(
 					continue
 				}
 				mu.Lock()
-				applyCollectResult(&out, res, job.pinned)
-				if res.inScopeN > 0 && onKeep != nil && len(res.kept) > 0 {
+				accepted := applyCollectResult(&out, res, job.pinned, targetPRs)
+				if accepted && onKeep != nil {
 					out.resultsAdded += onKeep(res.kept)
 				}
 				if out.interrupted == nil {
