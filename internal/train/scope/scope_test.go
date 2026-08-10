@@ -164,7 +164,7 @@ func TestNormalizeReviewCommentRemovesGuidanceButKeepsIntent(t *testing.T) {
 	body := `<!-- Thoughts represent an idea that popped up from reviewing. These comments are non-blocking by nature, but they are extremely valuable. -->
 **thought:** something about mounting the git directory feels weird. Would setting :ro make sense so the external directory is read-only and prevents permission collisions?`
 
-	normalized := normalizeReviewComment(body)
+	normalized := NormalizeReviewComment(body)
 	if strings.Contains(strings.ToLower(normalized), "non-blocking") {
 		t.Fatalf("template guidance survived normalization: %q", normalized)
 	}
@@ -181,7 +181,7 @@ func TestNormalizeReviewCommentRemovesGuidanceButKeepsIntent(t *testing.T) {
 
 func TestNormalizeReviewCommentPreservesAutomationProvenance(t *testing.T) {
 	body := "Useful-looking review text.\n\n<!-- hermes-pr-review abc123 -->"
-	if normalized := normalizeReviewComment(body); normalized != body {
+	if normalized := NormalizeReviewComment(body); normalized != body {
 		t.Fatalf("unknown provenance marker changed: %q", normalized)
 	}
 }

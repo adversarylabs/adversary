@@ -46,7 +46,7 @@ type routeDecision struct {
 
 // RouteComment selects the single best adversary or none.
 func (r *Router) RouteComment(body, path, author string) Route {
-	body = normalizeReviewComment(body)
+	body = NormalizeReviewComment(body)
 	if body == "" {
 		return Route{Decision: OutOfScope, Reason: "empty comment", Method: "heuristic"}
 	}

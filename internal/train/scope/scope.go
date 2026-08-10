@@ -94,7 +94,7 @@ func LoadMission(adversarySource, factoryRepoRoot, adversaryName string) (string
 // Classify decides if a human comment is in scope for the adversary.
 // author is the GitHub login (used to drop bots / copilot overviews).
 func (c *Classifier) Classify(commentBody, path, author string) Result {
-	body := normalizeReviewComment(commentBody)
+	body := NormalizeReviewComment(commentBody)
 	if body == "" {
 		return Result{Decision: OutOfScope, Reason: "empty comment", Method: "heuristic"}
 	}
@@ -148,12 +148,12 @@ func (c *Classifier) Classify(commentBody, path, author string) Result {
 	}
 }
 
-// normalizeReviewComment removes prose injected by known human-review templates
+// NormalizeReviewComment removes prose injected by known human-review templates
 // before intent classification. The guidance is not written by the reviewer and
 // can contain phrases such as "non-blocking" that otherwise turn an actionable
 // request into an apparent approval. Unknown HTML comments remain intact because
 // some are automation provenance used by the gold-quality filters.
-func normalizeReviewComment(body string) string {
+func NormalizeReviewComment(body string) string {
 	cursor := 0
 	for {
 		relStart := strings.Index(body[cursor:], "<!--")
@@ -447,7 +447,7 @@ func globalNonDefectOut(body, path string) (reason string, ok bool) {
 // a reviewer's praise summary is evidence about a conversation, not a defect an
 // adversary should learn to report.
 func NonActionableHumanComment(body string) (reason string, ok bool) {
-	body = normalizeReviewComment(body)
+	body = NormalizeReviewComment(body)
 	lower := strings.ToLower(strings.TrimSpace(body))
 	if lower == "" {
 		return "empty comment", true
