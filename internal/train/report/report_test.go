@@ -317,6 +317,25 @@ func TestSameConcernIntentRejectsOneSharedWordInBroadClass(t *testing.T) {
 	}
 }
 
+func TestWritePRSectionMarksMissingJudgmentUngraded(t *testing.T) {
+	c := &cases.Case{
+		Repository:  cases.Repository{Owner: "acme", Name: "project", URL: "https://github.com/acme/project/pull/1"},
+		PullRequest: cases.PullRequest{Number: 1, Title: "Test change"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "one", Summary: "Check the changed invariant.", Approved: true, OwnerAdversary: "nits",
+		}}},
+	}
+	var b strings.Builder
+	writePRSection(&b, c, nil, nil)
+	story := b.String()
+	if !strings.Contains(story, "Ungraded for `nits`") {
+		t.Fatalf("missing ungraded status: %s", story)
+	}
+	if strings.Contains(story, "Miss for") {
+		t.Fatalf("unexecuted review was described as a miss: %s", story)
+	}
+}
+
 func TestEngineeringReviewConcernClassesClusterByPrinciple(t *testing.T) {
 	cases := []struct {
 		summary string
