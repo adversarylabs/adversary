@@ -119,13 +119,24 @@ func importanceOf(expected []cases.ExpectedConcern, id string) string {
 }
 
 func bestMatch(f normalize.Finding, expected []cases.ExpectedConcern) (string, float64) {
-	claimTokens := tokens(f.Claim + " " + f.Evidence + " " + f.File)
+	claimTokens := tokens(f.Claim + " " + f.Evidence)
+	fileTokens := tokens(f.File)
 	var bestID string
 	var best float64
 	for _, e := range expected {
-		et := tokens(e.Summary + " " + e.File)
-		s := jaccard(claimTokens, et)
-		// Boost same-file.
+		expectedTokens := tokens(e.Summary)
+		semanticScore := jaccard(claimTokens, expectedTokens)
+		// A shared path is useful corroboration, but it is not evidence that two
+		// concerns mean the same thing. Requiring semantic overlap prevents an
+		// unrelated finding on the reviewed file from hiding a real miss.
+		if semanticScore == 0 {
+			continue
+		}
+		s := semanticScore
+		if len(fileTokens) > 0 && len(tokens(e.File)) > 0 {
+			s += 0.10 * jaccard(fileTokens, tokens(e.File))
+		}
+		// Exact same-file evidence is a modest boost after meaning overlaps.
 		if e.File != "" && f.File != "" && strings.EqualFold(e.File, f.File) {
 			s += 0.15
 		}
@@ -161,6 +172,7 @@ func tokens(s string) map[string]struct{} {
 		if len(t) < 3 {
 			return
 		}
+		t = canonicalToken(t)
 		// drop stopwords
 		switch t {
 		case "the", "and", "for", "with", "that", "this", "from", "are", "was", "were", "not", "can", "may", "should", "must":
@@ -177,6 +189,17 @@ func tokens(s string) map[string]struct{} {
 	}
 	flush()
 	return out
+}
+
+func canonicalToken(t string) string {
+	switch t {
+	case "pin", "pins", "pinned", "pinning", "unpin", "unpinned":
+		return "pin"
+	case "version", "versions", "versioned", "versioning":
+		return "version"
+	default:
+		return t
+	}
 }
 
 func jaccard(a, b map[string]struct{}) float64 {

@@ -76,3 +76,56 @@ func TestJudgeReviewMatchesExpectedConcern(t *testing.T) {
 		t.Fatal("expected failures for missed concern and/or weak finding")
 	}
 }
+
+func TestJudgeReviewDoesNotMatchUnrelatedConcernOnSameFile(t *testing.T) {
+	review := &normalize.Review{
+		ReviewerID: "dockerfile",
+		Findings: []normalize.Finding{{
+			ID:       "root-runtime",
+			File:     "testing/spark3-iceberg/Dockerfile",
+			Severity: "high",
+			Claim:    "runtime stage does not clearly drop root privileges",
+			Evidence: "No USER instruction appears in the final stage.",
+		}},
+	}
+	expected := []cases.ExpectedConcern{{
+		ID:         "pin-dependency",
+		Summary:    "Can't we use a pinned version of this dependency?",
+		Importance: "medium",
+		File:       "testing/spark3-iceberg/Dockerfile",
+		Approved:   true,
+	}}
+
+	j := JudgeReview(review, expected)
+	if len(j.ExpectedMatched) != 0 {
+		t.Fatalf("unrelated same-file concern matched: %+v", j.Findings)
+	}
+	if len(j.ExpectedMissed) != 1 || j.ExpectedMissed[0] != "pin-dependency" {
+		t.Fatalf("expected pinning concern to remain missed: %+v", j.ExpectedMissed)
+	}
+}
+
+func TestJudgeReviewMatchesPinningConcernWithDifferentInflection(t *testing.T) {
+	review := &normalize.Review{
+		ReviewerID: "dockerfile",
+		Findings: []normalize.Finding{{
+			ID:       "floating-artifact",
+			File:     "Dockerfile",
+			Severity: "high",
+			Claim:    "The downloaded artifact is unpinned and can change between builds.",
+			Evidence: "wget https://example.test/tool-latest.tar.gz",
+		}},
+	}
+	expected := []cases.ExpectedConcern{{
+		ID:         "pin-dependency",
+		Summary:    "Use a pinned version of this dependency.",
+		Importance: "medium",
+		File:       "Dockerfile",
+		Approved:   true,
+	}}
+
+	j := JudgeReview(review, expected)
+	if len(j.ExpectedMatched) != 1 || j.ExpectedMatched[0] != "pin-dependency" {
+		t.Fatalf("equivalent pinning concern did not match: matched=%v missed=%v findings=%+v", j.ExpectedMatched, j.ExpectedMissed, j.Findings)
+	}
+}
