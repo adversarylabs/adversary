@@ -616,13 +616,60 @@ func isContributionChatter(lower string) bool {
 
 func isAuthorStatusUpdate(lower string) bool {
 	trim := strings.TrimSpace(lower)
+	if hasReviewRequest(lower) {
+		return false
+	}
 	statusStart := []string{"fixed", "updated", "addressed", "implemented", "done", "resolved", "reproduced", "confirmed"}
 	for _, marker := range statusStart {
-		if hasStatusPrefix(trim, marker) && !hasReviewRequest(lower) {
+		if hasStatusPrefix(trim, marker) {
 			return true
 		}
 	}
-	return (strings.Contains(lower, "i'll revert") || strings.Contains(lower, "i will revert")) && !hasReviewRequest(lower)
+	firstPersonCompletions := []string{
+		"i fixed ", "i've fixed ", "i have fixed ",
+		"i updated ", "i've updated ", "i have updated ",
+		"i addressed ", "i've addressed ", "i have addressed ",
+		"i implemented ", "i've implemented ", "i have implemented ",
+		"i added test", "i've added test", "i have added test",
+	}
+	for _, marker := range firstPersonCompletions {
+		if hasCompletionClause(lower, marker) {
+			return true
+		}
+	}
+	return strings.Contains(lower, "i'll revert") || strings.Contains(lower, "i will revert")
+}
+
+func hasCompletionClause(lower, marker string) bool {
+	for offset := 0; offset < len(lower); {
+		rel := strings.Index(lower[offset:], marker)
+		if rel < 0 {
+			return false
+		}
+		start := offset + rel
+		before := strings.TrimSpace(lower[:start])
+		atClauseStart := before == "" || strings.HasSuffix(before, ".") ||
+			strings.HasSuffix(before, "!") || strings.HasSuffix(before, "?") ||
+			strings.HasSuffix(before, ",")
+		if atClauseStart {
+			after := lower[start:]
+			limit := min(len(after), 100)
+			context := after[:limit]
+			historical := []string{"similar issue", "similar bug", "previously", "in another", "last time"}
+			isHistorical := false
+			for _, phrase := range historical {
+				if strings.Contains(context, phrase) {
+					isHistorical = true
+					break
+				}
+			}
+			if !isHistorical {
+				return true
+			}
+		}
+		offset = start + len(marker)
+	}
+	return false
 }
 
 func hasStatusPrefix(s, marker string) bool {

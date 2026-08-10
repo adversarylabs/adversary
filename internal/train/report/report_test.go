@@ -220,7 +220,7 @@ func TestSuggestIssuesDraftsLocalOwnerOnly(t *testing.T) {
 	}
 }
 
-func TestSuggestIssuesRequiresTwoIndependentPullRequests(t *testing.T) {
+func TestSuggestIssuesWithoutAbstractionJudgeRequiresTwoIndependentPullRequests(t *testing.T) {
 	c := &cases.Case{
 		ID:         "case-one",
 		Repository: cases.Repository{URL: "https://github.com/acme/one/pull/1"},
