@@ -10,24 +10,24 @@ import (
 // Does not delete results.db, github-cache, or run artifacts.
 func ResetDiscovery(stateRoot string) (removed int, err error) {
 	dir := filepath.Join(stateRoot, "state", "discovery")
-	entries, err := os.ReadDir(dir)
+	err = filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			return nil
+		}
+		removed++
+		return nil
+	})
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil
 		}
 		return 0, err
 	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
-			return removed, err
-		}
-		removed++
+	if err := os.RemoveAll(dir); err != nil {
+		return 0, err
 	}
 	return removed, nil
 }

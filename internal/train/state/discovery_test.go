@@ -39,3 +39,22 @@ func TestDiscoveryStoreSkipAndPersist(t *testing.T) {
 		t.Fatalf("attempts=%d", s2.PRs["8685"].Attempts)
 	}
 }
+
+func TestTargetDiscoveryStoresAreIsolated(t *testing.T) {
+	dir := t.TempDir()
+	first, err := LoadDiscoveryForTarget(dir, "go-testing", "owner", "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Record(42, "title", "url", OutcomeNoInScope, "not testing")
+	if err := first.Save(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := LoadDiscoveryForTarget(dir, "go-security", "owner", "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Seen(42) {
+		t.Fatal("PR seen by one target leaked into another target's discovery state")
+	}
+}

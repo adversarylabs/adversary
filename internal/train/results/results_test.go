@@ -385,12 +385,18 @@ func TestResetDiscovery(t *testing.T) {
 	dir := filepath.Join(state, "state", "discovery")
 	_ = os.MkdirAll(dir, 0o755)
 	_ = os.WriteFile(filepath.Join(dir, "o__r.json"), []byte(`{}`), 0o644)
+	targetDir := filepath.Join(dir, "targets", "go-testing")
+	_ = os.MkdirAll(targetDir, 0o755)
+	_ = os.WriteFile(filepath.Join(targetDir, "o__r.json"), []byte(`{}`), 0o644)
 	n, err := ResetDiscovery(state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
+	if n != 2 {
 		t.Fatalf("removed %d", n)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("discovery directory still exists: %v", err)
 	}
 }
 
