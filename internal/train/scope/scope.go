@@ -655,7 +655,7 @@ func hasCompletionClause(lower, marker string) bool {
 			after := lower[start:]
 			limit := min(len(after), 100)
 			context := after[:limit]
-			historical := []string{"similar issue", "similar bug", " before", "previously", "in another", "last time"}
+			historical := []string{"similar issue", "similar bug", "previously", "in another", "last time"}
 			isHistorical := false
 			for _, phrase := range historical {
 				if strings.Contains(context, phrase) {
