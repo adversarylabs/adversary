@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -895,13 +896,30 @@ func suggestIssues(in Input) []SuggestedIssue {
 			continue
 		}
 		out = append(out, SuggestedIssue{
-			Key:    candidate.bkt.key,
+			Key:    issueSemanticKey(candidate.owner, candidate.bkt.classKey, candidate.bkt.evidence),
 			Title:  candidate.brief.Title,
 			Labels: []string{"train", "adversary:" + candidate.owner, "miss"},
 			Body:   renderIssueBrief(candidate.brief),
 		})
 	}
 	return out
+}
+
+// issueSemanticKey keeps the coarse concern class useful for evidence grouping
+// without letting it become the GitHub issue identity. The first admitted
+// source concern is deterministic across retries, unlike model-written prose,
+// and distinguishes unrelated discoveries in a broad class such as "general".
+func issueSemanticKey(owner, classKey string, evidence []IssueBriefEvidence) string {
+	base := strings.ToLower(strings.TrimSpace(owner)) + "|" + strings.ToLower(strings.TrimSpace(classKey))
+	if len(evidence) == 0 {
+		return base
+	}
+	identity := strings.ToLower(strings.Join(strings.Fields(evidence[0].Concern), " "))
+	if identity == "" {
+		return base
+	}
+	digest := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("%s|evidence:%x", base, digest[:12])
 }
 
 func concernScopeReason(concern *cases.ExpectedConcern) string {

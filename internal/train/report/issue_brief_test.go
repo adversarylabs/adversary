@@ -415,7 +415,7 @@ func TestSuggestIssuesUsesModelBriefAndPackageScope(t *testing.T) {
 	if issues[0].Title != "Detect independent behavior hidden inside an otherwise focused change" {
 		t.Fatalf("model title not used: %#v", issues[0])
 	}
-	if issues[0].Key != "engineering-review|change-cohesion" {
+	if !strings.HasPrefix(issues[0].Key, "engineering-review|change-cohesion|evidence:") {
 		t.Fatalf("stable concern key missing: %#v", issues[0])
 	}
 	if strings.Contains(issues[0].Body, "Task for coding agent") || strings.Contains(issues[0].Body, "Example concern classes") {
@@ -426,6 +426,31 @@ func TestSuggestIssuesUsesModelBriefAndPackageScope(t *testing.T) {
 	}
 	if len(writer.input.Evidence) != 2 || writer.input.Evidence[0].PRTitle != "fix operator precedence" {
 		t.Fatalf("source context not passed to writer: %#v", writer.input)
+	}
+}
+
+func TestIssueSemanticKeyDistinguishesCapabilitiesWithinOneConcernClass(t *testing.T) {
+	paginationEvidence := []IssueBriefEvidence{{Concern: "Advance the pagination offset by records consumed so short pages do not skip records."}}
+	pagination := issueSemanticKey("engineering-review", "general", paginationEvidence)
+	constraints := issueSemanticKey("engineering-review", "general", []IssueBriefEvidence{{
+		Concern: "Keep each listener constraint separate so one listener does not reject routes for another.",
+	}})
+	if pagination == constraints {
+		t.Fatalf("unrelated general capabilities share key %q", pagination)
+	}
+	if pagination != issueSemanticKey("Engineering-Review", "GENERAL", []IssueBriefEvidence{{
+		Concern: "  Advance   the pagination offset by records consumed so short pages do not skip records.  ",
+	}}) {
+		t.Fatalf("semantic key should ignore case and whitespace: %q", pagination)
+	}
+}
+
+func TestIssueSemanticKeyDoesNotDependOnModelBriefWording(t *testing.T) {
+	evidence := []IssueBriefEvidence{{Concern: "A short non-final page advances past records that were not consumed."}}
+	first := issueSemanticKey("engineering-review", "general", evidence)
+	second := issueSemanticKey("engineering-review", "general", evidence)
+	if first != second {
+		t.Fatalf("same admitted evidence produced unstable keys: %q != %q", first, second)
 	}
 }
 
