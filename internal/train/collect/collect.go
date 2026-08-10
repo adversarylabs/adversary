@@ -179,6 +179,9 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			SHA string `json:"sha"`
 		} `json:"head"`
 		HTMLURL string `json:"html_url"`
+		User    struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	}
 	if err := json.Unmarshal(prRaw, &prObj); err != nil {
 		return nil, err
@@ -217,6 +220,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		User             struct {
 			Login string `json:"login"`
 		} `json:"user"`
+		InReplyToID         int64 `json:"in_reply_to_id"`
 		PullRequestReviewID int64 `json:"pull_request_review_id"`
 	}
 	if err := json.Unmarshal(commentsRaw, &comments); err != nil {
@@ -227,6 +231,15 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	repoSlug := repo // case id uses short repo name
 	var out []*cases.Case
 	round := 0
+	commentContext := make(map[commentKey]reviewCommentContext, len(reviews)+len(comments))
+	for _, rev := range reviews {
+		commentContext[commentKey{kind: "review-body", id: rev.ID}] = reviewCommentContext{}
+	}
+	for _, comment := range comments {
+		commentContext[commentKey{kind: "review-comment", id: comment.ID}] = reviewCommentContext{
+			inReplyToID: comment.InReplyToID,
+		}
+	}
 	for _, rev := range reviews {
 		if rev.State == "PENDING" {
 			continue
@@ -291,7 +304,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		}
 		// Candidate labels, routed to best adversary (or none).
 		labels := cases.CandidateLabelsFromComments(revComments)
-		applyScopeFiltered(labels, revComments, clf, router, authorOK)
+		applyScopeFilteredWithContext(labels, revComments, clf, router, authorOK, prObj.User.Login, commentContext)
 		c := &cases.Case{
 			SchemaVersion: 4,
 			ID:            cases.CaseID(repoSlug, pr, round),
@@ -357,7 +370,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		}
 		sha, source, excl := cases.ReconstructReviewedSHA(cases.ReviewSignal{OriginalCommitIDs: origIDs, PRHeadSHA: prObj.Head.SHA})
 		labels := cases.CandidateLabelsFromComments(allComments)
-		applyScopeFiltered(labels, allComments, clf, router, authorOK)
+		applyScopeFilteredWithContext(labels, allComments, clf, router, authorOK, prObj.User.Login, commentContext)
 		out = append(out, &cases.Case{
 			SchemaVersion: 4,
 			ID:            cases.CaseID(repoSlug, pr, 1),
@@ -377,12 +390,25 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 // nil = allow all (still subject to bot heuristics in scope).
 type AuthorFilter func(login string) bool
 
+type commentKey struct {
+	kind string
+	id   int64
+}
+
+type reviewCommentContext struct {
+	inReplyToID int64
+}
+
 // applyScope routes each label to the best adversary (or none).
 func applyScope(labels []cases.ExpectedConcern, comments []cases.Comment, clf *scope.Classifier, router *scope.Router) {
 	applyScopeFiltered(labels, comments, clf, router, nil)
 }
 
 func applyScopeFiltered(labels []cases.ExpectedConcern, comments []cases.Comment, clf *scope.Classifier, router *scope.Router, authorOK AuthorFilter) {
+	applyScopeFilteredWithContext(labels, comments, clf, router, authorOK, "", nil)
+}
+
+func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []cases.Comment, clf *scope.Classifier, router *scope.Router, authorOK AuthorFilter, pullAuthor string, commentContext map[commentKey]reviewCommentContext) {
 	if clf == nil && router == nil {
 		clf = defaultScope()
 	}
@@ -390,9 +416,11 @@ func applyScopeFiltered(labels []cases.ExpectedConcern, comments []cases.Comment
 		body := labels[i].Summary
 		path := labels[i].File
 		author := ""
+		var matched *cases.Comment
 		for _, c := range comments {
-			if c.ID > 0 && strings.Contains(labels[i].ID, fmt.Sprintf("%d", c.ID)) {
+			if c.ID > 0 && strings.HasPrefix(labels[i].ID, fmt.Sprintf("c-%d-", c.ID)) {
 				author, body, path = c.Author, c.Body, c.Path
+				matched = &c
 				break
 			}
 		}
@@ -401,6 +429,7 @@ func applyScopeFiltered(labels []cases.ExpectedConcern, comments []cases.Comment
 				if c.Body != "" && (c.Body == labels[i].Summary || strings.Contains(c.Body, labels[i].Summary) ||
 					strings.Contains(labels[i].Summary, truncateRunes(c.Body, 60))) {
 					author, body = c.Author, c.Body
+					matched = &c
 					if c.Path != "" {
 						path = c.Path
 					}
@@ -415,6 +444,20 @@ func applyScopeFiltered(labels []cases.ExpectedConcern, comments []cases.Comment
 			labels[i].ScopeReason = "author filtered by train config"
 			labels[i].ScopeMethod = "config"
 			continue
+		}
+		if matched != nil {
+			ctx := commentContext[commentKey{kind: matched.Kind, id: matched.ID}]
+			isPullAuthor := pullAuthor != "" && strings.EqualFold(author, pullAuthor)
+			if isPullAuthor || ctx.inReplyToID != 0 {
+				if reason, ok := scope.NonActionableReply(body); ok {
+					labels[i].Scope = string(scope.OutOfScope)
+					labels[i].Approved = false
+					labels[i].OwnerAdversary = ""
+					labels[i].ScopeReason = reason
+					labels[i].ScopeMethod = "thread-metadata"
+					continue
+				}
+			}
 		}
 		if router != nil {
 			route := router.RouteComment(body, path, author)

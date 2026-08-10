@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/train/adversaries"
 	"github.com/adversarylabs/adversary/internal/train/collect"
 	"github.com/adversarylabs/adversary/internal/train/dataroot"
 	"github.com/adversarylabs/adversary/internal/train/pipeline"
@@ -742,32 +743,59 @@ func resolveTrainConfig(workspacePath string) (cfgPath string, cfg workspace.Con
 // resolvePackagePath finds the local package directory for apply.
 func resolvePackagePath(wsRoot string, cfg workspace.Config, packageID string) (string, error) {
 	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		return "", fmt.Errorf("result has empty package id")
+	}
 	if cfg.Adversaries.Path != "" {
 		p := cfg.Adversaries.Path
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(wsRoot, p)
 		}
-		// Single-package workspace: path is the package itself.
-		return p, nil
+		// A single-package workspace used to return its configured path without
+		// checking the result owner. That allowed (for example) an
+		// engineering-review row to be applied to the nits checkout. Resolve the
+		// package's on-disk identity before any draft, commit, or issue is created.
+		return validateResolvedPackage(p, packageID)
 	}
 	if cfg.Adversaries.Root != "" {
 		root := cfg.Adversaries.Root
 		if !filepath.IsAbs(root) {
 			root = filepath.Join(wsRoot, root)
 		}
-		if packageID == "" {
-			return "", fmt.Errorf("result has empty package id")
-		}
 		// Prefer exact id, then id-adversary folder name.
 		for _, name := range []string{packageID, packageID + "-adversary"} {
 			cand := filepath.Join(root, name)
 			if workspace.DirExists(cand) {
-				return cand, nil
+				return validateResolvedPackage(cand, packageID)
 			}
 		}
 		return "", fmt.Errorf("package %q not found under %s", packageID, root)
 	}
 	return "", fmt.Errorf("adversaries.path or adversaries.root required in config")
+}
+
+// validateResolvedPackage proves that a resolved checkout is the package named
+// by the result. Directory names are the stable train ids; manifest names are
+// also accepted for callers that store the canonical adversary.yaml identity.
+func validateResolvedPackage(packagePath, packageID string) (string, error) {
+	pkgs, err := adversaries.DiscoverRoot(packagePath)
+	if err != nil {
+		return "", fmt.Errorf("inspect configured package %s: %w", packagePath, err)
+	}
+	if len(pkgs) != 1 {
+		return "", fmt.Errorf("configured package %s resolved to %d packages; want exactly one", packagePath, len(pkgs))
+	}
+	pkg := pkgs[0]
+	want := strings.ToLower(strings.TrimSpace(packageID))
+	for _, identity := range []string{pkg.ID, pkg.DirName, pkg.ManifestName} {
+		if strings.EqualFold(strings.TrimSpace(identity), want) {
+			return pkg.Dir, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"result package %q does not match configured package %q (manifest %q) at %s",
+		packageID, pkg.ID, pkg.ManifestName, pkg.Dir,
+	)
 }
 
 func newTrainStatusCommand(app *application.App) *cobra.Command {

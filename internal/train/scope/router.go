@@ -57,6 +57,12 @@ func (r *Router) RouteComment(body, path, author string) Route {
 	if isPROverviewBlob(body) {
 		return Route{Decision: OutOfScope, Reason: "PR overview / summary dump", Method: "heuristic"}
 	}
+	// Conversation artifacts are never gold, even when a broad persona package is
+	// among the candidates. Previously one such candidate disabled non-defect
+	// filtering for every sibling and let status replies route into nits/engineering.
+	if reason, ok := NonActionableHumanComment(body); ok {
+		return Route{Decision: OutOfScope, Reason: reason, Method: "heuristic"}
+	}
 	// Global non-defect filters (LGTM, soft-OK, package-doc nits, explicit nits).
 	// Broad generalists skip these entirely — their mission owns every human comment
 	// that reaches routing (bots already rejected above; empty already rejected).
@@ -483,6 +489,9 @@ Rules:
 - CI/workflow → githubactions (if present)
 - Go concurrency races/lifecycle → go-concurrency (NOT eng-review)
 - LGTM / "looks good" / "I'm more satisfied" / praise without a defect → empty
+- Author status replies ("Fixed in <sha>", "Updated", "Addressed") → empty, even when they explain the fix
+- Rebuttals / resolutions ("don't need to worry", "no action needed", "working as intended") → empty unless they contain a new explicit review request
+- Explanations and summaries without an unresolved request are conversation context, not gold → empty
 - Explicit non-blocking taste → nits when present; package docs, godoc wording, and s/old/new/ rewrites → empty
 - Soft OK notes ("I think its ok", "seems fine") without asking for a fix → empty
 - Comments on pure documentation paths (.md, /docs/, book pages) that are wording/reference edits → empty (not product gold)

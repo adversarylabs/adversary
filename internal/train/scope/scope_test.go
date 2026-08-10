@@ -69,15 +69,15 @@ func TestBroadMissionTorvaldsStyleCommentInScope(t *testing.T) {
 	}
 }
 
-func TestBroadMissionKeepsLGTMAndNits(t *testing.T) {
+func TestBroadMissionRejectsPraiseButKeepsNits(t *testing.T) {
 	c := &Classifier{
 		AdversaryName:   "torvalds",
 		MissionMarkdown: "Everything is in scope.",
 		UseLLM:          false,
 	}
-	// Person generalist: anything the human wrote is gold (bots still out).
-	if r := c.Classify("LGTM", "foo.go", "torvalds"); r.Decision != InScope {
-		t.Fatalf("LGTM from person author should be in scope, got %s (%s)", r.Decision, r.Reason)
+	// Even a person generalist learns review behavior, not conversation status.
+	if r := c.Classify("LGTM", "foo.go", "torvalds"); r.Decision != OutOfScope {
+		t.Fatalf("LGTM should not become gold, got %s (%s)", r.Decision, r.Reason)
 	}
 	if r := c.Classify("nit: rename this", "foo.go", "torvalds"); r.Decision != InScope {
 		t.Fatalf("nit should be in scope, got %s", r.Decision)

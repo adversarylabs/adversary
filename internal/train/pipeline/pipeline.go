@@ -440,27 +440,18 @@ func Run(opts Options) (*Result, error) {
 		if c.Repository.URL != "" {
 			fmt.Fprintf(os.Stderr, "  PR: %s\n", c.Repository.URL)
 		}
-		// Which adversaries own in-scope gold on this case?
-		owners := map[string][]cases.ExpectedConcern{}
-		for _, lab := range cases.ApprovedLabels(c.Labels.ExpectedConcerns) {
-			own := lab.OwnerAdversary
-			if own == "" {
-				own = primaryID
+		// Only routed owners are graded. Empty-gold cases are retained as local
+		// discovery evidence, but running every loaded adversary against them is
+		// both expensive and incapable of measuring recall.
+		owners := gradeOwners(c, primaryID)
+		for own, labels := range owners {
+			for _, lab := range labels {
+				fmt.Fprintf(os.Stderr, "  gold → %s: %s\n", own, softWrapOne(lab.Summary, 80))
 			}
-			owners[own] = append(owners[own], lab)
-			fmt.Fprintf(os.Stderr, "  gold → %s: %s\n", own, softWrapOne(lab.Summary, 80))
 		}
 		if len(owners) == 0 {
-			// Run loaded locals (or primary) for extras — not a hard-coded eng-review.
-			if len(advPackages) > 0 {
-				for _, p := range advPackages {
-					owners[p.ID] = nil
-				}
-				fmt.Fprintf(os.Stderr, "  (no in-scope gold; still running %s for extras)\n", primaryID)
-			} else {
-				fmt.Fprintf(os.Stderr, "  (no in-scope gold; still running %s for extras)\n", primaryID)
-				owners[primaryID] = nil
-			}
+			fmt.Fprintln(os.Stderr, "  (no in-scope gold; skipping adversary grading)")
+			continue
 		}
 
 		man, err := bundle.BuildFromCase(c)
@@ -785,6 +776,7 @@ func Run(opts Options) (*Result, error) {
 	}
 	locIDs, offIDs := trainDraftContext(opts, advPackages)
 	briefWriter, packageScopes := trainIssueBriefContext(opts, advPackages)
+	priorMisses := loadPriorMissEvidence(opts.DataRoot)
 	// Also compute official catches from judgments (matching findings on gold).
 	officialCatch := map[string]string{}
 	for caseID, j := range judgments {
@@ -825,6 +817,7 @@ func Run(opts Options) (*Result, error) {
 		OfficialCatchByConcern: officialCatch,
 		PackageScopes:          packageScopes,
 		IssueBriefWriter:       briefWriter,
+		PriorMisses:            priorMisses,
 	})
 	if err != nil {
 		return nil, err
@@ -993,6 +986,45 @@ func packageIDs(pkgs []adversaries.Package) []string {
 		}
 	}
 	return ids
+}
+
+func gradeOwners(c *cases.Case, primaryID string) map[string][]cases.ExpectedConcern {
+	owners := map[string][]cases.ExpectedConcern{}
+	if c == nil {
+		return owners
+	}
+	for _, label := range cases.ApprovedLabels(c.Labels.ExpectedConcerns) {
+		owner := strings.TrimSpace(label.OwnerAdversary)
+		if owner == "" {
+			owner = primaryID
+		}
+		if owner == "" {
+			continue
+		}
+		owners[owner] = append(owners[owner], label)
+	}
+	return owners
+}
+
+func loadPriorMissEvidence(stateRoot string) []report.MissEvidence {
+	rows, err := results.List(stateRoot, "", "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: load prior train misses: %v\n", err)
+		return nil
+	}
+	prior := make([]report.MissEvidence, 0, len(rows))
+	for _, row := range rows {
+		if row.Kind != results.KindMiss || row.Status == results.StatusDismissed || strings.TrimSpace(row.PRURL) == "" {
+			continue
+		}
+		prior = append(prior, report.MissEvidence{
+			Package: row.Package,
+			Summary: row.Summary,
+			PRURL:   row.PRURL,
+			PRTitle: row.PRTitle,
+		})
+	}
+	return prior
 }
 
 // resolvePrimaryAdversaryName picks the hunt/scorecard package id.

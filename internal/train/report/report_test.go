@@ -189,7 +189,8 @@ func TestSuggestIssuesDraftsLocalOwnerOnly(t *testing.T) {
 	_, err := Write(Input{
 		RunID: "x", DataRoot: dir, RunDir: runDir, ExperimentDir: expDir,
 		Scorecard: sc, Cases: []*cases.Case{c},
-		LocalIDs: map[string]bool{"my-policy": true},
+		LocalIDs:    map[string]bool{"my-policy": true},
+		PriorMisses: []MissEvidence{{Package: "my-policy", Summary: "company policy is violated by this path", PRURL: "https://github.com/other/repo/pull/2"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -208,6 +209,7 @@ func TestSuggestIssuesDraftsLocalOwnerOnly(t *testing.T) {
 		Scorecard: sc, Cases: []*cases.Case{c},
 		LocalIDs:               map[string]bool{"my-policy": true},
 		OfficialCatchByConcern: map[string]string{"c1": "go-testing"},
+		PriorMisses:            []MissEvidence{{Package: "my-policy", Summary: "company policy is violated by this path", PRURL: "https://github.com/other/repo/pull/2"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -215,6 +217,103 @@ func TestSuggestIssuesDraftsLocalOwnerOnly(t *testing.T) {
 	raw2, _ := os.ReadFile(filepath.Join(dir, "experiments", "sup", "SUGGESTED_ISSUES.md"))
 	if strings.Contains(string(raw2), "Teach `my-policy`") {
 		t.Fatalf("official catch should suppress local draft:\n%s", raw2)
+	}
+}
+
+func TestSuggestIssuesRequiresTwoIndependentPullRequests(t *testing.T) {
+	c := &cases.Case{
+		ID:         "case-one",
+		Repository: cases.Repository{URL: "https://github.com/acme/one/pull/1"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "validation", Summary: "The test reaches the branch but does not assert the result.",
+			OwnerAdversary: "engineering-review", Approved: true,
+		}}},
+	}
+	failure := judge.Failure{CaseID: c.ID, Kind: "missed-concern", ConcernID: "validation", ReviewerID: "engineering-review"}
+	sc := score.Aggregate("engineering-review", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "engineering-review", ExpectedMissed: []string{"validation"}},
+	}, []judge.Failure{failure})
+	base := Input{Scorecard: sc, Cases: []*cases.Case{c}, LocalIDs: map[string]bool{"engineering-review": true}}
+	if issues := suggestIssues(base); len(issues) != 0 {
+		t.Fatalf("one PR must remain local evidence, got %#v", issues)
+	}
+	base.PriorMisses = []MissEvidence{{
+		Package: "engineering-review", Summary: "Coverage reaches a branch without asserting its result.",
+		PRURL: "https://github.com/acme/one/pull/1#discussion_r9",
+	}}
+	if issues := suggestIssues(base); len(issues) != 0 {
+		t.Fatalf("two comments from one PR are not independent evidence: %#v", issues)
+	}
+	base.PriorMisses[0].PRURL = "https://github.com/other/two/pull/2"
+	if issues := suggestIssues(base); len(issues) != 1 {
+		t.Fatalf("two independent PRs should corroborate one draft: %#v", issues)
+	}
+}
+
+func TestSuggestIssuesRejectsUnavailableReviewInputs(t *testing.T) {
+	c := &cases.Case{
+		ID:         "case-metadata",
+		Repository: cases.Repository{URL: "https://github.com/acme/one/pull/1"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "metadata", Summary: "The PR description promises a migration that the implementation does not provide.",
+			OwnerAdversary: "engineering-review", Approved: true,
+		}}},
+	}
+	failure := judge.Failure{CaseID: c.ID, Kind: "missed-concern", ConcernID: "metadata", ReviewerID: "engineering-review"}
+	sc := score.Aggregate("engineering-review", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "engineering-review", ExpectedMissed: []string{"metadata"}},
+	}, []judge.Failure{failure})
+	issues := suggestIssues(Input{
+		Scorecard: sc, Cases: []*cases.Case{c}, LocalIDs: map[string]bool{"engineering-review": true},
+		PriorMisses: []MissEvidence{{
+			Package: "engineering-review", Summary: "The pull request description claims behavior absent from the code.",
+			PRURL: "https://github.com/other/two/pull/2",
+		}},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("metadata-dependent capability cannot become a draft: %#v", issues)
+	}
+}
+
+func TestSuggestIssuesDoesNotClusterUnrelatedGeneralMisses(t *testing.T) {
+	c := &cases.Case{
+		ID:         "case-general",
+		Repository: cases.Repository{URL: "https://github.com/acme/one/pull/1"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "naming", Summary: "Prefer a clear local variable for the parsed tenant identifier.",
+			OwnerAdversary: "my-review", Approved: true,
+		}}},
+	}
+	failure := judge.Failure{CaseID: c.ID, Kind: "missed-concern", ConcernID: "naming", ReviewerID: "my-review"}
+	sc := score.Aggregate("my-review", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "my-review", ExpectedMissed: []string{"naming"}},
+	}, []judge.Failure{failure})
+	issues := suggestIssues(Input{
+		Scorecard: sc, Cases: []*cases.Case{c}, LocalIDs: map[string]bool{"my-review": true},
+		PriorMisses: []MissEvidence{{
+			Package: "my-review", Summary: "Guard cache eviction against missing entries.",
+			PRURL: "https://github.com/other/two/pull/2",
+		}},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("same package and class are insufficient without shared intent: %#v", issues)
+	}
+}
+
+func TestSameConcernIntentRejectsOneSharedWordInBroadClass(t *testing.T) {
+	if sameConcernIntent(
+		"meaningful-validation",
+		"The migration test never verifies the emitted audit event.",
+		[]string{"The parser test reaches the branch without checking its return value."},
+	) {
+		t.Fatal("one generic shared token must not corroborate distinct validation intents")
+	}
+	if !sameConcernIntent(
+		"meaningful-validation",
+		"Coverage reaches the branch but never asserts the returned value.",
+		[]string{"The test reaches the branch without checking its return value."},
+	) {
+		t.Fatal("multiple intent-specific tokens should corroborate the same validation gap")
 	}
 }
 
