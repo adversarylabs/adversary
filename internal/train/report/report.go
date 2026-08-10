@@ -855,16 +855,19 @@ func suggestIssues(in Input) []SuggestedIssue {
 					if abstractionJudge, ok := in.IssueBriefWriter.(IssueAbstractionJudge); ok {
 						assessment, err := abstractionJudge.AssessIssueAbstraction(ctx, briefInput)
 						if err != nil {
-							candidate.emit = false
-							fmt.Fprintf(os.Stderr, "warning: train abstraction judgment for %s: %v (candidate kept as local evidence)\n", candidate.owner, err)
-							continue
-						}
-						if !assessment.ShouldAbstract {
+							if len(candidate.bkt.sources) < 2 {
+								candidate.emit = false
+								fmt.Fprintf(os.Stderr, "warning: train abstraction judgment for %s: %v (singleton kept as local evidence)\n", candidate.owner, err)
+								continue
+							}
+							fmt.Fprintf(os.Stderr, "warning: train abstraction judgment for %s: %v (using corroborated admission fallback)\n", candidate.owner, err)
+						} else if !assessment.ShouldAbstract {
 							candidate.emit = false
 							fmt.Fprintf(os.Stderr, "note: train abstraction judgment for %s rejected candidate: %s\n", candidate.owner, softWrap(assessment.Reason, 240))
 							continue
+						} else {
+							fmt.Fprintf(os.Stderr, "note: train abstraction judgment for %s admitted candidate: %s\n", candidate.owner, softWrap(assessment.Reason, 240))
 						}
-						fmt.Fprintf(os.Stderr, "note: train abstraction judgment for %s admitted candidate: %s\n", candidate.owner, softWrap(assessment.Reason, 240))
 					}
 					generated, err := in.IssueBriefWriter.WriteIssueBrief(ctx, briefInput)
 					if err != nil {

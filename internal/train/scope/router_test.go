@@ -248,6 +248,7 @@ func TestRouterRejectsConversationArtifactsBeforeBroadRouting(t *testing.T) {
 		"LGTM overall, but please reject invalid column entries instead of silently discarding the validation error.",
 		"Could you use the class token instead of passing a duplicate value through every helper?",
 		"Nit: align this name with the sibling helper so the two call sites read consistently.",
+		"I fixed a similar issue before, and this implementation loses cancellation ownership across the worker boundary.",
 	}
 	for _, body := range requests {
 		route := r.RouteComment(body, "src/query.py", "reviewer")

@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -268,12 +269,36 @@ func (w *captureBriefWriter) WriteIssueBrief(_ context.Context, in IssueBriefInp
 
 type judgingBriefWriter struct {
 	captureBriefWriter
-	assessment IssueAbstractionAssessment
-	writes     int
+	assessment    IssueAbstractionAssessment
+	assessmentErr error
+	writes        int
 }
 
 func (w *judgingBriefWriter) AssessIssueAbstraction(_ context.Context, _ IssueBriefInput) (IssueAbstractionAssessment, error) {
-	return w.assessment, nil
+	return w.assessment, w.assessmentErr
+}
+
+func TestSuggestIssuesKeepsCorroboratedFallbackWhenJudgmentFails(t *testing.T) {
+	c := &cases.Case{
+		ID:         "case-corroborated",
+		Repository: cases.Repository{URL: "https://github.com/acme/one/pull/1"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "validation", Summary: "The test reaches the branch but does not assert the result.",
+			OwnerAdversary: "engineering-review", Approved: true,
+		}}},
+	}
+	failure := judge.Failure{CaseID: c.ID, Kind: "missed-concern", ConcernID: "validation", ReviewerID: "engineering-review"}
+	sc := score.Aggregate("engineering-review", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "engineering-review", ExpectedMissed: []string{"validation"}},
+	}, []judge.Failure{failure})
+	writer := &judgingBriefWriter{assessmentErr: errors.New("temporary model failure")}
+	issues := suggestIssues(Input{
+		Scorecard: sc, Cases: []*cases.Case{c}, LocalIDs: map[string]bool{"engineering-review": true}, IssueBriefWriter: writer,
+		PriorMisses: []MissEvidence{{Package: "engineering-review", Summary: "Coverage reaches a branch without asserting its result.", PRURL: "https://github.com/acme/two/pull/2"}},
+	})
+	if len(issues) != 1 || writer.writes != 1 {
+		t.Fatalf("corroborated candidate was lost after judgment error: issues=%#v writes=%d", issues, writer.writes)
+	}
 }
 
 func (w *judgingBriefWriter) WriteIssueBrief(ctx context.Context, in IssueBriefInput) (IssueBrief, error) {

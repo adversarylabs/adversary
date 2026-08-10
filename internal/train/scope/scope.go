@@ -633,11 +633,43 @@ func isAuthorStatusUpdate(lower string) bool {
 		"i added test", "i've added test", "i have added test",
 	}
 	for _, marker := range firstPersonCompletions {
-		if strings.Contains(lower, marker) {
+		if hasCompletionClause(lower, marker) {
 			return true
 		}
 	}
 	return strings.Contains(lower, "i'll revert") || strings.Contains(lower, "i will revert")
+}
+
+func hasCompletionClause(lower, marker string) bool {
+	for offset := 0; offset < len(lower); {
+		rel := strings.Index(lower[offset:], marker)
+		if rel < 0 {
+			return false
+		}
+		start := offset + rel
+		before := strings.TrimSpace(lower[:start])
+		atClauseStart := before == "" || strings.HasSuffix(before, ".") ||
+			strings.HasSuffix(before, "!") || strings.HasSuffix(before, "?") ||
+			strings.HasSuffix(before, ",")
+		if atClauseStart {
+			after := lower[start:]
+			limit := min(len(after), 100)
+			context := after[:limit]
+			historical := []string{"similar issue", "similar bug", " before", "previously", "in another", "last time"}
+			isHistorical := false
+			for _, phrase := range historical {
+				if strings.Contains(context, phrase) {
+					isHistorical = true
+					break
+				}
+			}
+			if !isHistorical {
+				return true
+			}
+		}
+		offset = start + len(marker)
+	}
+	return false
 }
 
 func hasStatusPrefix(s, marker string) bool {
