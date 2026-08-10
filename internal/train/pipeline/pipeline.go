@@ -406,6 +406,7 @@ func Run(opts Options) (*Result, error) {
 	judgments := map[string]*judge.ReviewJudgment{}
 	var allFailures []judge.Failure
 	var runtimes []caseRuntime
+	var gradedCases []*cases.Case
 	runDir := filepath.Join(opts.DataRoot, "runs", runID)
 	reviewBlocked := false
 
@@ -517,6 +518,7 @@ func Run(opts Options) (*Result, error) {
 		var primaryNorm *normalize.Review
 		var primaryJ *judge.ReviewJudgment
 		var lastRaw []byte
+		gradedOwners := map[string]bool{}
 		for ownerID, gold := range owners {
 			advRef := defaultAdvRef
 			if p, ok := pkgByID[ownerID]; ok {
@@ -525,16 +527,15 @@ func Run(opts Options) (*Result, error) {
 				advRef = defaultAdvRef
 			} else {
 				fmt.Fprintf(os.Stderr, "  skip %s: package not found as sibling\n", ownerID)
-				// Still record misses for missing package
-				if len(gold) > 0 {
-					fake := &normalize.Review{ReviewerID: ownerID, Findings: nil}
-					j := judge.JudgeReview(fake, gold)
-					for _, f := range judge.ExtractFailures(c.ID, j) {
-						f.ReviewerID = ownerID
-						f.Detail = f.Detail + " [owner=" + ownerID + "]"
-						combinedFails = append(combinedFails, f)
-					}
+				reviewBlocked = true
+				bl := &dataroot.BlockedResult{
+					Dependency: "adversary-package", Operation: "run-adversary", Classification: "not-installed",
+					SanitizedError: fmt.Sprintf("routed package %q is not available locally", ownerID),
+					StagesNotRun:   []string{"review", "judge"}, RetrySafe: true,
+					NextAction: "install or configure the routed adversary package",
 				}
+				out.Blocked = bl
+				_, _ = dataroot.WriteBlocked(opts.DataRoot, runID, *bl)
 				continue
 			}
 			fixturePath := ""
@@ -555,13 +556,6 @@ func Run(opts Options) (*Result, error) {
 				out.Blocked = eRes.Blocked
 				_, _ = dataroot.WriteBlocked(opts.DataRoot, runID, *eRes.Blocked)
 				reviewBlocked = true
-				// Count all gold as misses for this owner
-				fake := &normalize.Review{ReviewerID: ownerID}
-				j := judge.JudgeReview(fake, gold)
-				for _, f := range judge.ExtractFailures(c.ID, j) {
-					f.ReviewerID = ownerID
-					combinedFails = append(combinedFails, f)
-				}
 				continue
 			}
 			rcpt.Reviewers = append(rcpt.Reviewers,
@@ -570,12 +564,6 @@ func Run(opts Options) (*Result, error) {
 			)
 			if !looksJSON(eRes.RawJSON) {
 				reviewBlocked = true
-				fake := &normalize.Review{ReviewerID: ownerID}
-				j := judge.JudgeReview(fake, gold)
-				for _, f := range judge.ExtractFailures(c.ID, j) {
-					f.ReviewerID = ownerID
-					combinedFails = append(combinedFails, f)
-				}
 				continue
 			}
 			nRev, err := normalize.FromAnyJSON(ownerID, eRes.RawJSON)
@@ -589,6 +577,7 @@ func Run(opts Options) (*Result, error) {
 			_ = securefs.WriteFile(normPath, rawN)
 			// Judge only this owner's gold (may be empty → only extras matter)
 			j := judge.JudgeReview(nRev, gold)
+			gradedOwners[ownerID] = true
 			j.ReviewerID = ownerID
 			for _, f := range judge.ExtractFailures(c.ID, j) {
 				f.ReviewerID = ownerID
@@ -610,20 +599,28 @@ func Run(opts Options) (*Result, error) {
 			_ = lastRaw
 		}
 
-		// Merge judgments for scorecard: use primary + all failures
-		if primaryJ == nil {
-			primaryJ = &judge.ReviewJudgment{ReviewerID: "multi"}
+		if len(gradedOwners) == 0 {
+			runtimes = append(runtimes, caseRuntime{
+				Case: c, Proj: revProj, RepoPath: repoPath, BaseRef: baseRef, HeadRef: headRef,
+				BaseRaw: bRes.RawJSON,
+			})
+			continue
 		}
+
+		// Merge judgments for scorecard: use primary + all failures. Owners
+		// whose review did not execute are absent rather than synthetic misses.
 		// Recompute expected missed from combined fails for scorecard-friendly judgment
 		judgments[c.ID] = primaryJ
 		allFailures = append(allFailures, combinedFails...)
+		gradedCase := caseForGradedOwners(c, gradedOwners, primaryID)
+		gradedCases = append(gradedCases, gradedCase)
 		runtimes = append(runtimes, caseRuntime{
-			Case: c, Proj: revProj, RepoPath: repoPath, BaseRef: baseRef, HeadRef: headRef,
+			Case: gradedCase, Proj: revProj, RepoPath: repoPath, BaseRef: baseRef, HeadRef: headRef,
 			BaseRaw: bRes.RawJSON, EngRaw: lastRaw, Judgment: primaryJ, Norm: primaryNorm,
 		})
 
 		// Progressive results: upgrade gold → miss/caught immediately after each case.
-		if n, err := results.WriteGradedCase(opts.DataRoot, runID, c, combinedFails); err != nil {
+		if n, err := results.WriteGradedCase(opts.DataRoot, runID, gradedCase, combinedFails); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: results grade persist: %v\n", err)
 		} else if n > 0 {
 			out.ResultsAdded += n
@@ -805,7 +802,7 @@ func Run(opts Options) (*Result, error) {
 		Fixture:                opts.Fixture,
 		Live:                   opts.Live,
 		Scorecard:              sc,
-		Cases:                  usable,
+		Cases:                  gradedCases,
 		Judgments:              judgments,
 		NormReviews:            normByCase,
 		Hypotheses:             hyps,
@@ -831,7 +828,7 @@ func Run(opts Options) (*Result, error) {
 	}
 	if n, err := results.WriteFromRun(opts.DataRoot, results.WriteInput{
 		RunID:    runID,
-		Cases:    usable,
+		Cases:    gradedCases,
 		Failures: allFailures,
 		Issues:   issues,
 	}); err == nil {
@@ -1004,6 +1001,29 @@ func gradeOwners(c *cases.Case, primaryID string) map[string][]cases.ExpectedCon
 		owners[owner] = append(owners[owner], label)
 	}
 	return owners
+}
+
+func caseForGradedOwners(c *cases.Case, graded map[string]bool, primaryID string) *cases.Case {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	clone.Labels = c.Labels
+	clone.Labels.ExpectedConcerns = nil
+	for _, label := range c.Labels.ExpectedConcerns {
+		if !label.Approved {
+			clone.Labels.ExpectedConcerns = append(clone.Labels.ExpectedConcerns, label)
+			continue
+		}
+		owner := strings.TrimSpace(label.OwnerAdversary)
+		if owner == "" {
+			owner = primaryID
+		}
+		if graded[owner] {
+			clone.Labels.ExpectedConcerns = append(clone.Labels.ExpectedConcerns, label)
+		}
+	}
+	return &clone
 }
 
 func loadPriorMissEvidence(stateRoot string) []report.MissEvidence {

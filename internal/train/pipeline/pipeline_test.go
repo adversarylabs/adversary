@@ -99,6 +99,31 @@ func TestGradeOwnersRunsOnlyRoutedPackages(t *testing.T) {
 	}
 }
 
+func TestCaseForGradedOwnersExcludesBlockedGold(t *testing.T) {
+	c := &cases.Case{Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
+		{ID: "nits", Approved: true, OwnerAdversary: "nits"},
+		{ID: "tests", Approved: true, OwnerAdversary: "go-testing"},
+		{ID: "fallback", Approved: true},
+		{ID: "ignored", Approved: false, OwnerAdversary: "nits"},
+	}}}
+	got := caseForGradedOwners(c, map[string]bool{"nits": true, "engineering-review": true}, "engineering-review")
+	if got == c {
+		t.Fatal("expected a cloned case")
+	}
+	want := map[string]bool{"nits": true, "fallback": true, "ignored": true}
+	if len(got.Labels.ExpectedConcerns) != len(want) {
+		t.Fatalf("labels=%#v", got.Labels.ExpectedConcerns)
+	}
+	for _, label := range got.Labels.ExpectedConcerns {
+		if !want[label.ID] {
+			t.Fatalf("blocked owner's gold remained gradeable: %#v", label)
+		}
+	}
+	if len(c.Labels.ExpectedConcerns) != 4 {
+		t.Fatal("source case was mutated")
+	}
+}
+
 func TestEligiblePriorMissRejectsLegacyConversationNoise(t *testing.T) {
 	base := results.Result{
 		Kind:    results.KindMiss,
