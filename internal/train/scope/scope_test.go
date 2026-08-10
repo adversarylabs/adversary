@@ -1,6 +1,9 @@
 package scope
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestHeuristicSuggestionDocOutOfScope(t *testing.T) {
 	c := &Classifier{AdversaryName: "engineering-review", UseLLM: false}
@@ -154,6 +157,57 @@ func TestLGTMSatisfactionOutOfScope(t *testing.T) {
 	r := c.Classify(body, "", "ps-mir")
 	if r.Decision != OutOfScope {
 		t.Fatalf("LGTM/satisfaction should be out of scope, got %s (%s)", r.Decision, r.Reason)
+	}
+}
+
+func TestNormalizeReviewCommentRemovesGuidanceButKeepsIntent(t *testing.T) {
+	body := `<!-- Thoughts represent an idea that popped up from reviewing. These comments are non-blocking by nature, but they are extremely valuable. -->
+**thought:** something about mounting the git directory feels weird. Would setting :ro make sense so the external directory is read-only and prevents permission collisions?`
+
+	normalized := NormalizeReviewComment(body)
+	if strings.Contains(strings.ToLower(normalized), "non-blocking") {
+		t.Fatalf("template guidance survived normalization: %q", normalized)
+	}
+	if !strings.Contains(normalized, "Would setting :ro") {
+		t.Fatalf("reviewer intent was removed: %q", normalized)
+	}
+	if reason, rejected := NonActionableHumanComment(body); rejected {
+		t.Fatalf("actionable review was rejected as %q before routing", reason)
+	}
+	if reason, rejected := globalNonDefectOut(normalized, "docker-compose.yml"); rejected {
+		t.Fatalf("actionable review was rejected as %q after normalization", reason)
+	}
+}
+
+func TestNormalizeReviewCommentPreservesAutomationProvenance(t *testing.T) {
+	body := "Useful-looking review text.\n\n<!-- hermes-pr-review abc123 -->"
+	if normalized := NormalizeReviewComment(body); normalized != body {
+		t.Fatalf("unknown provenance marker changed: %q", normalized)
+	}
+}
+
+func TestNormalizeReviewCommentPreservesMixedAutomationMarker(t *testing.T) {
+	body := `<!-- hermes-pr-review abc123; Thoughts represent an idea that popped up from reviewing. These comments are non-blocking by nature. -->
+This goroutine can leak after shutdown.`
+	if normalized := NormalizeReviewComment(body); normalized != body {
+		t.Fatalf("mixed provenance marker changed: %q", normalized)
+	}
+	if reason, rejected := NonActionableHumanComment(body); !rejected || !strings.Contains(reason, "automated review artifact") {
+		t.Fatalf("mixed provenance was not rejected: rejected=%v reason=%q", rejected, reason)
+	}
+}
+
+func TestContextDependentReviewFragmentIsNotGold(t *testing.T) {
+	vague := `<!-- Questions are appropriate if you have a potential concern but are not quite sure if it's relevant or not. -->
+**question:** should this be excised as well?`
+	if reason, rejected := NonActionableHumanComment(vague); !rejected || !strings.Contains(reason, "context-dependent") {
+		t.Fatalf("vague fragment was not rejected: rejected=%v reason=%q", rejected, reason)
+	}
+
+	causal := `<!-- Thoughts represent an idea that popped up from reviewing. These comments are non-blocking by nature. -->
+**thought:** something about mounting the git directory feels weird. Would setting :ro make sense so the external directory is read-only and prevents permission collisions?`
+	if reason, rejected := NonActionableHumanComment(causal); rejected {
+		t.Fatalf("self-contained concern was rejected as %q", reason)
 	}
 }
 

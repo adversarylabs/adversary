@@ -437,6 +437,8 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 				}
 			}
 		}
+		body = scope.NormalizeReviewComment(body)
+		labels[i].Summary = body
 		if authorOK != nil && !authorOK(author) {
 			labels[i].Scope = string(scope.OutOfScope)
 			labels[i].Approved = false

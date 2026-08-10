@@ -27,7 +27,8 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	comments := `[
 	  {"id": 2, "pull_request_review_id": 1, "user": {"login": "mitchellh"}, "body": "Also a data race on the shared map without synchronization.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:01:00Z"},
 	  {"id": 3, "pull_request_review_id": 1, "in_reply_to_id": 2, "user": {"login": "author1"}, "body": "For context, this is because we already serialize access in the caller.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:02:00Z"},
-	  {"id": 4, "pull_request_review_id": 1, "in_reply_to_id": 2, "user": {"login": "mitchellh"}, "body": "Please add an assertion that proves the caller keeps this map serialized.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:03:00Z"}
+	  {"id": 4, "pull_request_review_id": 1, "in_reply_to_id": 2, "user": {"login": "mitchellh"}, "body": "Please add an assertion that proves the caller keeps this map serialized.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:03:00Z"},
+	  {"id": 5, "pull_request_review_id": 1, "user": {"login": "mitchellh"}, "body": "<!-- Thoughts represent an idea that popped up from reviewing. These comments are non-blocking by nature. --> Data race: this shared map is written without synchronization; guard it with the existing mutex.", "path": "worker.go", "line": 12, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:04:00Z"}
 	]`
 	_ = os.WriteFile(filepath.Join(dir, "pull.json"), []byte(pull), 0o600)
 	_ = os.WriteFile(filepath.Join(dir, "reviews.json"), []byte(reviews), 0o600)
@@ -46,7 +47,7 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	if len(cases) == 0 {
 		t.Fatal("expected cases")
 	}
-	foundExplanation, foundRequest := false, false
+	foundExplanation, foundRequest, foundNormalized := false, false, false
 	for _, label := range cases[0].Labels.ExpectedConcerns {
 		switch {
 		case strings.Contains(label.Summary, "For context"):
@@ -59,10 +60,15 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 			if !label.Approved || label.Scope != string(scope.InScope) {
 				t.Errorf("explicit reviewer request should remain gold: %+v", label)
 			}
+		case strings.Contains(label.Summary, "Data race"):
+			foundNormalized = true
+			if strings.Contains(label.Summary, "Thoughts represent") || !label.Approved {
+				t.Errorf("review guidance should be removed before persisting gold: %+v", label)
+			}
 		}
 	}
-	if !foundExplanation || !foundRequest {
-		t.Fatalf("missing metadata regression labels: explanation=%v request=%v", foundExplanation, foundRequest)
+	if !foundExplanation || !foundRequest || !foundNormalized {
+		t.Fatalf("missing metadata regression labels: explanation=%v request=%v normalized=%v", foundExplanation, foundRequest, foundNormalized)
 	}
 	// authors_only filter
 	cases2, err := BuildCasesFromCacheFiltered("acme", "r", 42, dir, nil, router, func(login string) bool {

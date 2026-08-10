@@ -94,7 +94,7 @@ func LoadMission(adversarySource, factoryRepoRoot, adversaryName string) (string
 // Classify decides if a human comment is in scope for the adversary.
 // author is the GitHub login (used to drop bots / copilot overviews).
 func (c *Classifier) Classify(commentBody, path, author string) Result {
-	body := strings.TrimSpace(commentBody)
+	body := NormalizeReviewComment(commentBody)
 	if body == "" {
 		return Result{Decision: OutOfScope, Reason: "empty comment", Method: "heuristic"}
 	}
@@ -146,6 +146,37 @@ func (c *Classifier) Classify(commentBody, path, author string) Result {
 		Reason:   "heuristic: not clearly in adversary mission (prefer ignore over false miss)",
 		Method:   "heuristic",
 	}
+}
+
+// NormalizeReviewComment removes prose injected by known human-review templates
+// before intent classification. The guidance is not written by the reviewer and
+// can contain phrases such as "non-blocking" that otherwise turn an actionable
+// request into an apparent approval. Unknown HTML comments remain intact because
+// some are automation provenance used by the gold-quality filters.
+func NormalizeReviewComment(body string) string {
+	cursor := 0
+	for {
+		relStart := strings.Index(body[cursor:], "<!--")
+		if relStart < 0 {
+			break
+		}
+		start := cursor + relStart
+		relEnd := strings.Index(body[start+4:], "-->")
+		if relEnd < 0 {
+			break
+		}
+		end := start + 4 + relEnd + 3
+		comment := strings.ToLower(body[start:end])
+		isGuidance := strings.Contains(comment, "questions are appropriate if you have a potential concern") ||
+			strings.Contains(comment, "thoughts represent an idea that popped up from reviewing")
+		if isGuidance && !isAutomatedReviewArtifact(comment) {
+			body = body[:start] + body[end:]
+			cursor = start
+			continue
+		}
+		cursor = end
+	}
+	return strings.TrimSpace(body)
 }
 
 // BroadScopeMission reports whether a package's mission claims nearly all
@@ -417,9 +448,13 @@ func globalNonDefectOut(body, path string) (reason string, ok bool) {
 // a reviewer's praise summary is evidence about a conversation, not a defect an
 // adversary should learn to report.
 func NonActionableHumanComment(body string) (reason string, ok bool) {
+	body = NormalizeReviewComment(body)
 	lower := strings.ToLower(strings.TrimSpace(body))
 	if lower == "" {
 		return "empty comment", true
+	}
+	if isContextDependentReviewFragment(lower) {
+		return "context-dependent fragment without a self-contained concern", true
 	}
 	if isAutomatedReviewArtifact(lower) {
 		return "automated review artifact posted through a human account", true
@@ -434,6 +469,27 @@ func NonActionableHumanComment(body string) (reason string, ok bool) {
 		return "approval / praise summary without an unresolved request", true
 	}
 	return "", false
+}
+
+func isContextDependentReviewFragment(lower string) bool {
+	if len(lower) > 100 || strings.Contains(lower, "`") {
+		return false
+	}
+	trimmed := strings.TrimSpace(lower)
+	for _, label := range []string{"**question:**", "question:", "**thought:**", "thought:"} {
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, label))
+	}
+	fragments := []string{
+		"should this be", "shouldn't this be", "can this be", "could this be",
+		"would this be", "remove this", "what about this", "why this", "this too",
+		"same here", "same as above", "as well?",
+	}
+	for _, fragment := range fragments {
+		if strings.Contains(trimmed, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 // NonActionableReply uses collection metadata (PR author and review-thread
