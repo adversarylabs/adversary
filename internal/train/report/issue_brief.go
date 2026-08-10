@@ -124,6 +124,7 @@ Writing rules:
 - Give 2-3 concrete hypothetical examples that exercise the same causal mechanism, and 1-2 counterexamples where a superficially similar operation is actually necessary. Keep every list item to one complete sentence of at most 45 words.
 - Do not reuse code identifiers, product names, or repository details from the evidence; examples must be hypothetical and repository-neutral.
 - Give 2-4 acceptance criteria about observable adversary behavior, including positive and negative fixtures. Do not prescribe changes to the source project.
+- Base every criterion on inputs the adversary actually receives: changed head-side code and current changed-file evidence. Never require PR title/body/description, base-side file contents, prior commits, or repository history.
 - Respect the package scope. Do not widen a specialist or use engineering-review as a dumping ground.
 - Do not mention model training, scores, result ids, repositories, PR numbers, implementation file lists, or provenance boilerplate.
 - Do not quote the source comment verbatim and do not hard-code its surface wording.
@@ -183,6 +184,7 @@ Return a revised brief that:
 - uses concrete hypothetical examples from at least two repository-neutral domains;
 - gives counterexamples where the superficially similar operation is actually necessary;
 - makes acceptance criteria observable adversary behavior: positive fixtures emit a focused finding and negative fixtures stay quiet;
+- uses only changed head-side code and current changed-file evidence; it never depends on PR metadata, base-side file contents, prior commits, or repository history;
 - avoids unsupported claims about performance, security, or correctness.
 - keeps the title to at most 12 words, each paragraph to at most two sentences and 70 words, and every list item to one complete sentence of at most 45 words;
 - removes repetition so the intent says what to detect and the rationale says why maintainers care.

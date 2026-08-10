@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/adversarylabs/adversary/internal/train/adversaries"
+	"github.com/adversarylabs/adversary/internal/train/cases"
 	"github.com/adversarylabs/adversary/internal/train/receipt"
 )
 
@@ -75,6 +76,25 @@ func TestPackageIDFromName(t *testing.T) {
 	}
 	if got := packageIDFromName("/x/y/go-concurrency-adversary/"); got != "go-concurrency" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGradeOwnersRunsOnlyRoutedPackages(t *testing.T) {
+	if owners := gradeOwners(&cases.Case{}, "engineering-review"); len(owners) != 0 {
+		t.Fatalf("empty-gold case should run no packages: %#v", owners)
+	}
+	c := &cases.Case{Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
+		{ID: "one", Summary: "one", Approved: true, Scope: "in_scope", OwnerAdversary: "terraform"},
+		{ID: "two", Summary: "two", Approved: true, Scope: "in_scope", OwnerAdversary: "terraform"},
+		{ID: "three", Summary: "three", Approved: true, Scope: "in_scope", OwnerAdversary: "nits"},
+		{ID: "ignored", Summary: "ignored", Approved: true, Scope: "out_of_scope", OwnerAdversary: "engineering-review"},
+	}}}
+	owners := gradeOwners(c, "engineering-review")
+	if len(owners) != 2 || len(owners["terraform"]) != 2 || len(owners["nits"]) != 1 {
+		t.Fatalf("grade owners = %#v", owners)
+	}
+	if _, ok := owners["engineering-review"]; ok {
+		t.Fatalf("unrouted package must not run: %#v", owners)
 	}
 }
 

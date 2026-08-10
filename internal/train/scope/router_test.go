@@ -219,6 +219,43 @@ func TestRouterBroadGeneralistKeepsNits(t *testing.T) {
 	}
 }
 
+func TestRouterRejectsConversationArtifactsBeforeBroadRouting(t *testing.T) {
+	r := &Router{
+		Candidates: []Candidate{
+			{ID: "engineering-review", AdversaryName: "engineering-review", Mission: "staff engineering contracts and validation"},
+			{ID: "nits", AdversaryName: "nits", Mission: "non-blocking maintainer taste"},
+			{ID: "person-maintainer", AdversaryName: "person-maintainer", Mission: "Everything is in scope. Do not exclude nits."},
+		},
+		UseLLM: false,
+	}
+
+	falseGold := []string{
+		"Fixed in 5fbd91a. Invalid column entries now fall back to form_data and regression coverage was added.",
+		"Updated",
+		"Overall, this is a correct behavior-preserving cleanup that removes redundant branching.",
+		"We don't need to worry about backwards compatibility here because this API has not shipped.",
+	}
+	for _, body := range falseGold {
+		route := r.RouteComment(body, "src/query.py", "author")
+		if route.OwnerID != "" || route.Decision != OutOfScope {
+			t.Errorf("conversation artifact became gold: %q => %+v", body, route)
+		}
+	}
+
+	requests := []string{
+		"Please reject invalid column entries instead of silently discarding the validation error.",
+		"LGTM overall, but please reject invalid column entries instead of silently discarding the validation error.",
+		"Could you use the class token instead of passing a duplicate value through every helper?",
+		"Nit: align this name with the sibling helper so the two call sites read consistently.",
+	}
+	for _, body := range requests {
+		route := r.RouteComment(body, "src/query.py", "reviewer")
+		if route.OwnerID == "" || route.Decision != InScope {
+			t.Errorf("real reviewer request was rejected: %q => %+v", body, route)
+		}
+	}
+}
+
 func TestRouteLLMDecisionRequiresGoldQualityGates(t *testing.T) {
 	candidates := []Candidate{{ID: "engineering-review"}, {ID: "go-concurrency"}}
 	base := routeDecision{

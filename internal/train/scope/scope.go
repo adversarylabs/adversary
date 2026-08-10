@@ -98,6 +98,9 @@ func (c *Classifier) Classify(commentBody, path, author string) Result {
 	if body == "" {
 		return Result{Decision: OutOfScope, Reason: "empty comment", Method: "heuristic"}
 	}
+	if reason, ok := NonActionableHumanComment(body); ok {
+		return Result{Decision: OutOfScope, Reason: reason, Method: "heuristic"}
+	}
 
 	// Broad generalists (person packages / "everything is in scope" missions) own
 	// nearly all technical review comments — including nits and style. Do not use
@@ -358,6 +361,9 @@ func heuristicOut(body, path, author, adversaryName string) (Result, bool) {
 // globalNonDefectOut is used by the multi-adversary router before scoring.
 // Only filters that apply to ALL adversaries (never specialist-owned).
 func globalNonDefectOut(body, path string) (reason string, ok bool) {
+	if reason, ok := NonActionableHumanComment(body); ok {
+		return reason, true
+	}
 	if isApprovalOrNonDefect(body) && !heuristicLikelyIn(body, path) {
 		return "approval / LGTM / non-defect observation (not a miss)", true
 	}
@@ -403,6 +409,114 @@ func globalNonDefectOut(body, path string) (reason string, ok bool) {
 		return "documentation-only suggestion / typo flip", true
 	}
 	return "", false
+}
+
+// NonActionableHumanComment rejects human prose that cannot be a review
+// finding, regardless of which adversary has the broadest mission. These checks
+// deliberately run before broad-persona routing: an author's "Fixed" reply or
+// a reviewer's praise summary is evidence about a conversation, not a defect an
+// adversary should learn to report.
+func NonActionableHumanComment(body string) (reason string, ok bool) {
+	lower := strings.ToLower(strings.TrimSpace(body))
+	if lower == "" {
+		return "empty comment", true
+	}
+	if isAuthorStatusUpdate(lower) {
+		return "author status / resolution update, not a review request", true
+	}
+	if isDismissiveResolution(lower) {
+		return "rebuttal / no-action-needed response, not a review request", true
+	}
+	if (isApprovalOrNonDefect(body) || isPraiseSummary(lower)) && !hasReviewRequest(lower) {
+		return "approval / praise summary without an unresolved request", true
+	}
+	return "", false
+}
+
+// NonActionableReply uses collection metadata (PR author and review-thread
+// linkage) to reject explanatory responses which would be ambiguous if seen as
+// standalone text. Callers should pass only comments known to be by the PR
+// author or replies in an existing review thread.
+func NonActionableReply(body string) (reason string, ok bool) {
+	if reason, ok := NonActionableHumanComment(body); ok {
+		return reason, true
+	}
+	lower := strings.ToLower(strings.TrimSpace(body))
+	if hasReviewRequest(lower) {
+		return "", false
+	}
+	explanations := []string{
+		"for context", "the reason ", "this is because", "that's because",
+		"that is because", "this already", "we already", "we have ",
+		"this is expected", "that's expected", "that is expected", "by design",
+		"as explained", "currently ", "it just ", "this just ",
+	}
+	for _, marker := range explanations {
+		if strings.Contains(lower, marker) {
+			if containsDefectAsk(lower) {
+				return "", false
+			}
+			return "author/thread explanation without an unresolved review request", true
+		}
+	}
+	return "", false
+}
+
+func isDismissiveResolution(lower string) bool {
+	if hasReviewRequest(lower) {
+		return false
+	}
+	markers := []string{
+		"don't need to worry", "do not need to worry", "no need to worry",
+		"nothing to worry", "not a concern", "no action needed", "can be ignored",
+		"safe to ignore", "working as intended", "behaving as intended",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPraiseSummary(lower string) bool {
+	if hasReviewRequest(lower) || containsDefectAsk(lower) {
+		return false
+	}
+	trim := strings.TrimSpace(lower)
+	if !strings.HasPrefix(trim, "overall") && !strings.HasPrefix(trim, "summary:") {
+		return false
+	}
+	markers := []string{
+		"correct", "behavior-preserving", "behaviour-preserving", "clean cleanup",
+		"solid", "looks good", "good change", "nice cleanup", "safe cleanup",
+	}
+	for _, marker := range markers {
+		if strings.Contains(trim, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasReviewRequest(lower string) bool {
+	requests := []string{
+		"please ", "could you", "can you", "can we", "could we", "would you",
+		"why not", "should ", "shouldn't", "should not", "must ", "must not",
+		"needs to", "need to", "consider ", "recommend ", "suggest ",
+		"instead", "nit:", "nit;", "would be better", "worth ",
+	}
+	for _, marker := range requests {
+		if strings.Contains(lower, marker) {
+			// Negated "no need" / "don't need" is a resolution, not an ask.
+			if (marker == "need to" || marker == "needs to") &&
+				(strings.Contains(lower, "no need to") || strings.Contains(lower, "don't need to") || strings.Contains(lower, "do not need to")) {
+				continue
+			}
+			return true
+		}
+	}
+	return containsDefectAsk(lower)
 }
 
 // isDocsOnlySuggestion recognizes fenced documentation edits even when the
@@ -483,13 +597,13 @@ func isContributionChatter(lower string) bool {
 
 func isAuthorStatusUpdate(lower string) bool {
 	trim := strings.TrimSpace(lower)
-	statusStart := []string{"fixed", "done", "resolved", "reproduced", "confirmed"}
+	statusStart := []string{"fixed", "updated", "addressed", "implemented", "done", "resolved", "reproduced", "confirmed"}
 	for _, marker := range statusStart {
-		if hasStatusPrefix(trim, marker) && !containsDefectAsk(lower) {
+		if hasStatusPrefix(trim, marker) && !hasReviewRequest(lower) {
 			return true
 		}
 	}
-	return (strings.Contains(lower, "i'll revert") || strings.Contains(lower, "i will revert")) && !containsDefectAsk(lower)
+	return (strings.Contains(lower, "i'll revert") || strings.Contains(lower, "i will revert")) && !hasReviewRequest(lower)
 }
 
 func hasStatusPrefix(s, marker string) bool {

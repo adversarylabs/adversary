@@ -158,6 +158,7 @@ func TestSuggestIssuesUsesFullSourceCommentAsBriefEvidence(t *testing.T) {
 	const fullComment = "This value is already masked on every path it takes. The trace manager masks logs and the issue recorder masks annotations. The new helper is only for protocol payloads that bypass both paths, so it is not applicable here."
 	c := &cases.Case{
 		ID:          "case-masking",
+		Repository:  cases.Repository{URL: "https://github.com/acme/one/pull/1"},
 		PullRequest: cases.PullRequest{Title: "Report a debugger infrastructure failure"},
 		Comments:    []cases.Comment{{ID: 42, Body: fullComment, Path: "debugger.cs"}},
 		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
@@ -173,6 +174,7 @@ func TestSuggestIssuesUsesFullSourceCommentAsBriefEvidence(t *testing.T) {
 	issues := suggestIssues(Input{
 		Context: context.Background(), Scorecard: sc, Cases: []*cases.Case{c},
 		LocalIDs: map[string]bool{"nits": true}, IssueBriefWriter: writer,
+		PriorMisses: []MissEvidence{{Package: "nits", Summary: "This validation is already guaranteed on every downstream path.", PRURL: "https://github.com/acme/two/pull/2"}},
 	})
 	if len(issues) != 1 {
 		t.Fatalf("issues=%d %#v", len(issues), issues)
@@ -207,9 +209,55 @@ func (w *captureBriefWriter) WriteIssueBrief(_ context.Context, in IssueBriefInp
 	}, nil
 }
 
+type unavailableInputBriefWriter struct{}
+
+func (unavailableInputBriefWriter) WriteIssueBrief(_ context.Context, _ IssueBriefInput) (IssueBrief, error) {
+	return IssueBrief{
+		Title:  "Compare implementation with promised behavior",
+		Intent: "Detect when implementation details diverge from the behavior promised to maintainers.",
+		Why:    "Unnoticed divergence can make a change incomplete even when the changed code is internally consistent.",
+		Examples: []string{
+			"A migration updates storage but omits one required consumer.",
+			"A new mode updates parsing but leaves execution unchanged.",
+		},
+		Counterexamples: []string{"A cohesive implementation updates every affected layer."},
+		Acceptance: []string{
+			"A positive fixture compares the PR description with the implementation.",
+			"A complete implementation remains quiet.",
+		},
+	}, nil
+}
+
+func TestSuggestIssuesRejectsGeneratedBriefThatNeedsUnavailableInputs(t *testing.T) {
+	c := &cases.Case{
+		ID:         "case-contract",
+		Repository: cases.Repository{URL: "https://github.com/acme/one/pull/1"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "contract", Summary: "The contract changes but the downstream adapter still rejects the value.",
+			OwnerAdversary: "engineering-review", Approved: true,
+		}}},
+	}
+	failure := judge.Failure{CaseID: c.ID, Kind: "missed-concern", ConcernID: "contract", ReviewerID: "engineering-review"}
+	sc := score.Aggregate("engineering-review", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "engineering-review", ExpectedMissed: []string{"contract"}},
+	}, []judge.Failure{failure})
+	issues := suggestIssues(Input{
+		Scorecard: sc, Cases: []*cases.Case{c}, LocalIDs: map[string]bool{"engineering-review": true},
+		IssueBriefWriter: unavailableInputBriefWriter{},
+		PriorMisses: []MissEvidence{{
+			Package: "engineering-review", Summary: "A downstream adapter still rejects the newly supported contract value.",
+			PRURL: "https://github.com/other/two/pull/2",
+		}},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("generated acceptance criteria require unavailable PR metadata: %#v", issues)
+	}
+}
+
 func TestSuggestIssuesUsesModelBriefAndPackageScope(t *testing.T) {
 	c := &cases.Case{
 		ID:          "case-1",
+		Repository:  cases.Repository{URL: "https://github.com/acme/one/pull/1"},
 		PullRequest: cases.PullRequest{Title: "fix operator precedence"},
 		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
 			ID: "concern-1", Summary: "why are these changes here?", File: "session.go",
@@ -229,6 +277,7 @@ func TestSuggestIssuesUsesModelBriefAndPackageScope(t *testing.T) {
 		LocalIDs:         map[string]bool{"engineering-review": true},
 		PackageScopes:    map[string]string{"engineering-review": "Staff-level residual engineering judgment."},
 		IssueBriefWriter: writer,
+		PriorMisses:      []MissEvidence{{Package: "engineering-review", Summary: "Why is this unrelated behavior bundled into the focused fix?", PRURL: "https://github.com/acme/two/pull/2"}},
 	})
 	if len(issues) != 1 {
 		t.Fatalf("issues=%d %#v", len(issues), issues)
@@ -236,7 +285,7 @@ func TestSuggestIssuesUsesModelBriefAndPackageScope(t *testing.T) {
 	if issues[0].Title != "Detect independent behavior hidden inside an otherwise focused change" {
 		t.Fatalf("model title not used: %#v", issues[0])
 	}
-	if issues[0].Key != "engineering-review|general" {
+	if issues[0].Key != "engineering-review|change-cohesion" {
 		t.Fatalf("stable concern key missing: %#v", issues[0])
 	}
 	if strings.Contains(issues[0].Body, "Task for coding agent") || strings.Contains(issues[0].Body, "Example concern classes") {
@@ -245,7 +294,7 @@ func TestSuggestIssuesUsesModelBriefAndPackageScope(t *testing.T) {
 	if writer.input.PackageScope != "Staff-level residual engineering judgment." {
 		t.Fatalf("scope not passed to writer: %#v", writer.input)
 	}
-	if len(writer.input.Evidence) != 1 || writer.input.Evidence[0].PRTitle != "fix operator precedence" {
+	if len(writer.input.Evidence) != 2 || writer.input.Evidence[0].PRTitle != "fix operator precedence" {
 		t.Fatalf("source context not passed to writer: %#v", writer.input)
 	}
 }
@@ -282,7 +331,8 @@ func (w *barrierBriefWriter) WriteIssueBrief(_ context.Context, _ IssueBriefInpu
 
 func TestSuggestIssuesGeneratesIndependentBriefsConcurrently(t *testing.T) {
 	c := &cases.Case{
-		ID: "case-concurrent",
+		ID:         "case-concurrent",
+		Repository: cases.Repository{URL: "https://github.com/acme/one/pull/1"},
 		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{
 			{ID: "validation", Summary: "The test reaches the branch but does not assert the result.", OwnerAdversary: "engineering-review", Approved: true},
 			{ID: "contract", Summary: "The public contract changes but the downstream adapter still rejects the value.", OwnerAdversary: "engineering-review", Approved: true},
@@ -301,6 +351,10 @@ func TestSuggestIssuesGeneratesIndependentBriefsConcurrently(t *testing.T) {
 		done <- suggestIssues(Input{
 			Scorecard: sc, Cases: []*cases.Case{c},
 			LocalIDs: map[string]bool{"engineering-review": true}, IssueBriefWriter: writer,
+			PriorMisses: []MissEvidence{
+				{Package: "engineering-review", Summary: "The coverage reaches the branch without asserting the invariant.", PRURL: "https://github.com/acme/two/pull/2"},
+				{Package: "engineering-review", Summary: "The newly supported value is still rejected by a downstream adapter.", PRURL: "https://github.com/acme/three/pull/3"},
+			},
 		})
 	}()
 	select {

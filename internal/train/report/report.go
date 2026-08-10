@@ -50,6 +50,20 @@ type Input struct {
 	// IssueBriefWriter synthesizes maintainer-quality issue intent from misses.
 	// Nil uses a concise deterministic fallback (fixtures and credential-less runs).
 	IssueBriefWriter IssueBriefWriter
+	// PriorMisses are individual, locally persisted misses from earlier runs.
+	// They may corroborate a current miss, but never produce a draft by
+	// themselves. This lets --max-prs 1 accumulate evidence safely over time.
+	PriorMisses []MissEvidence
+}
+
+// MissEvidence is the durable subset of an individual missed concern used to
+// decide whether a reusable improvement is corroborated across pull requests.
+// Individual miss rows remain the source of truth; this is only a report input.
+type MissEvidence struct {
+	Package string
+	Summary string
+	PRURL   string
+	PRTitle string
 }
 
 // Result of writing the report.
@@ -659,6 +673,16 @@ type SuggestedIssue struct {
 	Body   string
 }
 
+type issueBucket struct {
+	key           string
+	classKey      string
+	fallbackTitle string
+	evidence      []IssueBriefEvidence
+	sources       map[string]bool
+	exemplars     []string
+	touched       bool
+}
+
 func writeSuggestedIssuesFile(dir string, issues []SuggestedIssue) {
 	if dir == "" {
 		return
@@ -682,14 +706,7 @@ func suggestIssues(in Input) []SuggestedIssue {
 		return nil
 	}
 	// Group missed concerns by a coarse class from summary keywords.
-	type bucket struct {
-		key           string
-		classKey      string
-		fallbackTitle string
-		evidence      []IssueBriefEvidence
-		count         int
-	}
-	buckets := map[string]*bucket{}
+	buckets := map[string]*issueBucket{}
 	caseByID := map[string]*cases.Case{}
 	for _, c := range in.Cases {
 		caseByID[c.ID] = c
@@ -719,8 +736,13 @@ func suggestIssues(in Input) []SuggestedIssue {
 		if owner == "" {
 			continue
 		}
+		owner = strings.ToLower(strings.TrimSpace(owner))
 		// Train draft gate: local only, no official catch.
 		if !shouldEmitTrainDraft(in, f.ConcernID, owner) {
+			continue
+		}
+		concernBody := sourceConcernBody(c, concern, summary)
+		if unavailableReviewInputReason(concernBody, summary, concernScopeReason(concern)) != "" {
 			continue
 		}
 		key, title := classifyConcernClass(owner, summary)
@@ -728,22 +750,41 @@ func suggestIssues(in Input) []SuggestedIssue {
 		bkey := owner + "|" + key
 		bkt := buckets[bkey]
 		if bkt == nil {
-			bkt = &bucket{key: bkey, classKey: key, fallbackTitle: title}
+			bkt = &issueBucket{key: bkey, classKey: key, fallbackTitle: title, sources: map[string]bool{}}
 			buckets[bkey] = bkt
 		}
-		bkt.count++
-		if len(bkt.evidence) < 3 {
-			ev := IssueBriefEvidence{Concern: softWrap(sourceConcernBody(c, concern, summary), 1_200)}
-			if c != nil {
-				ev.PRTitle = softWrap(c.PullRequest.Title, 240)
-			}
-			if concern != nil {
-				ev.File = concern.File
-				ev.Importance = concern.Importance
-				ev.ScopeWhy = softWrap(concern.ScopeReason, 300)
-			}
-			bkt.evidence = append(bkt.evidence, ev)
+		bkt.touched = true
+		bkt.exemplars = append(bkt.exemplars, summary)
+		ev := IssueBriefEvidence{Concern: softWrap(concernBody, 1_200)}
+		if c != nil {
+			ev.PRTitle = softWrap(c.PullRequest.Title, 240)
 		}
+		if concern != nil {
+			ev.File = concern.File
+			ev.Importance = concern.Importance
+			ev.ScopeWhy = softWrap(concern.ScopeReason, 300)
+		}
+		addCorroboratingEvidence(bkt, reviewLink(c), ev)
+	}
+
+	// A single review comment is useful local evidence, but it is not enough to
+	// open maintainer work. Only prior misses with the same package and intent
+	// may corroborate a bucket touched by this run.
+	for _, prior := range in.PriorMisses {
+		owner := strings.ToLower(strings.TrimSpace(prior.Package))
+		if owner == "" || strings.TrimSpace(prior.Summary) == "" ||
+			unavailableReviewInputReason(prior.Summary) != "" {
+			continue
+		}
+		key, _ := classifyConcernClass(owner, prior.Summary)
+		bkt := buckets[owner+"|"+key]
+		if bkt == nil || !bkt.touched || !sameConcernIntent(key, prior.Summary, bkt.exemplars) {
+			continue
+		}
+		addCorroboratingEvidence(bkt, prior.PRURL, IssueBriefEvidence{
+			Concern: softWrap(prior.Summary, 1_200),
+			PRTitle: softWrap(prior.PRTitle, 240),
+		})
 	}
 	if len(buckets) == 0 {
 		// Do not emit noise drafts for official packages.
@@ -756,12 +797,15 @@ func suggestIssues(in Input) []SuggestedIssue {
 	sort.Strings(keys)
 	type issueCandidate struct {
 		owner string
-		bkt   *bucket
+		bkt   *issueBucket
 		brief IssueBrief
 	}
 	var candidates []issueCandidate
 	for _, k := range keys {
 		bkt := buckets[k]
+		if !bkt.touched || len(bkt.sources) < 2 {
+			continue
+		}
 		owner := ""
 		if i := strings.Index(bkt.key, "|"); i >= 0 {
 			owner = bkt.key[:i]
@@ -811,6 +855,9 @@ func suggestIssues(in Input) []SuggestedIssue {
 	}
 	out := make([]SuggestedIssue, 0, len(candidates))
 	for _, candidate := range candidates {
+		if unavailableIssueBriefReason(candidate.brief) != "" {
+			continue
+		}
 		out = append(out, SuggestedIssue{
 			Key:    candidate.bkt.key,
 			Title:  candidate.brief.Title,
@@ -819,6 +866,137 @@ func suggestIssues(in Input) []SuggestedIssue {
 		})
 	}
 	return out
+}
+
+func concernScopeReason(concern *cases.ExpectedConcern) string {
+	if concern == nil {
+		return ""
+	}
+	return concern.ScopeReason
+}
+
+func addCorroboratingEvidence(bkt *issueBucket, prURL string, ev IssueBriefEvidence) {
+	if bkt == nil {
+		return
+	}
+	source := normalizePRURL(prURL)
+	if source == "" || bkt.sources[source] {
+		return
+	}
+	bkt.sources[source] = true
+	if len(bkt.evidence) < 3 {
+		bkt.evidence = append(bkt.evidence, ev)
+	}
+}
+
+func normalizePRURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if i := strings.IndexByte(raw, '#'); i >= 0 {
+		raw = raw[:i]
+	}
+	if i := strings.IndexByte(raw, '?'); i >= 0 {
+		raw = raw[:i]
+	}
+	if !strings.Contains(raw, "/pull/") {
+		return ""
+	}
+	return strings.TrimSuffix(raw, "/")
+}
+
+func sameConcernIntent(classKey, summary string, exemplars []string) bool {
+	// These classifiers encode a narrow causal mechanism on their own. Broader
+	// classes (errors, concurrency, validation, contracts, and general) still
+	// need shared non-generic language so unrelated misses do not cluster.
+	switch classKey {
+	case "change-cohesion", "redundant-operation", "source-of-truth":
+		return true
+	}
+	threshold := 2
+	if classKey == "general" {
+		threshold = 3
+	}
+	for _, exemplar := range exemplars {
+		if concernTokenOverlap(summary, exemplar) >= threshold {
+			return true
+		}
+	}
+	return false
+}
+
+func concernTokenOverlap(a, b string) int {
+	stop := map[string]bool{
+		"about": true, "after": true, "before": true, "change": true, "changes": true,
+		"concurrent": true, "concurrency": true, "contract": true, "coverage": true,
+		"could": true, "does": true, "from": true, "have": true, "here": true,
+		"error": true, "errors": true, "testing": true, "tests": true, "test": true,
+		"adapter": true, "downstream": true, "lifecycle": true, "panic": true,
+		"should": true, "that": true, "these": true, "this": true, "when": true,
+		"where": true, "which": true, "with": true, "would": true,
+	}
+	words := map[string]bool{}
+	for _, word := range strings.FieldsFunc(strings.ToLower(a), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	}) {
+		if len(word) >= 4 && !stop[word] {
+			words[word] = true
+		}
+	}
+	overlap := 0
+	for _, word := range strings.FieldsFunc(strings.ToLower(b), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	}) {
+		if words[word] && !stop[word] {
+			delete(words, word)
+			overlap++
+		}
+	}
+	return overlap
+}
+
+// unavailableReviewInputReason encodes the inputs review adversaries do not
+// receive. A draft that depends on these sources cannot be implemented or
+// tested honestly, so it must remain individual evidence only.
+func unavailableReviewInputReason(parts ...string) string {
+	text := strings.ToLower(strings.Join(parts, "\n"))
+	rules := []struct {
+		reason  string
+		phrases []string
+	}{
+		{"pull request metadata", []string{
+			"pr description", "pull request description", "pull-request description",
+			"pr body", "pull request body", "pull-request body", "pr title", "pull request title",
+			"pull-request title", "pull request metadata", "pull-request metadata",
+		}},
+		{"base-side source", []string{
+			"base-side", "base side", "base diff", "base branch", "base revision contents",
+			"pre-change source", "before this change",
+			"previous version of the file", "old version of the file",
+		}},
+		{"commit history", []string{
+			"prior commit", "prior commits", "previous commit", "previous commits", "earlier commit",
+			"commit history", "git history", "repository history", "original commit",
+			"earlier revision", "previous revision",
+		}},
+	}
+	for _, rule := range rules {
+		for _, phrase := range rule.phrases {
+			if strings.Contains(text, phrase) {
+				return rule.reason
+			}
+		}
+	}
+	return ""
+}
+
+func unavailableIssueBriefReason(brief IssueBrief) string {
+	parts := []string{brief.Title, brief.Intent, brief.Why}
+	parts = append(parts, brief.Examples...)
+	parts = append(parts, brief.Counterexamples...)
+	parts = append(parts, brief.Acceptance...)
+	return unavailableReviewInputReason(parts...)
 }
 
 // sourceConcernBody keeps the full human explanation when the normalized gold
@@ -929,6 +1107,10 @@ func classifyConcernClass(owner, summary string) (key, title string) {
 	owner = strings.ToLower(strings.TrimSpace(owner))
 	if strings.Contains(owner, "engineering-review") || strings.Contains(owner, "engineering_review") {
 		switch {
+		case strings.Contains(s, "unrelated") || strings.Contains(s, "why are these changes") ||
+			strings.Contains(s, "bundled into") || strings.Contains(s, "otherwise focused") ||
+			strings.Contains(s, "independent behavior"):
+			return "change-cohesion", "keep independent behavior out of otherwise focused changes"
 		case strings.Contains(s, "test") || strings.Contains(s, "coverage") ||
 			strings.Contains(s, "assert") || strings.Contains(s, "verify") ||
 			strings.Contains(s, "reproduc") || strings.Contains(s, "regression"):
