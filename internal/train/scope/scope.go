@@ -94,7 +94,7 @@ func LoadMission(adversarySource, factoryRepoRoot, adversaryName string) (string
 // Classify decides if a human comment is in scope for the adversary.
 // author is the GitHub login (used to drop bots / copilot overviews).
 func (c *Classifier) Classify(commentBody, path, author string) Result {
-	body := strings.TrimSpace(commentBody)
+	body := normalizeReviewComment(commentBody)
 	if body == "" {
 		return Result{Decision: OutOfScope, Reason: "empty comment", Method: "heuristic"}
 	}
@@ -146,6 +146,36 @@ func (c *Classifier) Classify(commentBody, path, author string) Result {
 		Reason:   "heuristic: not clearly in adversary mission (prefer ignore over false miss)",
 		Method:   "heuristic",
 	}
+}
+
+// normalizeReviewComment removes prose injected by known human-review templates
+// before intent classification. The guidance is not written by the reviewer and
+// can contain phrases such as "non-blocking" that otherwise turn an actionable
+// request into an apparent approval. Unknown HTML comments remain intact because
+// some are automation provenance used by the gold-quality filters.
+func normalizeReviewComment(body string) string {
+	cursor := 0
+	for {
+		relStart := strings.Index(body[cursor:], "<!--")
+		if relStart < 0 {
+			break
+		}
+		start := cursor + relStart
+		relEnd := strings.Index(body[start+4:], "-->")
+		if relEnd < 0 {
+			break
+		}
+		end := start + 4 + relEnd + 3
+		comment := strings.ToLower(body[start:end])
+		if strings.Contains(comment, "questions are appropriate if you have a potential concern") ||
+			strings.Contains(comment, "thoughts represent an idea that popped up from reviewing") {
+			body = body[:start] + body[end:]
+			cursor = start
+			continue
+		}
+		cursor = end
+	}
+	return strings.TrimSpace(body)
 }
 
 // BroadScopeMission reports whether a package's mission claims nearly all
@@ -417,6 +447,7 @@ func globalNonDefectOut(body, path string) (reason string, ok bool) {
 // a reviewer's praise summary is evidence about a conversation, not a defect an
 // adversary should learn to report.
 func NonActionableHumanComment(body string) (reason string, ok bool) {
+	body = normalizeReviewComment(body)
 	lower := strings.ToLower(strings.TrimSpace(body))
 	if lower == "" {
 		return "empty comment", true
