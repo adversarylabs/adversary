@@ -452,6 +452,9 @@ func NonActionableHumanComment(body string) (reason string, ok bool) {
 	if lower == "" {
 		return "empty comment", true
 	}
+	if isContextDependentReviewFragment(lower) {
+		return "context-dependent fragment without a self-contained concern", true
+	}
 	if isAutomatedReviewArtifact(lower) {
 		return "automated review artifact posted through a human account", true
 	}
@@ -465,6 +468,27 @@ func NonActionableHumanComment(body string) (reason string, ok bool) {
 		return "approval / praise summary without an unresolved request", true
 	}
 	return "", false
+}
+
+func isContextDependentReviewFragment(lower string) bool {
+	if len(lower) > 100 || strings.Contains(lower, "`") {
+		return false
+	}
+	trimmed := strings.TrimSpace(lower)
+	for _, label := range []string{"**question:**", "question:", "**thought:**", "thought:"} {
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, label))
+	}
+	fragments := []string{
+		"should this be", "shouldn't this be", "can this be", "could this be",
+		"would this be", "remove this", "what about this", "why this", "this too",
+		"same here", "same as above", "as well?",
+	}
+	for _, fragment := range fragments {
+		if strings.Contains(trimmed, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 // NonActionableReply uses collection metadata (PR author and review-thread

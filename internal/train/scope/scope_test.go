@@ -186,6 +186,20 @@ func TestNormalizeReviewCommentPreservesAutomationProvenance(t *testing.T) {
 	}
 }
 
+func TestContextDependentReviewFragmentIsNotGold(t *testing.T) {
+	vague := `<!-- Questions are appropriate if you have a potential concern but are not quite sure if it's relevant or not. -->
+**question:** should this be excised as well?`
+	if reason, rejected := NonActionableHumanComment(vague); !rejected || !strings.Contains(reason, "context-dependent") {
+		t.Fatalf("vague fragment was not rejected: rejected=%v reason=%q", rejected, reason)
+	}
+
+	causal := `<!-- Thoughts represent an idea that popped up from reviewing. These comments are non-blocking by nature. -->
+**thought:** something about mounting the git directory feels weird. Would setting :ro make sense so the external directory is read-only and prevents permission collisions?`
+	if reason, rejected := NonActionableHumanComment(causal); rejected {
+		t.Fatalf("self-contained concern was rejected as %q", reason)
+	}
+}
+
 func TestPackageDocNitOutOfScope(t *testing.T) {
 	c := &Classifier{AdversaryName: "engineering-review", UseLLM: false}
 	body := "Nit; more description on package\n```go\n// Package attrnorm normalizes attribute values by:\n//\n//   - Deduplication: resolves duplicate map keys\n```"
