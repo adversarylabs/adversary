@@ -1014,7 +1014,7 @@ func loadPriorMissEvidence(stateRoot string) []report.MissEvidence {
 	}
 	prior := make([]report.MissEvidence, 0, len(rows))
 	for _, row := range rows {
-		if row.Kind != results.KindMiss || row.Status == results.StatusDismissed || strings.TrimSpace(row.PRURL) == "" {
+		if !eligiblePriorMiss(row) {
 			continue
 		}
 		prior = append(prior, report.MissEvidence{
@@ -1025,6 +1025,17 @@ func loadPriorMissEvidence(stateRoot string) []report.MissEvidence {
 		})
 	}
 	return prior
+}
+
+func eligiblePriorMiss(row results.Result) bool {
+	if row.Kind != results.KindMiss || row.Status == results.StatusDismissed || strings.TrimSpace(row.PRURL) == "" {
+		return false
+	}
+	// Legacy inboxes may predate the collection-time conversation filter. Do
+	// not let old status replies, praise, or no-action resolutions corroborate
+	// a newly discovered concern merely because they remain persisted locally.
+	_, nonActionable := scope.NonActionableHumanComment(row.Summary)
+	return !nonActionable
 }
 
 // resolvePrimaryAdversaryName picks the hunt/scorecard package id.
