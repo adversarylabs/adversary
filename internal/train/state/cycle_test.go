@@ -1,6 +1,10 @@
 package state
 
-import "testing"
+import (
+	"fmt"
+	"sync"
+	"testing"
+)
 
 func TestAdversaryCycleVisitsEveryTargetBeforeRepeating(t *testing.T) {
 	dir := t.TempDir()
@@ -43,5 +47,46 @@ func TestAdversaryCyclePersistsAndPrioritizesNewTarget(t *testing.T) {
 	}
 	if got := reloaded.Peek([]string{"a", "b", "new"}); got != "new" {
 		t.Fatalf("new target was not prioritized, got %q", got)
+	}
+}
+
+func TestAdversaryCycleConcurrentSelectionsAreNotLost(t *testing.T) {
+	dir := t.TempDir()
+	ids := []string{"a", "b", "c"}
+	var wg sync.WaitGroup
+	errs := make(chan error, 30)
+	for i := 0; i < 30; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cycle, err := LoadAdversaryCycle(dir)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if _, err := cycle.Select(ids, fmt.Sprintf("run-%d", i)); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	cycle, err := LoadAdversaryCycle(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, id := range ids {
+		total += cycle.Targets[id].Selections
+		if cycle.Targets[id].Selections != 10 {
+			t.Fatalf("target %s selections=%d want 10", id, cycle.Targets[id].Selections)
+		}
+	}
+	if total != 30 {
+		t.Fatalf("selection total=%d want 30", total)
 	}
 }

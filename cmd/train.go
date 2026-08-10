@@ -125,6 +125,9 @@ Use --no-issues for a local-only run.`,
 			if adversaryOnly != "" && cycleAdversaries {
 				return fmt.Errorf("--adversary and --cycle-adversaries cannot be combined")
 			}
+			if allAdversaries && cycleAdversaries {
+				return fmt.Errorf("--all-adversaries and --cycle-adversaries cannot be combined")
+			}
 			ws := workspacePath
 			if ws == "" {
 				wd, err := workspace.WorkingDir()

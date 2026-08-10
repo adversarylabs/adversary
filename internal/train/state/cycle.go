@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/publock"
 	"github.com/adversarylabs/adversary/internal/train/securefs"
 )
 
@@ -89,19 +90,36 @@ func (s *AdversaryCycleState) Peek(ids []string) string {
 
 // Select records and returns the next least-selected package.
 func (s *AdversaryCycleState) Select(ids []string, runID string) (string, error) {
-	id := s.Peek(ids)
+	if s == nil || s.path == "" {
+		return "", fmt.Errorf("nil adversary cycle state")
+	}
+	dataRoot := filepath.Dir(filepath.Dir(s.path))
+	lock, err := publock.Acquire(dataRoot, "adversary-train-cycle")
+	if err != nil {
+		return "", fmt.Errorf("lock adversary cycle state: %w", err)
+	}
+	defer lock.Close()
+
+	// Reload while holding the cross-process lock. Callers may have loaded an
+	// earlier snapshot before another train process selected its target.
+	fresh, err := LoadAdversaryCycle(dataRoot)
+	if err != nil {
+		return "", err
+	}
+	id := fresh.Peek(ids)
 	if id == "" {
 		return "", fmt.Errorf("no adversaries available for round-robin training")
 	}
-	record := s.Targets[id]
+	record := fresh.Targets[id]
 	record.Selections++
 	record.LastSelected = time.Now().UTC()
 	record.LastRun = runID
-	s.Targets[id] = record
-	s.LastTarget = id
-	if err := s.Save(); err != nil {
+	fresh.Targets[id] = record
+	fresh.LastTarget = id
+	if err := fresh.Save(); err != nil {
 		return "", err
 	}
+	*s = *fresh
 	return id, nil
 }
 
