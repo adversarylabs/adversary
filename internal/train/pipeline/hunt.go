@@ -108,8 +108,8 @@ func runParallelHunt(
 		res := collectOnePR(ctx, opts, dataRoot, huntJob{
 			owner: owner, name: name, ref: ref, store: store, pinned: true, turn: 1,
 		}, scopeClf, commentRouter, progress)
-		applyCollectResult(&out, res, true)
-		if res.inScopeN > 0 && onKeep != nil && len(res.kept) > 0 {
+		accepted := applyCollectResult(&out, res, true, targetPRs)
+		if accepted && onKeep != nil {
 			out.resultsAdded += onKeep(res.kept)
 		}
 		if err := ctx.Err(); err != nil {
@@ -165,8 +165,8 @@ func runParallelHunt(
 					// Still persist any in-scope gold from a finished collect.
 					if res.inScopeN > 0 && len(res.kept) > 0 {
 						mu.Lock()
-						applyCollectResult(&out, res, job.pinned)
-						if onKeep != nil {
+						accepted := applyCollectResult(&out, res, job.pinned, targetPRs)
+						if accepted && onKeep != nil {
 							out.resultsAdded += onKeep(res.kept)
 						}
 						mu.Unlock()
@@ -174,8 +174,8 @@ func runParallelHunt(
 					continue
 				}
 				mu.Lock()
-				applyCollectResult(&out, res, job.pinned)
-				if res.inScopeN > 0 && onKeep != nil && len(res.kept) > 0 {
+				accepted := applyCollectResult(&out, res, job.pinned, targetPRs)
+				if accepted && onKeep != nil {
 					out.resultsAdded += onKeep(res.kept)
 				}
 				mu.Unlock()
@@ -490,7 +490,14 @@ func collectOnePR(
 	return res
 }
 
-func applyCollectResult(out *huntOutcome, res collectResult, pinned bool) {
+// applyCollectResult admits one finished collection into the hunt outcome.
+// Callers serialize this operation with the hunt mutex. The limit must be
+// checked here, not only by the feeder: buffered and in-flight jobs can finish
+// after the feeder has admitted the target number of PRs.
+//
+// The return value reports whether an in-scope PR was admitted and should be
+// persisted to results.db.
+func applyCollectResult(out *huntOutcome, res collectResult, pinned bool, targetPRs int) bool {
 	if res.blocked != nil && out.blocked == nil {
 		out.blocked = res.blocked
 	}
@@ -498,18 +505,22 @@ func applyCollectResult(out *huntOutcome, res collectResult, pinned bool) {
 		out.collectClass = res.execClass
 	}
 	if res.err != nil || res.noCases || len(res.kept) == 0 {
-		return
+		return false
 	}
 	if res.inScopeN > 0 {
+		if targetPRs > 0 && out.prsWithInScope >= targetPRs {
+			return false
+		}
 		out.caseList = append(out.caseList, res.kept...)
 		out.prsWithInScope++
-		return
+		return true
 	}
 	out.fallbackCases = res.kept
 	if pinned {
 		// Pinned debug path: still grade even without in-scope gold.
 		out.caseList = append(out.caseList, res.kept...)
 	}
+	return false
 }
 
 // progressMu wraps stderr progress for concurrent workers.

@@ -35,7 +35,7 @@ func TestApplyCollectResult(t *testing.T) {
 	applyCollectResult(out, collectResult{
 		kept: []*cases.Case{c}, inScopeN: 1, outScopeN: 0,
 		execClass: dataroot.ClassReal,
-	}, false)
+	}, false, 1)
 	if out.prsWithInScope != 1 || len(out.caseList) != 1 {
 		t.Fatalf("%+v", out)
 	}
@@ -43,12 +43,12 @@ func TestApplyCollectResult(t *testing.T) {
 	applyCollectResult(out2, collectResult{
 		kept: []*cases.Case{c}, inScopeN: 0, outScopeN: 2,
 		execClass: dataroot.ClassReal,
-	}, true)
+	}, true, 1)
 	if len(out2.caseList) != 1 {
 		t.Fatal("pinned should keep")
 	}
 	out3 := &huntOutcome{}
-	applyCollectResult(out3, collectResult{blocked: &dataroot.BlockedResult{Classification: "x"}}, false)
+	applyCollectResult(out3, collectResult{blocked: &dataroot.BlockedResult{Classification: "x"}}, false, 1)
 	if out3.blocked == nil {
 		t.Fatal()
 	}

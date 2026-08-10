@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -89,13 +90,52 @@ func TestApplyCollectResultPinned(t *testing.T) {
 	t.Parallel()
 	out := &huntOutcome{}
 	c := &cases.Case{ID: "c1"}
-	applyCollectResult(out, collectResult{kept: []*cases.Case{c}, inScopeN: 0}, true)
+	applyCollectResult(out, collectResult{kept: []*cases.Case{c}, inScopeN: 0}, true, 1)
 	if len(out.caseList) != 1 {
 		t.Fatalf("pinned empty gold should still keep case")
 	}
 	out2 := &huntOutcome{}
-	applyCollectResult(out2, collectResult{kept: []*cases.Case{c}, inScopeN: 1}, false)
+	applyCollectResult(out2, collectResult{kept: []*cases.Case{c}, inScopeN: 1}, false, 1)
 	if out2.prsWithInScope != 1 {
 		t.Fatalf("in-scope count")
+	}
+}
+
+func TestApplyCollectResultEnforcesTargetSequentially(t *testing.T) {
+	t.Parallel()
+	out := &huntOutcome{}
+	persisted := 0
+	for i := 0; i < 5; i++ {
+		c := &cases.Case{ID: fmt.Sprintf("c%d", i)}
+		if applyCollectResult(out, collectResult{kept: []*cases.Case{c}, inScopeN: 1}, false, 1) {
+			persisted++
+		}
+	}
+	if out.prsWithInScope != 1 || len(out.caseList) != 1 || persisted != 1 {
+		t.Fatalf("cap not enforced: prs=%d cases=%d persisted=%d", out.prsWithInScope, len(out.caseList), persisted)
+	}
+}
+
+func TestApplyCollectResultEnforcesTargetConcurrently(t *testing.T) {
+	t.Parallel()
+	out := &huntOutcome{}
+	var mu sync.Mutex
+	persisted := 0
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			c := &cases.Case{ID: fmt.Sprintf("c%d", i)}
+			mu.Lock()
+			if applyCollectResult(out, collectResult{kept: []*cases.Case{c}, inScopeN: 1}, false, 1) {
+				persisted++
+			}
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+	if out.prsWithInScope != 1 || len(out.caseList) != 1 || persisted != 1 {
+		t.Fatalf("cap not enforced: prs=%d cases=%d persisted=%d", out.prsWithInScope, len(out.caseList), persisted)
 	}
 }
