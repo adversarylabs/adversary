@@ -167,8 +167,9 @@ func NormalizeReviewComment(body string) string {
 		}
 		end := start + 4 + relEnd + 3
 		comment := strings.ToLower(body[start:end])
-		if strings.Contains(comment, "questions are appropriate if you have a potential concern") ||
-			strings.Contains(comment, "thoughts represent an idea that popped up from reviewing") {
+		isGuidance := strings.Contains(comment, "questions are appropriate if you have a potential concern") ||
+			strings.Contains(comment, "thoughts represent an idea that popped up from reviewing")
+		if isGuidance && !isAutomatedReviewArtifact(comment) {
 			body = body[:start] + body[end:]
 			cursor = start
 			continue

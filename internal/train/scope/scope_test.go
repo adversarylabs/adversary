@@ -186,6 +186,17 @@ func TestNormalizeReviewCommentPreservesAutomationProvenance(t *testing.T) {
 	}
 }
 
+func TestNormalizeReviewCommentPreservesMixedAutomationMarker(t *testing.T) {
+	body := `<!-- hermes-pr-review abc123; Thoughts represent an idea that popped up from reviewing. These comments are non-blocking by nature. -->
+This goroutine can leak after shutdown.`
+	if normalized := NormalizeReviewComment(body); normalized != body {
+		t.Fatalf("mixed provenance marker changed: %q", normalized)
+	}
+	if reason, rejected := NonActionableHumanComment(body); !rejected || !strings.Contains(reason, "automated review artifact") {
+		t.Fatalf("mixed provenance was not rejected: rejected=%v reason=%q", rejected, reason)
+	}
+}
+
 func TestContextDependentReviewFragmentIsNotGold(t *testing.T) {
 	vague := `<!-- Questions are appropriate if you have a potential concern but are not quite sure if it's relevant or not. -->
 **question:** should this be excised as well?`
