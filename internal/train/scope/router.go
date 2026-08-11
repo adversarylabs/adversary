@@ -33,6 +33,9 @@ type Route struct {
 type Router struct {
 	Candidates []Candidate
 	UseLLM     bool
+	// callLLM is injectable for focused routing tests. Production uses
+	// callOpenAIJSON when this is nil.
+	callLLM func(string) ([]byte, error)
 }
 
 type routeDecision struct {
@@ -133,7 +136,7 @@ func (r *Router) RouteComment(body, path, author string) Route {
 	if len(hits) == 0 {
 		// Optional: LLM multi-choice when enabled
 		if r.UseLLM && len(r.Candidates) > 0 {
-			if route, err := r.routeLLM(body, path, author); err == nil && route.OwnerID != "" {
+			if route, err := r.routeLLM(body, path, author); err == nil {
 				return route
 			}
 		}
@@ -219,6 +222,60 @@ func candidatePathEligible(path string, cand Candidate) (bool, string) {
 		return true, ""
 	}
 	return false, fmt.Sprintf("path %q has no matching declared file surface %v", path, cand.Languages)
+}
+
+// candidateModelEligible is intentionally broader than candidatePathEligible.
+// Runtime trigger/detection globs describe where an adversary currently runs;
+// they are not the package's mission boundary. Training must be able to surface
+// a same-language gap outside those globs so the resulting improvement can
+// broaden activation. Cross-language and pathless mismatches still fail closed.
+func candidateModelEligible(candidatePath string, cand Candidate) (bool, string) {
+	if ok, _ := candidatePathEligible(candidatePath, cand); ok {
+		return true, "exact runtime file surface"
+	}
+	if strings.TrimSpace(candidatePath) == "" {
+		return false, "no file path evidence for same-language scope fallback"
+	}
+	for _, language := range cand.Languages {
+		if strings.EqualFold(strings.TrimSpace(language), "any") {
+			continue
+		}
+		if pathMatchesLanguage(candidatePath, language) {
+			return true, fmt.Sprintf("same-language scope fallback (%s); current runtime globs do not match", language)
+		}
+	}
+	return false, fmt.Sprintf("path %q does not match the candidate's runtime or language surface", candidatePath)
+}
+
+func pathMatchesLanguage(candidatePath, language string) bool {
+	ext := strings.ToLower(filepath.Ext(candidatePath))
+	base := strings.ToLower(filepath.Base(candidatePath))
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "go":
+		return ext == ".go"
+	case "typescript":
+		return ext == ".ts" || ext == ".tsx"
+	case "javascript":
+		return ext == ".js" || ext == ".jsx" || ext == ".mjs" || ext == ".cjs"
+	case "python":
+		return ext == ".py" || ext == ".pyi" || ext == ".pyw"
+	case "rust":
+		return ext == ".rs"
+	case "java":
+		return ext == ".java"
+	case "ci":
+		return isCIPath(strings.ToLower(candidatePath))
+	case "dockerfile":
+		return strings.Contains(base, "dockerfile")
+	case "terraform":
+		lowerPath := strings.ToLower(candidatePath)
+		return strings.HasSuffix(lowerPath, ".tf") ||
+			strings.HasSuffix(lowerPath, ".tfvars") ||
+			strings.HasSuffix(lowerPath, ".tf.json") ||
+			strings.HasSuffix(lowerPath, ".tfvars.json")
+	default:
+		return false
+	}
 }
 
 func hasUniversalFileGlob(patterns []string) bool {
@@ -479,13 +536,15 @@ func matchGlobSegments(pattern, candidate []string) bool {
 }
 
 func (r *Router) routeLLM(body, path, author string) (Route, error) {
-	// Build the prompt only from candidates compatible with the retained file
-	// evidence. This keeps an LLM from selecting an owner the deterministic
-	// router already knows cannot inspect the changed surface.
+	// Exact runtime globs remain the deterministic routing boundary. The scope
+	// model may additionally consider same-language candidates so training can
+	// discover that an adversary's current activation surface is too narrow.
 	var eligible []Candidate
+	eligibility := map[string]string{}
 	for _, candidate := range r.Candidates {
-		if ok, _ := candidatePathEligible(path, candidate); ok {
+		if ok, reason := candidateModelEligible(path, candidate); ok {
 			eligible = append(eligible, candidate)
+			eligibility[candidate.ID] = reason
 		}
 	}
 	if len(eligible) == 0 {
@@ -496,7 +555,7 @@ func (r *Router) routeLLM(body, path, author string) (Route, error) {
 	var scopes strings.Builder
 	for _, c := range eligible {
 		ids = append(ids, c.ID)
-		fmt.Fprintf(&scopes, "### %s\n%s\n\n", c.ID, truncate(c.Mission, 800))
+		fmt.Fprintf(&scopes, "### %s\nFile-surface evidence: %s\n%s\n\n", c.ID, eligibility[c.ID], truncate(c.Mission, 800))
 	}
 	prompt := fmt.Sprintf(`Pick which adversary package should own this human PR comment for grading, or none.
 
@@ -524,6 +583,8 @@ Rules:
 - Soft OK notes ("I think its ok", "seems fine") without asking for a fix → empty
 - Comments on pure documentation paths (.md, /docs/, book pages) that are wording/reference edits → empty (not product gold)
 - Path/file name containing a specialist keyword is NOT enough — comment must match that specialist's mission (e.g. kustomize = mutable images/secrets/dangerous patches, not docs wording)
+- Runtime trigger/detection globs describe current activation, not the package mission. A same-language candidate outside those globs may own the concern when its scope clearly matches; training may need to broaden activation.
+- Judge the stated behavior, not the reviewer's emoji or gentle tone. Explicitly accepted input that is silently ignored or contradicted is a concrete present-day consequence.
 - engineering-review only for staff residual judgment no specialist owns; never dump leftovers there
 - nits only for pure maintainer taste with no correctness, security, API, or operational consequence; set non_blocking=true only for that case
 - Any non-empty owner requires a concrete present-day consequence, a proportionate action, and a concern introduced/expanded/relied on by this change
@@ -534,7 +595,11 @@ Rules:
 Valid ids: %s or empty
 `, author, path, body, scopes.String(), strings.Join(ids, ", "))
 
-	raw, err := callOpenAIJSON(prompt)
+	call := r.callLLM
+	if call == nil {
+		call = callOpenAIJSON
+	}
+	raw, err := call(prompt)
 	if err != nil {
 		return Route{}, err
 	}
@@ -558,8 +623,8 @@ func routeFromLLMDecisionForPath(out routeDecision, candidates []Candidate, path
 		if candidate.ID != route.OwnerID {
 			continue
 		}
-		if ok, reason := candidatePathEligible(path, candidate); !ok {
-			return Route{Decision: OutOfScope, Reason: "llm owner outside declared file surface: " + reason, Method: "llm"}
+		if ok, reason := candidateModelEligible(path, candidate); !ok {
+			return Route{Decision: OutOfScope, Reason: "llm owner outside model-eligible file surface: " + reason, Method: "llm"}
 		}
 		return route
 	}
@@ -569,7 +634,11 @@ func routeFromLLMDecisionForPath(out routeDecision, candidates []Candidate, path
 func routeFromLLMDecision(out routeDecision, candidates []Candidate) Route {
 	owner := strings.TrimSpace(out.OwnerID)
 	if owner == "" || owner == "empty" || owner == "none" || owner == "null" {
-		return Route{Decision: OutOfScope, Reason: "llm: no owner", Method: "llm"}
+		reason := strings.TrimSpace(out.Reason)
+		if reason == "" {
+			reason = "llm: no owner"
+		}
+		return Route{Decision: OutOfScope, Reason: reason, Method: "llm"}
 	}
 	validOwner := false
 	for _, candidate := range candidates {
