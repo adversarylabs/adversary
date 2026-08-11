@@ -217,14 +217,16 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		Head struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
-		HTMLURL string `json:"html_url"`
-		User    struct {
+		HTMLURL  string `json:"html_url"`
+		MergedAt string `json:"merged_at"`
+		User     struct {
 			Login string `json:"login"`
 		} `json:"user"`
 	}
 	if err := json.Unmarshal(prRaw, &prObj); err != nil {
 		return nil, err
 	}
+	mergedAt, _ := time.Parse(time.RFC3339, prObj.MergedAt)
 
 	reviewsRaw, err := os.ReadFile(filepath.Join(cacheDir, "reviews.json"))
 	if err != nil {
@@ -242,6 +244,17 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	}
 	if err := json.Unmarshal(reviewsRaw, &reviews); err != nil {
 		return nil, err
+	}
+	if !mergedAt.IsZero() {
+		kept := reviews[:0]
+		for _, review := range reviews {
+			submitted, err := time.Parse(time.RFC3339, review.SubmittedAt)
+			if err == nil && submitted.After(mergedAt) {
+				continue
+			}
+			kept = append(kept, review)
+		}
+		reviews = kept
 	}
 	// The REST endpoint returns reviews oldest-first. Training stops once it has
 	// one reconstructable in-scope round, so inspect the latest maintainer
@@ -274,6 +287,19 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	}
 	if err := json.Unmarshal(commentsRaw, &comments); err != nil {
 		return nil, err
+	}
+	if !mergedAt.IsZero() {
+		kept := comments[:0]
+		for _, comment := range comments {
+			created, err := time.Parse(time.RFC3339, comment.CreatedAt)
+			if err == nil && created.After(mergedAt) {
+				// A post-merge suggestion cannot describe a change required for the
+				// accepted PR, so it is discussion rather than human gold.
+				continue
+			}
+			kept = append(kept, comment)
+		}
+		comments = kept
 	}
 
 	// Group by review for formal reviews with body or comments.
