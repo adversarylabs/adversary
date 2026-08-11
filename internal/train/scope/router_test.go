@@ -117,6 +117,22 @@ func TestRouterLetsModelJudgePreExistingConcernExplicitlyRequiredHere(t *testing
 	}
 }
 
+func TestNonLocalGateRecognizesMandatoryCurrentRequestPhrasing(t *testing.T) {
+	for _, body := range []string{
+		"This issue was not introduced by this PR. This should be fixed here.",
+		"This issue was not introduced by this PR. This needs to be addressed before merge.",
+		"This issue was not introduced by this PR. We must handle it in this change.",
+	} {
+		if reason, rejected := explicitNonLocalReviewRemark(body, ""); rejected {
+			t.Errorf("mixed disposition %q was rejected: %s", body, reason)
+		}
+	}
+	deferred := "This issue was not introduced by this PR. We should handle it in a follow-up PR."
+	if _, rejected := explicitNonLocalReviewRemark(deferred, ""); !rejected {
+		t.Fatalf("explicit later-PR disposition was not rejected: %q", deferred)
+	}
+}
+
 func TestRouteLLMPromptIncludesBoundedChangeEvidence(t *testing.T) {
 	const (
 		summary = "Please address the inline correctness concern before merge."
