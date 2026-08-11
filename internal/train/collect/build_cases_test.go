@@ -20,7 +20,7 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	  "base": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ref": "main"},
 	  "head": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ref": "feat"},
 	  "user": {"login": "author1"},
-	  "merged_at": "2024-01-02T00:00:00Z"
+	  "merged_at": "2024-01-03T00:00:00Z"
 	}`
 	reviews := `[
 	  {"id": 1, "user": {"login": "mitchellh"}, "body": "This goroutine can leak after Shutdown if the context is not cancelled properly.", "state": "CHANGES_REQUESTED", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "submitted_at": "2024-01-02T01:00:00Z"}
@@ -140,6 +140,48 @@ func TestBuildCasesPrefersLatestInScopeReview(t *testing.T) {
 	}
 	if len(selected.Comments) != 1 || !strings.Contains(selected.Comments[0].Body, "newest reviewer concern") {
 		t.Fatalf("selected comments = %#v, want newest reviewer comment", selected.Comments)
+	}
+}
+
+func TestBuildCasesIgnoresPostMergeReviewComments(t *testing.T) {
+	dir := t.TempDir()
+	pull := `{
+  "number": 938,
+  "title": "fix response lifecycle",
+  "html_url": "https://github.com/acme/r/pull/938",
+  "base": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "head": {"sha": "cccccccccccccccccccccccccccccccccccccccc"},
+  "user": {"login": "author1"},
+  "merged_at": "2024-01-03T12:00:00Z"
+}`
+	reviews := `[
+  {"id": 1, "user": {"login": "reviewer"}, "body": "", "state": "CHANGES_REQUESTED", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "submitted_at": "2024-01-02T10:00:00Z"},
+  {"id": 2, "user": {"login": "reviewer"}, "body": "", "state": "COMMENTED", "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "submitted_at": "2024-01-03T16:00:00Z"}
+]`
+	comments := `[
+  {"id": 11, "pull_request_review_id": 1, "user": {"login": "reviewer"}, "body": "This goroutine leaks unless its context is cancelled.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T10:01:00Z"},
+  {"id": 12, "pull_request_review_id": 2, "user": {"login": "reviewer"}, "body": "Maybe publish only one of the response or error values.", "path": "worker.go", "line": 20, "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "created_at": "2024-01-03T16:01:00Z"}
+]`
+	for name, body := range map[string]string{
+		"pull.json": pull, "reviews.json": reviews, "review-comments.json": comments,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := &scope.Router{
+		Candidates: []scope.Candidate{{ID: "go-concurrency", AdversaryName: "go-concurrency", Mission: "Go concurrency goroutine lifecycle response handoff"}},
+		UseLLM:     false,
+	}
+	got, err := BuildCasesFromCacheFiltered("acme", "r", 938, dir, nil, router, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 || len(got[0].Comments) != 1 {
+		t.Fatalf("cases = %#v, want only the pre-merge review", got)
+	}
+	if got[0].Comments[0].ID != 11 || strings.Contains(got[0].Comments[0].Body, "publish only one") {
+		t.Fatalf("post-merge suggestion leaked into gold: %#v", got[0].Comments)
 	}
 }
 
