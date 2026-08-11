@@ -213,6 +213,41 @@ func TestModelIssueBriefWriterRefinesSourceSpecificDraft(t *testing.T) {
 	}
 }
 
+type fixturePortableIdentifierProvider struct{}
+
+func (*fixturePortableIdentifierProvider) Name() string  { return "fixture" }
+func (*fixturePortableIdentifierProvider) Model() string { return "fixture" }
+func (*fixturePortableIdentifierProvider) Review(_ context.Context, _ modelreview.Request) (modelreview.Result, error) {
+	return modelreview.Result{Output: json.RawMessage(`{
+  "title": "Detect ModePerm in directory creation",
+  "intent": "Detect os.ModePerm or fs.ModePerm passed to directory-creation APIs because the symbolic constant requests permission bits 0777 before umask.",
+  "why": "The name reads like a safe default even though most private or executable directories should request an explicit narrower mode.",
+  "examples": ["A service creates its private state directory with os.ModePerm.", "A command creates a shared executable cache with fs.ModePerm."],
+  "counterexamples": ["Code masks a reported file mode with os.ModePerm only to inspect its permission bits."],
+  "acceptance": ["A positive fixture using os.ModePerm for directory creation emits a focused finding.", "A mask-only fixture using os.ModePerm remains quiet."]
+}`)}, nil
+}
+
+func TestModelIssueBriefWriterKeepsEssentialPortableIdentifier(t *testing.T) {
+	writer := &modelIssueBriefWriter{provider: &fixturePortableIdentifierProvider{}}
+	brief, err := writer.WriteIssueBrief(context.Background(), IssueBriefInput{
+		Package:  "go",
+		Evidence: []IssueBriefEvidence{{Concern: "`os.ModePerm` is 0777 and should not be passed to `os.MkdirAll`."}},
+		Abstraction: &IssueAbstractionAssessment{
+			ShouldAbstract: true, DetectableInDiff: true,
+			CausalMechanism: "ModePerm requests all permission bits when used as a directory creation mode.",
+			TransferTest:    "Different directory-creation call sites share the same standard-library API mistake.",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(brief)
+	if !strings.Contains(string(raw), "os.ModePerm") {
+		t.Fatalf("portable identifier defining the mechanism was removed: %#v", brief)
+	}
+}
+
 func TestSuggestIssuesUsesFullSourceCommentAsBriefEvidence(t *testing.T) {
 	const fullComment = "This value is already masked on every path it takes. The trace manager masks logs and the issue recorder masks annotations. The new helper is only for protocol payloads that bypass both paths, so it is not applicable here."
 	c := &cases.Case{
