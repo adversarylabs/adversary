@@ -52,6 +52,7 @@ type rawReviewComment struct {
 	OriginalCommitID string `json:"original_commit_id"`
 	CommitID         string `json:"commit_id"`
 	CreatedAt        string `json:"created_at"`
+	DiffHunk         string `json:"diff_hunk"`
 	User             struct {
 		Login string `json:"login"`
 	} `json:"user"`
@@ -321,6 +322,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			inReplyToID:     comment.InReplyToID,
 			automatedParent: automatedReviews[comment.PullRequestReviewID],
 			threadContext:   threadContext[comment.ID],
+			diffHunk:        comment.DiffHunk,
 		}
 	}
 	for _, rev := range reviews {
@@ -385,6 +387,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 				Classification:  "unclear",
 			}}, revComments...)
 		}
+		attachSingleInlineReviewSummary(commentContext, revComments, rev.Body)
 		// Candidate labels, routed to best adversary (or none).
 		labels := cases.CandidateLabelsFromComments(revComments)
 		applyScopeFilteredWithContext(labels, revComments, clf, router, authorOK, prObj.User.Login, commentContext)
@@ -496,6 +499,8 @@ type reviewCommentContext struct {
 	inReplyToID     int64
 	automatedParent bool
 	threadContext   []cases.ReviewThreadContext
+	reviewSummary   string
+	diffHunk        string
 }
 
 // applyScope routes each label to the best adversary (or none).
@@ -580,7 +585,17 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 			}
 		}
 		if router != nil {
-			route := router.RouteCommentWithContext(body, path, author, routeThreadContext(labels[i].ThreadContext))
+			reviewEvidence := scope.ReviewEvidence{}
+			if matched != nil {
+				ctx := commentContext[commentKey{kind: matched.Kind, id: matched.ID}]
+				reviewEvidence.Summary = ctx.reviewSummary
+				reviewEvidence.DiffHunk = ctx.diffHunk
+			}
+			route := router.RouteCommentWithEvidence(
+				body, path, author,
+				routeThreadContext(labels[i].ThreadContext),
+				reviewEvidence,
+			)
 			labels[i].OwnerAdversary = route.OwnerID
 			labels[i].ScopeReason = route.Reason
 			labels[i].ScopeMethod = route.Method
@@ -624,6 +639,39 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 			labels[i].Approved = false
 		}
 	}
+}
+
+// attachSingleInlineReviewSummary maps review-level disposition to an inline
+// comment only when the relationship is unambiguous. Summaries such as "one
+// comment unrelated to this PR; handle it next PR" must disqualify that comment
+// as current-change gold, while a summary cannot be guessed across several
+// independent inline comments.
+func attachSingleInlineReviewSummary(contexts map[commentKey]reviewCommentContext, comments []cases.Comment, summary string) {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return
+	}
+	var inline *cases.Comment
+	for i := range comments {
+		if comments[i].Kind != "review-comment" {
+			continue
+		}
+		ctx := contexts[commentKey{kind: comments[i].Kind, id: comments[i].ID}]
+		if ctx.inReplyToID != 0 {
+			continue
+		}
+		if inline != nil {
+			return
+		}
+		inline = &comments[i]
+	}
+	if inline == nil {
+		return
+	}
+	key := commentKey{kind: inline.Kind, id: inline.ID}
+	ctx := contexts[key]
+	ctx.reviewSummary = truncateRunes(summary, 800)
+	contexts[key] = ctx
 }
 
 const (
