@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -242,6 +243,16 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	if err := json.Unmarshal(reviewsRaw, &reviews); err != nil {
 		return nil, err
 	}
+	// The REST endpoint returns reviews oldest-first. Training stops once it has
+	// one reconstructable in-scope round, so inspect the latest maintainer
+	// judgment first; otherwise an early superficial comment can permanently hide
+	// a later security or correctness review on a long-lived PR.
+	sort.SliceStable(reviews, func(i, j int) bool {
+		if reviews[i].SubmittedAt == reviews[j].SubmittedAt {
+			return reviews[i].ID > reviews[j].ID
+		}
+		return reviews[i].SubmittedAt > reviews[j].SubmittedAt
+	})
 
 	commentsRaw, err := os.ReadFile(filepath.Join(cacheDir, "review-comments.json"))
 	if err != nil {
@@ -488,7 +499,15 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 		if matched != nil {
 			ctx := commentContext[commentKey{kind: matched.Kind, id: matched.ID}]
 			isPullAuthor := pullAuthor != "" && strings.EqualFold(author, pullAuthor)
-			if isPullAuthor || ctx.inReplyToID != 0 {
+			if isPullAuthor {
+				labels[i].Scope = string(scope.OutOfScope)
+				labels[i].Approved = false
+				labels[i].OwnerAdversary = ""
+				labels[i].ScopeReason = "pull request author replies are context, not reviewer gold"
+				labels[i].ScopeMethod = "thread-metadata"
+				continue
+			}
+			if ctx.inReplyToID != 0 {
 				if reason, ok := scope.NonActionableReply(body); ok {
 					labels[i].Scope = string(scope.OutOfScope)
 					labels[i].Approved = false

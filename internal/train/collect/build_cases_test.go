@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/adversarylabs/adversary/internal/train/cases"
 	"github.com/adversarylabs/adversary/internal/train/scope"
 )
 
@@ -79,6 +80,67 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	}
 	// may still have structure but no gold
 	_ = cases2
+}
+
+func TestBuildCasesPrefersLatestInScopeReview(t *testing.T) {
+	dir := t.TempDir()
+	pull := `{
+	  "number": 42,
+	  "title": "fix races",
+	  "html_url": "https://github.com/acme/r/pull/42",
+	  "base": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	  "head": {"sha": "cccccccccccccccccccccccccccccccccccccccc"},
+	  "user": {"login": "author1"}
+	}`
+	reviews := `[
+	  {"id": 1, "user": {"login": "old-reviewer"}, "body": "", "state": "CHANGES_REQUESTED", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "submitted_at": "2024-01-02T01:00:00Z"},
+	  {"id": 2, "user": {"login": "new-reviewer"}, "body": "", "state": "CHANGES_REQUESTED", "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "submitted_at": "2024-01-03T01:00:00Z"},
+	  {"id": 3, "user": {"login": "author1"}, "body": "", "state": "COMMENTED", "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "submitted_at": "2024-01-04T01:00:00Z"}
+	]`
+	comments := `[
+	  {"id": 11, "pull_request_review_id": 1, "user": {"login": "old-reviewer"}, "body": "This goroutine can leak after shutdown.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:01:00Z"},
+	  {"id": 12, "pull_request_review_id": 2, "user": {"login": "new-reviewer"}, "body": "This goroutine can leak after Shutdown if the context is not cancelled; this is the newest reviewer concern.", "path": "worker.go", "line": 20, "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "created_at": "2024-01-03T01:01:00Z"},
+	  {"id": 13, "pull_request_review_id": 3, "user": {"login": "author1"}, "body": "I agree the goroutine could leak and can make that change.", "path": "worker.go", "line": 20, "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "created_at": "2024-01-04T01:01:00Z"}
+	]`
+	for name, body := range map[string]string{
+		"pull.json": pull, "reviews.json": reviews, "review-comments.json": comments,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := &scope.Router{
+		Candidates: []scope.Candidate{{ID: "go-concurrency", AdversaryName: "go-concurrency", Mission: "Go concurrency races lifecycle goroutine"}},
+		UseLLM:     false,
+	}
+	got, err := BuildCasesFromCacheFiltered("acme", "r", 42, dir, nil, router, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("expected at least one case")
+	}
+	var selected *cases.Case
+	for _, candidate := range got {
+		for _, label := range candidate.Labels.ExpectedConcerns {
+			if label.Approved {
+				selected = candidate
+				break
+			}
+		}
+		if selected != nil {
+			break
+		}
+	}
+	if selected == nil {
+		t.Fatal("expected an approved reviewer concern")
+	}
+	if len(selected.ReviewEvent.Reviewers) != 1 || selected.ReviewEvent.Reviewers[0] != "new-reviewer" {
+		t.Fatalf("selected reviewers = %#v, want newest reviewer concern", selected.ReviewEvent.Reviewers)
+	}
+	if len(selected.Comments) != 1 || !strings.Contains(selected.Comments[0].Body, "newest reviewer concern") {
+		t.Fatalf("selected comments = %#v, want newest reviewer comment", selected.Comments)
+	}
 }
 
 func TestBlockedFromErrRateLimit(t *testing.T) {
