@@ -1,12 +1,19 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/train/cases"
+	"github.com/adversarylabs/adversary/internal/train/collect"
+	"github.com/adversarylabs/adversary/internal/train/repos"
 	"github.com/adversarylabs/adversary/internal/train/runner"
 	"github.com/adversarylabs/adversary/internal/train/state"
 )
@@ -25,6 +32,94 @@ func TestNormalizeConcurrency(t *testing.T) {
 	if got := normalizeConcurrency(100); got != maxHuntConcurrency {
 		t.Fatalf("cap: got %d", got)
 	}
+}
+
+func TestCatalogRepoWindowBoundsAndWraps(t *testing.T) {
+	t.Parallel()
+	catalog := []repos.Repo{
+		{Owner: "o", Name: "zero"},
+		{Owner: "o", Name: "one"},
+		{Owner: "o", Name: "two"},
+		{Owner: "o", Name: "three"},
+	}
+	got := catalogRepoWindow(catalog, 3, 3)
+	want := []string{"three", "zero", "one"}
+	if len(got) != len(want) {
+		t.Fatalf("window length = %d, want %d", len(got), len(want))
+	}
+	for i, repo := range got {
+		if repo.Name != want[i] {
+			t.Fatalf("window[%d] = %q, want %q", i, repo.Name, want[i])
+		}
+	}
+
+	got = catalogRepoWindow(catalog, 0, 20)
+	if len(got) != len(catalog) {
+		t.Fatalf("clamped window length = %d, want %d", len(got), len(catalog))
+	}
+}
+
+func TestParallelHuntProbesOneRotatingMaxTurnsWindow(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`[]`)),
+		}, nil
+	})
+
+	client := githubapi.NewClient("test")
+	client.HTTP = &http.Client{Transport: transport}
+	client.RESTBase = "https://api.test"
+	collect.SetDefaultClient(client)
+	t.Cleanup(func() { collect.SetDefaultClient(nil) })
+
+	var catalog []repos.Repo
+	for i := 0; i < 10; i++ {
+		catalog = append(catalog, repos.Repo{Owner: "owner", Name: fmt.Sprintf("repo-%d", i)})
+	}
+	dataRoot := t.TempDir()
+	opts := Options{Context: context.Background(), AdversaryName: "lang/typescript", Concurrency: 2}
+	progress := func(string, ...any) {}
+
+	first := runParallelHunt(context.Background(), opts, catalog, dataRoot, 1, 3, nil, nil, progress, nil)
+	if first.interrupted != nil {
+		t.Fatal(first.interrupted)
+	}
+	second := runParallelHunt(context.Background(), opts, catalog, dataRoot, 1, 3, nil, nil, progress, nil)
+	if second.interrupted != nil {
+		t.Fatal(second.interrupted)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{
+		"/repos/owner/repo-0/pulls", "/repos/owner/repo-1/pulls", "/repos/owner/repo-2/pulls",
+		"/repos/owner/repo-3/pulls", "/repos/owner/repo-4/pulls", "/repos/owner/repo-5/pulls",
+	}
+	if len(paths) != len(want) {
+		t.Fatalf("GitHub list requests = %d, want %d: %v", len(paths), len(want), paths)
+	}
+	seen := map[string]int{}
+	for _, path := range paths {
+		seen[path]++
+	}
+	for _, path := range want {
+		if seen[path] != 1 {
+			t.Fatalf("request count for %q = %d, want 1; all requests: %v", path, seen[path], paths)
+		}
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func TestDiscoveryStoreConcurrentRecord(t *testing.T) {

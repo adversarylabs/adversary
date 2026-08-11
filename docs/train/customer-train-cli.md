@@ -290,6 +290,11 @@ issues:
 state_dir: .adversary-train
 ```
 
+In repository-catalog mode, `max_turns` also limits how many repositories are
+listed per invocation. Each adversary resumes from its own durable catalog
+cursor, while a shared seed staggers the first window assigned to new adversaries.
+This avoids a full catalog refresh for every targeted package.
+
 ### Sources: org, repo, filters
 
 | Field | Meaning |

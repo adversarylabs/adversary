@@ -94,10 +94,6 @@ func runParallelHunt(
 			out.interrupted = err
 			return out
 		}
-		if opts.ResetDiscovery {
-			store.PRs = map[string]state.PRRecord{}
-			_ = store.Save()
-		}
 		progress("Pinned PR mode: %s/%s#%d", owner, name, opts.PR)
 		ref := collect.PRRef{
 			Number: opts.PR,
@@ -123,7 +119,24 @@ func runParallelHunt(
 	if len(opts.Languages) > 0 {
 		langNote = "languages=" + strings.Join(opts.Languages, ",")
 	}
-	progress("Hunting across %d repos (%s) for %s", len(catalogRepos), langNote, opts.AdversaryName)
+	totalCatalogRepos := len(catalogRepos)
+	cursorTarget := opts.DiscoveryNamespace
+	if strings.TrimSpace(cursorTarget) == "" {
+		cursorTarget = opts.AdversaryName
+	}
+	windowStart, windowCount, err := state.TakeCatalogWindow(
+		dataRoot, cursorTarget, totalCatalogRepos, maxTurns,
+	)
+	if err != nil {
+		out.interrupted = fmt.Errorf("reserve catalog discovery window: %w", err)
+		return out
+	}
+	catalogRepos = catalogRepoWindow(catalogRepos, windowStart, windowCount)
+	progress("Hunting across %d repos (%s) for %s", totalCatalogRepos, langNote, opts.AdversaryName)
+	if windowCount < totalCatalogRepos {
+		progress("Discovery window: %d/%d repos starting at catalog index %d; next run continues from index %d",
+			windowCount, totalCatalogRepos, windowStart, (windowStart+windowCount)%totalCatalogRepos)
+	}
 	progress("max-turns=%d, target in-scope PRs=%d, concurrency=%d", maxTurns, targetPRs, concurrency)
 
 	var mu sync.Mutex
@@ -138,10 +151,6 @@ func runParallelHunt(
 		s, err := state.LoadDiscoveryForTarget(dataRoot, opts.DiscoveryNamespace, owner, name)
 		if err != nil {
 			return nil, err
-		}
-		if opts.ResetDiscovery {
-			s.PRs = map[string]state.PRRecord{}
-			_ = s.Save()
 		}
 		stores[key] = s
 		return s, nil
@@ -183,9 +192,12 @@ func runParallelHunt(
 		}()
 	}
 
-	// Feeder: discover repos in parallel waves, then enqueue collect jobs.
+	// Feeder: discover one bounded, durable catalog window, then enqueue jobs.
+	// Seen-state filtering still requires one GitHub list request per repository,
+	// so repeatedly refreshing the whole catalog would exhaust core quota before
+	// max-turns can bound PR collection. A per-target cursor lets later runs resume
+	// at the next window while a shared seed staggers different targets' first run.
 	// Collect workers already run up to `concurrency` PRs at once.
-	idleCycles := 0
 feedLoop:
 	for {
 		if err := ctx.Err(); err != nil {
@@ -335,14 +347,9 @@ feedLoop:
 		}
 
 		if enqueuedThisWave == 0 {
-			idleCycles++
-			if idleCycles >= 2 {
-				progress("No new PR candidates across catalog — stopping hunt")
-				break
-			}
-		} else {
-			idleCycles = 0
+			progress("No new PR candidates in this catalog window — stopping hunt")
 		}
+		break
 	}
 
 	close(jobs)
@@ -373,6 +380,23 @@ feedLoop:
 		return out
 	}
 	progress("Hunt finished: turns=%d, in-scope PRs kept=%d (concurrency=%d)", out.turnsUsed, out.prsWithInScope, concurrency)
+	return out
+}
+
+func catalogRepoWindow(catalog []repos.Repo, start, count int) []repos.Repo {
+	if len(catalog) == 0 || count <= 0 {
+		return nil
+	}
+	if count > len(catalog) {
+		count = len(catalog)
+	}
+	if start < 0 || start >= len(catalog) {
+		start = 0
+	}
+	out := make([]repos.Repo, 0, count)
+	for i := 0; i < count; i++ {
+		out = append(out, catalog[(start+i)%len(catalog)])
+	}
 	return out
 }
 

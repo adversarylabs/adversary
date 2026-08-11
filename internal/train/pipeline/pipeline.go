@@ -58,12 +58,15 @@ type Options struct {
 	// MaxPRs is how many usable PRs we want to grade this run (default 1).
 	MaxPRs int
 	// MaxTurns is how many PRs we may attempt while hunting (default 15).
-	// Each turn = try one not-yet-seen PR (collect + scope). Stops early when MaxPRs usable cases collected.
+	// Each turn = try one not-yet-seen PR (collect + scope). For repo-catalog
+	// discovery it also bounds the rotating repository probe window, so an
+	// invocation may attempt fewer turns when that window has no candidates.
+	// Stops early when MaxPRs usable cases are collected.
 	MaxTurns int
 	// Concurrency is how many PR collects may run in parallel (gh API). Default 4.
 	// Local package `adversary run` stays serialized via a per-path lock.
 	Concurrency int
-	// ResetDiscovery clears seen-PR state for repos we touch before hunting.
+	// ResetDiscovery clears all seen-PR and catalog-cursor state once before hunting.
 	ResetDiscovery  bool
 	AdversarySource string
 	// LocalPackageDirs are all local package roots to load for routing/grading.
@@ -337,6 +340,16 @@ func Run(opts Options) (*Result, error) {
 				progress("  ↳ saved %d human-concern row(s) to results.db", added)
 			}
 			return added
+		}
+
+		if opts.ResetDiscovery {
+			removed, err := results.ResetDiscovery(opts.DataRoot)
+			if err != nil {
+				return nil, fmt.Errorf("reset discovery state: %w", err)
+			}
+			progress("Reset discovery state: cleared %d file(s)", removed)
+			// Mark the option consumed before catalog-window reservation and hunting.
+			opts.ResetDiscovery = false
 		}
 
 		var hunt huntOutcome
