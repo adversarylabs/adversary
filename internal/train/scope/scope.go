@@ -504,6 +504,17 @@ func NonActionableReply(body string) (reason string, ok bool) {
 	if hasReviewRequest(lower) {
 		return "", false
 	}
+	resolutionUpdates := []string{
+		"i pushed", "we pushed", "i've pushed", "i have pushed", "pushed a fix", "pushed an update",
+		"i fixed", "we fixed", "i've fixed", "i have fixed", "we have fixed",
+		"i updated", "we updated", "i've updated", "i have updated", "we have updated",
+		"i changed", "we changed", "addressed in commit", "resolved in commit",
+	}
+	for _, marker := range resolutionUpdates {
+		if strings.Contains(lower, marker) {
+			return "review-thread resolution update, not an unresolved reviewer concern", true
+		}
+	}
 	explanations := []string{
 		"for context", "the reason ", "this is because", "that's because",
 		"that is because", "this already", "we already", "we have ",
@@ -577,6 +588,7 @@ func isAutomatedReviewArtifact(lower string) bool {
 func hasReviewRequest(lower string) bool {
 	requests := []string{
 		"please ", "could you", "can you", "can we", "could we", "would you",
+		"could this", "can this", "would this",
 		"why not", "should ", "shouldn't", "should not", "must ", "must not",
 		"needs to", "need to", "consider ", "recommend ", "suggest ",
 		"instead", "nit:", "nit;", "would be better", "worth ",
