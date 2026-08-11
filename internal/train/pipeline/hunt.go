@@ -476,11 +476,7 @@ func collectOnePR(
 	if cres.CacheReused {
 		progress("  ↺ GitHub rate-limited; replaying the complete cached PR snapshot")
 	}
-	if opts.CycleAdversaries {
-		for _, c := range cres.CaseCandidates {
-			restrictGoldToCycleTarget(c, opts.AdversaryName)
-		}
-	}
+	restrictGoldToSelectedTarget(opts, cres.CaseCandidates)
 	var kept []*cases.Case
 	inScopeN := 0
 	outScopeN := 0
@@ -522,11 +518,20 @@ func collectOnePR(
 	return res
 }
 
-// restrictGoldToCycleTarget preserves the global router's ownership decision
-// while ensuring a target-scoped cycle can only make progress on its selected
+func restrictGoldToSelectedTarget(opts Options, candidates []*cases.Case) {
+	if !opts.targetAdversaryOnly {
+		return
+	}
+	for _, c := range candidates {
+		restrictGoldToTrainingTarget(c, opts.AdversaryName)
+	}
+}
+
+// restrictGoldToTrainingTarget preserves the global router's ownership decision
+// while ensuring a target-scoped run can only make progress on its selected
 // adversary. Sibling-owned comments remain auditable evidence, but are not gold
-// for this cycle and cannot stop discovery early or be persisted for the target.
-func restrictGoldToCycleTarget(c *cases.Case, target string) {
+// for this run and cannot stop discovery early or be persisted for the target.
+func restrictGoldToTrainingTarget(c *cases.Case, target string) {
 	if c == nil || strings.TrimSpace(target) == "" {
 		return
 	}
