@@ -2,6 +2,7 @@ package results
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/adversarylabs/adversary/internal/githubapi"
 )
+
+// ErrResultDismissed prevents a stale apply decision from overriding a human
+// dismissal after the result was selected for automatic issue creation.
+var ErrResultDismissed = errors.New("train result is dismissed")
 
 // ApplyOptions controls writing a result into a local package repo.
 type ApplyOptions struct {
@@ -68,6 +73,9 @@ func Apply(stateRoot, id string, opts ApplyOptions) (ApplyResult, error) {
 			ID: r.ID, Path: r.AppliedPath, Branch: r.Branch,
 			IssueURL: r.IssueURL, AlreadyDone: true,
 		}, nil
+	}
+	if r.Status == StatusDismissed {
+		return ApplyResult{}, fmt.Errorf("%w: %s", ErrResultDismissed, r.ID)
 	}
 	if opts.PackagePath == "" {
 		return ApplyResult{}, fmt.Errorf("package path required for apply")

@@ -348,6 +348,43 @@ func TestAutoIssueRunDeduplicatesAndDoesNotWriteDrafts(t *testing.T) {
 	}
 }
 
+func TestAutoIssueRunDoesNotResurrectDismissedResult(t *testing.T) {
+	state := t.TempDir()
+	pkg := t.TempDir()
+	_ = exec.Command("git", "init", pkg).Run()
+	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/go-cli-adversary.git").Run()
+	if err := SaveResult(state, Result{
+		ID: "stale-draft", RunID: "run-1", Package: "go-cli", Kind: KindDraft,
+		Status: StatusNew, Title: "Broad stale suggestion", CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeIssueClient{}
+	resolve := func(string) (string, error) {
+		// AutoIssueRun has already selected the row. Simulate the human dismissing
+		// it while a replay is still finishing.
+		if err := Dismiss(state, "stale-draft"); err != nil {
+			return "", err
+		}
+		return pkg, nil
+	}
+	applied, err := AutoIssueRun(state, "run-1", AutoIssueOptions{ResolvePackage: resolve, IssueClient: fake})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != 0 || fake.createCount != 0 {
+		t.Fatalf("applied=%+v creates=%d, want dismissed result skipped", applied, fake.createCount)
+	}
+	got, err := Get(state, "stale-draft")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusDismissed || got.IssueURL != "" {
+		t.Fatalf("result=%+v, want dismissal preserved without issue", got)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
