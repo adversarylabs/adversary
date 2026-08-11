@@ -145,6 +145,12 @@ issues:
 state_dir: .adversary-train
 ```
 
+For repository-catalog discovery, `run.max_turns` bounds both PR attempts and
+the number of repositories listed in one invocation. A durable shared catalog
+cursor advances to the next repository window on the following run. This keeps
+sequential package-specific runs from refreshing the full catalog—and spending
+one GitHub core request per repository—before the PR-attempt limit applies.
+
 ### B) Train from a reviewer’s history (no repo list)
 
 ```yaml

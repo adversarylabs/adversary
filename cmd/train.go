@@ -431,7 +431,7 @@ Use --no-issues for a local-only run.`,
 	cmd.Flags().StringSliceVar(&excluded, "exclude-adversary", nil, "exclude a local adversary id (repeatable or comma-separated)")
 	cmd.Flags().BoolVar(&noIssues, "no-issues", false, "keep results local instead of creating GitHub issues")
 	cmd.Flags().IntVar(&maxPRs, "max-prs", 0, "override run.max_prs")
-	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns")
+	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns (PR attempts and catalog probe window)")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 0, "override run.concurrency (parallel PR collect; default 2)")
 	cmd.Flags().BoolVar(&resetDiscovery, "reset-discovery", false, "forget seen PRs before hunting")
 	cmd.Flags().BoolVar(&fixture, "fixture", false, "hermetic fixture run (for tests/gates; ignores empty sources)")

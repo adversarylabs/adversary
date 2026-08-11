@@ -58,7 +58,10 @@ type Options struct {
 	// MaxPRs is how many usable PRs we want to grade this run (default 1).
 	MaxPRs int
 	// MaxTurns is how many PRs we may attempt while hunting (default 15).
-	// Each turn = try one not-yet-seen PR (collect + scope). Stops early when MaxPRs usable cases collected.
+	// Each turn = try one not-yet-seen PR (collect + scope). For repo-catalog
+	// discovery it also bounds the rotating repository probe window, so an
+	// invocation may attempt fewer turns when that window has no candidates.
+	// Stops early when MaxPRs usable cases are collected.
 	MaxTurns int
 	// Concurrency is how many PR collects may run in parallel (gh API). Default 4.
 	// Local package `adversary run` stays serialized via a per-path lock.
