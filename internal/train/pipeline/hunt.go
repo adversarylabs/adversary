@@ -449,6 +449,9 @@ func collectOnePR(
 		res.execClass = cres.ExecutionClass
 		return res
 	}
+	if cres.CacheReused {
+		progress("  ↺ GitHub rate-limited; replaying the complete cached PR snapshot")
+	}
 	var kept []*cases.Case
 	inScopeN := 0
 	outScopeN := 0
