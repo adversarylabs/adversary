@@ -82,6 +82,53 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	_ = cases2
 }
 
+func TestBuildCasesRejectsPullAuthorSelfReview(t *testing.T) {
+	dir := t.TempDir()
+	pull := `{
+  "number": 11666,
+  "title": "Use stable TypeScript compiler",
+  "html_url": "https://github.com/acme/r/pull/11666",
+  "base": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "head": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "user": {"login": "pull-author"}
+}`
+	reviews := `[
+  {"id": 101, "user": {"login": "pull-author"}, "body": "", "state": "COMMENTED", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "submitted_at": "2024-01-02T01:00:00Z"}
+]`
+	comments := `[
+  {"id": 102, "pull_request_review_id": 101, "user": {"login": "PULL-AUTHOR"}, "body": "This explicit return type keeps declaration emit from naming an internal package path.", "path": "public.ts", "line": 7, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:01:00Z"}
+]`
+	for name, body := range map[string]string{
+		"pull.json": pull, "reviews.json": reviews, "review-comments.json": comments,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := &scope.Router{
+		Candidates: []scope.Candidate{{ID: "typescript", AdversaryName: "typescript", Mission: "TypeScript declaration quality"}},
+		UseLLM:     false,
+	}
+	got, err := BuildCasesFromCacheFiltered("acme", "r", 11666, dir, nil, router, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("cases = %d, want one self-review evidence case", len(got))
+	}
+	labels := got[0].Labels.ExpectedConcerns
+	if len(labels) != 1 {
+		t.Fatalf("labels = %d, want one rejected self-review label", len(labels))
+	}
+	label := labels[0]
+	if label.Approved || label.Scope != string(scope.OutOfScope) || label.OwnerAdversary != "" {
+		t.Fatalf("pull author self-review became gold: %+v", label)
+	}
+	if label.ScopeMethod != "thread-metadata" || !strings.Contains(label.ScopeReason, "pull request author") {
+		t.Fatalf("self-review provenance was not retained: %+v", label)
+	}
+}
+
 func TestBuildCasesRejectsInlineChildrenOfAutomatedParentReview(t *testing.T) {
 	dir := t.TempDir()
 	pull := `{
