@@ -476,6 +476,11 @@ func collectOnePR(
 	if cres.CacheReused {
 		progress("  ↺ GitHub rate-limited; replaying the complete cached PR snapshot")
 	}
+	if opts.CycleAdversaries {
+		for _, c := range cres.CaseCandidates {
+			restrictGoldToCycleTarget(c, opts.AdversaryName)
+		}
+	}
 	var kept []*cases.Case
 	inScopeN := 0
 	outScopeN := 0
@@ -515,6 +520,37 @@ func collectOnePR(
 	job.store.Record(job.ref.Number, job.ref.Title, job.ref.URL, outcome, note)
 	_ = job.store.Save()
 	return res
+}
+
+// restrictGoldToCycleTarget preserves the global router's ownership decision
+// while ensuring a target-scoped cycle can only make progress on its selected
+// adversary. Sibling-owned comments remain auditable evidence, but are not gold
+// for this cycle and cannot stop discovery early or be persisted for the target.
+func restrictGoldToCycleTarget(c *cases.Case, target string) {
+	if c == nil || strings.TrimSpace(target) == "" {
+		return
+	}
+	target = strings.TrimSpace(target)
+	for i := range c.Labels.ExpectedConcerns {
+		label := &c.Labels.ExpectedConcerns[i]
+		if !label.Approved || (label.Scope != "" && label.Scope != "in_scope") {
+			continue
+		}
+		owner := strings.TrimSpace(label.OwnerAdversary)
+		if strings.EqualFold(owner, target) {
+			continue
+		}
+		label.Approved = false
+		label.Scope = "out_of_scope"
+		if owner == "" {
+			owner = "no adversary"
+		}
+		reason := fmt.Sprintf("routed to %s, not selected cycle target %s", owner, target)
+		if previous := strings.TrimSpace(label.ScopeReason); previous != "" {
+			reason += ": " + previous
+		}
+		label.ScopeReason = reason
+	}
 }
 
 // applyCollectResult admits one finished collection into the hunt outcome.
