@@ -258,6 +258,10 @@ func TestSuggestIssuesUsesFullSourceCommentAsBriefEvidence(t *testing.T) {
 		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
 			ID: "c-42-0", Summary: "This value is already masked on every path it takes…", File: "debugger.cs",
 			Importance: "medium", OwnerAdversary: "nits", Approved: true,
+			ThreadContext: []cases.ReviewThreadContext{{
+				CommentID: 43, Author: "pull-author", Role: "pull_request_author",
+				Body: "The helper is only used for protocol payloads that bypass both masking paths.",
+			}},
 		}}},
 	}
 	failure := judge.Failure{CaseID: c.ID, Kind: "missed-concern", ConcernID: "c-42-0", ReviewerID: "nits"}
@@ -278,6 +282,9 @@ func TestSuggestIssuesUsesFullSourceCommentAsBriefEvidence(t *testing.T) {
 	}
 	if got := writer.input.Evidence[0].Concern; got != fullComment {
 		t.Fatalf("brief evidence was truncated:\n%s", got)
+	}
+	if got := writer.input.Evidence[0].ThreadContext; len(got) != 1 || got[0].Role != "pull_request_author" || !strings.Contains(got[0].Body, "bypass both") {
+		t.Fatalf("labeled non-gold thread context was not passed to abstraction: %#v", got)
 	}
 }
 

@@ -48,9 +48,20 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	if len(cases) == 0 {
 		t.Fatal("expected cases")
 	}
-	foundExplanation, foundRequest, foundNormalized := false, false, false
+	foundExplanation, foundRequest, foundNormalized, foundRootContext := false, false, false, false
 	for _, label := range cases[0].Labels.ExpectedConcerns {
 		switch {
+		case strings.HasPrefix(label.ID, "c-2-"):
+			foundRootContext = true
+			if len(label.ThreadContext) != 2 {
+				t.Fatalf("root thread context = %#v, want author and reviewer replies", label.ThreadContext)
+			}
+			if label.ThreadContext[0].Role != "pull_request_author" || !strings.Contains(label.ThreadContext[0].Body, "serialize access") {
+				t.Fatalf("author explanation was not explicitly labeled context: %#v", label.ThreadContext)
+			}
+			if label.ThreadContext[1].Role != "reviewer" || !strings.Contains(label.ThreadContext[1].Body, "add an assertion") {
+				t.Fatalf("reviewer follow-up was not retained as context: %#v", label.ThreadContext)
+			}
 		case strings.Contains(label.Summary, "For context"):
 			foundExplanation = true
 			if label.Approved || label.Scope != string(scope.OutOfScope) || label.ScopeMethod != "thread-metadata" {
@@ -68,8 +79,8 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 			}
 		}
 	}
-	if !foundExplanation || !foundRequest || !foundNormalized {
-		t.Fatalf("missing metadata regression labels: explanation=%v request=%v normalized=%v", foundExplanation, foundRequest, foundNormalized)
+	if !foundExplanation || !foundRequest || !foundNormalized || !foundRootContext {
+		t.Fatalf("missing metadata regression labels: explanation=%v request=%v normalized=%v root-context=%v", foundExplanation, foundRequest, foundNormalized, foundRootContext)
 	}
 	// authors_only filter
 	cases2, err := BuildCasesFromCacheFiltered("acme", "r", 42, dir, nil, router, func(login string) bool {
@@ -80,6 +91,89 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	}
 	// may still have structure but no gold
 	_ = cases2
+}
+
+func TestBuildReviewThreadContextIsBoundedAndThreadLocal(t *testing.T) {
+	comments := []rawReviewComment{
+		rawComment(1, 0, "reviewer", "make it IPv6", "2024-01-02T01:00:00Z"),
+		rawComment(2, 1, "author", strings.Repeat("The generated rule passes string assertions but crashes the IPv6 consumer. ", 12), "2024-01-02T01:01:00Z"),
+		rawComment(3, 1, "reviewer", "Use the enclosed bracket form expected by the parser.", "2024-01-02T01:02:00Z"),
+		rawComment(4, 1, "author", "I reproduced that failure locally.", "2024-01-02T01:03:00Z"),
+		rawComment(5, 1, "reviewer", "Please keep the regression fixture.", "2024-01-02T01:04:00Z"),
+		rawComment(6, 1, "author", "Pushed another update.", "2024-01-02T01:05:00Z"),
+		rawComment(99, 0, "other-reviewer", "unrelated concern", "2024-01-02T01:00:30Z"),
+		rawComment(100, 99, "other-author", "unrelated explanation", "2024-01-02T01:01:30Z"),
+	}
+	got := buildReviewThreadContext(comments, "author")[1]
+	if len(got) != maxThreadContextMessages {
+		t.Fatalf("context messages = %d, want bound %d: %#v", len(got), maxThreadContextMessages, got)
+	}
+	total := 0
+	for _, message := range got {
+		if message.CommentID == 99 || message.CommentID == 100 || strings.Contains(message.Body, "unrelated") {
+			t.Fatalf("cross-thread message leaked into context: %#v", got)
+		}
+		if len([]rune(message.Body)) > maxThreadMessageRunes {
+			t.Fatalf("message exceeded per-message bound: %d", len([]rune(message.Body)))
+		}
+		total += len([]rune(message.Body))
+	}
+	if total > maxThreadContextRunes {
+		t.Fatalf("context exceeded total bound: %d", total)
+	}
+	if got[0].Role != "pull_request_author" || got[1].Role != "reviewer" {
+		t.Fatalf("speaker roles not explicit: %#v", got)
+	}
+}
+
+func rawComment(id, inReplyTo int64, author, body, createdAt string) rawReviewComment {
+	comment := rawReviewComment{ID: id, InReplyToID: inReplyTo, Body: body, CreatedAt: createdAt}
+	comment.User.Login = author
+	return comment
+}
+
+func TestBuildCasesAuthorOnlyThreadCannotCreateGold(t *testing.T) {
+	dir := t.TempDir()
+	pull := `{
+  "number": 7,
+  "title": "explain generated rules",
+  "html_url": "https://github.com/acme/r/pull/7",
+  "base": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "head": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "user": {"login": "pull-author"}
+}`
+	reviews := `[
+  {"id": 10, "user": {"login": "pull-author"}, "body": "", "state": "COMMENTED", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "submitted_at": "2024-01-02T01:00:00Z"}
+]`
+	comments := `[
+  {"id": 11, "pull_request_review_id": 10, "user": {"login": "pull-author"}, "body": "Use enclosed brackets for IPv6 or the generated rule crashes the consumer.", "path": "rules.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:01:00Z"},
+  {"id": 12, "pull_request_review_id": 10, "in_reply_to_id": 11, "user": {"login": "PULL-AUTHOR"}, "body": "The string assertion passed even though the real parser rejected it.", "path": "rules.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:02:00Z"}
+]`
+	for name, body := range map[string]string{
+		"pull.json": pull, "reviews.json": reviews, "review-comments.json": comments,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := &scope.Router{Candidates: []scope.Candidate{{
+		ID: "person-maintainer", AdversaryName: "person-maintainer", Mission: "Everything is in scope. Do not exclude nits.",
+	}}}
+	got, err := BuildCasesFromCacheFiltered("acme", "r", 7, dir, nil, router, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("cases = %d, want one author-only evidence case", len(got))
+	}
+	for _, label := range got[0].Labels.ExpectedConcerns {
+		if label.Approved || label.OwnerAdversary != "" || label.Scope != string(scope.OutOfScope) {
+			t.Fatalf("author-only thread created gold: %+v", label)
+		}
+		if label.ScopeMethod != "thread-metadata" {
+			t.Fatalf("author rejection lost thread provenance: %+v", label)
+		}
+	}
 }
 
 func TestBuildCasesRejectsPullAuthorSelfReview(t *testing.T) {

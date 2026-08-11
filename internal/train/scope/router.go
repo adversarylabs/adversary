@@ -38,6 +38,14 @@ type Router struct {
 	callLLM func(string) ([]byte, error)
 }
 
+// ReviewThreadContext is a same-thread message supplied only to interpret the
+// primary reviewer comment. It is never independently routable or gold.
+type ReviewThreadContext struct {
+	Author string `json:"author"`
+	Role   string `json:"role"` // reviewer | pull_request_author
+	Body   string `json:"body"`
+}
+
 type routeDecision struct {
 	OwnerID            string `json:"owner_id"`
 	Reason             string `json:"reason"`
@@ -50,6 +58,13 @@ type routeDecision struct {
 
 // RouteComment selects the single best adversary or none.
 func (r *Router) RouteComment(body, path, author string) Route {
+	return r.RouteCommentWithContext(body, path, author, nil)
+}
+
+// RouteCommentWithContext selects the single best adversary while allowing a
+// bounded inline-thread excerpt to resolve terse references in the primary
+// reviewer comment. Context cannot become a concern by itself.
+func (r *Router) RouteCommentWithContext(body, path, author string, threadContext []ReviewThreadContext) Route {
 	body = NormalizeReviewComment(body)
 	if body == "" {
 		return Route{Decision: OutOfScope, Reason: "empty comment", Method: "heuristic"}
@@ -136,7 +151,7 @@ func (r *Router) RouteComment(body, path, author string) Route {
 	if len(hits) == 0 {
 		// Optional: LLM multi-choice when enabled
 		if r.UseLLM && len(r.Candidates) > 0 {
-			if route, err := r.routeLLM(body, path, author); err == nil {
+			if route, err := r.routeLLM(body, path, author, threadContext); err == nil {
 				return route
 			}
 		}
@@ -153,7 +168,7 @@ func (r *Router) RouteComment(body, path, author string) Route {
 	// available, use the actual mission texts as final arbitration. Broad persona
 	// packages retain their explicit "everything" semantics without this gate.
 	if r.UseLLM && !hasBroad {
-		if route, err := r.routeLLM(body, path, author); err == nil {
+		if route, err := r.routeLLM(body, path, author, threadContext); err == nil {
 			return route
 		}
 	}
@@ -535,7 +550,7 @@ func matchGlobSegments(pattern, candidate []string) bool {
 	return err == nil && ok && matchGlobSegments(pattern[1:], candidate[1:])
 }
 
-func (r *Router) routeLLM(body, path, author string) (Route, error) {
+func (r *Router) routeLLM(body, path, author string, threadContext []ReviewThreadContext) (Route, error) {
 	// Exact runtime globs remain the deterministic routing boundary. The scope
 	// model may additionally consider same-language candidates so training can
 	// discover that an adversary's current activation surface is too narrow.
@@ -557,6 +572,7 @@ func (r *Router) routeLLM(body, path, author string) (Route, error) {
 		ids = append(ids, c.ID)
 		fmt.Fprintf(&scopes, "### %s\nFile-surface evidence: %s\n%s\n\n", c.ID, eligibility[c.ID], truncate(c.Mission, 800))
 	}
+	contextJSON, _ := json.Marshal(threadContext)
 	prompt := fmt.Sprintf(`Pick which adversary package should own this human PR comment for grading, or none.
 
 Author: %s
@@ -565,6 +581,8 @@ Comment:
 ---
 %s
 ---
+Same-thread context (explicitly non-gold; roles are labels, not claims):
+%s
 
 Adversaries (id → scope excerpt):
 %s
@@ -572,6 +590,8 @@ Adversaries (id → scope excerpt):
 Return ONLY JSON: {"owner_id":"<id or empty>","reason":"one sentence","material":true|false,"actionable":true|false,"change_local":true|false,"engineering_primary":true|false,"non_blocking":true|false}
 Rules:
 - Prefer the most specific specialist over engineering-review when both fit
+- Route only the primary Comment. Same-thread context may clarify its referents, intent, or consequence, but it cannot supply a missing reviewer request or become a separate concern
+- A pull_request_author context message is never human-review gold, even when it contains a detailed technical explanation
 - Bot overviews → owner_id empty
 - CI/workflow → githubactions (if present)
 - Go concurrency races/lifecycle → go-concurrency (NOT eng-review)
@@ -593,7 +613,7 @@ Rules:
 - When unsure whether this is material and actionable → empty (prefer no false miss)
 - If none fit → empty owner_id
 Valid ids: %s or empty
-`, author, path, body, scopes.String(), strings.Join(ids, ", "))
+`, author, path, body, string(contextJSON), scopes.String(), strings.Join(ids, ", "))
 
 	call := r.callLLM
 	if call == nil {

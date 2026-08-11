@@ -44,6 +44,21 @@ type CollectOptions struct {
 	Client *githubapi.Client
 }
 
+type rawReviewComment struct {
+	ID               int64  `json:"id"`
+	Body             string `json:"body"`
+	Path             string `json:"path"`
+	Line             int    `json:"line"`
+	OriginalCommitID string `json:"original_commit_id"`
+	CommitID         string `json:"commit_id"`
+	CreatedAt        string `json:"created_at"`
+	User             struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	InReplyToID         int64 `json:"in_reply_to_id"`
+	PullRequestReviewID int64 `json:"pull_request_review_id"`
+}
+
 // CollectPR fetches PR timeline/reviews/comments via GitHub HTTP and builds case candidates.
 func CollectPR(dataRoot, owner, repo string, pr int) (*Result, error) {
 	return CollectPRWithOptions(dataRoot, owner, repo, pr, CollectOptions{})
@@ -271,20 +286,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	if err != nil {
 		return nil, err
 	}
-	var comments []struct {
-		ID               int64  `json:"id"`
-		Body             string `json:"body"`
-		Path             string `json:"path"`
-		Line             int    `json:"line"`
-		OriginalCommitID string `json:"original_commit_id"`
-		CommitID         string `json:"commit_id"`
-		CreatedAt        string `json:"created_at"`
-		User             struct {
-			Login string `json:"login"`
-		} `json:"user"`
-		InReplyToID         int64 `json:"in_reply_to_id"`
-		PullRequestReviewID int64 `json:"pull_request_review_id"`
-	}
+	var comments []rawReviewComment
 	if err := json.Unmarshal(commentsRaw, &comments); err != nil {
 		return nil, err
 	}
@@ -308,6 +310,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	round := 0
 	byReviewedSHA := make(map[string]*cases.Case)
 	commentContext := make(map[commentKey]reviewCommentContext, len(reviews)+len(comments))
+	threadContext := buildReviewThreadContext(comments, prObj.User.Login)
 	automatedReviews := make(map[int64]bool, len(reviews))
 	for _, rev := range reviews {
 		commentContext[commentKey{kind: "review-body", id: rev.ID}] = reviewCommentContext{}
@@ -317,6 +320,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		commentContext[commentKey{kind: "review-comment", id: comment.ID}] = reviewCommentContext{
 			inReplyToID:     comment.InReplyToID,
 			automatedParent: automatedReviews[comment.PullRequestReviewID],
+			threadContext:   threadContext[comment.ID],
 		}
 	}
 	for _, rev := range reviews {
@@ -491,6 +495,7 @@ type commentKey struct {
 type reviewCommentContext struct {
 	inReplyToID     int64
 	automatedParent bool
+	threadContext   []cases.ReviewThreadContext
 }
 
 // applyScope routes each label to the best adversary (or none).
@@ -533,6 +538,9 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 		}
 		body = scope.NormalizeReviewComment(body)
 		labels[i].Summary = body
+		if matched != nil {
+			labels[i].ThreadContext = append([]cases.ReviewThreadContext(nil), commentContext[commentKey{kind: matched.Kind, id: matched.ID}].threadContext...)
+		}
 		if authorOK != nil && !authorOK(author) {
 			labels[i].Scope = string(scope.OutOfScope)
 			labels[i].Approved = false
@@ -572,7 +580,7 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 			}
 		}
 		if router != nil {
-			route := router.RouteComment(body, path, author)
+			route := router.RouteCommentWithContext(body, path, author, routeThreadContext(labels[i].ThreadContext))
 			labels[i].OwnerAdversary = route.OwnerID
 			labels[i].ScopeReason = route.Reason
 			labels[i].ScopeMethod = route.Method
@@ -616,6 +624,136 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 			labels[i].Approved = false
 		}
 	}
+}
+
+const (
+	maxThreadContextMessages = 4
+	maxThreadContextRunes    = 1_200
+	maxThreadMessageRunes    = 400
+)
+
+// buildReviewThreadContext retains only nearby messages from the same inline
+// review thread. Context is attached to an existing comment candidate; this
+// function cannot create a label or make any message gold.
+func buildReviewThreadContext(comments []rawReviewComment, pullAuthor string) map[int64][]cases.ReviewThreadContext {
+	byID := make(map[int64]rawReviewComment, len(comments))
+	for _, comment := range comments {
+		byID[comment.ID] = comment
+	}
+	rootID := func(id int64) int64 {
+		seen := map[int64]bool{}
+		for id != 0 && !seen[id] {
+			seen[id] = true
+			comment, ok := byID[id]
+			if !ok || comment.InReplyToID == 0 {
+				return id
+			}
+			id = comment.InReplyToID
+		}
+		return id
+	}
+	threads := map[int64][]rawReviewComment{}
+	for _, comment := range comments {
+		root := rootID(comment.ID)
+		if root == 0 {
+			continue
+		}
+		threads[root] = append(threads[root], comment)
+	}
+	for root := range threads {
+		sort.SliceStable(threads[root], func(i, j int) bool {
+			return threads[root][i].CreatedAt < threads[root][j].CreatedAt
+		})
+	}
+
+	out := make(map[int64][]cases.ReviewThreadContext, len(comments))
+	for _, target := range comments {
+		thread := threads[rootID(target.ID)]
+		if len(thread) < 2 {
+			continue
+		}
+		// Keep the nearest messages when a long thread exceeds the bound, then
+		// restore chronological order for model readability.
+		type neighbor struct {
+			comment  rawReviewComment
+			distance time.Duration
+		}
+		targetAt, _ := time.Parse(time.RFC3339, target.CreatedAt)
+		var neighbors []neighbor
+		for _, message := range thread {
+			if message.ID == target.ID || strings.TrimSpace(message.Body) == "" {
+				continue
+			}
+			createdAt, _ := time.Parse(time.RFC3339, message.CreatedAt)
+			distance := createdAt.Sub(targetAt)
+			if distance < 0 {
+				distance = -distance
+			}
+			neighbors = append(neighbors, neighbor{comment: message, distance: distance})
+		}
+		sort.SliceStable(neighbors, func(i, j int) bool {
+			if neighbors[i].distance == neighbors[j].distance {
+				return neighbors[i].comment.CreatedAt < neighbors[j].comment.CreatedAt
+			}
+			return neighbors[i].distance < neighbors[j].distance
+		})
+		if len(neighbors) > maxThreadContextMessages {
+			neighbors = neighbors[:maxThreadContextMessages]
+		}
+		sort.SliceStable(neighbors, func(i, j int) bool {
+			return neighbors[i].comment.CreatedAt < neighbors[j].comment.CreatedAt
+		})
+		remaining := maxThreadContextRunes
+		for _, item := range neighbors {
+			if remaining == 0 {
+				break
+			}
+			body := truncateContextRunes(strings.TrimSpace(item.comment.Body), min(maxThreadMessageRunes, remaining))
+			if body == "" {
+				continue
+			}
+			role := "reviewer"
+			if pullAuthor != "" && strings.EqualFold(item.comment.User.Login, pullAuthor) {
+				role = "pull_request_author"
+			}
+			createdAt, _ := time.Parse(time.RFC3339, item.comment.CreatedAt)
+			out[target.ID] = append(out[target.ID], cases.ReviewThreadContext{
+				CommentID: item.comment.ID,
+				Author:    item.comment.User.Login,
+				Role:      role,
+				Body:      body,
+				CreatedAt: createdAt,
+			})
+			remaining -= len([]rune(body))
+		}
+	}
+	return out
+}
+
+func truncateContextRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit == 1 {
+		return "…"
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
+func routeThreadContext(context []cases.ReviewThreadContext) []scope.ReviewThreadContext {
+	out := make([]scope.ReviewThreadContext, 0, len(context))
+	for _, message := range context {
+		out = append(out, scope.ReviewThreadContext{
+			Author: message.Author,
+			Role:   message.Role,
+			Body:   message.Body,
+		})
+	}
+	return out
 }
 
 func truncateRunes(s string, n int) string {

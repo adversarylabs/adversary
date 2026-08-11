@@ -104,6 +104,21 @@ type ExpectedConcern struct {
 	// OwnerAdversary is the package id that should be graded on this concern
 	// (e.g. go-concurrency, githubactions, engineering-review). Empty = none.
 	OwnerAdversary string `json:"owner_adversary,omitempty" yaml:"owner_adversary,omitempty"`
+	// ThreadContext contains bounded, same-thread conversation around the source
+	// reviewer comment. It is interpretation evidence for routing and issue
+	// abstraction only; it is never a gold concern and is not used by scoring.
+	ThreadContext []ReviewThreadContext `json:"thread_context,omitempty" yaml:"thread_context,omitempty"`
+}
+
+// ReviewThreadContext is a non-gold message adjacent to a reviewer concern.
+// Role is explicit so model-backed stages cannot mistake a pull request author's
+// explanation for a second human review finding.
+type ReviewThreadContext struct {
+	CommentID int64     `json:"comment_id" yaml:"comment_id"`
+	Author    string    `json:"author" yaml:"author"`
+	Role      string    `json:"role" yaml:"role"` // reviewer | pull_request_author
+	Body      string    `json:"body" yaml:"body"`
+	CreatedAt time.Time `json:"created_at,omitempty" yaml:"created_at,omitempty"`
 }
 
 type Metadata struct {

@@ -782,6 +782,9 @@ func suggestIssues(in Input) []SuggestedIssue {
 			ev.File = concern.File
 			ev.Importance = concern.Importance
 			ev.ScopeWhy = softWrap(concern.ScopeReason, 300)
+			for _, message := range concern.ThreadContext {
+				ev.ThreadContext = append(ev.ThreadContext, IssueBriefThreadContext{Role: message.Role, Body: message.Body})
+			}
 		}
 		addCorroboratingEvidence(bkt, reviewLink(c), ev)
 	}
