@@ -433,7 +433,7 @@ Use --no-issues for a local-only run.`,
 	cmd.Flags().IntVar(&maxPRs, "max-prs", 0, "override run.max_prs")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns (PR attempts and catalog probe window)")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 0, "override run.concurrency (parallel PR collect; default 2)")
-	cmd.Flags().BoolVar(&resetDiscovery, "reset-discovery", false, "forget seen PRs before hunting")
+	cmd.Flags().BoolVar(&resetDiscovery, "reset-discovery", false, "forget seen PRs and restart catalog discovery before hunting")
 	cmd.Flags().BoolVar(&fixture, "fixture", false, "hermetic fixture run (for tests/gates; ignores empty sources)")
 	cmd.Flags().IntVar(&pr, "pr", 0, "pin a single PR number (debug)")
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub owner with --pr/--repo")
@@ -652,8 +652,8 @@ func newTrainResetCommand(app *application.App) *cobra.Command {
 	var resultsOnly bool
 	cmd := &cobra.Command{
 		Use:   "reset",
-		Short: "Clear seen-PR discovery (re-hunt repos) and/or results inbox",
-		Long: `By default clears discovery state only (which PRs train already tried),
+		Short: "Clear discovery (re-hunt repos) and/or results inbox",
+		Long: `By default clears discovery state (seen PRs and catalog position),
 so the next train run will re-examine the catalog repos.
 
   adversary train reset           # discovery only

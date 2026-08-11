@@ -146,8 +146,9 @@ state_dir: .adversary-train
 ```
 
 For repository-catalog discovery, `run.max_turns` bounds both PR attempts and
-the number of repositories listed in one invocation. A durable shared catalog
-cursor advances to the next repository window on the following run. This keeps
+the number of repositories listed in one invocation. A durable per-target catalog
+cursor advances to the next repository window on the following run, and a shared
+seed staggers the first window assigned to each adversary. This keeps
 sequential package-specific runs from refreshing the full catalog—and spending
 one GitHub core request per repository—before the PR-attempt limit applies.
 

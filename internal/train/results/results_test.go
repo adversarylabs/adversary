@@ -15,6 +15,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/cases"
 	"github.com/adversarylabs/adversary/internal/train/judge"
 	"github.com/adversarylabs/adversary/internal/train/report"
+	trainstate "github.com/adversarylabs/adversary/internal/train/state"
 )
 
 func TestSQLiteWriteListInspectApply(t *testing.T) {
@@ -425,11 +426,14 @@ func TestResetDiscovery(t *testing.T) {
 	targetDir := filepath.Join(dir, "targets", "go-testing")
 	_ = os.MkdirAll(targetDir, 0o755)
 	_ = os.WriteFile(filepath.Join(targetDir, "o__r.json"), []byte(`{}`), 0o644)
+	if _, _, err := trainstate.TakeCatalogWindow(state, "go-testing", 10, 3); err != nil {
+		t.Fatal(err)
+	}
 	n, err := ResetDiscovery(state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
+	if n != 3 {
 		t.Fatalf("removed %d", n)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {

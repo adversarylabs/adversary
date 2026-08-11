@@ -94,10 +94,6 @@ func runParallelHunt(
 			out.interrupted = err
 			return out
 		}
-		if opts.ResetDiscovery {
-			store.PRs = map[string]state.PRRecord{}
-			_ = store.Save()
-		}
 		progress("Pinned PR mode: %s/%s#%d", owner, name, opts.PR)
 		ref := collect.PRRef{
 			Number: opts.PR,
@@ -124,8 +120,12 @@ func runParallelHunt(
 		langNote = "languages=" + strings.Join(opts.Languages, ",")
 	}
 	totalCatalogRepos := len(catalogRepos)
+	cursorTarget := opts.DiscoveryNamespace
+	if strings.TrimSpace(cursorTarget) == "" {
+		cursorTarget = opts.AdversaryName
+	}
 	windowStart, windowCount, err := state.TakeCatalogWindow(
-		dataRoot, totalCatalogRepos, maxTurns, opts.ResetDiscovery,
+		dataRoot, cursorTarget, totalCatalogRepos, maxTurns,
 	)
 	if err != nil {
 		out.interrupted = fmt.Errorf("reserve catalog discovery window: %w", err)
@@ -151,10 +151,6 @@ func runParallelHunt(
 		s, err := state.LoadDiscoveryForTarget(dataRoot, opts.DiscoveryNamespace, owner, name)
 		if err != nil {
 			return nil, err
-		}
-		if opts.ResetDiscovery {
-			s.PRs = map[string]state.PRRecord{}
-			_ = s.Save()
 		}
 		stores[key] = s
 		return s, nil
@@ -199,8 +195,8 @@ func runParallelHunt(
 	// Feeder: discover one bounded, durable catalog window, then enqueue jobs.
 	// Seen-state filtering still requires one GitHub list request per repository,
 	// so repeatedly refreshing the whole catalog would exhaust core quota before
-	// max-turns can bound PR collection. The shared cursor lets later runs resume
-	// at the next window instead.
+	// max-turns can bound PR collection. A per-target cursor lets later runs resume
+	// at the next window while a shared seed staggers different targets' first run.
 	// Collect workers already run up to `concurrency` PRs at once.
 feedLoop:
 	for {

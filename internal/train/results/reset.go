@@ -6,7 +6,8 @@ import (
 	"path/filepath"
 )
 
-// ResetDiscovery clears seen-PR memory so train run will re-hunt repos.
+// ResetDiscovery clears seen-PR memory and the catalog cursor so train run will
+// re-hunt repos from a clean discovery schedule.
 // Does not delete results.db, github-cache, or run artifacts.
 func ResetDiscovery(stateRoot string) (removed int, err error) {
 	dir := filepath.Join(stateRoot, "state", "discovery")

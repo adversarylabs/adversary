@@ -90,10 +90,6 @@ func runAuthorHunt(
 		if err != nil {
 			return nil, err
 		}
-		if opts.ResetDiscovery {
-			s.PRs = map[string]state.PRRecord{}
-			_ = s.Save()
-		}
 		stores[key] = s
 		return s, nil
 	}

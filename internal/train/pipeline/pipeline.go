@@ -66,7 +66,7 @@ type Options struct {
 	// Concurrency is how many PR collects may run in parallel (gh API). Default 4.
 	// Local package `adversary run` stays serialized via a per-path lock.
 	Concurrency int
-	// ResetDiscovery clears seen-PR state for repos we touch before hunting.
+	// ResetDiscovery clears all seen-PR and catalog-cursor state once before hunting.
 	ResetDiscovery  bool
 	AdversarySource string
 	// LocalPackageDirs are all local package roots to load for routing/grading.
@@ -340,6 +340,16 @@ func Run(opts Options) (*Result, error) {
 				progress("  ↳ saved %d human-concern row(s) to results.db", added)
 			}
 			return added
+		}
+
+		if opts.ResetDiscovery {
+			removed, err := results.ResetDiscovery(opts.DataRoot)
+			if err != nil {
+				return nil, fmt.Errorf("reset discovery state: %w", err)
+			}
+			progress("Reset discovery state: cleared %d file(s)", removed)
+			// Mark the option consumed before catalog-window reservation and hunting.
+			opts.ResetDiscovery = false
 		}
 
 		var hunt huntOutcome
