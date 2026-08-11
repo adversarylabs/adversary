@@ -95,12 +95,12 @@ func TestBuildCasesPrefersLatestInScopeReview(t *testing.T) {
 	reviews := `[
 	  {"id": 1, "user": {"login": "old-reviewer"}, "body": "", "state": "CHANGES_REQUESTED", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "submitted_at": "2024-01-02T01:00:00Z"},
 	  {"id": 2, "user": {"login": "new-reviewer"}, "body": "", "state": "CHANGES_REQUESTED", "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "submitted_at": "2024-01-03T01:00:00Z"},
-	  {"id": 3, "user": {"login": "author1"}, "body": "", "state": "COMMENTED", "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "submitted_at": "2024-01-04T01:00:00Z"}
+	  {"id": 3, "user": {"login": "maintainer-contributor"}, "body": "", "state": "COMMENTED", "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "submitted_at": "2024-01-04T01:00:00Z"}
 	]`
 	comments := `[
 	  {"id": 11, "pull_request_review_id": 1, "user": {"login": "old-reviewer"}, "body": "This goroutine can leak after shutdown.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:01:00Z"},
 	  {"id": 12, "pull_request_review_id": 2, "user": {"login": "new-reviewer"}, "body": "This goroutine can leak after Shutdown if the context is not cancelled; this is the newest reviewer concern.", "path": "worker.go", "line": 20, "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "created_at": "2024-01-03T01:01:00Z"},
-	  {"id": 13, "pull_request_review_id": 3, "user": {"login": "author1"}, "body": "I agree the goroutine could leak and can make that change.", "path": "worker.go", "line": 20, "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "created_at": "2024-01-04T01:01:00Z"}
+	  {"id": 13, "pull_request_review_id": 3, "in_reply_to_id": 12, "user": {"login": "maintainer-contributor"}, "body": "You're right. I pushed a fix that cancels the context and added regression tests.", "path": "worker.go", "line": 20, "commit_id": "cccccccccccccccccccccccccccccccccccccccc", "created_at": "2024-01-04T01:01:00Z"}
 	]`
 	for name, body := range map[string]string{
 		"pull.json": pull, "reviews.json": reviews, "review-comments.json": comments,

@@ -211,6 +211,21 @@ func TestContextDependentReviewFragmentIsNotGold(t *testing.T) {
 	}
 }
 
+func TestNonActionableReplyRejectsContributorResolutionUpdate(t *testing.T) {
+	body := "You're right, get_dialect() never connects to a live database. Pushed a fix forcing the PostgreSQL mode off, plus regression tests."
+	reason, rejected := NonActionableReply(body)
+	if !rejected || !strings.Contains(reason, "resolution update") {
+		t.Fatalf("contributor fix reply was not rejected: rejected=%v reason=%q", rejected, reason)
+	}
+}
+
+func TestNonActionableReplyKeepsUnresolvedFollowUp(t *testing.T) {
+	body := "I pushed the earlier cleanup, but could this still leak when the cancellation path wins the race?"
+	if reason, rejected := NonActionableReply(body); rejected {
+		t.Fatalf("reply with a new unresolved review request was rejected as %q", reason)
+	}
+}
+
 func TestPackageDocNitOutOfScope(t *testing.T) {
 	c := &Classifier{AdversaryName: "engineering-review", UseLLM: false}
 	body := "Nit; more description on package\n```go\n// Package attrnorm normalizes attribute values by:\n//\n//   - Deduplication: resolves duplicate map keys\n```"
