@@ -233,6 +233,7 @@ var (
 	explicitCurrentScope    = regexp.MustCompile(`(?i)\b(?:unrelated to|outside|out of)\b.{0,50}\b(?:scope|this (?:pull request|pr|change))\b`)
 	explicitFuturePR        = regexp.MustCompile(`(?i)\b(?:next|follow[- ]?up|separate) (?:pull request|pr)\b`)
 	explicitActionModal     = regexp.MustCompile(`(?i)\b(?:please|can|could|would|should|must|need|needs|have to|has to)\b`)
+	explicitImperative      = regexp.MustCompile(`(?i)(?:^|[.!?;:]\s+)(?:fix|address|change|update|remove|add|handle|resolve|correct)\b`)
 	explicitCurrentTiming   = regexp.MustCompile(`(?i)\b(?:here|now|before merge|in (?:this|the) (?:pull request|pr|change))\b`)
 )
 
@@ -250,7 +251,8 @@ func explicitNonLocalReviewRemark(body, reviewSummary string) (string, bool) {
 		// Mixed comments need model judgment: a reviewer may acknowledge that a
 		// problem predates the PR yet explicitly require it to be fixed here. A
 		// later-PR marker remains an unambiguous deferral.
-		currentRequest := explicitActionModal.MatchString(body) && explicitCurrentTiming.MatchString(body)
+		currentAction := explicitActionModal.MatchString(body) || explicitImperative.MatchString(body)
+		currentRequest := currentAction && explicitCurrentTiming.MatchString(body)
 		if currentRequest && !explicitFuturePR.MatchString(body) {
 			return "", false
 		}

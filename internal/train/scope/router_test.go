@@ -133,6 +133,22 @@ func TestNonLocalGateRecognizesMandatoryCurrentRequestPhrasing(t *testing.T) {
 	}
 }
 
+func TestNonLocalGateRecognizesDirectImperativeCurrentRequests(t *testing.T) {
+	for _, body := range []string{
+		"This issue was not introduced by this PR. Fix this in this change.",
+		"This problem was not caused by this PR; address it here.",
+		"This concern was not introduced by the change: handle it before merge.",
+	} {
+		if reason, rejected := explicitNonLocalReviewRemark(body, ""); rejected {
+			t.Errorf("imperative current request %q was rejected: %s", body, reason)
+		}
+	}
+	deferred := "This issue was not introduced by this PR. Fix this in a follow-up PR."
+	if _, rejected := explicitNonLocalReviewRemark(deferred, ""); !rejected {
+		t.Fatalf("imperative later-PR disposition was not rejected: %q", deferred)
+	}
+}
+
 func TestRouteLLMPromptIncludesBoundedChangeEvidence(t *testing.T) {
 	const (
 		summary = "Please address the inline correctness concern before merge."
