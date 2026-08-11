@@ -381,6 +381,8 @@ func formatIssueBody(r Result, draftPath, packagePath string) string {
 }
 
 func formatDraftIssueBody(r Result, draftPath, packagePath string) string {
+	_ = draftPath
+	_ = packagePath
 	draft := strings.TrimSpace(r.DraftBody)
 	if draft == "" {
 		draft = strings.TrimSpace(r.Summary)
@@ -390,15 +392,9 @@ func formatDraftIssueBody(r Result, draftPath, packagePath string) string {
 	if draft != "" && !strings.HasSuffix(draft, "\n") {
 		b.WriteByte('\n')
 	}
-	b.WriteString("\n> Implement the general review capability described above and cover both a positive example and a clean counterexample. This brief is synthetic; do not add its wording to the package voice corpus.\n\n")
-	b.WriteString("<details>\n<summary>Training provenance</summary>\n\n")
-	fmt.Fprintf(&b, "- Package: `%s`\n", r.Package)
-	fmt.Fprintf(&b, "- Result: `%s`\n", r.ID)
-	fmt.Fprintf(&b, "- Run: `%s`\n", r.RunID)
-	if draftPath != "" {
-		fmt.Fprintf(&b, "- Local evidence: `%s`\n", RelDraftPath(packagePath, draftPath))
-	}
-	b.WriteString("\n</details>\n")
+	// Keep audit linkage available to automation without making maintainers read
+	// a generated instruction block and provenance table after the actual issue.
+	fmt.Fprintf(&b, "\n<!-- adversary-train-source: package=%s result=%s run=%s -->\n", r.Package, r.ID, r.RunID)
 	return b.String()
 }
 

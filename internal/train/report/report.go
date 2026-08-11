@@ -867,6 +867,7 @@ func suggestIssues(in Input) []SuggestedIssue {
 							fmt.Fprintf(os.Stderr, "note: train abstraction judgment for %s rejected candidate: %s\n", candidate.owner, softWrap(assessment.Reason, 240))
 							continue
 						} else {
+							briefInput.Abstraction = &assessment
 							fmt.Fprintf(os.Stderr, "note: train abstraction judgment for %s admitted candidate: %s\n", candidate.owner, softWrap(assessment.Reason, 240))
 						}
 					}
