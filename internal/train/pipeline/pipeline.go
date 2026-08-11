@@ -76,7 +76,7 @@ type Options struct {
 	LocalPackageRoot string
 	// TrainOnlyIDs limits train-eligible locals (empty = all locals).
 	TrainOnlyIDs []string
-	// TrainExcludeIDs removes locals from routing after TrainOnlyIDs is applied.
+	// TrainExcludeIDs removes locals from both training and routing.
 	TrainExcludeIDs []string
 	// CycleAdversaries selects one least-trained local package for this run.
 	// Selection is durable across invocations and uses per-target PR memory.
@@ -275,12 +275,13 @@ func Run(opts Options) (*Result, error) {
 				}
 			}
 		} else {
+			discoveredPkgs := siblingPkgs
 			discoveredIDs := packageIDs(siblingPkgs)
-			var duplicates []adversaries.CanonicalDuplicate
 			var onlyMatched bool
-			siblingPkgs, duplicates, onlyMatched = adversaries.ResolveTrainingPackages(
+			siblingPkgs, _, onlyMatched = adversaries.ResolveTrainingPackages(
 				siblingPkgs, opts.TrainOnlyIDs, opts.TrainExcludeIDs,
 			)
+			routingPkgs, duplicates := routingPackagesForTraining(discoveredPkgs, siblingPkgs, opts.TrainExcludeIDs)
 			if !onlyMatched {
 				fmt.Fprintf(os.Stderr, "note: run.only %v matched no loaded packages %v — keeping all loaded\n",
 					opts.TrainOnlyIDs, discoveredIDs)
@@ -291,6 +292,9 @@ func Run(opts Options) (*Result, error) {
 			}
 			if len(siblingPkgs) == 0 {
 				return nil, fmt.Errorf("no local adversary packages remain for train routing (only=%v exclude=%v)", opts.TrainOnlyIDs, opts.TrainExcludeIDs)
+			}
+			if len(routingPkgs) == 0 {
+				return nil, fmt.Errorf("no local adversary packages remain for comment routing (exclude=%v)", opts.TrainExcludeIDs)
 			}
 			if opts.CycleAdversaries {
 				cycle, err := state.LoadAdversaryCycle(opts.DataRoot)
@@ -309,15 +313,10 @@ func Run(opts Options) (*Result, error) {
 				opts.DiscoveryNamespace = targetID
 				fmt.Fprintf(os.Stderr, "Round-robin target: %s (target-scoped discovery state)\n", targetID)
 			}
-			var cands []scope.Candidate
-			for _, p := range siblingPkgs {
-				cands = append(cands, scope.Candidate{
-					ID: p.ID, AdversaryName: p.ID, Mission: p.ScopeMarkdown,
-					Languages: p.Languages, FileGlobs: p.FileGlobs,
-				})
-			}
+			cands := routerCandidates(routingPkgs)
 			commentRouter = &scope.Router{Candidates: cands, UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
-			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing: %v\n", len(siblingPkgs), packageIDs(siblingPkgs))
+			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing: %v\n", len(routingPkgs), packageIDs(routingPkgs))
+			fmt.Fprintf(os.Stderr, "Training %d adversaries this run: %v\n", len(siblingPkgs), packageIDs(siblingPkgs))
 			// Always expand each local package's adversary.yaml uses for product
 			// grading. This is independent of official jury enable/disable —
 			// uses are part of the package under train, not the catalog jury.
@@ -1039,6 +1038,75 @@ func packageIDs(pkgs []adversaries.Package) []string {
 		}
 	}
 	return ids
+}
+
+// routingPackagesForTraining returns one canonical checkout for every eligible
+// local adversary, independent of the narrower set selected for training. When
+// run.only chose a particular duplicate checkout as a local override, prefer
+// that checkout for its canonical routing identity as well.
+func routingPackagesForTraining(discovered, training []adversaries.Package, excluded []string) ([]adversaries.Package, []adversaries.CanonicalDuplicate) {
+	routing, _ := adversaries.DeduplicateCanonical(discovered)
+	routing = adversaries.FilterExcludedIDs(routing, excluded)
+
+	byIdentity := make(map[string]int, len(routing))
+	for i, pkg := range routing {
+		byIdentity[canonicalPackageIdentity(pkg)] = i
+	}
+	for _, pkg := range training {
+		if i, ok := byIdentity[canonicalPackageIdentity(pkg)]; ok {
+			routing[i] = pkg
+		}
+	}
+	sort.Slice(routing, func(i, j int) bool { return routing[i].ID < routing[j].ID })
+
+	var duplicates []adversaries.CanonicalDuplicate
+	for _, kept := range routing {
+		for _, candidate := range discovered {
+			if canonicalPackageIdentity(candidate) != canonicalPackageIdentity(kept) || samePackageCheckout(candidate, kept) {
+				continue
+			}
+			duplicates = append(duplicates, adversaries.CanonicalDuplicate{
+				ManifestName: kept.ManifestName,
+				Kept:         kept,
+				Ignored:      candidate,
+			})
+		}
+	}
+	sort.Slice(duplicates, func(i, j int) bool {
+		if duplicates[i].ManifestName != duplicates[j].ManifestName {
+			return duplicates[i].ManifestName < duplicates[j].ManifestName
+		}
+		return duplicates[i].Ignored.ID < duplicates[j].Ignored.ID
+	})
+	return routing, duplicates
+}
+
+func canonicalPackageIdentity(pkg adversaries.Package) string {
+	if name := strings.ToLower(strings.Trim(strings.TrimSpace(pkg.ManifestName), "/")); name != "" {
+		return "manifest:" + name
+	}
+	if id := strings.ToLower(strings.TrimSpace(pkg.ID)); id != "" {
+		return "id:" + id
+	}
+	return "dir:" + strings.ToLower(strings.TrimSpace(pkg.DirName))
+}
+
+func samePackageCheckout(a, b adversaries.Package) bool {
+	return a.Dir == b.Dir && a.ID == b.ID
+}
+
+func routerCandidates(pkgs []adversaries.Package) []scope.Candidate {
+	candidates := make([]scope.Candidate, 0, len(pkgs))
+	for _, pkg := range pkgs {
+		candidates = append(candidates, scope.Candidate{
+			ID:            pkg.ID,
+			AdversaryName: pkg.ID,
+			Mission:       pkg.ScopeMarkdown,
+			Languages:     pkg.Languages,
+			FileGlobs:     pkg.FileGlobs,
+		})
+	}
+	return candidates
 }
 
 func gradeOwners(c *cases.Case, primaryID string) map[string][]cases.ExpectedConcern {
