@@ -138,6 +138,10 @@ func TestNonLocalGateRecognizesDirectImperativeCurrentRequests(t *testing.T) {
 		"This issue was not introduced by this PR. Fix this in this change.",
 		"This problem was not caused by this PR; address it here.",
 		"This concern was not introduced by the change: handle it before merge.",
+		"This issue was not introduced by this PR.\n- Fix this in this change.",
+		"This problem was not caused by this PR.\n> Address it here.",
+		"This concern was not introduced by the change.\n1. Handle it before merge.",
+		"This issue was not introduced by this PR.\n- [ ] **Fix** this in this change.",
 	} {
 		if reason, rejected := explicitNonLocalReviewRemark(body, ""); rejected {
 			t.Errorf("imperative current request %q was rejected: %s", body, reason)
@@ -146,6 +150,10 @@ func TestNonLocalGateRecognizesDirectImperativeCurrentRequests(t *testing.T) {
 	deferred := "This issue was not introduced by this PR. Fix this in a follow-up PR."
 	if _, rejected := explicitNonLocalReviewRemark(deferred, ""); !rejected {
 		t.Fatalf("imperative later-PR disposition was not rejected: %q", deferred)
+	}
+	markdownDeferred := "This issue was not introduced by this PR.\n> Fix this in a follow-up PR."
+	if _, rejected := explicitNonLocalReviewRemark(markdownDeferred, ""); !rejected {
+		t.Fatalf("markdown later-PR disposition was not rejected: %q", markdownDeferred)
 	}
 }
 

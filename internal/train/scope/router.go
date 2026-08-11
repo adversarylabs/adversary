@@ -233,7 +233,7 @@ var (
 	explicitCurrentScope    = regexp.MustCompile(`(?i)\b(?:unrelated to|outside|out of)\b.{0,50}\b(?:scope|this (?:pull request|pr|change))\b`)
 	explicitFuturePR        = regexp.MustCompile(`(?i)\b(?:next|follow[- ]?up|separate) (?:pull request|pr)\b`)
 	explicitActionModal     = regexp.MustCompile(`(?i)\b(?:please|can|could|would|should|must|need|needs|have to|has to)\b`)
-	explicitImperative      = regexp.MustCompile(`(?i)(?:^|[.!?;:]\s+)(?:fix|address|change|update|remove|add|handle|resolve|correct)\b`)
+	explicitImperative      = regexp.MustCompile(`(?im)(?:^[\t ]*(?:(?:[-*+]|>+|\d+[.)])[\t ]+)*|[.!?;:]\s+)(?:\[[ xX]\][\t ]+)?(?:[*_]{1,2})?(?:fix|address|change|update|remove|add|handle|resolve|correct)\b`)
 	explicitCurrentTiming   = regexp.MustCompile(`(?i)\b(?:here|now|before merge|in (?:this|the) (?:pull request|pr|change))\b`)
 )
 
