@@ -82,6 +82,58 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	_ = cases2
 }
 
+func TestBuildCasesRejectsInlineChildrenOfAutomatedParentReview(t *testing.T) {
+	dir := t.TempDir()
+	pull := `{
+  "number": 9278,
+  "title": "fix stale query state",
+  "html_url": "https://github.com/acme/r/pull/9278",
+  "base": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "head": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "user": {"login": "author1"}
+}`
+	reviews := `[
+  {"id": 101, "user": {"login": "human-maintainer"}, "body": "The fix is sound. One concern inline.\n\n<!-- hermes-pr-review bbbbbbb -->", "state": "COMMENTED", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "submitted_at": "2024-01-02T01:00:00Z"}
+]`
+	comments := `[
+  {"id": 102, "pull_request_review_id": 101, "user": {"login": "human-maintainer"}, "body": "This search path leaves the applied filter state stale, so the next page queries with the wrong filters.", "path": "SearchPage.tsx", "line": 145, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:01:00Z"}
+]`
+	for name, body := range map[string]string{
+		"pull.json": pull, "reviews.json": reviews, "review-comments.json": comments,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := &scope.Router{
+		Candidates: []scope.Candidate{{ID: "typescript", AdversaryName: "typescript", Mission: "TypeScript and React state correctness"}},
+		UseLLM:     false,
+	}
+	got, err := BuildCasesFromCacheFiltered("acme", "r", 9278, dir, nil, router, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("cases = %d, want one automated review evidence case", len(got))
+	}
+	foundInline := false
+	for _, label := range got[0].Labels.ExpectedConcerns {
+		if !strings.HasPrefix(label.ID, "c-102-") {
+			continue
+		}
+		foundInline = true
+		if label.Approved || label.Scope != string(scope.OutOfScope) || label.OwnerAdversary != "" {
+			t.Fatalf("automated child became gold: %+v", label)
+		}
+		if label.ScopeMethod != "thread-metadata" || !strings.Contains(label.ScopeReason, "automated parent review") {
+			t.Fatalf("automated provenance was not retained: %+v", label)
+		}
+	}
+	if !foundInline {
+		t.Fatal("expected inline child label to remain as rejected evidence")
+	}
+}
+
 func TestBuildCasesPrefersLatestInScopeReview(t *testing.T) {
 	dir := t.TempDir()
 	pull := `{
