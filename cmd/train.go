@@ -866,7 +866,16 @@ func newTrainStatusCommand(app *application.App) *cobra.Command {
 				}
 				cyclePackages, _ = adversaries.DiscoverRoot(packagePath)
 			}
-			cyclePackages = adversaries.FilterExcludedIDs(cyclePackages, append(append([]string{}, cfg.Run.Exclude...), "torvalds"))
+			var cycleDuplicates []adversaries.CanonicalDuplicate
+			cyclePackages, cycleDuplicates, _ = adversaries.ResolveTrainingPackages(
+				cyclePackages,
+				cfg.Run.Only,
+				append(append([]string{}, cfg.Run.Exclude...), "torvalds"),
+			)
+			for _, duplicate := range cycleDuplicates {
+				fmt.Fprintf(out, "cycle.duplicate_ignored: %s manifest=%s kept=%s\n",
+					duplicate.Ignored.DirName, duplicate.ManifestName, duplicate.Kept.DirName)
+			}
 			if len(cyclePackages) > 0 {
 				cycle, cycleErr := trainstate.LoadAdversaryCycle(workspace.ResolveStateAbs(cfgPath, cfg.StateDirResolved()))
 				if cycleErr == nil {

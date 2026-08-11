@@ -44,6 +44,15 @@ type UseSpec struct {
 	Path    string
 }
 
+// CanonicalDuplicate records a local checkout omitted because another package
+// declares the same adversary.yaml name. ManifestName is the package identity;
+// directory-derived IDs only identify a particular local checkout.
+type CanonicalDuplicate struct {
+	ManifestName string
+	Kept         Package
+	Ignored      Package
+}
+
 // DiscoverSiblings finds *-adversary directories next to factoryRoot's parent
 // (…/adversarylabs/adversary → …/adversarylabs/*-adversary).
 func DiscoverSiblings(factoryRoot string) ([]Package, error) {
@@ -178,6 +187,134 @@ func FilterExcludedIDs(pkgs []Package, excluded []string) []Package {
 		out = append(out, p)
 	}
 	return out
+}
+
+// ResolveTrainingPackages applies explicit package selection before canonical
+// deduplication, then exclusions. Filtering first is intentional: run.only (or
+// --adversary) may name a particular checkout as a temporary local override.
+// Without that explicit choice, multiple directories declaring the same
+// manifest package must not become separate routing or cycle targets.
+//
+// onlyMatched is false only when a non-empty only list matched nothing; callers
+// retain the existing behavior of keeping all discovered packages in that case.
+func ResolveTrainingPackages(pkgs []Package, only, excluded []string) (selected []Package, duplicates []CanonicalDuplicate, onlyMatched bool) {
+	selected = pkgs
+	onlyMatched = true
+	if len(only) > 0 {
+		if filtered := FilterByIDs(selected, only); len(filtered) > 0 {
+			selected = filtered
+		} else {
+			onlyMatched = false
+		}
+	}
+	selected, duplicates = DeduplicateCanonical(selected)
+	selected = FilterExcludedIDs(selected, excluded)
+	return selected, duplicates, onlyMatched
+}
+
+// DeduplicateCanonical keeps one local checkout per adversary.yaml name.
+// Selection is deterministic and favors a directory-derived ID that matches
+// the full or leaf manifest identity (for example go-concurrency for
+// go/concurrency, or githubactions for ci/github-actions). Conventional
+// *-adversary checkout names, shorter names, and lexical order break ties.
+func DeduplicateCanonical(pkgs []Package) ([]Package, []CanonicalDuplicate) {
+	groups := map[string][]Package{}
+	var keys []string
+	for _, pkg := range pkgs {
+		key := canonicalPackageKey(pkg)
+		if _, ok := groups[key]; !ok {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], pkg)
+	}
+	sort.Strings(keys)
+	selected := make([]Package, 0, len(keys))
+	var duplicates []CanonicalDuplicate
+	for _, key := range keys {
+		group := groups[key]
+		best := group[0]
+		for _, candidate := range group[1:] {
+			if preferCanonicalPackage(candidate, best) {
+				best = candidate
+			}
+		}
+		selected = append(selected, best)
+		for _, candidate := range group {
+			if candidate.Dir == best.Dir && candidate.ID == best.ID {
+				continue
+			}
+			duplicates = append(duplicates, CanonicalDuplicate{
+				ManifestName: best.ManifestName,
+				Kept:         best,
+				Ignored:      candidate,
+			})
+		}
+	}
+	sort.Slice(selected, func(i, j int) bool { return selected[i].ID < selected[j].ID })
+	sort.Slice(duplicates, func(i, j int) bool {
+		if duplicates[i].ManifestName != duplicates[j].ManifestName {
+			return duplicates[i].ManifestName < duplicates[j].ManifestName
+		}
+		return duplicates[i].Ignored.ID < duplicates[j].Ignored.ID
+	})
+	return selected, duplicates
+}
+
+func canonicalPackageKey(pkg Package) string {
+	if name := strings.ToLower(strings.Trim(strings.TrimSpace(pkg.ManifestName), "/")); name != "" {
+		return "manifest:" + name
+	}
+	if id := strings.ToLower(strings.TrimSpace(pkg.ID)); id != "" {
+		return "id:" + id
+	}
+	return "dir:" + strings.ToLower(strings.TrimSpace(pkg.DirName))
+}
+
+func preferCanonicalPackage(candidate, current Package) bool {
+	candidateScore := manifestIdentityScore(candidate)
+	currentScore := manifestIdentityScore(current)
+	if candidateScore != currentScore {
+		return candidateScore > currentScore
+	}
+	candidateConventional := strings.HasSuffix(strings.ToLower(candidate.DirName), "-adversary")
+	currentConventional := strings.HasSuffix(strings.ToLower(current.DirName), "-adversary")
+	if candidateConventional != currentConventional {
+		return candidateConventional
+	}
+	if len(candidate.DirName) != len(current.DirName) {
+		return len(candidate.DirName) < len(current.DirName)
+	}
+	if candidate.DirName != current.DirName {
+		return candidate.DirName < current.DirName
+	}
+	return candidate.Dir < current.Dir
+}
+
+func manifestIdentityScore(pkg Package) int {
+	id := compactIdentity(pkg.ID)
+	manifest := strings.Trim(strings.TrimSpace(pkg.ManifestName), "/")
+	if id == "" || manifest == "" {
+		return 0
+	}
+	if id == compactIdentity(manifest) {
+		return 2
+	}
+	if slash := strings.LastIndexByte(manifest, '/'); slash >= 0 && id == compactIdentity(manifest[slash+1:]) {
+		return 1
+	}
+	return 0
+}
+
+func compactIdentity(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return -1
+	}, strings.TrimSpace(value))
 }
 
 func loadPackage(dir, dirName string) (Package, error) {

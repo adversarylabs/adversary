@@ -102,6 +102,71 @@ func TestDiscoverSiblings(t *testing.T) {
 	}
 }
 
+func TestResolveTrainingPackagesDeduplicatesCanonicalManifestIdentity(t *testing.T) {
+	root := t.TempDir()
+	canonicalDir := writePkg(t, root, "githubactions-adversary", "ci/github-actions")
+	historicalDir := writePkg(t, root, "githubactions-adversary-job-timeouts", "ci/github-actions")
+	writePkg(t, root, "go-concurrency-adversary", "go/concurrency")
+
+	pkgs, err := DiscoverRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, duplicates, matched := ResolveTrainingPackages(pkgs, nil, nil)
+	if !matched || len(selected) != 2 || len(duplicates) != 1 {
+		t.Fatalf("selected=%+v duplicates=%+v matched=%v", selected, duplicates, matched)
+	}
+	by := ByID(selected)
+	githubActions, ok := by["githubactions"]
+	if !ok || githubActions.Dir != canonicalDir {
+		t.Fatalf("canonical checkout not preferred: %+v", selected)
+	}
+	if duplicates[0].ManifestName != "ci/github-actions" || duplicates[0].Kept.Dir != canonicalDir || duplicates[0].Ignored.Dir != historicalDir {
+		t.Fatalf("unexpected duplicate record: %+v", duplicates[0])
+	}
+}
+
+func TestResolveTrainingPackagesPreservesExplicitCheckoutOverride(t *testing.T) {
+	root := t.TempDir()
+	writePkg(t, root, "githubactions-adversary", "ci/github-actions")
+	historicalDir := writePkg(t, root, "githubactions-adversary-job-timeouts", "ci/github-actions")
+	pkgs, err := DiscoverRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	selected, duplicates, matched := ResolveTrainingPackages(pkgs, []string{"githubactions-adversary-job-timeouts"}, nil)
+	if !matched || len(selected) != 1 || len(duplicates) != 0 || selected[0].Dir != historicalDir {
+		t.Fatalf("explicit override was not preserved: selected=%+v duplicates=%+v matched=%v", selected, duplicates, matched)
+	}
+}
+
+func TestResolveTrainingPackagesDeduplicatesBeforeExclusion(t *testing.T) {
+	root := t.TempDir()
+	writePkg(t, root, "githubactions-adversary", "ci/github-actions")
+	writePkg(t, root, "githubactions-adversary-job-timeouts", "ci/github-actions")
+	pkgs, err := DiscoverRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	selected, duplicates, matched := ResolveTrainingPackages(pkgs, nil, []string{"githubactions"})
+	if !matched || len(selected) != 0 || len(duplicates) != 1 {
+		t.Fatalf("duplicate evaded canonical exclusion: selected=%+v duplicates=%+v matched=%v", selected, duplicates, matched)
+	}
+}
+
+func TestDeduplicateCanonicalKeepsDistinctManifestPackages(t *testing.T) {
+	pkgs := []Package{
+		{ID: "first", DirName: "first-adversary", Dir: "/tmp/first", ManifestName: "ci/first"},
+		{ID: "second", DirName: "second-adversary", Dir: "/tmp/second", ManifestName: "ci/second"},
+	}
+	selected, duplicates := DeduplicateCanonical(pkgs)
+	if len(selected) != 2 || len(duplicates) != 0 {
+		t.Fatalf("distinct packages were deduplicated: selected=%+v duplicates=%+v", selected, duplicates)
+	}
+}
+
 func TestLanguagesFromGlobs(t *testing.T) {
 	got := languagesFromGlobs([]string{"**/*.go", "Dockerfile"}, "go-foo")
 	if len(got) == 0 {
