@@ -134,7 +134,7 @@ func TestBuildCasesRejectsInlineChildrenOfAutomatedParentReview(t *testing.T) {
 	}
 }
 
-func TestBuildCasesPrefersLatestInScopeReview(t *testing.T) {
+func TestBuildCasesRetainsIndependentInScopeReviewsNewestFirst(t *testing.T) {
 	dir := t.TempDir()
 	pull := `{
 	  "number": 42,
@@ -169,30 +169,40 @@ func TestBuildCasesPrefersLatestInScopeReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) == 0 {
-		t.Fatal("expected at least one case")
+	if len(got) != 2 {
+		t.Fatalf("cases = %d, want one case per distinct reviewed SHA", len(got))
 	}
-	var selected *cases.Case
+	var approved []*cases.Case
 	for _, candidate := range got {
 		for _, label := range candidate.Labels.ExpectedConcerns {
 			if label.Approved {
-				selected = candidate
+				approved = append(approved, candidate)
 				break
 			}
 		}
-		if selected != nil {
-			break
+	}
+	if len(approved) != 2 {
+		t.Fatalf("approved cases = %d, want both independently reviewed states", len(approved))
+	}
+	if approved[0].ReviewEvent.ReviewedSHA != "cccccccccccccccccccccccccccccccccccccccc" ||
+		approved[1].ReviewEvent.ReviewedSHA != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("reviewed SHAs = [%q, %q], want newest then older", approved[0].ReviewEvent.ReviewedSHA, approved[1].ReviewEvent.ReviewedSHA)
+	}
+	if !containsString(approved[0].ReviewEvent.Reviewers, "new-reviewer") || !containsString(approved[0].ReviewEvent.Reviewers, "maintainer-contributor") {
+		t.Fatalf("first reviewers = %#v, want both reviews of the newest SHA", approved[0].ReviewEvent.Reviewers)
+	}
+	if len(approved[1].ReviewEvent.Reviewers) != 1 || approved[1].ReviewEvent.Reviewers[0] != "old-reviewer" {
+		t.Fatalf("second reviewers = %#v, want older reviewer concern", approved[1].ReviewEvent.Reviewers)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
 		}
 	}
-	if selected == nil {
-		t.Fatal("expected an approved reviewer concern")
-	}
-	if len(selected.ReviewEvent.Reviewers) != 1 || selected.ReviewEvent.Reviewers[0] != "new-reviewer" {
-		t.Fatalf("selected reviewers = %#v, want newest reviewer concern", selected.ReviewEvent.Reviewers)
-	}
-	if len(selected.Comments) != 1 || !strings.Contains(selected.Comments[0].Body, "newest reviewer concern") {
-		t.Fatalf("selected comments = %#v, want newest reviewer comment", selected.Comments)
-	}
+	return false
 }
 
 func TestBuildCasesIgnoresPostMergeReviewComments(t *testing.T) {

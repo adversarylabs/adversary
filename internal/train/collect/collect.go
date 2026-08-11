@@ -306,6 +306,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	repoSlug := repo // case id uses short repo name
 	var out []*cases.Case
 	round := 0
+	byReviewedSHA := make(map[string]*cases.Case)
 	commentContext := make(map[commentKey]reviewCommentContext, len(reviews)+len(comments))
 	automatedReviews := make(map[int64]bool, len(reviews))
 	for _, rev := range reviews {
@@ -422,11 +423,25 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			},
 			Exclusion: excl,
 		}
-		// Cap at one high-quality round per PR for v1 when we already have one good case.
-		out = append(out, c)
-		if excl == nil && len(cases.ApprovedLabels(labels)) > 0 {
-			break
+		// Keep each independently reviewed code state. Reviews are newest-first, but
+		// a later in-scope concern must not hide an earlier concern attached to a
+		// different reviewed SHA.
+		if sha != "" {
+			if existing := byReviewedSHA[sha]; existing != nil {
+				existing.ReviewEvent.GitHubReviewIDs = append(existing.ReviewEvent.GitHubReviewIDs, c.ReviewEvent.GitHubReviewIDs...)
+				existing.ReviewEvent.Reviewers = append(existing.ReviewEvent.Reviewers, c.ReviewEvent.Reviewers...)
+				existing.ReviewEvent.Dismissed = existing.ReviewEvent.Dismissed && c.ReviewEvent.Dismissed
+				if existing.ReviewEvent.SubmittedAt.IsZero() || (!c.ReviewEvent.SubmittedAt.IsZero() && c.ReviewEvent.SubmittedAt.Before(existing.ReviewEvent.SubmittedAt)) {
+					existing.ReviewEvent.SubmittedAt = c.ReviewEvent.SubmittedAt
+					existing.EvidenceWindow.OpensAt = c.EvidenceWindow.OpensAt
+				}
+				existing.Comments = append(existing.Comments, c.Comments...)
+				existing.Labels.ExpectedConcerns = append(existing.Labels.ExpectedConcerns, c.Labels.ExpectedConcerns...)
+				continue
+			}
+			byReviewedSHA[sha] = c
 		}
+		out = append(out, c)
 	}
 	if len(out) == 0 {
 		// Fallback: single case from PR head if we have comments with original_commit_id
