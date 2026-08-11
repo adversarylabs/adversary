@@ -81,6 +81,10 @@ type Options struct {
 	// CycleAdversaries selects one least-trained local package for this run.
 	// Selection is durable across invocations and uses per-target PR memory.
 	CycleAdversaries bool
+	// targetAdversaryOnly is derived after local package selection. It keeps
+	// sibling-owned review comments from satisfying a one-package hunt whether
+	// that package was selected by round-robin or an explicit --adversary.
+	targetAdversaryOnly bool
 	// DiscoveryNamespace isolates seen-PR state. Cycle mode sets this to the
 	// selected package id so every specialist can examine the same source PR.
 	DiscoveryNamespace string
@@ -313,6 +317,7 @@ func Run(opts Options) (*Result, error) {
 				opts.DiscoveryNamespace = targetID
 				fmt.Fprintf(os.Stderr, "Round-robin target: %s (target-scoped discovery state)\n", targetID)
 			}
+			opts.targetAdversaryOnly = len(siblingPkgs) == 1
 			cands := routerCandidates(routingPkgs)
 			commentRouter = &scope.Router{Candidates: cands, UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
 			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing: %v\n", len(routingPkgs), packageIDs(routingPkgs))

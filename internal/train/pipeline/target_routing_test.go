@@ -42,7 +42,7 @@ func TestGoDatabaseCycleRoutesGloballyButAdmitsOnlyDatabaseGold(t *testing.T) {
 		t.Fatalf("CLI/IP-history race was forced into database: %+v", wrongRoute)
 	}
 	wrongCase := caseWithRoutedConcern("wrong-owner", wrongRoute)
-	restrictGoldToCycleTarget(wrongCase, "go-database")
+	restrictGoldToTrainingTarget(wrongCase, "go-database")
 	if got := len(cases.ApprovedLabels(wrongCase.Labels.ExpectedConcerns)); got != 0 {
 		t.Fatalf("sibling-owned concern remained target gold: %+v", wrongCase.Labels.ExpectedConcerns)
 	}
@@ -69,7 +69,7 @@ func TestGoDatabaseCycleRoutesGloballyButAdmitsOnlyDatabaseGold(t *testing.T) {
 		t.Fatalf("true database concern was not routed to database: %+v", databaseRoute)
 	}
 	databaseCase := caseWithRoutedConcern("database-owner", databaseRoute)
-	restrictGoldToCycleTarget(databaseCase, "go-database")
+	restrictGoldToTrainingTarget(databaseCase, "go-database")
 	databaseResult := collectResult{
 		kept:      []*cases.Case{databaseCase},
 		inScopeN:  len(cases.ApprovedLabels(databaseCase.Labels.ExpectedConcerns)),
@@ -97,6 +97,32 @@ func TestRoutingPackagesPreferSelectedDuplicateCheckout(t *testing.T) {
 	}
 	if len(duplicates) != 1 || duplicates[0].Kept.Dir != override.Dir || duplicates[0].Ignored.Dir != canonical.Dir {
 		t.Fatalf("duplicate report disagrees with routing checkout: %+v", duplicates)
+	}
+}
+
+func TestExplicitSingleTargetRejectsSiblingOwnedGold(t *testing.T) {
+	opts := Options{AdversaryName: "go-project", TrainOnlyIDs: []string{"go-project"}}
+	training := []adversaries.Package{{ID: "go-project", ManifestName: "go/project"}}
+	opts.targetAdversaryOnly = len(training) == 1
+
+	c := caseWithRoutedConcern("concurrency-owner", scope.Route{
+		Decision: scope.InScope,
+		OwnerID:  "go-concurrency",
+		Reason:   "shared informer lifecycle concern",
+		Method:   "llm",
+	})
+	restrictGoldToSelectedTarget(opts, []*cases.Case{c})
+	if got := len(cases.ApprovedLabels(c.Labels.ExpectedConcerns)); got != 0 {
+		t.Fatalf("sibling-owned concern satisfied explicit target hunt: %+v", c.Labels.ExpectedConcerns)
+	}
+
+	unrestricted := caseWithRoutedConcern("all-packages", scope.Route{
+		Decision: scope.InScope,
+		OwnerID:  "go-concurrency",
+	})
+	restrictGoldToSelectedTarget(Options{AdversaryName: "go-project"}, []*cases.Case{unrestricted})
+	if got := len(cases.ApprovedLabels(unrestricted.Labels.ExpectedConcerns)); got != 1 {
+		t.Fatalf("all-package training unexpectedly discarded sibling gold: %+v", unrestricted.Labels.ExpectedConcerns)
 	}
 }
 
