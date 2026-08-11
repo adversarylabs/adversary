@@ -45,19 +45,35 @@ type CollectOptions struct {
 }
 
 type rawReviewComment struct {
-	ID               int64  `json:"id"`
-	Body             string `json:"body"`
-	Path             string `json:"path"`
-	Line             int    `json:"line"`
-	OriginalCommitID string `json:"original_commit_id"`
-	CommitID         string `json:"commit_id"`
-	CreatedAt        string `json:"created_at"`
-	DiffHunk         string `json:"diff_hunk"`
-	User             struct {
-		Login string `json:"login"`
-	} `json:"user"`
-	InReplyToID         int64 `json:"in_reply_to_id"`
-	PullRequestReviewID int64 `json:"pull_request_review_id"`
+	ID                    int64          `json:"id"`
+	Body                  string         `json:"body"`
+	Path                  string         `json:"path"`
+	Line                  int            `json:"line"`
+	OriginalCommitID      string         `json:"original_commit_id"`
+	CommitID              string         `json:"commit_id"`
+	CreatedAt             string         `json:"created_at"`
+	DiffHunk              string         `json:"diff_hunk"`
+	User                  rawGitHubActor `json:"user"`
+	PerformedViaGitHubApp *rawGitHubApp  `json:"performed_via_github_app"`
+	InReplyToID           int64          `json:"in_reply_to_id"`
+	PullRequestReviewID   int64          `json:"pull_request_review_id"`
+}
+
+type rawGitHubActor struct {
+	Login string `json:"login"`
+	Type  string `json:"type"`
+}
+
+type rawGitHubApp struct {
+	Slug string `json:"slug"`
+}
+
+func automatedGitHubProvenance(actor rawGitHubActor, app *rawGitHubApp) bool {
+	appSlug := ""
+	if app != nil {
+		appSlug = app.Slug
+	}
+	return scope.IsAutomatedReviewer(actor.Login, actor.Type, appSlug)
 }
 
 // CollectPR fetches PR timeline/reviews/comments via GitHub HTTP and builds case candidates.
@@ -249,14 +265,13 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		return nil, err
 	}
 	var reviews []struct {
-		ID          int64  `json:"id"`
-		Body        string `json:"body"`
-		State       string `json:"state"`
-		CommitID    string `json:"commit_id"`
-		SubmittedAt string `json:"submitted_at"`
-		User        struct {
-			Login string `json:"login"`
-		} `json:"user"`
+		ID                    int64          `json:"id"`
+		Body                  string         `json:"body"`
+		State                 string         `json:"state"`
+		CommitID              string         `json:"commit_id"`
+		SubmittedAt           string         `json:"submitted_at"`
+		User                  rawGitHubActor `json:"user"`
+		PerformedViaGitHubApp *rawGitHubApp  `json:"performed_via_github_app"`
 	}
 	if err := json.Unmarshal(reviewsRaw, &reviews); err != nil {
 		return nil, err
@@ -314,13 +329,15 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	threadContext := buildReviewThreadContext(comments, prObj.User.Login)
 	automatedReviews := make(map[int64]bool, len(reviews))
 	for _, rev := range reviews {
-		commentContext[commentKey{kind: "review-body", id: rev.ID}] = reviewCommentContext{}
-		automatedReviews[rev.ID] = scope.IsAutomatedReviewArtifact(rev.Body)
+		automated := automatedGitHubProvenance(rev.User, rev.PerformedViaGitHubApp) || scope.IsAutomatedReviewArtifact(rev.Body)
+		commentContext[commentKey{kind: "review-body", id: rev.ID}] = reviewCommentContext{automatedAuthor: automated}
+		automatedReviews[rev.ID] = automated
 	}
 	for _, comment := range comments {
 		commentContext[commentKey{kind: "review-comment", id: comment.ID}] = reviewCommentContext{
 			inReplyToID:     comment.InReplyToID,
 			automatedParent: automatedReviews[comment.PullRequestReviewID],
+			automatedAuthor: automatedGitHubProvenance(comment.User, comment.PerformedViaGitHubApp),
 			threadContext:   threadContext[comment.ID],
 			diffHunk:        comment.DiffHunk,
 		}
@@ -498,6 +515,7 @@ type commentKey struct {
 type reviewCommentContext struct {
 	inReplyToID     int64
 	automatedParent bool
+	automatedAuthor bool
 	threadContext   []cases.ReviewThreadContext
 	reviewSummary   string
 	diffHunk        string
@@ -556,6 +574,14 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 		}
 		if matched != nil {
 			ctx := commentContext[commentKey{kind: matched.Kind, id: matched.ID}]
+			if ctx.automatedAuthor {
+				labels[i].Scope = string(scope.OutOfScope)
+				labels[i].Approved = false
+				labels[i].OwnerAdversary = ""
+				labels[i].ScopeReason = "comment carries automated GitHub actor/app provenance"
+				labels[i].ScopeMethod = "github-metadata"
+				continue
+			}
 			if ctx.automatedParent {
 				labels[i].Scope = string(scope.OutOfScope)
 				labels[i].Approved = false
