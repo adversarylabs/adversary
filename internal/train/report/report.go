@@ -599,6 +599,9 @@ func commentForConcern(c *cases.Case, e cases.ExpectedConcern) *cases.Comment {
 	if c == nil {
 		return nil
 	}
+	if exact := exactCommentForConcern(c, e); exact != nil {
+		return exact
+	}
 	var best *cases.Comment
 	bestScore := 0
 	for i := range c.Comments {
@@ -628,6 +631,23 @@ func commentForConcern(c *cases.Case, e cases.ExpectedConcern) *cases.Comment {
 		return nil
 	}
 	return best
+}
+
+// exactCommentForConcern resolves the source GitHub comment encoded by
+// CandidateLabelsFromComments as c-<comment id>-<index>. This identity is
+// authoritative; text overlap is only a fallback for legacy or synthetic
+// concern ids that do not resolve to a comment in the case.
+func exactCommentForConcern(c *cases.Case, e cases.ExpectedConcern) *cases.Comment {
+	if c == nil || e.ID == "" {
+		return nil
+	}
+	for i := range c.Comments {
+		comment := &c.Comments[i]
+		if strings.HasPrefix(e.ID, fmt.Sprintf("c-%d-", comment.ID)) {
+			return comment
+		}
+	}
+	return nil
 }
 
 func concernByID(c *cases.Case, id string) *cases.ExpectedConcern {
@@ -1071,10 +1091,8 @@ func sourceConcernBody(c *cases.Case, concern *cases.ExpectedConcern, fallback s
 	if c == nil || concern == nil {
 		return fallback
 	}
-	for _, comment := range c.Comments {
-		if strings.HasPrefix(concern.ID, fmt.Sprintf("c-%d-", comment.ID)) && strings.TrimSpace(comment.Body) != "" {
-			return comment.Body
-		}
+	if comment := exactCommentForConcern(c, *concern); comment != nil && strings.TrimSpace(comment.Body) != "" {
+		return comment.Body
 	}
 	needle := strings.TrimSuffix(strings.TrimSpace(concern.Summary), "…")
 	for _, comment := range c.Comments {
