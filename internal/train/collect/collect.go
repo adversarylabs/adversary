@@ -23,6 +23,7 @@ type Result struct {
 	PR             int
 	CacheDir       string
 	ExecutionClass dataroot.ExecutionClass
+	CacheReused    bool
 	CaseCandidates []*cases.Case
 	Blocked        *dataroot.BlockedResult
 }
@@ -81,29 +82,48 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 			return res, nil
 		}
 	}
+	if resetAt, limited := githubapi.ActiveRateLimit(); limited {
+		gateErr := &RateLimitError{ResetAt: resetAt}
+		if replayCachedCases(res, gateErr, opts) {
+			return res, nil
+		}
+		res.ExecutionClass = dataroot.ClassPartial
+		res.Blocked = blockedFromErr("github-api", "collect-rate-gate", gateErr)
+		return res, nil
+	}
 
 	prJSON, _, err := client.RESTGet(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, pr))
 	if err != nil {
+		if replayCachedCases(res, err, opts) {
+			return res, nil
+		}
 		res.ExecutionClass = dataroot.ClassPartial
 		res.Blocked = blockedFromErr("github-api", "collect-pr", err)
 		return res, nil
 	}
-	_ = securefs.WriteFile(filepath.Join(cacheDir, "pull.json"), prJSON)
-
 	reviewsJSON, err := client.RESTGetPaginated(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", owner, repo, pr))
 	if err != nil {
+		if replayCachedCases(res, err, opts) {
+			return res, nil
+		}
 		res.Blocked = blockedFromErr("github-api", "collect-reviews", err)
 		res.ExecutionClass = dataroot.ClassPartial
 		return res, nil
 	}
-	_ = securefs.WriteFile(filepath.Join(cacheDir, "reviews.json"), reviewsJSON)
-
 	commentsJSON, err := client.RESTGetPaginated(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/comments?per_page=100", owner, repo, pr))
 	if err != nil {
+		if replayCachedCases(res, err, opts) {
+			return res, nil
+		}
 		res.Blocked = blockedFromErr("github-api", "collect-comments", err)
 		res.ExecutionClass = dataroot.ClassPartial
 		return res, nil
 	}
+	// Replace the cache only after collecting a coherent snapshot. This avoids
+	// mixing a fresh pull object with stale reviews or comments if GitHub rate
+	// limits one of the later endpoints.
+	_ = securefs.WriteFile(filepath.Join(cacheDir, "pull.json"), prJSON)
+	_ = securefs.WriteFile(filepath.Join(cacheDir, "reviews.json"), reviewsJSON)
 	_ = securefs.WriteFile(filepath.Join(cacheDir, "review-comments.json"), commentsJSON)
 
 	res.ExecutionClass = dataroot.ClassReal
@@ -113,6 +133,24 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 	}
 	res.CaseCandidates = built
 	return res, nil
+}
+
+// replayCachedCases keeps long-running training useful through GitHub's
+// secondary rate limits. It is deliberately limited to rate-limit failures and
+// requires a complete, parseable cache snapshot; auth and missing-source errors
+// remain first-class blocked results.
+func replayCachedCases(res *Result, collectErr error, opts CollectOptions) bool {
+	if !IsRateLimit(collectErr) {
+		return false
+	}
+	built, err := BuildCasesFromCacheFiltered(res.Owner, res.Repo, res.PR, res.CacheDir, opts.Scope, opts.Router, opts.AuthorOK)
+	if err != nil {
+		return false
+	}
+	res.ExecutionClass = dataroot.ClassReplayed
+	res.CacheReused = true
+	res.CaseCandidates = built
+	return true
 }
 
 func defaultScope() *scope.Classifier {

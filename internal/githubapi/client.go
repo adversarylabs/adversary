@@ -189,12 +189,10 @@ func (c *Client) doURL(ctx context.Context, method, fullURL string, body []byte,
 			rl := rateLimitFromHeaders(resp.Header, data)
 			noteRateLimit(rl.ResetAt)
 			lastErr = rl
-			if retryGET && i+1 < attempts {
-				if err := waitForRateGate(ctx); err != nil {
-					return data, resp.Header, rl
-				}
-				continue
-			}
+			// Repeating the same request cannot clear a primary or secondary
+			// rate limit. Return immediately so higher layers can use cached
+			// evidence or record a resumable blocked result instead of sleeping
+			// inside an otherwise retryable GET.
 			return data, resp.Header, rl
 		}
 		if resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {

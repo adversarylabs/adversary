@@ -210,6 +210,33 @@ func TestAuthErrorAndRateLimit(t *testing.T) {
 	}
 }
 
+func TestRateLimitReturnsWithoutRetrying(t *testing.T) {
+	ResetRateGateForTest()
+	t.Cleanup(ResetRateGateForTest)
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"secondary rate limit"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("token")
+	c.HTTP = srv.Client()
+	c.RESTBase = srv.URL
+	_, _, err := c.RESTGet(context.Background(), "/repos/acme/r/pulls/1")
+	if err == nil || !IsRateLimit(err) {
+		t.Fatalf("expected rate limit, got %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("rate-limited GET retried %d times", requests)
+	}
+	if _, active := ActiveRateLimit(); !active {
+		t.Fatal("expected active process rate gate")
+	}
+}
+
 func TestRequireToken(t *testing.T) {
 	if TokenFromLookup(func(string) (string, bool) { return "", false }) != "" {
 		t.Fatal()

@@ -86,6 +86,18 @@ func noteRateLimit(resetAt time.Time) {
 	}
 }
 
+// ActiveRateLimit reports the process-wide GitHub hold, if one is currently
+// active. Callers with replayable local data can use this to avoid sleeping at
+// the request gate.
+func ActiveRateLimit() (time.Time, bool) {
+	rateMu.Lock()
+	defer rateMu.Unlock()
+	if rateHoldUntil.IsZero() || !rateHoldUntil.After(time.Now()) {
+		return time.Time{}, false
+	}
+	return rateHoldUntil, true
+}
+
 func rateLimitFromHeaders(h http.Header, body []byte) *RateLimitError {
 	rl := &RateLimitError{Message: softErr(string(body), 300)}
 	if reset := h.Get("X-RateLimit-Reset"); reset != "" {
