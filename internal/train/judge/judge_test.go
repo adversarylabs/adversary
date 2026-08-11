@@ -105,6 +105,30 @@ func TestJudgeReviewDoesNotMatchUnrelatedConcernOnSameFile(t *testing.T) {
 	}
 }
 
+func TestJudgeReviewDoesNotPromoteGenericOverlapWithSameFile(t *testing.T) {
+	review := &normalize.Review{
+		ReviewerID: "engineering-review",
+		Findings: []normalize.Finding{{
+			ID:       "parse-error",
+			File:     "service.go",
+			Severity: "high",
+			Claim:    "An error while parsing the response is silently ignored.",
+		}},
+	}
+	expected := []cases.ExpectedConcern{{
+		ID:         "retry-error",
+		Summary:    "The retry policy returns the wrong error after exhausting attempts.",
+		Importance: "high",
+		File:       "service.go",
+		Approved:   true,
+	}}
+
+	j := JudgeReview(review, expected)
+	if len(j.ExpectedMatched) != 0 || len(j.ExpectedMissed) != 1 {
+		t.Fatalf("generic same-file overlap should not match: matched=%v missed=%v findings=%+v", j.ExpectedMatched, j.ExpectedMissed, j.Findings)
+	}
+}
+
 func TestJudgeReviewMatchesPinningConcernWithDifferentInflection(t *testing.T) {
 	review := &normalize.Review{
 		ReviewerID: "dockerfile",
@@ -112,7 +136,7 @@ func TestJudgeReviewMatchesPinningConcernWithDifferentInflection(t *testing.T) {
 			ID:       "floating-artifact",
 			File:     "Dockerfile",
 			Severity: "high",
-			Claim:    "The downloaded artifact is unpinned and can change between builds.",
+			Claim:    "This dependency uses an unpinned version that can change between builds.",
 			Evidence: "wget https://example.test/tool-latest.tar.gz",
 		}},
 	}
@@ -127,5 +151,29 @@ func TestJudgeReviewMatchesPinningConcernWithDifferentInflection(t *testing.T) {
 	j := JudgeReview(review, expected)
 	if len(j.ExpectedMatched) != 1 || j.ExpectedMatched[0] != "pin-dependency" {
 		t.Fatalf("equivalent pinning concern did not match: matched=%v missed=%v findings=%+v", j.ExpectedMatched, j.ExpectedMissed, j.Findings)
+	}
+}
+
+func TestJudgeReviewDoesNotErasePinPolarity(t *testing.T) {
+	review := &normalize.Review{
+		ReviewerID: "dockerfile",
+		Findings: []normalize.Finding{{
+			ID:       "remove-pin",
+			File:     "Dockerfile",
+			Severity: "high",
+			Claim:    "Unpin this dependency so security patches can flow automatically.",
+		}},
+	}
+	expected := []cases.ExpectedConcern{{
+		ID:         "add-pin",
+		Summary:    "Pin this dependency version so builds remain reproducible.",
+		Importance: "high",
+		File:       "Dockerfile",
+		Approved:   true,
+	}}
+
+	j := JudgeReview(review, expected)
+	if len(j.ExpectedMatched) != 0 || len(j.ExpectedMissed) != 1 {
+		t.Fatalf("opposite pinning instructions should not match: matched=%v missed=%v findings=%+v", j.ExpectedMatched, j.ExpectedMissed, j.Findings)
 	}
 }

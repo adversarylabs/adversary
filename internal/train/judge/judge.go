@@ -119,7 +119,9 @@ func importanceOf(expected []cases.ExpectedConcern, id string) string {
 }
 
 func bestMatch(f normalize.Finding, expected []cases.ExpectedConcern) (string, float64) {
-	claimTokens := tokens(f.Claim + " " + f.Evidence)
+	// Match the reviewer's asserted concern, not incidental identifiers and
+	// code fragments from its supporting evidence.
+	claimTokens := tokens(f.Claim)
 	fileTokens := tokens(f.File)
 	var bestID string
 	var best float64
@@ -129,7 +131,9 @@ func bestMatch(f normalize.Finding, expected []cases.ExpectedConcern) (string, f
 		// A shared path is useful corroboration, but it is not evidence that two
 		// concerns mean the same thing. Requiring semantic overlap prevents an
 		// unrelated finding on the reviewed file from hiding a real miss.
-		if semanticScore == 0 {
+		// Location may break a tie between already plausible semantic matches,
+		// but it must never promote incidental word overlap into a match.
+		if semanticScore < 0.25 || contradictoryPolarity(claimTokens, expectedTokens) {
 			continue
 		}
 		s := semanticScore
@@ -175,7 +179,7 @@ func tokens(s string) map[string]struct{} {
 		t = canonicalToken(t)
 		// drop stopwords
 		switch t {
-		case "the", "and", "for", "with", "that", "this", "from", "are", "was", "were", "not", "can", "may", "should", "must":
+		case "the", "and", "for", "with", "that", "this", "from", "are", "was", "were", "can", "may", "should", "must":
 			return
 		}
 		out[t] = struct{}{}
@@ -193,13 +197,21 @@ func tokens(s string) map[string]struct{} {
 
 func canonicalToken(t string) string {
 	switch t {
-	case "pin", "pins", "pinned", "pinning", "unpin", "unpinned":
+	case "pin", "pins", "pinned", "pinning", "unpinned":
 		return "pin"
 	case "version", "versions", "versioned", "versioning":
 		return "version"
 	default:
 		return t
 	}
+}
+
+func contradictoryPolarity(a, b map[string]struct{}) bool {
+	_, aPin := a["pin"]
+	_, aUnpin := a["unpin"]
+	_, bPin := b["pin"]
+	_, bUnpin := b["unpin"]
+	return (aPin && bUnpin) || (aUnpin && bPin)
 }
 
 func jaccard(a, b map[string]struct{}) float64 {
