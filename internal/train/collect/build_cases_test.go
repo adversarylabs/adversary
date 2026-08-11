@@ -340,6 +340,66 @@ func TestBuildCasesRejectsInlineChildrenOfAutomatedParentReview(t *testing.T) {
 	}
 }
 
+func TestBuildCasesRejectsGitHubAutomationProvenance(t *testing.T) {
+	dir := t.TempDir()
+	pull := `{
+  "number": 99,
+  "title": "avoid stale worker state",
+  "html_url": "https://github.com/acme/r/pull/99",
+  "base": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "head": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "user": {"login": "pull-author"}
+}`
+	reviews := `[
+  {"id": 101, "user": {"login": "review-service", "type": "Bot"}, "body": "This worker can race with shutdown.", "state": "COMMENTED", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "submitted_at": "2024-01-02T01:00:00Z"},
+  {"id": 201, "user": {"login": "maintainer", "type": "User"}, "body": "Please keep the cancellation regression test.", "state": "CHANGES_REQUESTED", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "submitted_at": "2024-01-02T02:00:00Z"}
+]`
+	comments := `[
+  {"id": 102, "pull_request_review_id": 101, "user": {"login": "review-service", "type": "Bot"}, "body": "The shared state is written without synchronization.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:01:00Z"},
+  {"id": 202, "pull_request_review_id": 201, "user": {"login": "human-looking", "type": "User"}, "performed_via_github_app": {"slug": "ai-reviewer"}, "body": "This timer leaks when cancellation wins.", "path": "worker.go", "line": 20, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T02:01:00Z"},
+  {"id": 203, "pull_request_review_id": 201, "user": {"login": "maintainer", "type": "User"}, "body": "Please guard the shared state with the worker mutex.", "path": "worker.go", "line": 30, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T02:02:00Z"}
+]`
+	for name, body := range map[string]string{
+		"pull.json": pull, "reviews.json": reviews, "review-comments.json": comments,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := &scope.Router{Candidates: []scope.Candidate{{
+		ID: "person-maintainer", AdversaryName: "person-maintainer",
+		Mission: "Everything is in scope. Do not exclude nits.",
+	}}}
+	got, err := BuildCasesFromCacheFiltered("acme", "r", 99, dir, nil, router, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]cases.ExpectedConcern{}
+	for _, reviewCase := range got {
+		for _, label := range reviewCase.Labels.ExpectedConcerns {
+			labels[strings.SplitN(label.ID, "-", 3)[1]] = label
+		}
+	}
+	for _, id := range []string{"101", "102", "202"} {
+		label, ok := labels[id]
+		if !ok {
+			t.Fatalf("missing automated evidence label %s", id)
+		}
+		if label.Approved || label.OwnerAdversary != "" || label.Scope != string(scope.OutOfScope) {
+			t.Fatalf("automated evidence %s became gold: %+v", id, label)
+		}
+		if label.ScopeMethod != "github-metadata" && label.ScopeMethod != "thread-metadata" {
+			t.Fatalf("automated evidence %s lost provenance: %+v", id, label)
+		}
+	}
+	for _, id := range []string{"201", "203"} {
+		label, ok := labels[id]
+		if !ok || !label.Approved || label.OwnerAdversary != "person-maintainer" {
+			t.Fatalf("substantive human evidence %s was not retained: %+v", id, label)
+		}
+	}
+}
+
 func TestBuildCasesRetainsIndependentInScopeReviewsNewestFirst(t *testing.T) {
 	dir := t.TempDir()
 	pull := `{
