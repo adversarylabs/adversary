@@ -422,6 +422,25 @@ func TestRouteFromLLMDecisionAllowsSameLanguageOutsideRuntimeGlobs(t *testing.T)
 	}
 }
 
+func TestCandidateModelEligibleRecognizesTerraformFileForms(t *testing.T) {
+	candidate := Candidate{
+		ID: "terraform", Languages: []string{"terraform"}, FileGlobs: []string{"modules/**/*.tf"},
+	}
+	for _, path := range []string{
+		"environments/prod.tf",
+		"environments/prod.tfvars",
+		"environments/prod.tf.json",
+		"environments/prod.tfvars.json",
+	} {
+		if ok, reason := candidateModelEligible(path, candidate); !ok {
+			t.Errorf("Terraform model fallback rejected %q: %s", path, reason)
+		}
+	}
+	if ok, _ := candidateModelEligible("environments/prod.yaml", candidate); ok {
+		t.Fatal("Terraform model fallback accepted a cross-language YAML path")
+	}
+}
+
 func TestRouteFromLLMDecisionEnforcesNitsSemanticGate(t *testing.T) {
 	candidates := []Candidate{{ID: "nits", Languages: []string{"any"}, FileGlobs: []string{"**/*"}}}
 	decision := routeDecision{

@@ -258,7 +258,7 @@ func pathMatchesLanguage(candidatePath, language string) bool {
 	case "javascript":
 		return ext == ".js" || ext == ".jsx" || ext == ".mjs" || ext == ".cjs"
 	case "python":
-		return ext == ".py"
+		return ext == ".py" || ext == ".pyi" || ext == ".pyw"
 	case "rust":
 		return ext == ".rs"
 	case "java":
@@ -268,7 +268,11 @@ func pathMatchesLanguage(candidatePath, language string) bool {
 	case "dockerfile":
 		return strings.Contains(base, "dockerfile")
 	case "terraform":
-		return ext == ".tf"
+		lowerPath := strings.ToLower(candidatePath)
+		return strings.HasSuffix(lowerPath, ".tf") ||
+			strings.HasSuffix(lowerPath, ".tfvars") ||
+			strings.HasSuffix(lowerPath, ".tf.json") ||
+			strings.HasSuffix(lowerPath, ".tfvars.json")
 	default:
 		return false
 	}
