@@ -109,6 +109,7 @@ func TestModelIssueBriefWriterSynthesizesIntent(t *testing.T) {
 	}
 	if !strings.Contains(provider.request.Prompt, "package_scope is only an ownership boundary") ||
 		!strings.Contains(provider.request.Prompt, "same causal mechanism") ||
+		!strings.Contains(provider.request.Prompt, "portable technical identifiers") ||
 		!strings.Contains(provider.request.Prompt, "at most 45 words") {
 		t.Fatalf("prompt does not require evidence-grounded generalization:\n%s", provider.request.Prompt)
 	}
@@ -324,7 +325,8 @@ func TestSuggestIssuesLetsAbstractionJudgeDecideSingletons(t *testing.T) {
 		ShouldAbstract: true, DetectableInDiff: true, Reason: "reusable", CausalMechanism: "duplicate guarantee", TransferTest: "two domains",
 	}}
 	issues := suggestIssues(Input{Scorecard: sc, Cases: []*cases.Case{c}, LocalIDs: map[string]bool{"engineering-review": true}, IssueBriefWriter: accepted})
-	if len(issues) != 1 || accepted.writes != 1 || len(accepted.input.Evidence) != 1 {
+	if len(issues) != 1 || accepted.writes != 1 || len(accepted.input.Evidence) != 1 ||
+		accepted.input.Abstraction == nil || accepted.input.Abstraction.CausalMechanism != "duplicate guarantee" {
 		t.Fatalf("accepted singleton did not produce one issue: issues=%#v writer=%#v", issues, accepted)
 	}
 

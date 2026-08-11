@@ -171,8 +171,8 @@ func TestFormatIssueBodyDraftDoesNotBankSyntheticSummary(t *testing.T) {
 	if strings.Contains(body, "Exact entry to add") {
 		t.Fatal("draft kind must not emit voice bank entry")
 	}
-	if !strings.Contains(body, "do not add its wording to the package voice corpus") {
-		t.Fatalf("expected concise no-bank instruction:\n%s", body)
+	if strings.Contains(body, "Implement the general review capability") || strings.Contains(body, "package voice corpus") {
+		t.Fatalf("draft issue must not append generated implementation instructions:\n%s", body)
 	}
 	if strings.Contains(body, "Human gold (bank in voice") {
 		t.Fatal("must not label draft summary as human gold")
@@ -182,7 +182,7 @@ func TestFormatIssueBodyDraftDoesNotBankSyntheticSummary(t *testing.T) {
 			t.Fatalf("synthetic draft issue kept boilerplate %q:\n%s", noisy, body)
 		}
 	}
-	if !strings.Contains(body, "<summary>Training provenance</summary>") {
-		t.Fatalf("expected compact provenance footer:\n%s", body)
+	if !strings.Contains(body, "<!-- adversary-train-source:") || strings.Contains(body, "<summary>Training provenance</summary>") {
+		t.Fatalf("expected invisible provenance without a visible footer:\n%s", body)
 	}
 }
