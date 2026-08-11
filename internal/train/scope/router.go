@@ -3,6 +3,7 @@ package scope
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -438,16 +439,43 @@ func isWordChar(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
 }
 
-func globMatch(pattern, path string) bool {
-	// Very small subset: **/*.go, *.yml, exact suffix
-	pattern = strings.ReplaceAll(pattern, "**/", "")
-	pattern = strings.ReplaceAll(pattern, "**/", "")
-	ok, err := filepath.Match(pattern, filepath.Base(path))
-	if err == nil && ok {
-		return true
+func globMatch(pattern, candidatePath string) bool {
+	pattern = strings.TrimSpace(strings.ReplaceAll(pattern, "\\", "/"))
+	candidatePath = strings.TrimPrefix(strings.ReplaceAll(candidatePath, "\\", "/"), "./")
+	if pattern == "" || candidatePath == "" {
+		return false
 	}
-	ok, err = filepath.Match(pattern, path)
-	return err == nil && ok
+
+	// A basename-only pattern applies at any depth, matching common manifest
+	// entries such as "*.go" without weakening path-qualified entries.
+	if !strings.Contains(pattern, "/") {
+		ok, err := path.Match(pattern, path.Base(candidatePath))
+		return err == nil && ok
+	}
+
+	return matchGlobSegments(strings.Split(pattern, "/"), strings.Split(candidatePath, "/"))
+}
+
+func matchGlobSegments(pattern, candidate []string) bool {
+	if len(pattern) == 0 {
+		return len(candidate) == 0
+	}
+	if pattern[0] == "**" {
+		if matchGlobSegments(pattern[1:], candidate) {
+			return true
+		}
+		for i := range candidate {
+			if matchGlobSegments(pattern[1:], candidate[i+1:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(candidate) == 0 {
+		return false
+	}
+	ok, err := path.Match(pattern[0], candidate[0])
+	return err == nil && ok && matchGlobSegments(pattern[1:], candidate[1:])
 }
 
 func (r *Router) routeLLM(body, path, author string) (Route, error) {

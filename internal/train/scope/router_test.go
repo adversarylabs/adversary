@@ -322,6 +322,31 @@ func TestCandidatePathEligibleTreatsAnyAndUnsetAsLanguageNeutral(t *testing.T) {
 	}
 }
 
+func TestCandidatePathEligibleMatchesRecursiveManifestGlobs(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		glob    string
+		matches bool
+	}{
+		{name: "nested command", path: "cmd/grype/cli/commands/db_get.go", glob: "cmd/**/*.go", matches: true},
+		{name: "direct command", path: "cmd/root.go", glob: "cmd/**/*.go", matches: true},
+		{name: "any depth test", path: "internal/deep/parser_test.go", glob: "**/*_test.go", matches: true},
+		{name: "wrong root", path: "internal/commands/db_get.go", glob: "cmd/**/*.go", matches: false},
+		{name: "wrong extension", path: "cmd/grype/README.md", glob: "cmd/**/*.go", matches: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := Candidate{ID: "go-cli", Languages: []string{"go"}, FileGlobs: []string{tc.glob}}
+			matched, _ := candidatePathEligible(tc.path, candidate)
+			if matched != tc.matches {
+				t.Fatalf("candidatePathEligible(%q, %q) = %v, want %v", tc.path, tc.glob, matched, tc.matches)
+			}
+		})
+	}
+}
+
 func TestRouteFromLLMDecisionRejectsOwnerOutsideDeclaredFileSurface(t *testing.T) {
 	candidates := []Candidate{
 		{ID: "typescript", Languages: []string{"typescript"}, FileGlobs: []string{"**/*.ts", "**/*.tsx"}},
