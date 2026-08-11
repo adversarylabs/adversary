@@ -239,6 +239,26 @@ func SaveResult(stateRoot string, r Result) error {
 	return upsertResult(db, r)
 }
 
+// CountByRun returns the number of unique inbox rows owned by runID.
+// Progressive training writes may insert a row and later update that same row,
+// so counting write operations does not accurately describe the inbox.
+func CountByRun(stateRoot, runID string) (int, error) {
+	if strings.TrimSpace(runID) == "" {
+		return 0, fmt.Errorf("run id required")
+	}
+	db, err := openDB(stateRoot)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM results WHERE run_id = ?`, runID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // WriteInput is enough of a finished grade run to build inbox rows.
 type WriteInput struct {
 	RunID    string
