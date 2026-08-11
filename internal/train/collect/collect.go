@@ -307,12 +307,15 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	var out []*cases.Case
 	round := 0
 	commentContext := make(map[commentKey]reviewCommentContext, len(reviews)+len(comments))
+	automatedReviews := make(map[int64]bool, len(reviews))
 	for _, rev := range reviews {
 		commentContext[commentKey{kind: "review-body", id: rev.ID}] = reviewCommentContext{}
+		automatedReviews[rev.ID] = scope.IsAutomatedReviewArtifact(rev.Body)
 	}
 	for _, comment := range comments {
 		commentContext[commentKey{kind: "review-comment", id: comment.ID}] = reviewCommentContext{
-			inReplyToID: comment.InReplyToID,
+			inReplyToID:     comment.InReplyToID,
+			automatedParent: automatedReviews[comment.PullRequestReviewID],
 		}
 	}
 	for _, rev := range reviews {
@@ -471,7 +474,8 @@ type commentKey struct {
 }
 
 type reviewCommentContext struct {
-	inReplyToID int64
+	inReplyToID     int64
+	automatedParent bool
 }
 
 // applyScope routes each label to the best adversary (or none).
@@ -524,6 +528,14 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 		}
 		if matched != nil {
 			ctx := commentContext[commentKey{kind: matched.Kind, id: matched.ID}]
+			if ctx.automatedParent {
+				labels[i].Scope = string(scope.OutOfScope)
+				labels[i].Approved = false
+				labels[i].OwnerAdversary = ""
+				labels[i].ScopeReason = "inline comment belongs to an automated parent review"
+				labels[i].ScopeMethod = "thread-metadata"
+				continue
+			}
 			isPullAuthor := pullAuthor != "" && strings.EqualFold(author, pullAuthor)
 			if isPullAuthor {
 				labels[i].Scope = string(scope.OutOfScope)
