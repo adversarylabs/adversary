@@ -1,6 +1,9 @@
 package scope
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRouterConcurrencyVsEngReview(t *testing.T) {
 	r := &Router{
@@ -167,6 +170,49 @@ func TestRouterRejectsSpecialistOutsideDeclaredFileSurface(t *testing.T) {
 	)
 	if python.OwnerID == "typescript" {
 		t.Fatalf("Python must not route to typescript: %+v", python)
+	}
+}
+
+func TestRouterModelCanClaimSameLanguageConcernOutsideRuntimeGlobs(t *testing.T) {
+	const body = "Could we make --output and --select mutually exclusive since structured output silently ignores the selection?"
+	r := &Router{
+		Candidates: []Candidate{{
+			ID:            "go-cli",
+			AdversaryName: "go-cli",
+			Mission:       "Review Go CLIs. In scope: flag and environment configuration predictability.",
+			Languages:     []string{"go"},
+			FileGlobs:     []string{"cmd/**/*.go", "**/main.go"},
+		}},
+		UseLLM: true,
+		callLLM: func(prompt string) ([]byte, error) {
+			if !strings.Contains(prompt, body) || !strings.Contains(prompt, "same-language scope fallback") {
+				t.Fatalf("model prompt omitted concern or fallback evidence:\n%s", prompt)
+			}
+			return []byte(`{"owner_id":"go-cli","reason":"accepted CLI flags conflict silently","material":true,"actionable":true,"change_local":true,"engineering_primary":false,"non_blocking":false}`), nil
+		},
+	}
+
+	route := r.RouteComment(body, "pkg/commands/list.go", "reviewer")
+	if route.OwnerID != "go-cli" || route.Decision != InScope || route.Method != "llm" {
+		t.Fatalf("same-language scope model should claim CLI concern: %+v", route)
+	}
+}
+
+func TestRouterPreservesModelNoOwnerDecision(t *testing.T) {
+	r := &Router{
+		Candidates: []Candidate{{
+			ID: "go-cli", AdversaryName: "go-cli", Mission: "Go CLI behavior",
+			Languages: []string{"go"}, FileGlobs: []string{"cmd/**/*.go"},
+		}},
+		UseLLM: true,
+		callLLM: func(string) ([]byte, error) {
+			return []byte(`{"owner_id":"","reason":"not a CLI behavior concern","material":false,"actionable":false,"change_local":true,"engineering_primary":false,"non_blocking":false}`), nil
+		},
+	}
+
+	route := r.RouteComment("Could this helper use a different local variable name?", "pkg/helpers/value.go", "reviewer")
+	if route.OwnerID != "" || route.Decision != OutOfScope || route.Method != "llm" || route.Reason != "not a CLI behavior concern" {
+		t.Fatalf("model no-owner decision was masked: %+v", route)
 	}
 }
 
@@ -359,6 +405,20 @@ func TestRouteFromLLMDecisionRejectsOwnerOutsideDeclaredFileSurface(t *testing.T
 	got := routeFromLLMDecisionForPath(decision, candidates, "airflow/provider.yaml.schema.json")
 	if got.OwnerID != "" || got.Decision != OutOfScope {
 		t.Fatalf("LLM-selected TypeScript owner must be rejected for JSON schema: %+v", got)
+	}
+}
+
+func TestRouteFromLLMDecisionAllowsSameLanguageOutsideRuntimeGlobs(t *testing.T) {
+	candidates := []Candidate{{
+		ID: "go-cli", Languages: []string{"go"}, FileGlobs: []string{"cmd/**/*.go", "**/main.go"},
+	}}
+	decision := routeDecision{
+		OwnerID: "go-cli", Reason: "flag behavior", Material: true,
+		Actionable: true, ChangeLocal: true,
+	}
+	got := routeFromLLMDecisionForPath(decision, candidates, "pkg/cmd/tool/list.go")
+	if got.OwnerID != "go-cli" || got.Decision != InScope {
+		t.Fatalf("same-language model owner should be accepted outside runtime globs: %+v", got)
 	}
 }
 
