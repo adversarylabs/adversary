@@ -149,25 +149,18 @@ func fetchSHAs(ctx context.Context, dest, owner, repo, baseSHA, headSHA string) 
 
 func ensureDiffable(repo, baseSHA, headSHA string, run func(args ...string) ([]byte, error)) error {
 	var last error
-	// deepen progressively; re-fetch tips with larger depth when deepen is not enough
+	// Deepen the exact reviewed tips progressively. A plain `git fetch --deepen`
+	// follows the remote's configured branch refspec, so it can deepen current
+	// branches while leaving SHA-fetched historical PR tips at depth 1.
 	depths := []string{"20", "50", "100", "200", "500", "1000"}
-	for i, d := range depths {
+	for _, d := range depths {
 		if err := checkDiffable(repo, baseSHA, headSHA); err == nil {
 			return nil
 		} else {
 			last = err
 		}
-		// Prefer deepen when we still have a remote.
-		if _, err := run("git", "fetch", "--deepen", d, "origin"); err != nil {
-			// Fallback: re-fetch each tip at greater depth
-			_, _ = run("git", "fetch", "--depth", d, "origin", headSHA)
-			_, _ = run("git", "fetch", "--depth", d, "origin", baseSHA)
-		}
-		// Also try fetching the merge-base path via compare-style: fetch head with enough history
-		if i == len(depths)-1 {
-			// Last resort: unshallow if the repo is shallow
-			_, _ = run("git", "fetch", "--unshallow", "origin")
-		}
+		_, _ = run("git", "fetch", "--depth", d, "origin", headSHA)
+		_, _ = run("git", "fetch", "--depth", d, "origin", baseSHA)
 	}
 	if err := checkDiffable(repo, baseSHA, headSHA); err == nil {
 		return nil
