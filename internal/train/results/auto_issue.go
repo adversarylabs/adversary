@@ -2,6 +2,7 @@ package results
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -42,6 +43,9 @@ func AutoIssueRun(stateRoot, runID string, opts AutoIssueOptions) ([]ApplyResult
 			IssueClient: opts.IssueClient,
 			Context:     opts.Context,
 		})
+		if errors.Is(err, ErrResultDismissed) {
+			continue
+		}
 		if err != nil {
 			return applied, fmt.Errorf("result %s: %w", row.ID, err)
 		}
