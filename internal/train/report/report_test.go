@@ -129,6 +129,32 @@ func TestWriteStoryIsPlainEnglish(t *testing.T) {
 	}
 }
 
+func TestWriteStoryReportsInboxRowsWhenNoIssueDraftIsProduced(t *testing.T) {
+	dir := t.TempDir()
+	res, err := Write(Input{
+		RunID:     "slice-rejected",
+		RunDir:    filepath.Join(dir, "runs", "slice-rejected"),
+		InboxRows: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(res.READMEPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	story := string(raw)
+	for _, want := range []string{
+		"No generalized issue drafts were produced this run.",
+		"recorded **2 result row(s)** in the local inbox",
+		"adversary train results ls",
+	} {
+		if !strings.Contains(story, want) {
+			t.Fatalf("story missing %q:\n%s", want, story)
+		}
+	}
+}
+
 func TestSuggestIssuesNeverDraftsOfficialOwners(t *testing.T) {
 	dir := t.TempDir()
 	runDir := filepath.Join(dir, "runs", "off")

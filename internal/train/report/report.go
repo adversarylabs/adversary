@@ -56,6 +56,10 @@ type Input struct {
 	// themselves. A live abstraction judge decides whether one or more examples
 	// express a reusable capability.
 	PriorMisses []MissEvidence
+	// InboxRows is the number of unique result rows recorded for this run.
+	// It includes individual evidence even when no generalized issue draft passes
+	// the abstraction gate.
+	InboxRows int
 }
 
 // MissEvidence is the durable subset of an individual missed concern used to
@@ -322,7 +326,10 @@ func renderStoryWithIssues(in Input, verdict, headline string, issues []Suggeste
 	fmt.Fprintf(&b, "## Suggested GitHub issue(s) for our agents\n\n")
 	b.WriteString("_These are **drafts for you to review**. Nothing was filed on GitHub. Use `adversary train results ls` / `apply`._\n\n")
 	if len(issues) == 0 {
-		b.WriteString("No suggested issues this run (no clear misses to generalize).\n\n")
+		b.WriteString("No generalized issue drafts were produced this run.\n\n")
+		if in.InboxRows > 0 {
+			fmt.Fprintf(&b, "The run still recorded **%d result row(s)** in the local inbox, including individual review evidence and grading state. Inspect or dismiss them with `adversary train results ls`.\n\n", in.InboxRows)
+		}
 	} else {
 		for i, iss := range issues {
 			fmt.Fprintf(&b, "### Suggested issue %d\n\n", i+1)

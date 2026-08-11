@@ -190,6 +190,13 @@ func TestFixtureSliceEndToEnd(t *testing.T) {
 	if res.Scorecard == nil {
 		t.Fatal("missing scorecard")
 	}
+	storedResults, err := results.CountByRun(dataRoot, res.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ResultsAdded != storedResults {
+		t.Fatalf("reported %d result row(s), but results.db contains %d for run %s", res.ResultsAdded, storedResults, res.RunID)
+	}
 	if res.Scorecard.FailureCount < 1 {
 		t.Fatalf("expected failures, got %d", res.Scorecard.FailureCount)
 	}

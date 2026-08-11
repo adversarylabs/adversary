@@ -125,6 +125,21 @@ type Result struct {
 	Message      string
 }
 
+// refreshResultsAdded reports unique inbox rows, not insert/update operations.
+// delta preserves the best available count if SQLite cannot be queried.
+func refreshResultsAdded(out *Result, stateRoot string, delta int) {
+	if out == nil {
+		return
+	}
+	out.ResultsAdded += delta
+	n, err := results.CountByRun(stateRoot, out.RunID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: results count: %v\n", err)
+		return
+	}
+	out.ResultsAdded = n
+}
+
 // caseRuntime holds per-case artifacts needed for candidate re-run.
 type caseRuntime struct {
 	Case     *cases.Case
@@ -358,7 +373,7 @@ func Run(opts Options) (*Result, error) {
 		} else {
 			hunt = runParallelHunt(ctx, opts, catalogRepos, opts.DataRoot, targetPRs, maxTurns, scopeClf, commentRouter, progress, onKeep)
 		}
-		out.ResultsAdded += hunt.resultsAdded
+		refreshResultsAdded(out, opts.DataRoot, hunt.resultsAdded)
 		rateLimited := hunt.interrupted != nil && collect.IsRateLimit(hunt.interrupted)
 		if hunt.interrupted != nil && !rateLimited {
 			// Ctrl+C / hard stop — gold already in SQLite.
@@ -660,7 +675,7 @@ func Run(opts Options) (*Result, error) {
 		if n, err := results.WriteGradedCase(opts.DataRoot, runID, gradedCase, combinedFails); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: results grade persist: %v\n", err)
 		} else if n > 0 {
-			out.ResultsAdded += n
+			refreshResultsAdded(out, opts.DataRoot, n)
 			fmt.Fprintf(os.Stderr, "  ↳ updated %d result row(s) in results.db\n", n)
 		}
 	}
@@ -681,6 +696,7 @@ func Run(opts Options) (*Result, error) {
 			Live: true, Cases: usable, BlockedNote: blockedNote,
 			LocalIDs: locIDs, OfficialIDs: offIDs,
 			PackageScopes: packageScopes, IssueBriefWriter: briefWriter,
+			InboxRows: out.ResultsAdded,
 		})
 		if err == nil {
 			out.HumanReport = human
@@ -852,6 +868,7 @@ func Run(opts Options) (*Result, error) {
 		PackageScopes:          packageScopes,
 		IssueBriefWriter:       briefWriter,
 		PriorMisses:            priorMisses,
+		InboxRows:              out.ResultsAdded,
 	})
 	if err != nil {
 		return nil, err
@@ -869,7 +886,7 @@ func Run(opts Options) (*Result, error) {
 		Failures: allFailures,
 		Issues:   issues,
 	}); err == nil {
-		out.ResultsAdded = n
+		refreshResultsAdded(out, opts.DataRoot, n)
 	} else {
 		fmt.Fprintf(os.Stderr, "warning: results index: %v\n", err)
 	}
