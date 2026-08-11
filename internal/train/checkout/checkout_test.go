@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +43,30 @@ func TestPrepareLiveWithoutNetworkRefusesSynthetic(t *testing.T) {
 	}
 	if res.Error == "" {
 		t.Fatal("expected error")
+	}
+}
+
+func TestEnsureDiffableDeepensExactReviewedTips(t *testing.T) {
+	var calls []string
+	run := func(args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return nil, nil
+	}
+
+	err := ensureDiffable(t.TempDir(), "base-reviewed-sha", "head-reviewed-sha", run)
+	if err == nil {
+		t.Fatal("expected an empty repository to remain non-diffable")
+	}
+	for _, want := range []string{
+		"git fetch --depth 20 origin head-reviewed-sha",
+		"git fetch --depth 20 origin base-reviewed-sha",
+	} {
+		if !slices.Contains(calls, want) {
+			t.Fatalf("missing exact-tip fetch %q in %v", want, calls)
+		}
+	}
+	if slices.Contains(calls, "git fetch --deepen 20 origin") {
+		t.Fatalf("must not deepen unrelated remote branches: %v", calls)
 	}
 }
 

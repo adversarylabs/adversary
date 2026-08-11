@@ -209,7 +209,7 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 		}, nil
 	}
 
-	adv, err := exec.LookPath("adversary")
+	adv, err := resolveAdversaryCLI()
 	if err != nil {
 		return &Result{
 			ReviewerID:     "engineering-review",
@@ -260,17 +260,7 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 	if model == "" {
 		model = defaultModel(provider)
 	}
-	args := []string{
-		"run", adversaryRef,
-		"--path", repoPath,
-		"--base", baseSHA,
-		"--head", headSHA,
-		"--format", "json",
-		"--output-file", outFile,
-		"--force",
-		"--model-provider", provider,
-		"--model", model,
-	}
+	args := engineeringReviewArgs(adversaryRef, repoPath, baseSHA, headSHA, outFile, provider, model)
 	cmd := exec.CommandContext(ctx, adv, args...)
 	// Ensure child sees consistent env even if flags are ignored by older CLIs.
 	cmd.Env = append(os.Environ(),
@@ -334,6 +324,34 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 	}, nil
 }
 
+func engineeringReviewArgs(adversaryRef, repoPath, baseSHA, headSHA, outFile, provider, model string) []string {
+	return []string{
+		"run", adversaryRef,
+		"--path", repoPath,
+		"--base", baseSHA,
+		"--head", headSHA,
+		"--format", "json",
+		"--output-file", outFile,
+		"--force",
+		"--model-provider", provider,
+		"--model", model,
+		// Train intentionally evaluates the configured local package. Local
+		// packages are unsigned by definition, so the non-interactive child must
+		// explicitly acknowledge unrestricted host execution.
+		"--allow-unsafe-host-execution",
+	}
+}
+
+func resolveAdversaryCLI() (string, error) {
+	// A development build running `train` must delegate to itself. Looking up
+	// `adversary` first can silently select an older installed CLI with an
+	// incompatible manifest schema.
+	if current, err := os.Executable(); err == nil && strings.HasPrefix(filepath.Base(current), "adversary") {
+		return current, nil
+	}
+	return exec.LookPath("adversary")
+}
+
 func looksLikeJSON(raw []byte) bool {
 	s := strings.TrimSpace(string(raw))
 	return strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[")
@@ -380,6 +398,9 @@ func classifyAdversaryError(msg string) string {
 
 func nextActionForAdversaryError(msg string) string {
 	l := strings.ToLower(msg)
+	if classifyAdversaryError(msg) == "missing-source" {
+		return "factory checkout failed to prepare base/head; re-run or pass a different --pr"
+	}
 	switch {
 	case strings.Contains(l, "model_provider") || strings.Contains(l, "model provider"):
 		return "set ADVERSARY_MODEL_PROVIDER=openai (or anthropic/fireworks) and ensure the matching API key is set"
@@ -387,8 +408,6 @@ func nextActionForAdversaryError(msg string) string {
 		return "set the model provider API key (e.g. OPENAI_API_KEY) for engineering-review"
 	case strings.Contains(l, "not installed") || strings.Contains(l, "oci"):
 		return "pass --source /path/to/engineering-review-adversary (local checkout) or adversary pull engineering-review"
-	case strings.Contains(l, "git") || strings.Contains(l, "merge-base"):
-		return "factory checkout failed to prepare base/head; re-run or pass a different --pr"
 	default:
 		return "run the same adversary command manually with --verbose and fix the reported error"
 	}

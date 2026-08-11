@@ -3,6 +3,8 @@ package runner
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/adversarylabs/adversary/internal/train/bundle"
@@ -77,5 +79,27 @@ func TestRunEngineeringReviewFixture(t *testing.T) {
 	}
 	if res == nil || res.ExecutionClass != dataroot.ClassFixture {
 		t.Fatalf("%+v", res)
+	}
+}
+
+func TestNextActionDoesNotTreatGitHubPathAsCheckoutFailure(t *testing.T) {
+	msg := "decode manifest YAML /Users/dev/src/github.com/acme/go-adversary/adversary.yaml: field uses not found"
+	got := nextActionForAdversaryError(msg)
+	if strings.Contains(got, "checkout failed") {
+		t.Fatalf("misclassified manifest error as checkout failure: %q", got)
+	}
+}
+
+func TestNextActionRecognizesSpecificCheckoutFailure(t *testing.T) {
+	got := nextActionForAdversaryError("git diff failed: no merge-base")
+	if !strings.Contains(got, "checkout failed") {
+		t.Fatalf("expected checkout guidance, got %q", got)
+	}
+}
+
+func TestEngineeringReviewArgsAllowsConfiguredLocalPackage(t *testing.T) {
+	args := engineeringReviewArgs("/tmp/go-adversary", "/tmp/repo", "base", "head", "/tmp/out.json", "openai", "model")
+	if !slices.Contains(args, "--allow-unsafe-host-execution") {
+		t.Fatalf("training a configured local package must acknowledge host execution: %v", args)
 	}
 }
