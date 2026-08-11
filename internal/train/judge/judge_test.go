@@ -76,3 +76,104 @@ func TestJudgeReviewMatchesExpectedConcern(t *testing.T) {
 		t.Fatal("expected failures for missed concern and/or weak finding")
 	}
 }
+
+func TestJudgeReviewDoesNotMatchUnrelatedConcernOnSameFile(t *testing.T) {
+	review := &normalize.Review{
+		ReviewerID: "dockerfile",
+		Findings: []normalize.Finding{{
+			ID:       "root-runtime",
+			File:     "testing/spark3-iceberg/Dockerfile",
+			Severity: "high",
+			Claim:    "runtime stage does not clearly drop root privileges",
+			Evidence: "No USER instruction appears in the final stage.",
+		}},
+	}
+	expected := []cases.ExpectedConcern{{
+		ID:         "pin-dependency",
+		Summary:    "Can't we use a pinned version of this dependency?",
+		Importance: "medium",
+		File:       "testing/spark3-iceberg/Dockerfile",
+		Approved:   true,
+	}}
+
+	j := JudgeReview(review, expected)
+	if len(j.ExpectedMatched) != 0 {
+		t.Fatalf("unrelated same-file concern matched: %+v", j.Findings)
+	}
+	if len(j.ExpectedMissed) != 1 || j.ExpectedMissed[0] != "pin-dependency" {
+		t.Fatalf("expected pinning concern to remain missed: %+v", j.ExpectedMissed)
+	}
+}
+
+func TestJudgeReviewDoesNotPromoteGenericOverlapWithSameFile(t *testing.T) {
+	review := &normalize.Review{
+		ReviewerID: "engineering-review",
+		Findings: []normalize.Finding{{
+			ID:       "parse-error",
+			File:     "service.go",
+			Severity: "high",
+			Claim:    "An error while parsing the response is silently ignored.",
+		}},
+	}
+	expected := []cases.ExpectedConcern{{
+		ID:         "retry-error",
+		Summary:    "The retry policy returns the wrong error after exhausting attempts.",
+		Importance: "high",
+		File:       "service.go",
+		Approved:   true,
+	}}
+
+	j := JudgeReview(review, expected)
+	if len(j.ExpectedMatched) != 0 || len(j.ExpectedMissed) != 1 {
+		t.Fatalf("generic same-file overlap should not match: matched=%v missed=%v findings=%+v", j.ExpectedMatched, j.ExpectedMissed, j.Findings)
+	}
+}
+
+func TestJudgeReviewMatchesPinningConcernWithDifferentInflection(t *testing.T) {
+	review := &normalize.Review{
+		ReviewerID: "dockerfile",
+		Findings: []normalize.Finding{{
+			ID:       "floating-artifact",
+			File:     "Dockerfile",
+			Severity: "high",
+			Claim:    "This dependency uses an unpinned version that can change between builds.",
+			Evidence: "wget https://example.test/tool-latest.tar.gz",
+		}},
+	}
+	expected := []cases.ExpectedConcern{{
+		ID:         "pin-dependency",
+		Summary:    "Use a pinned version of this dependency.",
+		Importance: "medium",
+		File:       "Dockerfile",
+		Approved:   true,
+	}}
+
+	j := JudgeReview(review, expected)
+	if len(j.ExpectedMatched) != 1 || j.ExpectedMatched[0] != "pin-dependency" {
+		t.Fatalf("equivalent pinning concern did not match: matched=%v missed=%v findings=%+v", j.ExpectedMatched, j.ExpectedMissed, j.Findings)
+	}
+}
+
+func TestJudgeReviewDoesNotErasePinPolarity(t *testing.T) {
+	review := &normalize.Review{
+		ReviewerID: "dockerfile",
+		Findings: []normalize.Finding{{
+			ID:       "remove-pin",
+			File:     "Dockerfile",
+			Severity: "high",
+			Claim:    "Unpin this dependency so security patches can flow automatically.",
+		}},
+	}
+	expected := []cases.ExpectedConcern{{
+		ID:         "add-pin",
+		Summary:    "Pin this dependency version so builds remain reproducible.",
+		Importance: "high",
+		File:       "Dockerfile",
+		Approved:   true,
+	}}
+
+	j := JudgeReview(review, expected)
+	if len(j.ExpectedMatched) != 0 || len(j.ExpectedMissed) != 1 {
+		t.Fatalf("opposite pinning instructions should not match: matched=%v missed=%v findings=%+v", j.ExpectedMatched, j.ExpectedMissed, j.Findings)
+	}
+}
