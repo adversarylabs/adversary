@@ -275,17 +275,19 @@ func Run(opts Options) (*Result, error) {
 				}
 			}
 		} else {
-			if len(opts.TrainOnlyIDs) > 0 {
-				filtered := adversaries.FilterByIDs(siblingPkgs, opts.TrainOnlyIDs)
-				if len(filtered) == 0 {
-					fmt.Fprintf(os.Stderr, "note: run.only %v matched no loaded packages %v — keeping all loaded\n",
-						opts.TrainOnlyIDs, packageIDs(siblingPkgs))
-				} else {
-					siblingPkgs = filtered
-				}
+			discoveredIDs := packageIDs(siblingPkgs)
+			var duplicates []adversaries.CanonicalDuplicate
+			var onlyMatched bool
+			siblingPkgs, duplicates, onlyMatched = adversaries.ResolveTrainingPackages(
+				siblingPkgs, opts.TrainOnlyIDs, opts.TrainExcludeIDs,
+			)
+			if !onlyMatched {
+				fmt.Fprintf(os.Stderr, "note: run.only %v matched no loaded packages %v — keeping all loaded\n",
+					opts.TrainOnlyIDs, discoveredIDs)
 			}
-			if len(opts.TrainExcludeIDs) > 0 {
-				siblingPkgs = adversaries.FilterExcludedIDs(siblingPkgs, opts.TrainExcludeIDs)
+			for _, duplicate := range duplicates {
+				fmt.Fprintf(os.Stderr, "note: ignoring duplicate checkout %s for manifest %s; using %s\n",
+					duplicate.Ignored.DirName, duplicate.ManifestName, duplicate.Kept.DirName)
 			}
 			if len(siblingPkgs) == 0 {
 				return nil, fmt.Errorf("no local adversary packages remain for train routing (only=%v exclude=%v)", opts.TrainOnlyIDs, opts.TrainExcludeIDs)
