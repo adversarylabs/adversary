@@ -44,6 +44,87 @@ func TestRouterSuppliesLabeledThreadContextToLLM(t *testing.T) {
 	}
 }
 
+func TestRouterRejectsExplicitlyNonLocalFormalReviewComment(t *testing.T) {
+	const (
+		comment = "This is an existing path, but modifying /etc/ paths seems risky IMO. Is there any chance this could also be a temp path with the same permissions as /etc/ so that it can be simulated instead?"
+		summary = "LGTM. One comment unrelated to the scope of the PR, but might be a good one to take in the next PR."
+		hunk    = `@@ -88,7 +92,7 @@
+- privilegedCertsDir := "/etc/containers/certs.d/localhost:8089"
++ privilegedCertsDir := filepath.Join("/etc/containers/certs.d", "127.0.0.1:"+strconv.Itoa(cm.Port()))
+- defer exec.Command("rm", "-rf", privilegedCertsDir+"/")
++ defer func() { _ = exec.Command("rm", "-rf", privilegedCertsDir+"/").Run() }()`
+	)
+	called := false
+	r := &Router{
+		Candidates: []Candidate{{
+			ID: "go", AdversaryName: "go",
+			Mission: "Review unsafe filesystem paths and permissions in Go code.",
+		}},
+		UseLLM: true,
+		callLLM: func(string) ([]byte, error) {
+			called = true
+			return []byte(`{"owner_id":"go","reason":"unsafe filesystem path","material":true,"actionable":true,"change_local":true,"engineering_primary":false,"non_blocking":false}`), nil
+		},
+	}
+
+	route := r.RouteCommentWithEvidence(comment, "pkg/cli/client/elevated_test.go", "reviewer", nil, ReviewEvidence{
+		Summary:  summary,
+		DiffHunk: hunk,
+	})
+	if route.OwnerID != "" || route.Decision != OutOfScope || route.Method != "review-metadata" {
+		t.Fatalf("explicitly deferred concern became gold: %+v", route)
+	}
+	if called {
+		t.Fatal("model must not override an explicit reviewer disposition")
+	}
+}
+
+func TestRouterDoesNotConfuseUnrelatedChangeWithNonLocalComment(t *testing.T) {
+	r := &Router{
+		Candidates: []Candidate{{
+			ID: "engineering-review", AdversaryName: "engineering-review",
+			Mission: "Review whether a focused change bundles unrelated behavior.",
+		}},
+		UseLLM: true,
+		callLLM: func(string) ([]byte, error) {
+			return []byte(`{"owner_id":"engineering-review","reason":"the current change bundles unrelated behavior","material":true,"actionable":true,"change_local":true,"engineering_primary":true,"non_blocking":false}`), nil
+		},
+	}
+	route := r.RouteComment("This change also rewrites an unrelated cache policy; please split it from the bug fix.", "cache.go", "reviewer")
+	if route.OwnerID == "" || route.Decision != InScope {
+		t.Fatalf("change-local scope creep was incorrectly rejected: %+v", route)
+	}
+}
+
+func TestRouteLLMPromptIncludesBoundedChangeEvidence(t *testing.T) {
+	const (
+		summary = "Please address the inline correctness concern before merge."
+		hunk    = "@@ -10,1 +10,1 @@\\n-old\\n+new"
+	)
+	var prompt string
+	r := &Router{
+		Candidates: []Candidate{{
+			ID: "go", AdversaryName: "go", Mission: "Go correctness", Languages: []string{"go"},
+		}},
+		UseLLM: true,
+		callLLM: func(input string) ([]byte, error) {
+			prompt = input
+			return []byte(`{"owner_id":"go","reason":"change-local defect","material":true,"actionable":true,"change_local":true,"engineering_primary":false,"non_blocking":false}`), nil
+		},
+	}
+	route := r.RouteCommentWithEvidence("This return now drops the caller's error.", "result.go", "reviewer", nil, ReviewEvidence{
+		Summary: summary, DiffHunk: hunk,
+	})
+	if route.OwnerID != "go" || route.Decision != InScope {
+		t.Fatalf("expected routed concern, got %+v", route)
+	}
+	for _, want := range []string{summary, hunk, "disposition evidence only", "change-local evidence only"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("routing prompt omitted %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestRouterGHA(t *testing.T) {
 	r := &Router{
 		Candidates: []Candidate{

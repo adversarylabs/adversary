@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -46,6 +47,14 @@ type ReviewThreadContext struct {
 	Body   string `json:"body"`
 }
 
+// ReviewEvidence is bounded metadata from the formal review that contains the
+// primary comment. It may disqualify a comment as gold, but never creates a
+// concern or supplies technical substance missing from the primary comment.
+type ReviewEvidence struct {
+	Summary  string `json:"summary,omitempty"`
+	DiffHunk string `json:"diff_hunk,omitempty"`
+}
+
 type routeDecision struct {
 	OwnerID            string `json:"owner_id"`
 	Reason             string `json:"reason"`
@@ -65,6 +74,14 @@ func (r *Router) RouteComment(body, path, author string) Route {
 // bounded inline-thread excerpt to resolve terse references in the primary
 // reviewer comment. Context cannot become a concern by itself.
 func (r *Router) RouteCommentWithContext(body, path, author string, threadContext []ReviewThreadContext) Route {
+	return r.RouteCommentWithEvidence(body, path, author, threadContext, ReviewEvidence{})
+}
+
+// RouteCommentWithEvidence selects the single best adversary while honoring
+// explicit review-level statements that the primary comment is not a request
+// for the reviewed change. Review evidence is deliberately separate from
+// thread context so a review summary cannot become gold by implication.
+func (r *Router) RouteCommentWithEvidence(body, path, author string, threadContext []ReviewThreadContext, evidence ReviewEvidence) Route {
 	body = NormalizeReviewComment(body)
 	if body == "" {
 		return Route{Decision: OutOfScope, Reason: "empty comment", Method: "heuristic"}
@@ -81,6 +98,9 @@ func (r *Router) RouteCommentWithContext(body, path, author string, threadContex
 	// filtering for every sibling and let status replies route into nits/engineering.
 	if reason, ok := NonActionableHumanComment(body); ok {
 		return Route{Decision: OutOfScope, Reason: reason, Method: "heuristic"}
+	}
+	if reason, ok := explicitNonLocalReviewRemark(body, evidence.Summary); ok {
+		return Route{Decision: OutOfScope, Reason: reason, Method: "review-metadata"}
 	}
 	// Global non-defect filters (LGTM, soft-OK, package-doc nits, explicit nits).
 	// Broad generalists skip these entirely — their mission owns every human comment
@@ -151,7 +171,7 @@ func (r *Router) RouteCommentWithContext(body, path, author string, threadContex
 	if len(hits) == 0 {
 		// Optional: LLM multi-choice when enabled
 		if r.UseLLM && len(r.Candidates) > 0 {
-			if route, err := r.routeLLM(body, path, author, threadContext); err == nil {
+			if route, err := r.routeLLM(body, path, author, threadContext, evidence); err == nil {
 				return route
 			}
 		}
@@ -168,7 +188,7 @@ func (r *Router) RouteCommentWithContext(body, path, author string, threadContex
 	// available, use the actual mission texts as final arbitration. Broad persona
 	// packages retain their explicit "everything" semantics without this gate.
 	if r.UseLLM && !hasBroad {
-		if route, err := r.routeLLM(body, path, author, threadContext); err == nil {
+		if route, err := r.routeLLM(body, path, author, threadContext, evidence); err == nil {
 			return route
 		}
 	}
@@ -204,6 +224,37 @@ func (r *Router) RouteCommentWithContext(body, path, author string, threadContex
 		Method:   "heuristic",
 		Rejected: rejected,
 	}
+}
+
+var (
+	explicitExistingSubject = regexp.MustCompile(`(?i)\bthis (?:is|was) (?:an? )?(?:existing|pre-existing|preexisting) (?:path|behavior|issue|problem|concern|pattern|code)\b`)
+	explicitNotIntroduced   = regexp.MustCompile(`(?i)\b(?:this|the) (?:issue|problem|concern|behavior|path) (?:(?:is|was) )?(?:not introduced|not caused|unrelated) (?:by|to) (?:this|the) (?:pull request|pr|change)\b`)
+	explicitRemarkSubject   = regexp.MustCompile(`(?i)\b(?:this|the|one|my|an?) (?:comment|concern|suggestion|observation|nit)\b`)
+	explicitCurrentScope    = regexp.MustCompile(`(?i)\b(?:unrelated to|outside|out of)\b.{0,50}\b(?:scope|this (?:pull request|pr|change))\b`)
+	explicitFuturePR        = regexp.MustCompile(`(?i)\b(?:next|follow[- ]?up|separate) (?:pull request|pr)\b`)
+)
+
+// explicitNonLocalReviewRemark fails closed only on the reviewer's own clear
+// disposition. "This change is unrelated" remains valid change-local gold;
+// the subject must be the comment/concern, or a pre-existing observation must
+// be corroborated by a review summary assigning it to a later PR.
+func explicitNonLocalReviewRemark(body, reviewSummary string) (string, bool) {
+	body = strings.TrimSpace(body)
+	summary := strings.TrimSpace(reviewSummary)
+
+	primaryDisposition := explicitRemarkSubject.MatchString(body) &&
+		(explicitCurrentScope.MatchString(body) || explicitFuturePR.MatchString(body))
+	if explicitNotIntroduced.MatchString(body) || primaryDisposition {
+		return "reviewer explicitly marked the concern as pre-existing or outside this change", true
+	}
+
+	summaryDisposition := explicitRemarkSubject.MatchString(summary) &&
+		(explicitCurrentScope.MatchString(summary) || explicitFuturePR.MatchString(summary))
+	if explicitExistingSubject.MatchString(body) && summaryDisposition {
+		return "review summary assigns this pre-existing concern outside the current PR", true
+	}
+
+	return "", false
 }
 
 func isNitsCandidate(id string) bool {
@@ -550,7 +601,7 @@ func matchGlobSegments(pattern, candidate []string) bool {
 	return err == nil && ok && matchGlobSegments(pattern[1:], candidate[1:])
 }
 
-func (r *Router) routeLLM(body, path, author string, threadContext []ReviewThreadContext) (Route, error) {
+func (r *Router) routeLLM(body, path, author string, threadContext []ReviewThreadContext, evidence ReviewEvidence) (Route, error) {
 	// Exact runtime globs remain the deterministic routing boundary. The scope
 	// model may additionally consider same-language candidates so training can
 	// discover that an adversary's current activation surface is too narrow.
@@ -573,6 +624,8 @@ func (r *Router) routeLLM(body, path, author string, threadContext []ReviewThrea
 		fmt.Fprintf(&scopes, "### %s\nFile-surface evidence: %s\n%s\n\n", c.ID, eligibility[c.ID], truncate(c.Mission, 800))
 	}
 	contextJSON, _ := json.Marshal(threadContext)
+	reviewSummary := truncate(strings.TrimSpace(evidence.Summary), 800)
+	diffHunk := truncate(strings.TrimSpace(evidence.DiffHunk), 4_000)
 	prompt := fmt.Sprintf(`Pick which adversary package should own this human PR comment for grading, or none.
 
 Author: %s
@@ -583,6 +636,14 @@ Comment:
 ---
 Same-thread context (explicitly non-gold; roles are labels, not claims):
 %s
+Formal review summary (disposition evidence only; never a separate concern):
+---
+%s
+---
+Bounded diff hunk attached to the primary comment (change-local evidence only):
+---
+%s
+---
 
 Adversaries (id → scope excerpt):
 %s
@@ -591,6 +652,8 @@ Return ONLY JSON: {"owner_id":"<id or empty>","reason":"one sentence","material"
 Rules:
 - Prefer the most specific specialist over engineering-review when both fit
 - Route only the primary Comment. Same-thread context may clarify its referents, intent, or consequence, but it cannot supply a missing reviewer request or become a separate concern
+- A formal review summary may disqualify the primary comment when it explicitly calls that comment pre-existing, unrelated to this PR, or work for a later PR; it cannot create a concern
+- Use the bounded diff only to check whether this change introduced, expanded, or relied on the concern. Unchanged context and pre-existing behavior are not change-local gold
 - A pull_request_author context message is never human-review gold, even when it contains a detailed technical explanation
 - Bot overviews → owner_id empty
 - CI/workflow → githubactions (if present)
@@ -613,7 +676,7 @@ Rules:
 - When unsure whether this is material and actionable → empty (prefer no false miss)
 - If none fit → empty owner_id
 Valid ids: %s or empty
-`, author, path, body, string(contextJSON), scopes.String(), strings.Join(ids, ", "))
+`, author, path, body, string(contextJSON), reviewSummary, diffHunk, scopes.String(), strings.Join(ids, ", "))
 
 	call := r.callLLM
 	if call == nil {

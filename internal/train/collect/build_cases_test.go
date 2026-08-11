@@ -93,6 +93,71 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	_ = cases2
 }
 
+func TestBuildCasesRejectsSingleInlineConcernDeferredByReviewSummary(t *testing.T) {
+	dir := t.TempDir()
+	pull := `{
+  "number": 4317,
+  "title": "make pre-existing privileged test path dynamic",
+  "html_url": "https://github.com/project-zot/zot/pull/4317",
+  "base": {"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "head": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "user": {"login": "pull-author"}
+}`
+	reviews := `[{
+  "id": 4908126748,
+  "user": {"login": "reviewer"},
+  "body": "LGTM. One comment unrelated to the scope of the PR, but might be a good one to take in the next PR.",
+  "state": "APPROVED",
+  "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "submitted_at": "2026-08-11T16:08:51Z"
+}]`
+	comments := `[{
+  "id": 3759513262,
+  "pull_request_review_id": 4908126748,
+  "user": {"login": "reviewer"},
+  "body": "This is an existing path, but modifying /etc/ paths seems risky IMO. Is there any chance this could also be a temp path with the same permissions as /etc/ so that it can be simulated instead?",
+  "path": "pkg/cli/client/elevated_test.go",
+  "line": 92,
+  "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "created_at": "2026-08-11T15:50:21Z",
+  "diff_hunk": "@@ -88,7 +92,7 @@\\n- privilegedCertsDir := \"/etc/containers/certs.d/localhost:8089\"\\n+ privilegedCertsDir := filepath.Join(\"/etc/containers/certs.d\", dynamicPort)\\n- defer exec.Command(\"rm\", \"-rf\", privilegedCertsDir)\\n+ defer func() { _ = exec.Command(\"rm\", \"-rf\", privilegedCertsDir).Run() }()"
+}]`
+	for name, body := range map[string]string{
+		"pull.json": pull, "reviews.json": reviews, "review-comments.json": comments,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := &scope.Router{Candidates: []scope.Candidate{{
+		ID: "person-maintainer", AdversaryName: "person-maintainer",
+		Mission: "Everything is in scope. Do not exclude nits.",
+	}}}
+	got, err := BuildCasesFromCacheFiltered("project-zot", "zot", 4317, dir, nil, router, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("cases = %d, want one", len(got))
+	}
+	found := false
+	for _, label := range got[0].Labels.ExpectedConcerns {
+		if !strings.HasPrefix(label.ID, "c-3759513262-") {
+			continue
+		}
+		found = true
+		if label.Approved || label.OwnerAdversary != "" || label.Scope != string(scope.OutOfScope) {
+			t.Fatalf("explicitly deferred inline concern became gold: %+v", label)
+		}
+		if label.ScopeMethod != "review-metadata" || !strings.Contains(label.ScopeReason, "outside the current PR") {
+			t.Fatalf("review disposition provenance was lost: %+v", label)
+		}
+	}
+	if !found {
+		t.Fatal("expected deferred inline concern to remain as rejected evidence")
+	}
+}
+
 func TestBuildReviewThreadContextIsBoundedAndThreadLocal(t *testing.T) {
 	comments := []rawReviewComment{
 		rawComment(1, 0, "reviewer", "make it IPv6", "2024-01-02T01:00:00Z"),
