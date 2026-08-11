@@ -155,6 +155,71 @@ func TestWriteStoryReportsInboxRowsWhenNoIssueDraftIsProduced(t *testing.T) {
 	}
 }
 
+func TestCommentForConcernPrefersExactGitHubCommentID(t *testing.T) {
+	c := &cases.Case{Comments: []cases.Comment{
+		{
+			ID: 101, Body: "This operation can outlive the worker that owns it.",
+			Path: "worker.go", Line: 20,
+		},
+		{
+			ID: 102, Body: "The retry loop discards the caller context deadline.",
+			GeneralizedConcern: "Retry loop discards caller context deadline",
+			Path:               "worker.go", Line: 24,
+		},
+	}}
+	concern := cases.ExpectedConcern{
+		ID: "c-101-0", Summary: "Retry loop discards caller context deadline", File: "worker.go",
+	}
+
+	got := commentForConcern(c, concern)
+	if got == nil || got.ID != 101 {
+		t.Fatalf("commentForConcern() = %#v, want exact source comment 101", got)
+	}
+}
+
+func TestWriteMissStoryDoesNotAttachConcernToNearbyComment(t *testing.T) {
+	c := &cases.Case{
+		Repository: cases.Repository{URL: "https://github.com/acme/project/pull/7"},
+		Comments: []cases.Comment{
+			{
+				ID: 201, Author: "reviewer", Body: "This operation can outlive the worker that owns it.",
+				Path: "worker.go", Line: 20,
+			},
+			{
+				ID: 202, Author: "reviewer", Body: "The retry loop discards the caller context deadline.",
+				GeneralizedConcern: "Retry loop discards caller context deadline",
+				Path:               "worker.go", Line: 24,
+			},
+		},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "c-201-0", Summary: "Retry loop discards caller context deadline", File: "worker.go",
+			Approved: true, OwnerAdversary: "go-concurrency",
+		}}},
+	}
+	failure := judge.Failure{
+		Kind: "missed-concern", ConcernID: "c-201-0", ReviewerID: "go-concurrency",
+	}
+	var story strings.Builder
+	writeMissStory(&story, 1, c, failure, nil)
+	got := story.String()
+	for _, want := range []string{
+		"This operation can outlive the worker that owns it.",
+		"https://github.com/acme/project/pull/7#discussion_r201",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("story missing exact source %q:\n%s", want, got)
+		}
+	}
+	for _, wrong := range []string{
+		"The retry loop discards the caller context deadline.",
+		"discussion_r202",
+	} {
+		if strings.Contains(got, wrong) {
+			t.Fatalf("story attached concern to nearby comment %q:\n%s", wrong, got)
+		}
+	}
+}
+
 func TestSuggestIssuesNeverDraftsOfficialOwners(t *testing.T) {
 	dir := t.TempDir()
 	runDir := filepath.Join(dir, "runs", "off")
