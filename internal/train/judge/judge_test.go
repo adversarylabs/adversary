@@ -129,6 +129,27 @@ func TestJudgeReviewDoesNotPromoteGenericOverlapWithSameFile(t *testing.T) {
 	}
 }
 
+func TestJudgeReviewDoesNotScoreThreadContextAsGold(t *testing.T) {
+	review := &normalize.Review{
+		ReviewerID: "engineering-review",
+		Findings: []normalize.Finding{{
+			ID: "ipv6-parser", Claim: "Generated IPv6 rules crash the real parser because the address is not enclosed in brackets.",
+		}},
+	}
+	expected := []cases.ExpectedConcern{{
+		ID: "terse-request", Summary: "make it IPv6", Approved: true,
+		ThreadContext: []cases.ReviewThreadContext{{
+			CommentID: 2, Author: "pull-author", Role: "pull_request_author",
+			Body: "Generated IPv6 rules crash the real parser because the address is not enclosed in brackets.",
+		}},
+	}}
+
+	j := JudgeReview(review, expected)
+	if len(j.ExpectedMatched) != 0 || len(j.ExpectedMissed) != 1 {
+		t.Fatalf("non-gold thread context affected scoring: matched=%v missed=%v findings=%+v", j.ExpectedMatched, j.ExpectedMissed, j.Findings)
+	}
+}
+
 func TestJudgeReviewMatchesPinningConcernWithDifferentInflection(t *testing.T) {
 	review := &normalize.Review{
 		ReviewerID: "dockerfile",

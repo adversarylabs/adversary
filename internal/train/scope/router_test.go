@@ -20,6 +20,30 @@ func TestRouterConcurrencyVsEngReview(t *testing.T) {
 	}
 }
 
+func TestRouterSuppliesLabeledThreadContextToLLM(t *testing.T) {
+	var prompt string
+	r := &Router{
+		Candidates: []Candidate{{ID: "engineering-review", AdversaryName: "engineering-review", Mission: "staff engineering correctness and integration judgment"}},
+		UseLLM:     true,
+		callLLM: func(input string) ([]byte, error) {
+			prompt = input
+			return []byte(`{"owner_id":"engineering-review","reason":"The reviewer requests IPv6-safe output.","material":true,"actionable":true,"change_local":true,"engineering_primary":true,"non_blocking":false}`), nil
+		},
+	}
+	route := r.RouteCommentWithContext("make it IPv6", "rules.go", "reviewer", []ReviewThreadContext{{
+		Author: "pull-author", Role: "pull_request_author",
+		Body: "The generated output passes string assertions but crashes the real IPv6 parser without brackets.",
+	}})
+	if route.OwnerID != "engineering-review" || route.Decision != InScope {
+		t.Fatalf("terse reviewer request was not routed with context: %+v", route)
+	}
+	for _, want := range []string{`"role":"pull_request_author"`, "crashes the real IPv6 parser", "explicitly non-gold"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("routing prompt omitted %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestRouterGHA(t *testing.T) {
 	r := &Router{
 		Candidates: []Candidate{
