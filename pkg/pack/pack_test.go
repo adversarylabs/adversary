@@ -275,6 +275,28 @@ func TestCreateStoresAdversaryManifestOutsideImageLayer(t *testing.T) {
 	}
 }
 
+func TestCreateUsesManifestName(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "adversary.yaml", `name: replicated/feature-toggles
+version: 0.0.1
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.js
+`)
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Name != "replicated/feature-toggles" {
+		t.Fatalf("Name = %q", artifact.Name)
+	}
+	if artifact.ManifestName != "replicated/feature-toggles" {
+		t.Fatalf("ManifestName = %q", artifact.ManifestName)
+	}
+}
+
 func TestCreateNameOverride(t *testing.T) {
 	dir := testProject(t)
 	artifact, err := Create(context.Background(), Options{Dir: dir, NameOverride: "ghcr.io/acme/security-reviewer", ParseReference: oci.ParseReference})

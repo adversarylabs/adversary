@@ -143,7 +143,7 @@ func Check(opts Options) (result Preflight, err error) {
 	if err != nil {
 		return result, err
 	}
-	name := manifest.ShortName(m.Name)
+	name := m.Name
 	if strings.TrimSpace(opts.NameOverride) != "" {
 		name, err = normalizeNameOverride(opts.NameOverride, opts.ParseReference)
 		if err != nil {
@@ -330,7 +330,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 	if err := validatePackageEntrypoint(m, files); err != nil {
 		return Artifact{}, err
 	}
-	name := manifest.ShortName(m.Name)
+	name := m.Name
 	if strings.TrimSpace(opts.NameOverride) != "" {
 		name, err = normalizeNameOverride(opts.NameOverride, opts.ParseReference)
 		if err != nil {
