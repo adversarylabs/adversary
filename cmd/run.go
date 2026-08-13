@@ -517,6 +517,9 @@ func runAdversaries(
 	apiURL, profile *string,
 	resultOut, progressOut io.Writer,
 ) error {
+	for i := range refs {
+		refs[i] = canonicalCatalogReference(refs[i])
+	}
 	// --shell is a single interactive package session. Skip uses expansion entirely
 	// so we never pull a composition graph, never re-expand after auto-install, and
 	// never launch a shell into a multi-member product by accident. Name a leaf
