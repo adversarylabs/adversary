@@ -520,6 +520,53 @@ func TestPackNameOverride(t *testing.T) {
 	}
 }
 
+func TestPackUsesEditedManifestNameForDistinctLocalReference(t *testing.T) {
+	t.Setenv("ADVERSARY_DATA_DIR", t.TempDir())
+	project := t.TempDir()
+	writeProject(t, project)
+
+	var stdout, stderr bytes.Buffer
+	first := NewRootCommand(&stdout, &stderr)
+	first.SetArgs([]string{"pack", project})
+	if err := first.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "registry.adversarylabs.ai/local/security-reviewer:1.4.2") {
+		t.Fatalf("first pack did not use manifest name:\n%s", stdout.String())
+	}
+
+	manifestPath := filepath.Join(project, "adversary.yaml")
+	manifest := readFile(t, manifestPath)
+	manifest = strings.Replace(manifest, "name: local/security-reviewer", "name: replicated/security-reviewer", 1)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	second := NewRootCommand(&stdout, &stderr)
+	second.SetArgs([]string{"pack", project})
+	if err := second.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "registry.adversarylabs.ai/replicated/security-reviewer:1.4.2") {
+		t.Fatalf("second pack did not use edited manifest name:\n%s", stdout.String())
+	}
+
+	resolver, err := internaladversary.DefaultResolver()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{
+		"registry.adversarylabs.ai/local/security-reviewer:1.4.2",
+		"registry.adversarylabs.ai/replicated/security-reviewer:1.4.2",
+	} {
+		if _, err := resolver.Repository.Resolve(ref); err != nil {
+			t.Fatalf("resolve %q: %v", ref, err)
+		}
+	}
+}
+
 func TestDefaultAdversaryLabsPushRefUsesStoredNamespace(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ADVERSARY_REGISTRY_HOST", "localhost:5000")
@@ -957,7 +1004,7 @@ func TestPackAndInspectUseDurableCanonicalIdentityAndInventory(t *testing.T) {
 	if err := json.Unmarshal(packOut.Bytes(), &packed); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := packed.Data.CanonicalReference, "poison.invalid/library/security-reviewer:1.4.2"; got != want {
+	if got, want := packed.Data.CanonicalReference, "poison.invalid/local/security-reviewer:1.4.2"; got != want {
 		t.Fatalf("canonical=%q want %q", got, want)
 	}
 	if len(packed.Data.Files) == 0 {

@@ -14,10 +14,10 @@
           overlays = [
             (final: prev: {
               go_1_26 = prev.go_1_26.overrideAttrs {
-                version = "1.26.5";
+                version = "1.26.6";
                 src = prev.fetchurl {
-                  url = "https://go.dev/dl/go1.26.5.src.tar.gz";
-                  hash = "sha256-SVvkvIcXasVnOS5bQRar2YRm0z17SdQedkzMaXay3EI=";
+                  url = "https://go.dev/dl/go1.26.6.src.tar.gz";
+                  hash = "sha256-oHIcVMaIkBRI13rZs+x+p8R0cwdV/4kTgukuy5P/LLE=";
                 };
               };
             })
@@ -42,8 +42,8 @@
           ];
 
           shellHook = ''
-            if [ "$(${go}/bin/go env GOVERSION)" != "go1.26.5" ]; then
-              echo "expected Go 1.26.5, got $(${go}/bin/go env GOVERSION)" >&2
+            if [ "$(${go}/bin/go env GOVERSION)" != "go1.26.6" ]; then
+              echo "expected Go 1.26.6, got $(${go}/bin/go env GOVERSION)" >&2
               return 1
             fi
           '';
