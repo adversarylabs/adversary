@@ -158,6 +158,7 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	if stderr == nil {
 		stderr = io.Discard
 	}
+	refStr = canonicalCatalogReference(refStr)
 	resolver := app.Dependencies().Resolver
 	ref, err := app.Dependencies().References.Parse(refStr)
 	if err != nil {
