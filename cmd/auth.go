@@ -8,9 +8,9 @@ import (
 )
 
 type loginOptions struct {
-	ci                                    bool
-	name, emailAddress, registryNamespace string
-	passwordStdin, tokenStdin, device     bool
+	ci                                          bool
+	name, emailAddress, registryNamespace, team string
+	passwordStdin, tokenStdin, device           bool
 }
 type logoutOptions struct{ localOnly bool }
 
@@ -37,7 +37,7 @@ func newLoginCommand(app *application.App, apiURL, profile *string) *cobra.Comma
 			client := deps.API.New(valueOf(apiURL))
 			var token adversarylabs.TokenResponse
 			if opts.tokenStdin {
-				if opts.emailAddress != "" || opts.passwordStdin || opts.device || opts.ci {
+				if opts.emailAddress != "" || opts.passwordStdin || opts.device || opts.ci || opts.team != "" {
 					return fmt.Errorf("--token-stdin cannot be combined with password, device, or CI login options")
 				}
 				value, readErr := readSecretLine(stdin, "token")
@@ -71,6 +71,7 @@ func newLoginCommand(app *application.App, apiURL, profile *string) *cobra.Comma
 					Password:     password,
 					Name:         opts.name,
 					CI:           opts.ci,
+					Team:         opts.team,
 				})
 				if err != nil {
 					return err
@@ -87,7 +88,7 @@ func newLoginCommand(app *application.App, apiURL, profile *string) *cobra.Comma
 				if opts.registryNamespace != "" {
 					return fmt.Errorf("--registry-namespace requires --token-stdin")
 				}
-				token, err = browserAuth.Login(cmd.Context(), application.BrowserAuthRequest{Client: client, Name: opts.name, CI: opts.ci, Output: cmd.OutOrStdout()})
+				token, err = browserAuth.Login(cmd.Context(), application.BrowserAuthRequest{Client: client, Name: opts.name, Team: opts.team, CI: opts.ci, Output: cmd.OutOrStdout()})
 				if err != nil {
 					return err
 				}
@@ -113,8 +114,9 @@ func newLoginCommand(app *application.App, apiURL, profile *string) *cobra.Comma
 	cmd.Flags().StringVar(&opts.name, "name", "", "friendly name for this client")
 	cmd.Flags().StringVar(&opts.emailAddress, "email-address", "", "email address for password login")
 	cmd.Flags().BoolVar(&opts.passwordStdin, "password-stdin", false, "read the password from standard input")
-	cmd.Flags().BoolVar(&opts.tokenStdin, "token-stdin", false, "read a service account token from standard input")
-	cmd.Flags().StringVar(&opts.registryNamespace, "registry-namespace", "", "registry namespace for a service account token")
+	cmd.Flags().BoolVar(&opts.tokenStdin, "token-stdin", false, "read a service account or short-lived CI token from standard input")
+	cmd.Flags().StringVar(&opts.registryNamespace, "registry-namespace", "", "registry namespace for a service account or CI token")
+	cmd.Flags().StringVar(&opts.team, "team", "", "team slug to use for browser or password login")
 	return cmd
 }
 

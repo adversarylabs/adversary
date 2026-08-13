@@ -291,6 +291,7 @@ func TestClientBrowserLoginURL(t *testing.T) {
 		RedirectURI: "http://127.0.0.1:54321/callback",
 		State:       "random-state", CodeChallenge: "pkce-challenge",
 		Name: "Marc's MacBook Pro",
+		Team: "acme",
 		CI:   true,
 	})
 	if err != nil {
@@ -308,6 +309,9 @@ func TestClientBrowserLoginURL(t *testing.T) {
 	parsed, _ := url.Parse(loginURL)
 	if parsed.Query().Get("state") != "random-state" || parsed.Query().Get("code_challenge") != "pkce-challenge" || parsed.Query().Get("code_challenge_method") != "S256" {
 		t.Fatalf("PKCE query = %q", parsed.RawQuery)
+	}
+	if parsed.Query().Get("team") != "acme" {
+		t.Fatalf("team query = %q", parsed.RawQuery)
 	}
 }
 

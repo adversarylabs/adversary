@@ -25,6 +25,7 @@ type Client struct {
 type LoginOptions struct {
 	Name string `json:"name,omitempty"`
 	CI   bool   `json:"ci,omitempty"`
+	Team string `json:"team,omitempty"`
 }
 
 type PasswordLoginOptions struct {
@@ -33,6 +34,7 @@ type PasswordLoginOptions struct {
 	Password     string `json:"password"`
 	Name         string `json:"name,omitempty"`
 	CI           bool   `json:"ci,omitempty"`
+	Team         string `json:"team,omitempty"`
 }
 
 type DeviceLogin struct {
@@ -59,6 +61,7 @@ type BrowserLoginOptions struct {
 	CodeChallenge string
 	Name          string
 	CI            bool
+	Team          string
 }
 
 type SearchResult struct {
@@ -152,6 +155,9 @@ func (c Client) BrowserLoginURL(opts BrowserLoginOptions) (string, error) {
 	}
 	if opts.CI {
 		q.Set("ci", "true")
+	}
+	if opts.Team != "" {
+		q.Set("team", opts.Team)
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
