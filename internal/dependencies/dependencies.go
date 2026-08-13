@@ -188,7 +188,7 @@ func (b BrowserAuth) Login(parent context.Context, request application.BrowserAu
 			retErr = errors.Join(retErr, fmt.Errorf("callback server did not stop during cleanup: %w", shutdownCtx.Err()))
 		}
 	}()
-	loginURL, err := request.Client.BrowserLoginURL(adversarylabs.BrowserLoginOptions{RedirectURI: callbackURL, State: state, CodeChallenge: challenge, Name: request.Name, CI: request.CI})
+	loginURL, err := request.Client.BrowserLoginURL(adversarylabs.BrowserLoginOptions{RedirectURI: callbackURL, State: state, CodeChallenge: challenge, Name: request.Name, Team: request.Team, CI: request.CI})
 	if err != nil {
 		return adversarylabs.TokenResponse{}, err
 	}

@@ -49,7 +49,7 @@ func waitForLogin(ctx context.Context, clock application.Clock, client applicati
 }
 
 func loginWithDevice(ctx context.Context, clock application.Clock, stdout io.Writer, client application.APIClient, opts *loginOptions) (adversarylabs.TokenResponse, error) {
-	login, err := client.BeginLogin(ctx, adversarylabs.LoginOptions{Name: opts.name, CI: opts.ci})
+	login, err := client.BeginLogin(ctx, adversarylabs.LoginOptions{Name: opts.name, CI: opts.ci, Team: opts.team})
 	if err != nil {
 		return adversarylabs.TokenResponse{}, err
 	}

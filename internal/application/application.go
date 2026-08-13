@@ -201,6 +201,7 @@ type AdversaryAutoResult struct {
 type BrowserAuthRequest struct {
 	Client APIClient
 	Name   string
+	Team   string
 	CI     bool
 	Output io.Writer
 }

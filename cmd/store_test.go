@@ -192,12 +192,15 @@ func TestLoginCommandUsesInjectedBrowserAuthService(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := NewRootCommandWithApp(app)
-	command.SetArgs([]string{"login"})
+	command.SetArgs([]string{"login", "--team", "acme"})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	if !browser.called || browser.request.Client == nil || browser.request.Output == nil {
 		t.Fatalf("browser request=%#v", browser.request)
+	}
+	if browser.request.Team != "acme" {
+		t.Fatalf("browser team=%q", browser.request.Team)
 	}
 	store := base.Auth.(processAuthStore)
 	auth, ok, err := store.ExactAuthE(adversarylabs.AuthKey(adversarylabs.DefaultAPIURL, "default"))
