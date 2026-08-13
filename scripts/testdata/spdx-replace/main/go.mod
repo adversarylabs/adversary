@@ -1,6 +1,6 @@
 module example.com/main
 
-go 1.26.5
+go 1.26.6
 
 require example.com/dependency v1.2.3
 

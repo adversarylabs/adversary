@@ -1,6 +1,6 @@
 module github.com/adversarylabs/adversary/scripts/spdx-validator
 
-go 1.26.5
+go 1.26.6
 
 require github.com/spdx/tools-golang v0.5.7
 
