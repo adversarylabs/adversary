@@ -116,7 +116,7 @@ func newLoginCommand(app *application.App, apiURL, profile *string) *cobra.Comma
 	cmd.Flags().BoolVar(&opts.passwordStdin, "password-stdin", false, "read the password from standard input")
 	cmd.Flags().BoolVar(&opts.tokenStdin, "token-stdin", false, "read a service account or short-lived CI token from standard input")
 	cmd.Flags().StringVar(&opts.registryNamespace, "registry-namespace", "", "registry namespace for a service account or CI token")
-	cmd.Flags().StringVar(&opts.team, "team", "", "team slug to use for browser or password login")
+	cmd.Flags().StringVar(&opts.team, "team", "", "team slug to use for browser, password, or device login")
 	return cmd
 }
 
