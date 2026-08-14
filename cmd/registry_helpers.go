@@ -103,6 +103,9 @@ func defaultAdversaryLabsPushRef(ctx context.Context, deps application.Dependenc
 		}
 		return "", fmt.Errorf("remote reference is required for unqualified local ref %q; run adversary login or provide a remote reference", localRef)
 	}
+	if manifestRepositoryForRemote(record.Name) != "" {
+		return defaultRegistryPushRef(registryHost, "", record), nil
+	}
 	namespace := registryNamespaceFromAuth(auth, deps.RegistryNS)
 	if namespace == "" {
 		client := deps.API.New(apiURL)
@@ -130,12 +133,26 @@ func defaultAdversaryLabsPushRef(ctx context.Context, deps application.Dependenc
 }
 
 func defaultRegistryPushRef(registryHost, namespace string, record pushRecord) string {
-	name := manifestNameForRemote(record.Name)
+	name := manifestRepositoryForRemote(record.Name)
+	if name == "" {
+		name = manifestNameForRemote(record.Name)
+		if namespace = strings.Trim(namespace, "/"); namespace != "" {
+			name = namespace + "/" + name
+		}
+	}
 	tag := record.Version
 	if tag == "" {
 		tag = oci.DefaultTag
 	}
-	return registryHost + "/" + namespace + "/" + name + ":" + tag
+	return strings.TrimRight(registryHost, "/") + "/" + name + ":" + tag
+}
+
+func manifestRepositoryForRemote(name string) string {
+	name = strings.Trim(strings.TrimSpace(name), "/")
+	if name == "" || hasExplicitRegistry(name) || !strings.Contains(name, "/") || strings.HasPrefix(name, "local/") {
+		return ""
+	}
+	return name
 }
 
 func pushErrorWithNamespaceHint(err error, localRef string, ref oci.Reference) error {
