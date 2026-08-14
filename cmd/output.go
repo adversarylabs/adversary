@@ -161,6 +161,7 @@ type packDTO struct {
 	Runtime            string           `json:"runtime"`
 	RuntimeRequirement string           `json:"runtimeRequirement,omitempty"`
 	Digest             string           `json:"digest"`
+	Reference          string           `json:"reference"`
 	CanonicalReference string           `json:"canonicalReference"`
 	SizeBytes          int64            `json:"sizeBytes"`
 	References         []string         `json:"references"`

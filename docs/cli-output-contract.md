@@ -63,10 +63,15 @@ unavailable) and a unified `results` catalog that merges local store rows with
 remote registry entries. `search` uses the same `results` shape, with an optional
 query argument; empty search is the same inventory as `list` text/results.
 
-Canonical references in modern pack output come from the committed repository
-reference index. Local shorthand lookup uses durable aliases and stored refs,
-not the live `ADVERSARY_REGISTRY_HOST`; an environment change therefore cannot
-rename an installed artifact, and multiple matching aliases fail closed.
+Modern pack output presents the registryless manifest identity (for example,
+`replicated/feature-toggles:0.0.1`) as `reference` and in the human-readable
+stored-reference list. `canonicalReference` retains the fully qualified durable
+repository locator for machine consumers. Local shorthand lookup uses durable
+aliases and stored refs, not the live `ADVERSARY_REGISTRY_HOST`; an environment
+change therefore cannot rename an installed artifact, and multiple matching
+aliases fail closed. An unqualified push preserves a non-`local/` manifest
+namespace and prepends the configured registry host; flat and `local/` names
+continue to use the authenticated or configured registry namespace.
 The registry and namespace used when qualifying a new shorthand are injected
 once by command composition; repositories without explicit settings retain the
 public defaults. Versioned alias indexes authenticate their plaintext alias and

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -531,8 +532,11 @@ func TestPackUsesEditedManifestNameForDistinctLocalReference(t *testing.T) {
 	if err := first.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "registry.adversarylabs.ai/local/security-reviewer:1.4.2") {
+	if !strings.Contains(stdout.String(), "Reference: local/security-reviewer:1.4.2") {
 		t.Fatalf("first pack did not use manifest name:\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "registry.adversarylabs.ai") {
+		t.Fatalf("first pack exposed the default registry:\n%s", stdout.String())
 	}
 
 	manifestPath := filepath.Join(project, "adversary.yaml")
@@ -549,8 +553,11 @@ func TestPackUsesEditedManifestNameForDistinctLocalReference(t *testing.T) {
 	if err := second.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "registry.adversarylabs.ai/replicated/security-reviewer:1.4.2") {
+	if !strings.Contains(stdout.String(), "Reference: replicated/security-reviewer:1.4.2") {
 		t.Fatalf("second pack did not use edited manifest name:\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "registry.adversarylabs.ai") {
+		t.Fatalf("second pack exposed the default registry:\n%s", stdout.String())
 	}
 
 	resolver, err := internaladversary.DefaultResolver()
@@ -590,6 +597,34 @@ func TestDefaultAdversaryLabsPushRefUsesStoredNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "localhost:5000/acme-security/dockerfile-reviewer:0.1.0"
+	if ref != want {
+		t.Fatalf("ref = %q, want %q", ref, want)
+	}
+}
+
+func TestDefaultAdversaryLabsPushRefPreservesManifestNamespace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ADVERSARY_REGISTRY_HOST", "localhost:5000")
+	configStore, err := adversarylabs.DefaultConfigStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := configStore.SetAuth("localhost:5000", adversarylabs.Auth{
+		Token:             "secret-token",
+		RegistryNamespace: "different-team",
+		ExpiresAt:         "2099-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ref, err := defaultAdversaryLabsPushRef(context.Background(), application.Dependencies{Auth: configStore, API: processAPIFactory{store: configStore, http: http.DefaultClient}, RegistryHost: "localhost:5000"}, "replicated/feature-toggles:0.0.1", pushRecord{
+		Name:    "replicated/feature-toggles",
+		Version: "0.0.1",
+	}, "", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "localhost:5000/replicated/feature-toggles:0.0.1"
 	if ref != want {
 		t.Fatalf("ref = %q, want %q", ref, want)
 	}
@@ -998,6 +1033,8 @@ func TestPackAndInspectUseDurableCanonicalIdentityAndInventory(t *testing.T) {
 		SchemaVersion int `json:"schemaVersion"`
 		Data          struct {
 			CanonicalReference string        `json:"canonicalReference"`
+			Reference          string        `json:"reference"`
+			References         []string      `json:"references"`
 			Files              []packFileDTO `json:"files"`
 		} `json:"data"`
 	}
@@ -1006,6 +1043,13 @@ func TestPackAndInspectUseDurableCanonicalIdentityAndInventory(t *testing.T) {
 	}
 	if got, want := packed.Data.CanonicalReference, "poison.invalid/local/security-reviewer:1.4.2"; got != want {
 		t.Fatalf("canonical=%q want %q", got, want)
+	}
+	if got, want := packed.Data.Reference, "local/security-reviewer:1.4.2"; got != want {
+		t.Fatalf("reference=%q want %q", got, want)
+	}
+	wantReferences := []string{"local/security-reviewer:1.4.2", "local/security-reviewer:latest"}
+	if !reflect.DeepEqual(packed.Data.References, wantReferences) {
+		t.Fatalf("references=%q want %q", packed.Data.References, wantReferences)
 	}
 	if len(packed.Data.Files) == 0 {
 		t.Fatal("pack inventory missing")

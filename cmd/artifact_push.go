@@ -107,7 +107,8 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 	if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
 		registry.SetPlainHTTP(true)
 	}
-	fmt.Fprintf(stderr, "Pushing %s (%s) to %s\n", resolution.CanonicalReference, resolution.Digest, ref.Locator())
+	localRef := resolution.Record.Name + ":" + resolution.Record.Version
+	fmt.Fprintf(stderr, "Pushing %s (%s) to %s\n", localRef, resolution.Digest, ref.Locator())
 	// Catalog docs live in the package layer; extract while the lease is open.
 	docs, docsErr := extractCatalogDocs(lease.Blobs)
 	digest, err := registry.PushSources(ctx, ref, manifest, lease.Blobs)

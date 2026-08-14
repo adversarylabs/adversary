@@ -74,6 +74,7 @@ func newPackCommand(app *application.App) *cobra.Command {
 			if err := registerExactRef(resolver, latest, unified.Digest); err != nil {
 				return err
 			}
+			localLatest := artifact.Name + ":" + oci.DefaultTag
 			if format == "json" {
 				requirement := ""
 				if artifact.RuntimeName != "" {
@@ -83,7 +84,7 @@ func newPackCommand(app *application.App) *cobra.Command {
 				if opts.json {
 					return writeJSON(cmd.OutOrStdout(), "pack", legacyPackV1DTO{Name: artifact.ManifestName, Version: artifact.Version, Runtime: artifact.Runtime, RuntimeRequirement: requirement, Digest: unified.Digest, CanonicalReference: requested, SizeBytes: artifact.Size, References: []string{requested, artifact.Name + ":" + oci.DefaultTag}})
 				}
-				return writeJSONVersion(cmd.OutOrStdout(), 2, "pack", packDTO{Name: artifact.ManifestName, Version: artifact.Version, Runtime: artifact.Runtime, RuntimeRequirement: requirement, Digest: unified.Digest, CanonicalReference: canonical, SizeBytes: artifact.Size, References: []string{canonical, latest}, Files: files, Warnings: warnings})
+				return writeJSONVersion(cmd.OutOrStdout(), 2, "pack", packDTO{Name: artifact.ManifestName, Version: artifact.Version, Runtime: artifact.Runtime, RuntimeRequirement: requirement, Digest: unified.Digest, Reference: requested, CanonicalReference: canonical, SizeBytes: artifact.Size, References: []string{requested, localLatest}, Files: files, Warnings: warnings})
 			}
 			fmt.Fprintln(cmd.OutOrStdout())
 			fmt.Fprintf(cmd.OutOrStdout(), "Name: %s\n", artifact.ManifestName)
@@ -93,7 +94,7 @@ func newPackCommand(app *application.App) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "Runtime Requirement: %s@%s\n", artifact.RuntimeName, artifact.RuntimeVersion)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Digest: %s\n", unified.Digest)
-			fmt.Fprintf(cmd.OutOrStdout(), "Canonical reference: %s\nUnified digest: %s\n", canonical, unified.Digest)
+			fmt.Fprintf(cmd.OutOrStdout(), "Reference: %s\nUnified digest: %s\n", requested, unified.Digest)
 			fmt.Fprintf(cmd.OutOrStdout(), "Size: %s\n", humanSize(artifact.Size))
 			files, warnings := packOutputDetails(artifact.Files, pack.WarningsForFiles(artifact.Files))
 			fmt.Fprintln(cmd.OutOrStdout(), "Files:")
@@ -101,8 +102,8 @@ func newPackCommand(app *application.App) *cobra.Command {
 			fmt.Fprintln(cmd.OutOrStdout())
 			fmt.Fprintln(cmd.OutOrStdout(), "Stored locally as:")
 			fmt.Fprintln(cmd.OutOrStdout())
-			fmt.Fprintln(cmd.OutOrStdout(), canonical)
-			fmt.Fprintln(cmd.OutOrStdout(), latest)
+			fmt.Fprintln(cmd.OutOrStdout(), requested)
+			fmt.Fprintln(cmd.OutOrStdout(), localLatest)
 			return nil
 		},
 	}
