@@ -582,7 +582,8 @@ func isDismissiveResolution(lower string) bool {
 	markers := []string{
 		"don't need to worry", "do not need to worry", "no need to worry",
 		"nothing to worry", "not a concern", "no action needed", "can be ignored",
-		"safe to ignore", "working as intended", "behaving as intended",
+		"safe to ignore", "fine to ignore", "okay to ignore", "ok to ignore",
+		"working as intended", "behaving as intended",
 	}
 	for _, marker := range markers {
 		if strings.Contains(lower, marker) {

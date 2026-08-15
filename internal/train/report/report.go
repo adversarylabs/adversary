@@ -16,6 +16,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/experiment"
 	"github.com/adversarylabs/adversary/internal/train/judge"
 	"github.com/adversarylabs/adversary/internal/train/normalize"
+	"github.com/adversarylabs/adversary/internal/train/scope"
 	"github.com/adversarylabs/adversary/internal/train/score"
 	"github.com/adversarylabs/adversary/internal/train/securefs"
 	"github.com/adversarylabs/adversary/internal/train/workspace"
@@ -48,6 +49,9 @@ type Input struct {
 	OfficialCatchByConcern map[string]string
 	// PackageScopes gives the issue writer the owning package's actual mission.
 	PackageScopes map[string]string
+	// ChangedFileEvidence maps case id, then changed file path, to a bounded
+	// base/head patch used to ground issue abstraction in reviewed source.
+	ChangedFileEvidence map[string]map[string]string
 	// IssueBriefWriter synthesizes maintainer-quality issue intent from misses.
 	// Nil uses a concise deterministic fallback (fixtures and credential-less runs).
 	IssueBriefWriter IssueBriefWriter
@@ -781,6 +785,12 @@ func suggestIssues(in Input) []SuggestedIssue {
 			continue
 		}
 		concernBody := sourceConcernBody(c, concern, summary)
+		// Thread context may resolve the referents of an actionable reviewer
+		// concern, but it cannot turn an approval, dismissal, or status reply into
+		// a training request of its own.
+		if _, nonActionable := scope.NonActionableHumanComment(concernBody); nonActionable {
+			continue
+		}
 		if unavailableReviewInputReason(concernBody, summary, concernScopeReason(concern)) != "" {
 			continue
 		}
@@ -800,6 +810,9 @@ func suggestIssues(in Input) []SuggestedIssue {
 		}
 		if concern != nil {
 			ev.File = concern.File
+			if byFile := in.ChangedFileEvidence[c.ID]; byFile != nil {
+				ev.SourceDiff = softWrapDiff(byFile[concern.File], 8_000)
+			}
 			ev.Importance = concern.Importance
 			ev.ScopeWhy = softWrap(concern.ScopeReason, 300)
 			for _, message := range concern.ThreadContext {
@@ -934,6 +947,14 @@ func suggestIssues(in Input) []SuggestedIssue {
 		})
 	}
 	return out
+}
+
+func softWrapDiff(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	return s[:n] + "\n[diff truncated]"
 }
 
 // issueSemanticKey keeps the coarse concern class useful for evidence grouping

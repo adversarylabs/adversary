@@ -185,6 +185,28 @@ func checkDiffable(repo, baseSHA, headSHA string) error {
 	return nil
 }
 
+// ChangedFileEvidence returns a bounded patch for one changed file. Training
+// issue abstraction uses this to verify that a reviewer concern's proposed
+// mechanism is actually present in the code the adversary reviewed.
+func ChangedFileEvidence(ctx context.Context, repo, baseRef, headRef, file string, maxBytes int) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if repo == "" || baseRef == "" || headRef == "" || file == "" {
+		return "", fmt.Errorf("repository, refs, and file are required")
+	}
+	cmd := exec.CommandContext(ctx, "git", "diff", "--no-ext-diff", "--unified=40", baseRef, headRef, "--", file)
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git diff changed-file evidence: %w (%s)", err, truncate(string(out), 300))
+	}
+	if maxBytes > 0 && len(out) > maxBytes {
+		out = append(out[:maxBytes], []byte("\n[diff truncated]\n")...)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func syntheticTwoCommitRepo(dest string) error {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
