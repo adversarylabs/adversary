@@ -90,6 +90,25 @@ func TestBroadMissionRejectsPraiseButKeepsNits(t *testing.T) {
 	}
 }
 
+func TestFineToIgnoreIsNonActionableWithoutConsultingThreadContext(t *testing.T) {
+	reason, ok := NonActionableHumanComment("Yeah, fine to ignore")
+	if !ok || !strings.Contains(reason, "no-action-needed") {
+		t.Fatalf("dismissive reviewer reply became gold: ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestNegatedDismissalRemainsActionable(t *testing.T) {
+	for _, body := range []string{
+		"This is not fine to ignore—the error is swallowed.",
+		"This isn't safe to ignore because retries lose the update.",
+		"This is never okay to ignore.",
+	} {
+		if reason, ok := NonActionableHumanComment(body); ok {
+			t.Fatalf("negated concern %q became non-actionable: %s", body, reason)
+		}
+	}
+}
+
 func TestAutomatedReviewArtifactBehindHumanAccountIsOutOfScope(t *testing.T) {
 	c := &Classifier{AdversaryName: "nits", UseLLM: false}
 	body := "This is a correct, minimal fix applied consistently across all handlers.\n\n- Worth a grep for any remaining copy.\n\n<!-- hermes-pr-review da4eaa1 -->"

@@ -833,6 +833,7 @@ func Run(opts Options) (*Result, error) {
 	locIDs, offIDs := trainDraftContext(opts, advPackages)
 	briefWriter, packageScopes := trainIssueBriefContext(opts, advPackages)
 	priorMisses := loadPriorMissEvidence(opts.DataRoot)
+	changedFileEvidence := collectChangedFileEvidence(ctx, runtimes)
 	// Also compute official catches from judgments (matching findings on gold).
 	officialCatch := map[string]string{}
 	for caseID, j := range judgments {
@@ -872,6 +873,7 @@ func Run(opts Options) (*Result, error) {
 		OfficialIDs:            offIDs,
 		OfficialCatchByConcern: officialCatch,
 		PackageScopes:          packageScopes,
+		ChangedFileEvidence:    changedFileEvidence,
 		IssueBriefWriter:       briefWriter,
 		PriorMisses:            priorMisses,
 		InboxRows:              out.ResultsAdded,
@@ -915,6 +917,40 @@ func Run(opts Options) (*Result, error) {
 	// Message is the full plain-English CLI block only.
 	out.Message = human.CLIBlock
 	return out, nil
+}
+
+func collectChangedFileEvidence(ctx context.Context, runtimes []caseRuntime) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for _, rt := range runtimes {
+		if rt.Case == nil || rt.RepoPath == "" || rt.BaseRef == "" || rt.HeadRef == "" {
+			continue
+		}
+		for _, concern := range rt.Case.Labels.ExpectedConcerns {
+			file := strings.TrimSpace(concern.File)
+			if file == "" {
+				continue
+			}
+			line := concernCommentLine(rt.Case, concern.ID, file)
+			diff, err := checkout.ChangedFileEvidence(ctx, rt.RepoPath, rt.BaseRef, rt.HeadRef, file, line, 8_000)
+			if err != nil || diff == "" {
+				continue
+			}
+			if out[rt.Case.ID] == nil {
+				out[rt.Case.ID] = map[string]string{}
+			}
+			out[rt.Case.ID][concern.ID] = diff
+		}
+	}
+	return out
+}
+
+func concernCommentLine(c *cases.Case, concernID, file string) int {
+	for _, comment := range c.Comments {
+		if comment.Path == file && strings.HasPrefix(concernID, fmt.Sprintf("c-%d-", comment.ID)) {
+			return comment.Line
+		}
+	}
+	return 0
 }
 
 // remeasureCandidate re-runs engineering-review from the candidate worktree when possible.

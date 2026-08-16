@@ -29,11 +29,30 @@ type fixtureAssessmentProvider struct {
 func (p *fixtureAssessmentProvider) Name() string  { return "fixture" }
 func (p *fixtureAssessmentProvider) Model() string { return "fixture" }
 func (p *fixtureAssessmentProvider) Review(_ context.Context, request modelreview.Request) (modelreview.Result, error) {
-	p.request = request
+	if p.request.Prompt == "" {
+		p.request = request
+	}
+	if strings.Contains(request.Prompt, "evidence-entailment verifier") {
+		return modelreview.Result{Output: json.RawMessage(`{
+  "grounded": true,
+  "reason": "The cited concern and changed code directly establish the proposed mechanism.",
+  "unsupported_claims": []
+}`)}, nil
+	}
 	return modelreview.Result{Output: json.RawMessage(fmt.Sprintf(`{
   "should_abstract": %t,
+  "evidence_sufficient": true,
   "reason": "The finding identifies a transferable changed-code mechanism rather than a repository preference.",
+  "ambiguity": "No unresolved alternative mechanism remains.",
   "causal_mechanism": "A newly added operation duplicates a guarantee already provided on every downstream route and obscures ownership.",
+  "evidence_support": [
+    {"id":"review","evidence_index":0,"source":"reviewer_concern","quote":"Every downstream route already performs this transformation.","claim":"The reviewer identifies an existing guarantee on every route."},
+    {"id":"diff","evidence_index":0,"source":"source_diff","quote":"+ transform(value)","claim":"The changed code adds the transformation before downstream routing."}
+  ],
+  "transfer_examples": [
+    {"scenario":"A renderer escapes input before every downstream template escapes it again.","mechanism_link":"Both operations implement the same already-universal transformation.","evidence_support_ids":["review","diff"]},
+    {"scenario":"A storage caller normalizes a key before every selected backend normalizes it.","mechanism_link":"The new caller duplicates the downstream guarantee identified by the evidence.","evidence_support_ids":["review","diff"]}
+  ],
   "transfer_test": "The same issue appears in rendering and storage pipelines, while a bypass route is a counterexample.",
   "detectable_in_diff": %t
 }`, p.abstract, p.detectable))}, nil
@@ -134,7 +153,10 @@ func TestModelIssueAbstractionJudgeAdmitsReusableSingleton(t *testing.T) {
 		Package:      "engineering-review",
 		PackageScope: "Staff-level review of correctness and maintainability.",
 		ConcernClass: "redundant-operation",
-		Evidence:     []IssueBriefEvidence{{Concern: "Every downstream route already performs this transformation."}},
+		Evidence: []IssueBriefEvidence{{
+			Concern:    "Every downstream route already performs this transformation.",
+			SourceDiff: "+ transform(value)",
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +166,8 @@ func TestModelIssueAbstractionJudgeAdmitsReusableSingleton(t *testing.T) {
 	}
 	if !strings.Contains(provider.request.Prompt, "One source PR is sufficient") ||
 		!strings.Contains(provider.request.Prompt, "two concrete hypothetical examples") ||
-		!strings.Contains(provider.request.Prompt, "changed head-side code") {
+		!strings.Contains(provider.request.Prompt, "changed head-side code") ||
+		!strings.Contains(provider.request.Prompt, "copy quote exactly") {
 		t.Fatalf("abstraction prompt is missing admission safeguards:\n%s", provider.request.Prompt)
 	}
 }
@@ -161,6 +184,120 @@ func TestModelIssueAbstractionJudgeRejectsUnavailableInput(t *testing.T) {
 	}
 	if assessment.ShouldAbstract {
 		t.Fatalf("metadata-dependent singleton admitted: %#v", assessment)
+	}
+}
+
+func TestModelIssueAbstractionJudgeRejectsMissingSourceDiff(t *testing.T) {
+	provider := &fixtureAssessmentProvider{abstract: true, detectable: true}
+	assessment, err := (&modelIssueBriefWriter{provider: provider}).AssessIssueAbstraction(context.Background(), IssueBriefInput{
+		Package:  "engineering-review",
+		Evidence: []IssueBriefEvidence{{Concern: "Every downstream route already performs this transformation."}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.ShouldAbstract || assessment.EvidenceSufficient {
+		t.Fatalf("admission without source_diff: %#v", assessment)
+	}
+	if !strings.Contains(assessment.Reason, "source-diff") && !strings.Contains(assessment.Reason, "source_diff") {
+		t.Fatalf("missing-diff rejection is not auditable: %#v", assessment)
+	}
+}
+
+type staticAssessmentProvider struct {
+	output   json.RawMessage
+	grounded bool
+}
+
+func (*staticAssessmentProvider) Name() string  { return "fixture" }
+func (*staticAssessmentProvider) Model() string { return "fixture" }
+func (p *staticAssessmentProvider) Review(_ context.Context, request modelreview.Request) (modelreview.Result, error) {
+	if strings.Contains(request.Prompt, "evidence-entailment verifier") {
+		reason := "The evidence directly entails the proposed test-oracle mechanism."
+		unsupported := "[]"
+		if !p.grounded {
+			reason = "The endpoint-shaped expected output does not establish concatenation or parsing APIs."
+			unsupported = `["Naive host and port concatenation", "Delimiter-based endpoint parsing"]`
+		}
+		return modelreview.Result{Output: json.RawMessage(fmt.Sprintf(`{"grounded":%t,"reason":%q,"unsupported_claims":%s}`, p.grounded, reason, unsupported))}, nil
+	}
+	return modelreview.Result{Output: p.output}, nil
+}
+
+func nftablesSyntaxEvidence() IssueBriefInput {
+	return IssueBriefInput{
+		Package:      "engineering-review",
+		PackageScope: "Review correctness and whether tests validate behavior.",
+		ConcernClass: "testing",
+		Evidence: []IssueBriefEvidence{{
+			Concern: "but the rules have different syntax, so if for any case the rule had wrong syntax it will be more obvious",
+			File:    "pkg/proxy/nftables/proxier_test.go",
+			SourceDiff: `+ expectedRule: "meta l4proto tcp dnat to 10.180.0.1:80"
++ assertNFTablesTransactionEqual(t, getLine(), expected, nft.Dump())`,
+			ThreadContext: []IssueBriefThreadContext{
+				{Role: "reviewer", Body: "can we add an ipv6 test?"},
+				{Role: "pull_request_author", Body: "These tests compare expected output but do not verify that nft accepts the generated rules."},
+			},
+		}},
+	}
+}
+
+func TestModelIssueAbstractionJudgeRejectsInventedMechanismDespitePlausibleExamples(t *testing.T) {
+	provider := &staticAssessmentProvider{grounded: false, output: json.RawMessage(`{
+  "should_abstract": true,
+  "evidence_sufficient": true,
+  "reason": "Address formatting APIs that mishandle IPv6 endpoints.",
+  "ambiguity": "No unresolved ambiguity remains.",
+  "causal_mechanism": "Naive host and port concatenation produces ambiguous IPv6 endpoints.",
+  "evidence_support": [
+    {"id":"review","evidence_index":0,"source":"reviewer_concern","quote":"rules have different syntax","claim":"IPv4 and IPv6 need different syntax."},
+    {"id":"thread","evidence_index":0,"source":"thread_context","quote":"can we add an ipv6 test?","claim":"The reviewer requests IPv6 coverage."},
+    {"id":"diff","evidence_index":0,"source":"source_diff","quote":"expectedRule: \"meta l4proto tcp dnat to 10.180.0.1:80\"","claim":"The changed code concatenates a host and port."}
+  ],
+  "transfer_examples": [
+    {"scenario":"An HTTP client concatenates an IPv6 host and port without brackets.","mechanism_link":"It repeats the claimed string-concatenation mechanism.","evidence_support_ids":["review","diff"]},
+    {"scenario":"A proxy parser splits an IPv6 endpoint at every colon.","mechanism_link":"It repeats the claimed delimiter ambiguity.","evidence_support_ids":["review","diff"]}
+  ],
+  "transfer_test": "Endpoint construction and parsing both fail on colon-bearing IPv6 literals.",
+  "detectable_in_diff": true
+}`)}
+	assessment, err := (&modelIssueBriefWriter{provider: provider}).AssessIssueAbstraction(context.Background(), nftablesSyntaxEvidence())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.ShouldAbstract || assessment.EvidenceSufficient {
+		t.Fatalf("invented host-port mechanism was admitted: %#v", assessment)
+	}
+	if !strings.Contains(assessment.Reason, "does not establish concatenation") {
+		t.Fatalf("rejection is not auditable: %#v", assessment)
+	}
+}
+
+func TestModelIssueAbstractionJudgeAdmitsGroundedConsumerValidationMechanism(t *testing.T) {
+	provider := &staticAssessmentProvider{grounded: true, output: json.RawMessage(`{
+  "should_abstract": true,
+  "evidence_sufficient": true,
+  "reason": "The concern and changed test establish a reusable test-oracle gap.",
+  "ambiguity": "The evidence does not establish which production API formats the rule, so the mechanism stays at the consumer-validation boundary.",
+  "causal_mechanism": "A test that compares generated syntax only with an expected string can agree with an invalid expectation without proving that the real consumer accepts the syntax.",
+  "evidence_support": [
+    {"id":"review","evidence_index":0,"source":"reviewer_concern","quote":"rules have different syntax","claim":"The accepted syntax varies across the two protocol families."},
+    {"id":"thread","evidence_index":0,"source":"thread_context","quote":"compare expected output but do not verify that nft accepts the generated rules","claim":"The current oracle does not exercise the syntax consumer."},
+    {"id":"diff","evidence_index":0,"source":"source_diff","quote":"assertNFTablesTransactionEqual(t, getLine(), expected, nft.Dump())","claim":"The changed test compares generated and expected transaction text."}
+  ],
+  "transfer_examples": [
+    {"scenario":"A query generator test compares SQL text with a fixture but never asks a parser to accept it.","mechanism_link":"The fixture and generator may share an invalid syntax assumption without consulting the consumer.","evidence_support_ids":["thread","diff"]},
+    {"scenario":"A configuration emitter snapshots YAML but never loads it with the supported configuration parser.","mechanism_link":"Text equality does not establish acceptance by the downstream parser.","evidence_support_ids":["thread","diff"]}
+  ],
+  "transfer_test": "Generated SQL and configuration syntax use different consumers but share the evidenced oracle gap; pure presentation text is a counterexample.",
+  "detectable_in_diff": true
+}`)}
+	assessment, err := (&modelIssueBriefWriter{provider: provider}).AssessIssueAbstraction(context.Background(), nftablesSyntaxEvidence())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !assessment.ShouldAbstract || !assessment.EvidenceSufficient {
+		t.Fatalf("grounded consumer-validation mechanism was rejected: %#v", assessment)
 	}
 }
 
@@ -272,7 +409,8 @@ func TestSuggestIssuesUsesFullSourceCommentAsBriefEvidence(t *testing.T) {
 	issues := suggestIssues(Input{
 		Context: context.Background(), Scorecard: sc, Cases: []*cases.Case{c},
 		LocalIDs: map[string]bool{"nits": true}, IssueBriefWriter: writer,
-		PriorMisses: []MissEvidence{{Package: "nits", Summary: "This validation is already guaranteed on every downstream path.", PRURL: "https://github.com/acme/two/pull/2"}},
+		ChangedFileEvidence: map[string]map[string]string{c.ID: {"c-42-0": "+ MaskUserVisibleText(value)"}},
+		PriorMisses:         []MissEvidence{{Package: "nits", Summary: "This validation is already guaranteed on every downstream path.", PRURL: "https://github.com/acme/two/pull/2"}},
 	})
 	if len(issues) != 1 {
 		t.Fatalf("issues=%d %#v", len(issues), issues)
@@ -282,6 +420,9 @@ func TestSuggestIssuesUsesFullSourceCommentAsBriefEvidence(t *testing.T) {
 	}
 	if got := writer.input.Evidence[0].Concern; got != fullComment {
 		t.Fatalf("brief evidence was truncated:\n%s", got)
+	}
+	if got := writer.input.Evidence[0].SourceDiff; !strings.Contains(got, "MaskUserVisibleText") {
+		t.Fatalf("changed-file evidence was not passed to abstraction: %q", got)
 	}
 	if got := writer.input.Evidence[0].ThreadContext; len(got) != 1 || got[0].Role != "pull_request_author" || !strings.Contains(got[0].Body, "bypass both") {
 		t.Fatalf("labeled non-gold thread context was not passed to abstraction: %#v", got)
@@ -380,6 +521,36 @@ func TestSuggestIssuesLetsAbstractionJudgeDecideSingletons(t *testing.T) {
 	}
 	if rejected.writes != 0 {
 		t.Fatalf("rejected singleton still invoked brief writer %d time(s)", rejected.writes)
+	}
+}
+
+func TestSuggestIssuesDoesNotPromoteDismissalFromTechnicalThreadContext(t *testing.T) {
+	c := &cases.Case{
+		ID:         "case-dismissal",
+		Repository: cases.Repository{URL: "https://github.com/acme/one/pull/1"},
+		Comments:   []cases.Comment{{ID: 91, Body: "Yeah, fine to ignore", Path: ".github/workflows/ci.yml"}},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID: "c-91-0", Summary: "Yeah, fine to ignore", File: ".github/workflows/ci.yml",
+			OwnerAdversary: "githubactions", Approved: true,
+			ThreadContext: []cases.ReviewThreadContext{{
+				Role: "reviewer", Body: "A branch filter can prevent a workflow from running after a pull request is retargeted.",
+			}},
+		}}},
+	}
+	failure := judge.Failure{CaseID: c.ID, Kind: "missed-concern", ConcernID: "c-91-0", ReviewerID: "githubactions"}
+	sc := score.Aggregate("githubactions", map[string]*judge.ReviewJudgment{
+		c.ID: {ReviewerID: "githubactions", ExpectedMissed: []string{"c-91-0"}},
+	}, []judge.Failure{failure})
+	writer := &judgingBriefWriter{assessment: IssueAbstractionAssessment{
+		ShouldAbstract: true, EvidenceSufficient: true, DetectableInDiff: true,
+		Reason: "reusable", Ambiguity: "none", CausalMechanism: "branch filtering", TransferTest: "two domains",
+	}}
+	issues := suggestIssues(Input{
+		Scorecard: sc, Cases: []*cases.Case{c}, LocalIDs: map[string]bool{"githubactions": true}, IssueBriefWriter: writer,
+		ChangedFileEvidence: map[string]map[string]string{c.ID: {"c-91-0": "+ branches: [main]"}},
+	})
+	if len(issues) != 0 || writer.writes != 0 {
+		t.Fatalf("thread context promoted a dismissal into a draft: issues=%#v writes=%d", issues, writer.writes)
 	}
 }
 
