@@ -233,6 +233,51 @@ func TestCreateScaffoldsFactoryScopeDocs(t *testing.T) {
 	}
 }
 
+func TestCreateScaffoldsCatalogAndContributorDocs(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "catalog-docs-project")
+	if _, err := Create(Options{Destination: dst}); err != nil {
+		t.Fatal(err)
+	}
+
+	readmeRaw, err := os.ReadFile(filepath.Join(dst, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(readmeRaw)
+	for _, want := range []string{"## Goals", "## Scope", "## Boundaries", "CHECKS.md", "CONTRIBUTING.md"} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("README.md missing %q\n\n%s", want, readme)
+		}
+	}
+	for _, command := range []string{"npm ci", "npm test", "adversary validate", "adversary pack"} {
+		if strings.Contains(readme, command) {
+			t.Fatalf("README.md contains contributor command %q\n\n%s", command, readme)
+		}
+	}
+
+	checksRaw, err := os.ReadFile(filepath.Join(dst, "CHECKS.md"))
+	if err != nil {
+		t.Fatalf("CHECKS.md missing: %v", err)
+	}
+	checks := string(checksRaw)
+	for _, want := range []string{"| Rule | Severity | Scans for |", "`readme.exists`", "Repositories without a root `README.md`"} {
+		if !strings.Contains(checks, want) {
+			t.Fatalf("CHECKS.md missing %q\n\n%s", want, checks)
+		}
+	}
+
+	contributingRaw, err := os.ReadFile(filepath.Join(dst, "CONTRIBUTING.md"))
+	if err != nil {
+		t.Fatalf("CONTRIBUTING.md missing: %v", err)
+	}
+	contributing := string(contributingRaw)
+	for _, want := range []string{"npm ci", "npm test", "adversary validate .", "adversary pack . --check", "CHECKS.md"} {
+		if !strings.Contains(contributing, want) {
+			t.Fatalf("CONTRIBUTING.md missing %q\n\n%s", want, contributing)
+		}
+	}
+}
+
 func TestCreateScaffoldsAgentVoice(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "voice-scaffold-project")
 	if _, err := Create(Options{Destination: dst}); err != nil {
