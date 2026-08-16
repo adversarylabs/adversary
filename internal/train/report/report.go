@@ -49,7 +49,7 @@ type Input struct {
 	OfficialCatchByConcern map[string]string
 	// PackageScopes gives the issue writer the owning package's actual mission.
 	PackageScopes map[string]string
-	// ChangedFileEvidence maps case id, then changed file path, to a bounded
+	// ChangedFileEvidence maps case id, then concern id, to a bounded
 	// base/head patch used to ground issue abstraction in reviewed source.
 	ChangedFileEvidence map[string]map[string]string
 	// IssueBriefWriter synthesizes maintainer-quality issue intent from misses.
@@ -810,8 +810,8 @@ func suggestIssues(in Input) []SuggestedIssue {
 		}
 		if concern != nil {
 			ev.File = concern.File
-			if byFile := in.ChangedFileEvidence[c.ID]; byFile != nil {
-				ev.SourceDiff = softWrapDiff(byFile[concern.File], 8_000)
+			if byConcern := in.ChangedFileEvidence[c.ID]; byConcern != nil {
+				ev.SourceDiff = byConcern[concern.ID]
 			}
 			ev.Importance = concern.Importance
 			ev.ScopeWhy = softWrap(concern.ScopeReason, 300)

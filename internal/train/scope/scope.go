@@ -586,9 +586,32 @@ func isDismissiveResolution(lower string) bool {
 		"working as intended", "behaving as intended",
 	}
 	for _, marker := range markers {
-		if strings.Contains(lower, marker) {
+		if containsUnnegatedMarker(lower, marker) {
 			return true
 		}
+	}
+	return false
+}
+
+func containsUnnegatedMarker(text, marker string) bool {
+	for searchFrom := 0; searchFrom < len(text); {
+		relative := strings.Index(text[searchFrom:], marker)
+		if relative < 0 {
+			return false
+		}
+		index := searchFrom + relative
+		before := strings.TrimSpace(text[:index])
+		negated := false
+		for _, suffix := range []string{" not", " never", " isn't", " isn’t", " aren't", " aren’t", " wasn't", " wasn’t", " weren't", " weren’t"} {
+			if strings.HasSuffix(" "+before, suffix) {
+				negated = true
+				break
+			}
+		}
+		if !negated {
+			return true
+		}
+		searchFrom = index + len(marker)
 	}
 	return false
 }

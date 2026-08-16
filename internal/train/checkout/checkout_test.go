@@ -39,15 +39,23 @@ func TestChangedFileEvidenceReturnsBoundedReviewedPatch(t *testing.T) {
 	}
 	root := t.TempDir()
 	res := PrepareForCase(root, "", "", "case-evidence", "aaa", "bbb", true)
-	diff, err := ChangedFileEvidence(context.Background(), res.Path, "HEAD~1", "HEAD", "changed.go", 4_000)
+	diff, err := ChangedFileEvidence(context.Background(), res.Path, "HEAD~1", "HEAD", "changed.go", 2, 4_000)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(diff, "+func Worker() {}") || !strings.Contains(diff, "diff --git a/changed.go") {
 		t.Fatalf("unexpected changed-file evidence:\n%s", diff)
 	}
-	if other, err := ChangedFileEvidence(context.Background(), res.Path, "HEAD~1", "HEAD", "README.md", 20); err != nil || !strings.Contains(other, "[diff truncated]") {
+	if other, err := ChangedFileEvidence(context.Background(), res.Path, "HEAD~1", "HEAD", "README.md", 0, 20); err != nil || !strings.Contains(other, "[diff truncated]") {
 		t.Fatalf("bounded evidence=%q err=%v", other, err)
+	}
+}
+
+func TestChangedFileEvidenceKeepsLaterReviewedHunk(t *testing.T) {
+	diff := []byte("diff --git a/file.go b/file.go\n--- a/file.go\n+++ b/file.go\n@@ -1,2 +1,2 @@\n-old\n+early\n" + strings.Repeat(" context\n", 40) + "@@ -200,2 +200,2 @@\n-old later\n+reviewed bug\n")
+	bounded := string(boundChangedFileEvidence(diff, 200, 180))
+	if !strings.Contains(bounded, "+reviewed bug") || strings.Contains(bounded, "+early") {
+		t.Fatalf("wrong hunk retained:\n%s", bounded)
 	}
 }
 

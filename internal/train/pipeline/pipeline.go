@@ -930,22 +930,27 @@ func collectChangedFileEvidence(ctx context.Context, runtimes []caseRuntime) map
 			if file == "" {
 				continue
 			}
-			if out[rt.Case.ID] != nil {
-				if _, exists := out[rt.Case.ID][file]; exists {
-					continue
-				}
-			}
-			diff, err := checkout.ChangedFileEvidence(ctx, rt.RepoPath, rt.BaseRef, rt.HeadRef, file, 8_000)
+			line := concernCommentLine(rt.Case, concern.ID, file)
+			diff, err := checkout.ChangedFileEvidence(ctx, rt.RepoPath, rt.BaseRef, rt.HeadRef, file, line, 8_000)
 			if err != nil || diff == "" {
 				continue
 			}
 			if out[rt.Case.ID] == nil {
 				out[rt.Case.ID] = map[string]string{}
 			}
-			out[rt.Case.ID][file] = diff
+			out[rt.Case.ID][concern.ID] = diff
 		}
 	}
 	return out
+}
+
+func concernCommentLine(c *cases.Case, concernID, file string) int {
+	for _, comment := range c.Comments {
+		if comment.Path == file && strings.HasPrefix(concernID, fmt.Sprintf("c-%d-", comment.ID)) {
+			return comment.Line
+		}
+	}
+	return 0
 }
 
 // remeasureCandidate re-runs engineering-review from the candidate worktree when possible.

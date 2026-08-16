@@ -409,7 +409,7 @@ func TestSuggestIssuesUsesFullSourceCommentAsBriefEvidence(t *testing.T) {
 	issues := suggestIssues(Input{
 		Context: context.Background(), Scorecard: sc, Cases: []*cases.Case{c},
 		LocalIDs: map[string]bool{"nits": true}, IssueBriefWriter: writer,
-		ChangedFileEvidence: map[string]map[string]string{c.ID: {"debugger.cs": "+ MaskUserVisibleText(value)"}},
+		ChangedFileEvidence: map[string]map[string]string{c.ID: {"c-42-0": "+ MaskUserVisibleText(value)"}},
 		PriorMisses:         []MissEvidence{{Package: "nits", Summary: "This validation is already guaranteed on every downstream path.", PRURL: "https://github.com/acme/two/pull/2"}},
 	})
 	if len(issues) != 1 {
@@ -547,7 +547,7 @@ func TestSuggestIssuesDoesNotPromoteDismissalFromTechnicalThreadContext(t *testi
 	}}
 	issues := suggestIssues(Input{
 		Scorecard: sc, Cases: []*cases.Case{c}, LocalIDs: map[string]bool{"githubactions": true}, IssueBriefWriter: writer,
-		ChangedFileEvidence: map[string]map[string]string{c.ID: {".github/workflows/ci.yml": "+ branches: [main]"}},
+		ChangedFileEvidence: map[string]map[string]string{c.ID: {"c-91-0": "+ branches: [main]"}},
 	})
 	if len(issues) != 0 || writer.writes != 0 {
 		t.Fatalf("thread context promoted a dismissal into a draft: issues=%#v writes=%d", issues, writer.writes)
