@@ -168,9 +168,10 @@ Use --no-issues for a local-only run.`,
 				cfg.Run.Concurrency = concurrency
 			}
 
-			// History sources from config → pipeline catalog (repos mode).
+			// History sources from config → pipeline catalog (repo-backed modes).
 			// author_reviews mode needs no catalog (GitHub search by login).
 			discoveryMode := cfg.DiscoveryMode()
+			repoDiscoveryMode := discoveryMode == "repos" || discoveryMode == "github_events"
 			var catalog []repos.Repo
 			seenRepo := map[string]bool{}
 			addCatalog := func(owner, name string) {
@@ -200,7 +201,7 @@ Use --no-issues for a local-only run.`,
 				addCatalog(parts[0], parts[1])
 			}
 			// Expand sources.org (and optional repos_allowlist) via gh for live runs.
-			if discoveryMode == "repos" && !fixture && strings.TrimSpace(cfg.Sources.Org) != "" {
+			if repoDiscoveryMode && !fixture && strings.TrimSpace(cfg.Sources.Org) != "" {
 				orgRepos, err := collect.ListOrgRepos(cmd.Context(), cfg.Sources.Org, cfg.Sources.ReposAllowlist)
 				if err != nil {
 					return fmt.Errorf("expand sources.org %q: %w", cfg.Sources.Org, err)
@@ -212,7 +213,7 @@ Use --no-issues for a local-only run.`,
 					return fmt.Errorf("sources.org %q expanded to zero repositories (check allowlist and access)", cfg.Sources.Org)
 				}
 			}
-			if discoveryMode == "repos" && !fixture && len(catalog) == 0 {
+			if repoDiscoveryMode && !fixture && len(catalog) == 0 {
 				return fmt.Errorf("no repositories to hunt: set sources.repos and/or sources.org")
 			}
 
@@ -297,35 +298,37 @@ Use --no-issues for a local-only run.`,
 				authorOrgs = append(authorOrgs, cfg.Sources.Org)
 			}
 			opts := pipeline.Options{
-				Context:          cmd.Context(),
-				DataRoot:         stateRoot,
-				RepoRoot:         trainRoot,
-				Fixture:          fixture,
-				Live:             !fixture,
-				AdversaryName:    primaryName,
-				AdversarySource:  advSource,
-				LocalPackageRoot: localRoot,
-				LocalPackageDirs: localDirs,
-				TrainOnlyIDs:     trainOnly,
-				TrainExcludeIDs:  trainExclude,
-				CycleAdversaries: cycleAdversaries,
-				LocalIDs:         localIDs,
-				OfficialIDs:      officialIDs,
-				AuthorsOnly:      cfg.Sources.AuthorsOnly,
-				AuthorsIgnore:    cfg.Sources.AuthorsIgnore,
-				Languages:        cfg.Sources.Languages,
-				CatalogRepos:     catalog,
-				DiscoveryMode:    discoveryMode,
-				AuthorRoles:      cfg.Sources.AuthorRoles,
-				AuthorOrgs:       authorOrgs,
-				AuthorSince:      cfg.Sources.Since,
-				MaxPRs:           cfg.Run.MaxPRs,
-				MaxTurns:         cfg.Run.MaxTurns,
-				Concurrency:      cfg.Run.Concurrency,
-				ResetDiscovery:   resetDiscovery,
-				PR:               pr,
-				Owner:            owner,
-				Repo:             repo,
+				Context:             cmd.Context(),
+				DataRoot:            stateRoot,
+				RepoRoot:            trainRoot,
+				Fixture:             fixture,
+				Live:                !fixture,
+				AdversaryName:       primaryName,
+				AdversarySource:     advSource,
+				LocalPackageRoot:    localRoot,
+				LocalPackageDirs:    localDirs,
+				TrainOnlyIDs:        trainOnly,
+				TrainExcludeIDs:     trainExclude,
+				CycleAdversaries:    cycleAdversaries,
+				LocalIDs:            localIDs,
+				OfficialIDs:         officialIDs,
+				AuthorsOnly:         cfg.Sources.AuthorsOnly,
+				AuthorsIgnore:       cfg.Sources.AuthorsIgnore,
+				Languages:           cfg.Sources.Languages,
+				CatalogRepos:        catalog,
+				DiscoveryMode:       discoveryMode,
+				GitHubEventsURL:     cfg.Sources.GitHubEventsURL,
+				GitHubEventsPerRepo: cfg.Sources.GitHubEventsPerRepo,
+				AuthorRoles:         cfg.Sources.AuthorRoles,
+				AuthorOrgs:          authorOrgs,
+				AuthorSince:         cfg.Sources.Since,
+				MaxPRs:              cfg.Run.MaxPRs,
+				MaxTurns:            cfg.Run.MaxTurns,
+				Concurrency:         cfg.Run.Concurrency,
+				ResetDiscovery:      resetDiscovery,
+				PR:                  pr,
+				Owner:               owner,
+				Repo:                repo,
 			}
 			if opts.MaxPRs == 0 {
 				opts.MaxPRs = 1

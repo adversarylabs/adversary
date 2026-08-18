@@ -3,9 +3,11 @@ package workspace
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -44,10 +46,17 @@ type SourcesConfig struct {
 	Host string `yaml:"host"`
 	// Discovery selects how train finds PRs:
 	//   "repos" (default) — hunt listed sources.repos / org catalog
+	//   "github_events" — batch candidate discovery through the public
+	//                     ClickHouse GH Archive mirror, then hydrate from GitHub
 	//   "author_reviews"  — GitHub search for PRs reviewed/commented by authors_only (no repo list required)
 	// Empty: auto — author_reviews when authors_only set and repos empty; else repos.
 	Discovery string `yaml:"discovery"`
-	Org       string `yaml:"org"`
+	// GitHubEventsURL overrides the public read-only ClickHouse endpoint.
+	// It must be HTTPS and may not contain embedded credentials.
+	GitHubEventsURL string `yaml:"github_events_url"`
+	// GitHubEventsPerRepo bounds candidates returned per repository (default 40, max 100).
+	GitHubEventsPerRepo int    `yaml:"github_events_per_repo"`
+	Org                 string `yaml:"org"`
 	// Orgs bounds author_reviews search (gh --owner). Optional.
 	Orgs           []string `yaml:"orgs"`
 	Repos          []string `yaml:"repos"`
@@ -106,6 +115,8 @@ func (c Config) DiscoveryMode() string {
 	switch d {
 	case "repos", "repo", "catalog":
 		return "repos"
+	case "github_events", "github-events", "gharchive", "clickhouse":
+		return "github_events"
 	case "author_reviews", "author", "authors", "person", "reviewed-by":
 		return "author_reviews"
 	case "":
@@ -133,12 +144,28 @@ func (c Config) Validate() error {
 		if len(trimNonEmpty(c.Sources.AuthorsOnly)) == 0 {
 			return fmt.Errorf("sources.discovery=author_reviews requires sources.authors_only (GitHub logins)")
 		}
-	case "repos":
+	case "repos", "github_events":
 		if !c.HasRepoSources() {
 			return fmt.Errorf("sources are empty: set sources.repos and/or sources.org, or use sources.authors_only for author_reviews discovery")
 		}
 	default:
-		return fmt.Errorf("unknown sources.discovery %q (want repos or author_reviews)", c.Sources.Discovery)
+		return fmt.Errorf("unknown sources.discovery %q (want repos, github_events, or author_reviews)", c.Sources.Discovery)
+	}
+	if c.Sources.GitHubEventsPerRepo < 0 || c.Sources.GitHubEventsPerRepo > 100 {
+		return fmt.Errorf("sources.github_events_per_repo must be between 0 and 100")
+	}
+	if mode == "github_events" {
+		if raw := strings.TrimSpace(c.Sources.GitHubEventsURL); raw != "" {
+			u, err := url.Parse(raw)
+			if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+				return fmt.Errorf("sources.github_events_url must be an HTTPS URL without embedded credentials")
+			}
+		}
+		if since := strings.TrimSpace(c.Sources.Since); since != "" {
+			if _, err := time.Parse("2006-01-02", since); err != nil {
+				return fmt.Errorf("sources.since must be YYYY-MM-DD for github_events discovery")
+			}
+		}
 	}
 	if c.Run.MaxPRs < 0 || c.Run.MaxTurns < 0 {
 		return fmt.Errorf("run.max_prs and run.max_turns must be non-negative")

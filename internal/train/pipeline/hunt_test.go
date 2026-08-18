@@ -116,6 +116,100 @@ func TestParallelHuntProbesOneRotatingMaxTurnsWindow(t *testing.T) {
 	}
 }
 
+func TestGitHubEventsHuntUsesOneBatchThenHydratesFromGitHub(t *testing.T) {
+	var mu sync.Mutex
+	var githubPaths []string
+	githubTransport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		githubPaths = append(githubPaths, r.URL.Path)
+		mu.Unlock()
+		body := `[]`
+		if r.URL.Path == "/repos/acme/api/pulls/42" {
+			body = `{
+				"number":42,
+				"html_url":"https://github.com/acme/api/pull/42",
+				"title":"canonical title from GitHub",
+				"merged_at":"2026-08-17T12:00:00Z",
+				"user":{"login":"human-author"},
+				"base":{"sha":"base-sha"},
+				"head":{"sha":"head-sha"}
+			}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+	githubClient := githubapi.NewClient("test")
+	githubClient.HTTP = &http.Client{Transport: githubTransport}
+	githubClient.RESTBase = "https://api.test"
+	collect.SetDefaultClient(githubClient)
+	t.Cleanup(func() { collect.SetDefaultClient(nil) })
+
+	eventsRequests := 0
+	eventsClient := &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		eventsRequests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(
+				`{"repo_name":"acme/api","number":43,"title":"already seen"}` + "\n" +
+					`{"repo_name":"acme/api","number":42,"title":"mirror title is not evidence"}` + "\n")),
+		}, nil
+	})}
+
+	catalog := []repos.Repo{
+		{Owner: "acme", Name: "api"},
+		{Owner: "other", Name: "tool"},
+		{Owner: "third", Name: "repo"},
+	}
+	opts := Options{
+		Context:            context.Background(),
+		AdversaryName:      "lang/typescript",
+		DiscoveryMode:      "github_events",
+		GitHubEventsClient: eventsClient,
+		Concurrency:        1,
+	}
+	dataRoot := t.TempDir()
+	store, err := state.LoadDiscovery(dataRoot, "acme", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Record(43, "already seen", "https://github.com/acme/api/pull/43", state.OutcomeNoInScope, "prior run")
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	out := runParallelHunt(context.Background(), opts, catalog, dataRoot, 1, 3, nil, nil, func(string, ...any) {}, nil)
+	if out.interrupted != nil {
+		t.Fatal(out.interrupted)
+	}
+	if eventsRequests != 1 {
+		t.Fatalf("events requests=%d want 1", eventsRequests)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	wantPaths := []string{
+		"/repos/acme/api/pulls/42",
+		"/repos/acme/api/pulls/42/reviews",
+		"/repos/acme/api/pulls/42/comments",
+	}
+	for _, want := range wantPaths {
+		found := false
+		for _, got := range githubPaths {
+			if got == want {
+				found = true
+			}
+			if strings.HasSuffix(got, "/pulls") {
+				t.Fatalf("unexpected GitHub list discovery request: %s", got)
+			}
+		}
+		if !found {
+			t.Fatalf("missing canonical hydration request %s; got %v", want, githubPaths)
+		}
+	}
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {

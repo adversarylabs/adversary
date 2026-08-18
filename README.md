@@ -233,6 +233,10 @@ separately trained `torvalds` package is excluded automatically.
 adversary train run --cycle-adversaries --max-prs 1
 ```
 
+For large public-repository catalogs, `sources.discovery: github_events`
+batches candidate selection through ClickHouse's read-only GH Archive mirror.
+Selected PRs are still hydrated from GitHub before any review evidence is used.
+
 `train run` opens issues for consolidated drafts and false-positive fixes by
 default. Individual misses remain in the local results database as evidence.
 Use `--no-issues` when you want a local-only run.
