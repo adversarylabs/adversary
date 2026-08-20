@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
+	"github.com/adversarylabs/adversary/pkg/namespacesig"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/officialsig"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -192,9 +194,10 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 		if err := registerVersionRef(resolver, ref, existing); err != nil {
 			return pullResult{}, err
 		}
-		if !app.Dependencies().Repository.HasVerifiedOfficialSignature(existing.Digest) {
-			if err := fetchAndStoreOfficialSignature(ctx, app, registry, ref, existing.Digest, stderr); err != nil {
-				fmt.Fprintf(stderr, "Warning: official signature not stored (%v)\n", err)
+		if !app.Dependencies().Repository.HasVerifiedOfficialSignature(existing.Digest) &&
+			!app.Dependencies().Repository.HasVerifiedNamespaceSignature(existing.Digest, ref.Registry, ref.Repository) {
+			if err := fetchAndStoreArtifactTrust(ctx, app, registry, ref, existing.Digest, apiURL, profile, stderr); err != nil {
+				fmt.Fprintf(stderr, "Warning: trusted signature not stored (%v)\n", err)
 			}
 		}
 		// best-effort pull metric (AMB-8); respects telemetry opt-out env vars
@@ -234,13 +237,25 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	if err := registerVersionRef(resolver, ref, unified); err != nil {
 		return pullResult{}, err
 	}
-	// Best-effort: fetch and store official signature so host-exec trust works offline.
-	if err := fetchAndStoreOfficialSignature(ctx, app, registry, ref, unified.Digest, stderr); err != nil {
-		fmt.Fprintf(stderr, "Warning: official signature not stored (%v)\n", err)
+	// Best-effort: fetch and store a verified signature so host-exec trust works offline.
+	if err := fetchAndStoreArtifactTrust(ctx, app, registry, ref, unified.Digest, apiURL, profile, stderr); err != nil {
+		fmt.Fprintf(stderr, "Warning: trusted signature not stored (%v)\n", err)
 	}
 	// best-effort pull metric (AMB-8); respects telemetry opt-out env vars
 	reportPull(ctx, app, apiURL, profile, ref.Locator(), unified.Digest)
 	return pullResult{Record: unified, Reference: ref, AlreadyPresent: false}, nil
+}
+
+func fetchAndStoreArtifactTrust(ctx context.Context, app *application.App, registry application.OCIRegistry, ref oci.Reference, digest, apiURL, profile string, stderr io.Writer) error {
+	officialErr := fetchAndStoreOfficialSignature(ctx, app, registry, ref, digest, stderr)
+	if officialErr == nil {
+		return nil
+	}
+	namespaceErr := fetchAndStoreNamespaceSignature(ctx, app, registry, ref, digest, apiURL, profile, stderr)
+	if namespaceErr == nil {
+		return nil
+	}
+	return fmt.Errorf("official: %v; namespace: %v", officialErr, namespaceErr)
 }
 
 func fetchAndStoreOfficialSignature(ctx context.Context, app *application.App, registry application.OCIRegistry, ref oci.Reference, digest string, stderr io.Writer) error {
@@ -267,6 +282,54 @@ func fetchAndStoreOfficialSignature(ctx context.Context, app *application.App, r
 	}
 	if stderr != nil {
 		fmt.Fprintln(stderr, "Official signature verified and stored.")
+	}
+	return nil
+}
+
+func fetchAndStoreNamespaceSignature(ctx context.Context, app *application.App, registry application.OCIRegistry, ref oci.Reference, digest, apiURL, profile string, stderr io.Writer) error {
+	deps := app.Dependencies()
+	if !isHostedNamespaceRegistry(ref.Registry) {
+		return fmt.Errorf("namespace trust is not available from external registry %s", ref.Registry)
+	}
+	auth, ok, err := scopedAuth(deps.Auth, apiURL, profile, deps.RegistryHost)
+	if err != nil {
+		return err
+	}
+	if !ok || strings.TrimSpace(auth.Token) == "" {
+		return fmt.Errorf("namespace trust requires an authenticated profile")
+	}
+	envelopeData, err := registry.GetNamespaceSignatureReferrer(ctx, ref, digest)
+	if err != nil {
+		return err
+	}
+	trustData, err := registry.GetNamespaceTrustReferrer(ctx, ref, digest)
+	if err != nil {
+		return err
+	}
+	if len(envelopeData) == 0 || len(trustData) == 0 {
+		return fmt.Errorf("namespace signature referrers are missing")
+	}
+	envelope, err := namespacesig.ParseEnvelope(envelopeData)
+	if err != nil {
+		return err
+	}
+	bundle, err := namespacesig.ParseTrustBundle(trustData)
+	if err != nil {
+		return err
+	}
+	client := adversarylabs.NewClientWithBaseURL(adversarylabs.ConfigStore{}, apiURL)
+	root, err := client.NamespaceTrustRoot(ctx, auth.Token)
+	if err != nil {
+		return err
+	}
+	if err := namespacesig.Verify(envelope, bundle, ref.Registry, ref.Repository, digest, root); err != nil {
+		return err
+	}
+	if err := deps.Repository.SaveNamespaceSignature(digest, envelopeData, trustData, root); err != nil {
+		return err
+	}
+	if stderr != nil {
+		fmt.Fprintln(stderr, "Team namespace signature verified and stored.")
 	}
 	return nil
 }

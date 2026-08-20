@@ -88,7 +88,7 @@ func (r Runner) Detect(ctx context.Context, opts DetectOptions) (detection.Resul
 	if resolved.Digest == "" && resolved.StoreRecord.Digest != "" {
 		publisher.Digest = resolved.StoreRecord.Digest
 	}
-	publisher = withOfficialSignature(publisher, r.Repository)
+	publisher = withArtifactSignature(publisher, r.Repository)
 	trustPolicy := r.TrustPolicy
 	if trustPolicy == nil {
 		policy := DefaultPublisherTrustPolicy()
