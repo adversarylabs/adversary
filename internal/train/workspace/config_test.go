@@ -89,6 +89,53 @@ sources:
 	}
 }
 
+func TestGitHubEventsDiscoveryValidates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, DefaultConfigName)
+	body := `
+version: 1
+adversaries:
+  path: .
+sources:
+  discovery: clickhouse
+  repos: [acme/api, other/tool]
+  since: 2025-01-01
+  github_events_url: https://mirror.example/
+  github_events_per_repo: 60
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DiscoveryMode() != "github_events" {
+		t.Fatalf("mode=%s", cfg.DiscoveryMode())
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sources.GitHubEventsURL != "https://mirror.example/" || cfg.Sources.GitHubEventsPerRepo != 60 {
+		t.Fatalf("sources=%+v", cfg.Sources)
+	}
+
+	cfg.Sources.GitHubEventsPerRepo = 101
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "github_events_per_repo") {
+		t.Fatalf("limit err=%v", err)
+	}
+	cfg.Sources.GitHubEventsPerRepo = 40
+	cfg.Sources.GitHubEventsURL = "http://mirror.example/"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "HTTPS URL") {
+		t.Fatalf("endpoint err=%v", err)
+	}
+	cfg.Sources.GitHubEventsURL = "https://mirror.example/"
+	cfg.Sources.Since = "last week"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "YYYY-MM-DD") {
+		t.Fatalf("since err=%v", err)
+	}
+}
+
 func TestAuthorReviewsRequiresAuthors(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, DefaultConfigName)

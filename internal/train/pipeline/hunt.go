@@ -77,6 +77,7 @@ func runParallelHunt(
 ) huntOutcome {
 	out := huntOutcome{}
 	concurrency := normalizeConcurrency(opts.Concurrency)
+	githubEventsMode := strings.EqualFold(opts.DiscoveryMode, "github_events")
 
 	if opts.PR > 0 {
 		// Pinned PR stays single-flight (debug path).
@@ -193,11 +194,12 @@ func runParallelHunt(
 	}
 
 	// Feeder: discover one bounded, durable catalog window, then enqueue jobs.
-	// Seen-state filtering still requires one GitHub list request per repository,
-	// so repeatedly refreshing the whole catalog would exhaust core quota before
-	// max-turns can bound PR collection. A per-target cursor lets later runs resume
-	// at the next window while a shared seed staggers different targets' first run.
-	// Collect workers already run up to `concurrency` PRs at once.
+	// The default repo mode spends one GitHub list request per repository. The
+	// github_events mode replaces that wave with one public ClickHouse query, but
+	// selected candidates are still hydrated by the canonical GitHub collector.
+	// A per-target cursor lets later runs resume at the next window while a shared
+	// seed staggers different targets' first run. Collect workers already run up
+	// to `concurrency` PRs at once.
 feedLoop:
 	for {
 		if err := ctx.Err(); err != nil {
@@ -216,7 +218,7 @@ feedLoop:
 			break
 		}
 
-		// Parallel discover: one candidate PR per catalog repo this wave.
+		// Discover one candidate PR per catalog repo this wave.
 		type discHit struct {
 			repo  repos.Repo
 			store *state.DiscoveryStore
@@ -224,75 +226,116 @@ feedLoop:
 			ok    bool
 		}
 		hits := make([]discHit, len(catalogRepos))
-		var discWG sync.WaitGroup
-		sem := make(chan struct{}, concurrency)
-		for i, r := range catalogRepos {
-			discWG.Add(1)
-			go func(i int, r repos.Repo) {
-				defer discWG.Done()
-				if ctx.Err() != nil {
-					return
-				}
-				// Never block forever on the semaphore after Ctrl+C.
-				select {
-				case sem <- struct{}{}:
-					defer func() { <-sem }()
-				case <-ctx.Done():
-					return
-				}
-
+		if githubEventsMode {
+			repoNames := make([]string, 0, len(catalogRepos))
+			for _, r := range catalogRepos {
+				repoNames = append(repoNames, r.FullName())
+			}
+			progress("Querying public GitHub Events mirror for %d repositories…", len(repoNames))
+			foundByRepo, err := collect.DiscoverPRsFromGitHubEvents(repoNames, collect.GitHubEventsOpts{
+				Context:      ctx,
+				Endpoint:     opts.GitHubEventsURL,
+				Since:        opts.AuthorSince,
+				PerRepoLimit: opts.GitHubEventsPerRepo,
+				Client:       opts.GitHubEventsClient,
+			})
+			if err != nil {
+				mu.Lock()
+				out.interrupted = err
+				mu.Unlock()
+				progress("  GitHub Events discovery failed: %v", err)
+				break feedLoop
+			}
+			for i, r := range catalogRepos {
 				store, err := storeFor(r.Owner, r.Name)
 				if err != nil {
+					mu.Lock()
+					out.interrupted = err
+					mu.Unlock()
 					progress("  state error for %s: %v", r.FullName(), err)
-					return
+					break feedLoop
 				}
-				progress("Looking for new PRs in %s (seen %d)…", r.FullName(), len(store.SeenSet()))
-				found, err := collect.DiscoverPRsWithOpts(r.Owner, r.Name, collect.DiscoverOpts{
-					Context: ctx,
-					Limit:   3,
-					Skip:    store.SeenSet(),
-				})
-				if err != nil {
-					if ctx.Err() != nil {
-						return
-					}
-					if collect.IsRateLimit(err) {
-						progress("  rate limited on %s: %v", r.FullName(), err)
-						mu.Lock()
-						if out.interrupted == nil {
-							// Preserve typed RateLimitError for collect.IsRateLimit.
-							out.interrupted = err
-						}
-						mu.Unlock()
-						return
-					}
-					progress("  no new PRs in %s: %v", r.FullName(), err)
-					return
-				}
-				for _, ref := range found {
+				candidates := foundByRepo[r.FullName()]
+				progress("Mirror candidates in %s: %d (seen %d)", r.FullName(), len(candidates), len(store.SeenSet()))
+				for _, ref := range candidates {
 					if store.Seen(ref.Number) {
 						continue
 					}
 					hits[i] = discHit{repo: r, store: store, ref: ref, ok: true}
-					return
+					break
 				}
-			}(i, r)
-		}
-		// Wait for discover wave, but don't hang if something ignored cancel.
-		discDone := make(chan struct{})
-		go func() {
-			discWG.Wait()
-			close(discDone)
-		}()
-		select {
-		case <-discDone:
-		case <-ctx.Done():
-			progress("interrupted — stopping discover wave…")
-			<-discDone // still wait for goroutines to release after gh kill
-			mu.Lock()
-			out.interrupted = fmt.Errorf("train interrupted: %w", ctx.Err())
-			mu.Unlock()
-			break feedLoop
+			}
+		} else {
+			var discWG sync.WaitGroup
+			sem := make(chan struct{}, concurrency)
+			for i, r := range catalogRepos {
+				discWG.Add(1)
+				go func(i int, r repos.Repo) {
+					defer discWG.Done()
+					if ctx.Err() != nil {
+						return
+					}
+					// Never block forever on the semaphore after Ctrl+C.
+					select {
+					case sem <- struct{}{}:
+						defer func() { <-sem }()
+					case <-ctx.Done():
+						return
+					}
+
+					store, err := storeFor(r.Owner, r.Name)
+					if err != nil {
+						progress("  state error for %s: %v", r.FullName(), err)
+						return
+					}
+					progress("Looking for new PRs in %s (seen %d)…", r.FullName(), len(store.SeenSet()))
+					found, err := collect.DiscoverPRsWithOpts(r.Owner, r.Name, collect.DiscoverOpts{
+						Context: ctx,
+						Limit:   3,
+						Skip:    store.SeenSet(),
+					})
+					if err != nil {
+						if ctx.Err() != nil {
+							return
+						}
+						if collect.IsRateLimit(err) {
+							progress("  rate limited on %s: %v", r.FullName(), err)
+							mu.Lock()
+							if out.interrupted == nil {
+								// Preserve typed RateLimitError for collect.IsRateLimit.
+								out.interrupted = err
+							}
+							mu.Unlock()
+							return
+						}
+						progress("  no new PRs in %s: %v", r.FullName(), err)
+						return
+					}
+					for _, ref := range found {
+						if store.Seen(ref.Number) {
+							continue
+						}
+						hits[i] = discHit{repo: r, store: store, ref: ref, ok: true}
+						return
+					}
+				}(i, r)
+			}
+			// Wait for discover wave, but don't hang if something ignored cancel.
+			discDone := make(chan struct{})
+			go func() {
+				discWG.Wait()
+				close(discDone)
+			}()
+			select {
+			case <-discDone:
+			case <-ctx.Done():
+				progress("interrupted — stopping discover wave…")
+				<-discDone // still wait for goroutines to release after gh kill
+				mu.Lock()
+				out.interrupted = fmt.Errorf("train interrupted: %w", ctx.Err())
+				mu.Unlock()
+				break feedLoop
+			}
 		}
 
 		// If any discover hit rate limit, stop the whole hunt (results already saved).

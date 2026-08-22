@@ -152,7 +152,39 @@ seed staggers the first window assigned to each adversary. This keeps
 sequential package-specific runs from refreshing the full catalog—and spending
 one GitHub core request per repository—before the PR-attempt limit applies.
 
-### B) Train from a reviewer’s history (no repo list)
+### B) Batch discovery from the public GitHub Events mirror
+
+For large public-repository catalogs, use ClickHouse's read-only GH Archive
+mirror to replace the per-repository GitHub list requests with one query:
+
+```yaml
+sources:
+  host: github.com
+  discovery: github_events
+  repos:
+    - kubernetes/kubernetes
+    - grafana/grafana
+  since: "2025-01-01"       # optional; defaults to one year
+  # github_events_url: https://sql-clickhouse.clickhouse.com/
+  # github_events_per_repo: 40  # default 40, maximum 100
+```
+
+The mirror is used only to select merged PR numbers with review activity. It
+is not accepted as human gold or canonical PR state. Every selected candidate
+still goes through the normal GitHub collector, which retrieves and caches the
+pull request, complete reviews, inline comments and replies before routing or
+grading. Exact source still comes from Git.
+
+The public playground is read-only, updated independently, and quota-limited.
+It may be stale or return incomplete results under service limits. Transport,
+quota, timeout, malformed-response, and cancellation failures stop discovery;
+train never silently falls back to one GitHub list request per repository.
+Absence from the mirror is not recorded as a negative result. Pinned PR mode
+continues to bypass discovery and can be used when a known PR is missing.
+Use an explicit `sources.repos` list to avoid discovery-time GitHub calls
+entirely; `sources.org` still requires one GitHub request to expand the org.
+
+### C) Train from a reviewer’s history (no repo list)
 
 ```yaml
 sources:
@@ -204,7 +236,8 @@ adversary train run --reset-discovery
 
 What happens:
 
-1. Select the next target first in cycle mode, then discover PRs from config (repos or author_reviews).
+1. Select the next target first in cycle mode, then discover PRs from config
+   (`repos`, `github_events`, or `author_reviews`).
 2. Collect human review comments (gold).  
 3. Route each comment to the single best matching local package, or none.
 4. Run the selected local packages (and optional official jury) against the change.

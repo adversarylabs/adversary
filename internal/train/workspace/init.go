@@ -39,7 +39,13 @@ official:
 # History sources — pick one style:
 #
 # A) Repo catalog (default): list repos to hunt
-# B) Author reviews: no repo list; GitHub search for PRs they reviewed
+# B) Public GitHub Events mirror: batch-discover candidates for the repo catalog,
+#    then hydrate selected PRs from GitHub for canonical review evidence
+#    discovery: github_events
+#    since: 2025-01-01
+#    # github_events_url: https://sql-clickhouse.clickhouse.com/
+#    # github_events_per_repo: 40
+# C) Author reviews: no repo list; GitHub search for PRs they reviewed
 #    discovery: author_reviews
 #    authors_only: [mitchellh]
 #    # orgs: [hashicorp]   # optional bound

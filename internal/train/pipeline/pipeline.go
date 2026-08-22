@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -97,8 +98,14 @@ type Options struct {
 	// AuthorsOnly / AuthorsIgnore filter gold authors (from train config).
 	AuthorsOnly   []string
 	AuthorsIgnore []string
-	// DiscoveryMode: "repos" (default) or "author_reviews".
+	// DiscoveryMode: "repos" (default), "github_events", or "author_reviews".
 	DiscoveryMode string
+	// GitHubEventsURL is the optional public ClickHouse mirror endpoint.
+	GitHubEventsURL string
+	// GitHubEventsPerRepo bounds candidates returned per catalog repository.
+	GitHubEventsPerRepo int
+	// GitHubEventsClient is injectable for hermetic pipeline tests.
+	GitHubEventsClient *http.Client
 	// AuthorRoles for author_reviews: reviewed-by, commenter, author.
 	AuthorRoles []string
 	// AuthorOrgs bounds author search (--owner).
@@ -413,13 +420,19 @@ func Run(opts Options) (*Result, error) {
 				return out, nil // soft stop: keep partial results
 			}
 			if out.Blocked == nil {
+				dependency := "github-api"
+				nextAction := "raise --max-turns, pass --pr N, expand config/repositories.json, or --reset-discovery"
+				if opts.DiscoveryMode == "github_events" {
+					dependency = "github-events-mirror"
+					nextAction = "widen sources.since, raise sources.github_events_per_repo, pass --pr N, or continue to the next catalog window"
+				}
 				out.Blocked = &dataroot.BlockedResult{
-					Dependency:     "github-api",
+					Dependency:     dependency,
 					Operation:      "collect",
 					Classification: "missing-source",
 					SanitizedError: fmt.Sprintf("no usable cases after %d turn(s); hunt: %s",
 						hunt.turnsUsed, strings.Join(huntLog, "; ")),
-					NextAction: "raise --max-turns, pass --pr N, expand config/repositories.json, or --reset-discovery",
+					NextAction: nextAction,
 					RetrySafe:  true,
 				}
 			}
