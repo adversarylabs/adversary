@@ -15,10 +15,12 @@ const (
 	ReadmeMediaType = "application/vnd.adversarylabs.readme.v1+markdown"
 	ChecksMediaType = "application/vnd.adversarylabs.checks.v1+markdown"
 	// OfficialSignatureMediaType is the OCI referrer/blob type for official catalog signatures.
-	OfficialSignatureMediaType = "application/vnd.adversarylabs.official-signature.v1+json"
-	EmptyConfigMediaType       = "application/vnd.adversarylabs.adversary.config.v1+json"
-	ArtifactMediaType          = "application/vnd.adversarylabs.adversary.manifest.v1+json"
-	PackageLayerMediaType      = "application/vnd.adversarylabs.adversary.layer.v1.tar+gzip"
+	OfficialSignatureMediaType  = "application/vnd.adversarylabs.official-signature.v1+json"
+	NamespaceSignatureMediaType = "application/vnd.adversarylabs.namespace-signature.v1+json"
+	NamespaceTrustMediaType     = "application/vnd.adversarylabs.namespace-trust.v1+json"
+	EmptyConfigMediaType        = "application/vnd.adversarylabs.adversary.config.v1+json"
+	ArtifactMediaType           = "application/vnd.adversarylabs.adversary.manifest.v1+json"
+	PackageLayerMediaType       = "application/vnd.adversarylabs.adversary.layer.v1.tar+gzip"
 )
 
 type Manifest struct {

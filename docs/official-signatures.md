@@ -1,4 +1,4 @@
-# Official catalog signatures
+# Artifact signatures
 
 ## Model
 
@@ -15,6 +15,23 @@ binary**.
 | Who signs | CI / local tooling with `ADVERSARY_OFFICIAL_SIGNING_SEED` |
 
 Public keys are committed and compiled in. Private seeds are never committed.
+
+## Private team namespace signatures
+
+`adversary push` automatically requests a server-side signature when the target
+is the authenticated team's private namespace on the configured Adversary Labs
+registry. The platform returns a digest signature and a root-endorsed public
+team key; the publisher attaches both as OCI referrers. No private key leaves
+the platform.
+
+On pull, the CLI fetches the authenticated platform root, verifies the team
+delegation, and then verifies that the signature matches the registry hostname,
+exact `team/repository`, and immutable digest. The verified evidence is cached
+for offline execution of that digest. A copy on GHCR does not match the signed
+registry and remains untrusted.
+
+This establishes authorized team provenance and artifact integrity. It does not
+mean Adversary Labs reviewed the package's code.
 
 ## Dev vs prod keys (separate binaries)
 

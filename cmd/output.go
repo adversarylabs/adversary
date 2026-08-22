@@ -197,9 +197,11 @@ type packCheckDTO struct {
 	Warnings []packWarningDTO `json:"warnings"`
 }
 type pushDTO struct {
-	CanonicalReference string `json:"canonicalReference"`
-	Digest             string `json:"digest"`
-	ManifestDigest     string `json:"manifestDigest"`
+	CanonicalReference       string `json:"canonicalReference"`
+	Digest                   string `json:"digest"`
+	ManifestDigest           string `json:"manifestDigest"`
+	NamespaceSignatureDigest string `json:"namespaceSignatureDigest,omitempty"`
+	NamespaceTrustDigest     string `json:"namespaceTrustDigest,omitempty"`
 }
 type pullDTO struct {
 	Name               string `json:"name"`

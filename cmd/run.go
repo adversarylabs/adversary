@@ -251,7 +251,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "print detailed execution diagnostics")
 	cmd.Flags().BoolVar(&opts.includeSuppressed, "include-suppressed", false, "request suppressed review findings when supported by the runtime")
 	cmd.Flags().BoolVar(&opts.shell, "shell", false, "UNSAFE: launch an unrestricted host shell in the adversary working directory")
-	cmd.Flags().BoolVar(&opts.allowUnsafeHostExecution, "allow-unsafe-host-execution", false, "allow host execution of an untrusted adversary (no valid official signature); on a TTY you can also confirm interactively")
+	cmd.Flags().BoolVar(&opts.allowUnsafeHostExecution, "allow-unsafe-host-execution", false, "allow host execution of an untrusted adversary (no valid artifact signature); on a TTY you can also confirm interactively")
 	cmd.Flags().BoolVar(&opts.allFiles, "all-files", false, "scan the entire target instead of inferring a change")
 	cmd.Flags().BoolVar(&opts.all, "all", false, "with no adversary refs: run every available adversary without detection filtering")
 	cmd.Flags().BoolVar(&opts.noPull, "no-pull", false, "with no adversary refs: do not pull remote adversaries; use only the local store")

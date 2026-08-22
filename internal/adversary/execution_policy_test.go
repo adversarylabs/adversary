@@ -253,6 +253,9 @@ func TestDefaultPublisherTrustPolicy(t *testing.T) {
 	if got := policy.Evaluate(PublisherIdentity{Name: "go", Registry: oci.DefaultRegistry, OfficialSigned: true}).Trust; got != TrustedPublisherTrust {
 		t.Fatalf("signed trust=%q want trusted", got)
 	}
+	if got := policy.Evaluate(PublisherIdentity{Name: "team", Registry: oci.DefaultRegistry, NamespaceSigned: true}).Trust; got != TrustedPublisherTrust {
+		t.Fatalf("namespace signed trust=%q want trusted", got)
+	}
 	if got := policy.Evaluate(PublisherIdentity{Name: "anything", Local: true}).Trust; got != LocalSourceTrust {
 		t.Fatalf("local trust=%q", got)
 	}

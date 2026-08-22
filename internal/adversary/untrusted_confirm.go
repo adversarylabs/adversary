@@ -38,7 +38,7 @@ func confirmUntrustedHostExecution(ctx context.Context, stdin io.Reader, stderr 
 	}
 	fmt.Fprintf(stderr, `
 
-No valid official signature is available for this package. Host execution will
+No valid artifact signature is available for this package. Host execution will
 run unrestricted code with your user privileges (filesystem, network, etc.).
 
 Run anyway? [y/N] `)
