@@ -64,3 +64,35 @@ func TestNormalizePath(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestProjectFindingsCanOmitAggregateSummary(t *testing.T) {
+	line := 3
+	env := review.RunEnvelope{Result: review.ReviewResult{
+		Adversary:  review.ReviewAdversary{Name: "reviewer"},
+		Assessment: &review.Assessment{Risk: "high", Summary: "aggregate assessment"},
+		Opinion:    &review.Opinion{Summary: "aggregate opinion"},
+		Findings: []review.Finding{{
+			ID: "f", Title: "Finding", Severity: "high", Confidence: "high",
+			Summary: "inline detail", Evidence: []review.Evidence{{File: "a.go", Line: &line}},
+		}},
+	}}
+	plan := ProjectFindings([]NamedEnvelope{{Adversary: "reviewer", Envelope: env}}, ProjectOptions{OmitSummary: true})
+	if plan.ReviewBody != "" {
+		t.Fatalf("review body = %q", plan.ReviewBody)
+	}
+	if len(plan.Comments) != 1 || !strings.Contains(plan.Comments[0].Body, "inline detail") {
+		t.Fatalf("comments = %#v", plan.Comments)
+	}
+}
+
+func TestProjectFindingsDoesNotSummarizeCleanAdversaries(t *testing.T) {
+	env := review.RunEnvelope{Result: review.ReviewResult{
+		Adversary:  review.ReviewAdversary{Name: "clean"},
+		Assessment: &review.Assessment{Risk: "none", Summary: "No material concerns."},
+		Opinion:    &review.Opinion{Summary: "I would merge this as-is."},
+	}}
+	plan := ProjectFindings([]NamedEnvelope{{Adversary: "clean", Envelope: env}}, ProjectOptions{})
+	if len(plan.Comments) != 0 || plan.ReviewBody != "" {
+		t.Fatalf("clean result created review content: %#v", plan)
+	}
+}

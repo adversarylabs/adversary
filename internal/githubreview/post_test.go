@@ -92,6 +92,49 @@ func TestPostCreatesPendingReview(t *testing.T) {
 	}
 }
 
+func TestPostInlineOnlyReviewOmitsBody(t *testing.T) {
+	var addInput map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/files") {
+			_, _ = w.Write([]byte(`[{"filename":"a.go","patch":"@@ -1,1 +1,2 @@\n keep\n+added\n"}]`))
+			return
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		switch {
+		case strings.Contains(payload.Query, "pullRequest(number"):
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"id":"PR_1","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","url":"https://github.com/o/r/pull/1"}}}}`))
+		case strings.Contains(payload.Query, "addPullRequestReview"):
+			addInput, _ = payload.Variables["input"].(map[string]any)
+			_, _ = w.Write([]byte(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"RV_1","url":"https://github.com/o/r/pull/1#pullrequestreview-1","state":"PENDING"}}}}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := githubapi.NewClient("tok")
+	client.HTTP = srv.Client()
+	client.RESTBase = srv.URL
+	client.GQLURL = srv.URL + "/"
+	line := 2
+	_, err := Post(context.Background(), CommentPlan{Comments: []PlannedComment{{
+		FindingID: "f", Title: "Finding", Severity: "high", Body: "inline body",
+		Placement: "inline", Anchor: Anchor{Path: "a.go", Line: &line},
+	}}}, PostOptions{Client: client, Owner: "o", Repo: "r", Number: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := addInput["body"]; ok {
+		t.Fatalf("inline-only review unexpectedly included body: %#v", addInput)
+	}
+}
+
 func TestWritePlanFile(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/plan.json"

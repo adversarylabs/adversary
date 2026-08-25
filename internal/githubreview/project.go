@@ -14,6 +14,7 @@ type ProjectOptions struct {
 	PullRequest int
 	MinSeverity string // empty = all
 	Voice       VoiceInfo
+	OmitSummary bool // keep inline/body findings but omit aggregate assessment/opinion
 }
 
 // ProjectFindings builds a CommentPlan from one or more run envelopes.
@@ -38,27 +39,11 @@ func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan
 		minRank = SeverityRank(plan.MinSeverity)
 	}
 
-	var assessmentBits []string
 	for _, ne := range envelopes {
 		res := ne.Envelope.Result
 		adv := strings.TrimSpace(ne.Adversary)
 		if adv == "" {
 			adv = res.Adversary.Name
-		}
-		if res.Assessment != nil {
-			bit := strings.TrimSpace(res.Assessment.Risk)
-			if res.Assessment.Summary != "" {
-				if bit != "" {
-					bit += ": "
-				}
-				bit += strings.TrimSpace(res.Assessment.Summary)
-			}
-			if bit != "" {
-				assessmentBits = append(assessmentBits, fmt.Sprintf("[%s] %s", adv, bit))
-			}
-		}
-		if res.Opinion != nil && strings.TrimSpace(res.Opinion.Summary) != "" {
-			assessmentBits = append(assessmentBits, fmt.Sprintf("[%s] %s", adv, strings.TrimSpace(res.Opinion.Summary)))
 		}
 		for _, f := range res.Findings {
 			plan.Summary.FindingsSeen++
@@ -73,8 +58,8 @@ func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan
 		}
 	}
 
-	if len(assessmentBits) > 0 {
-		plan.ReviewBody = strings.Join(assessmentBits, "\n\n")
+	if !opts.OmitSummary && len(plan.Comments) > 0 {
+		plan.ReviewBody = TemplateSummary(plan.Comments)
 	}
 	plan.Summary.Comments = len(plan.Comments)
 	plan.Summary.Skipped = len(plan.Skipped)
@@ -89,6 +74,40 @@ func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan
 		}
 	}
 	return plan
+}
+
+// TemplateSummary is the deterministic fallback when no model provider is
+// available. It includes only actionable findings, never clean-run opinions.
+func TemplateSummary(comments []PlannedComment) string {
+	if len(comments) == 0 {
+		return ""
+	}
+	counts := map[string]int{}
+	for _, comment := range comments {
+		counts[strings.ToLower(strings.TrimSpace(comment.Severity))]++
+	}
+	var countBits []string
+	for _, severity := range []string{"critical", "high", "medium", "low", "info"} {
+		if count := counts[severity]; count > 0 {
+			countBits = append(countBits, fmt.Sprintf("%d %s", count, severity))
+		}
+	}
+	var body strings.Builder
+	fmt.Fprintf(&body, "Adversary found %d actionable issue", len(comments))
+	if len(comments) != 1 {
+		body.WriteString("s")
+	}
+	if len(countBits) > 0 {
+		fmt.Fprintf(&body, " (%s)", strings.Join(countBits, ", "))
+	}
+	body.WriteString(":\n")
+	for _, comment := range comments {
+		fmt.Fprintf(&body, "\n- **%s** %s", strings.ToLower(comment.Severity), comment.Title)
+		if comment.Adversary != "" {
+			fmt.Fprintf(&body, " — `%s`", comment.Adversary)
+		}
+	}
+	return body.String()
 }
 
 func projectOne(adversary string, f review.Finding) PlannedComment {

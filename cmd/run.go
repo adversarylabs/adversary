@@ -56,15 +56,16 @@ type runOptions struct {
 	repoIndex                string
 
 	// GitHub review (opt-in posting / plan).
-	githubReview      bool
-	githubDryRun      bool
-	githubPlanFile    string
-	githubPR          int
-	githubRepo        string
-	githubSubmit      bool
-	githubMinSeverity string
-	githubAPIURL      string
-	githubRESTURL     string
+	githubReview         bool
+	githubDryRun         bool
+	githubPlanFile       string
+	githubPR             int
+	githubRepo           string
+	githubSubmit         bool
+	githubIncludeSummary bool
+	githubMinSeverity    string
+	githubAPIURL         string
+	githubRESTURL        string
 
 	// Filled by peel/resolve.
 	prURL           *githubapi.PRRef
@@ -136,7 +137,7 @@ review base/head and optional posting context. Posting still requires
 				return fmt.Errorf("--github-review cannot be combined with --shell")
 			}
 			if !opts.githubReview {
-				if opts.githubDryRun || opts.githubPlanFile != "" || opts.githubSubmit || opts.githubMinSeverity != "" {
+				if opts.githubDryRun || opts.githubPlanFile != "" || opts.githubSubmit || cmd.Flags().Changed("github-include-summary") || opts.githubMinSeverity != "" {
 					return fmt.Errorf("GitHub review flags require --github-review")
 				}
 				if cmd.Flags().Changed("github-pr") || cmd.Flags().Changed("github-repo") {
@@ -275,6 +276,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().IntVar(&opts.githubPR, "github-pr", 0, "pull request number for posting")
 	cmd.Flags().StringVar(&opts.githubRepo, "github-repo", "", "owner/name repository for posting")
 	cmd.Flags().BoolVar(&opts.githubSubmit, "github-submit", false, "submit the review as informational COMMENT (default leaves pending)")
+	cmd.Flags().BoolVar(&opts.githubIncludeSummary, "github-include-summary", true, "include the aggregate assessment and opinion in the review body")
 	cmd.Flags().StringVar(&opts.githubMinSeverity, "github-min-severity", "", "only plan/post findings at this severity or higher")
 	cmd.Flags().StringVar(&opts.githubAPIURL, "github-api-url", "", "GraphQL endpoint override (default https://api.github.com/graphql)")
 	cmd.Flags().StringVar(&opts.githubRESTURL, "github-rest-url", "", "REST API base override (default https://api.github.com)")

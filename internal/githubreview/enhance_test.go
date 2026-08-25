@@ -14,9 +14,10 @@ type fakeProvider struct {
 	name  string
 	model string
 	// bodies maps finding id -> rewrite body (JSON object without outer schema wrap handled by Review)
-	bodies map[string]string
-	calls  int
-	fail   bool
+	bodies      map[string]string
+	summaryBody string
+	calls       int
+	fail        bool
 }
 
 func (f *fakeProvider) Name() string  { return f.name }
@@ -26,6 +27,10 @@ func (f *fakeProvider) Review(_ context.Context, req modelreview.Request) (model
 	f.calls++
 	if f.fail {
 		return modelreview.Result{}, &modelreview.ProviderError{Code: "fail", Message: "provider down"}
+	}
+	if strings.Contains(req.Prompt, "aggregate summary") {
+		out, _ := json.Marshal(map[string]string{"body": f.summaryBody})
+		return modelreview.Result{Output: out}, nil
 	}
 	// Rewrite prompt always wraps package/CLI voice with the CLI task preamble.
 	if !strings.Contains(req.Prompt, "CLI comment rewrite task") {
@@ -47,6 +52,21 @@ func (f *fakeProvider) Review(_ context.Context, req modelreview.Request) (model
 	}
 	out, _ := json.Marshal(map[string]string{"body": body})
 	return modelreview.Result{Output: out}, nil
+}
+
+func TestEnhanceSummarySynthesizesActualFindings(t *testing.T) {
+	plan := CommentPlan{
+		ReviewBody: "deterministic fallback",
+		Comments: []PlannedComment{
+			{FindingID: "one", Adversary: "ci/depot", Severity: "high", Title: "Pin actions", Body: "Pin mutable actions."},
+			{FindingID: "two", Adversary: "go/security", Severity: "medium", Title: "Validate input", Body: "Validate the request."},
+		},
+	}
+	provider := &fakeProvider{summaryBody: "Pin the privileged actions first, then validate the request boundary."}
+	EnhanceSummary(context.Background(), &plan, EnhanceOptions{Provider: provider})
+	if !strings.Contains(plan.ReviewBody, "Pin the privileged actions first") {
+		t.Fatalf("summary = %q", plan.ReviewBody)
+	}
 }
 
 func TestEnhanceBodiesUsesProviderAndSetsLLMSource(t *testing.T) {

@@ -21,6 +21,12 @@ const bodyOutputSchema = `{
   }
 }`
 
+const summaryPrompt = `You write the aggregate summary for an automated pull-request review.
+Synthesize only the supplied findings into a concise, actionable summary. Lead with the
+highest-priority remediation, group overlapping findings, and mention meaningful risk.
+Do not report clean checks, repeat "merge as-is" opinions, praise the repository, or add
+generic process advice. Use at most 150 words. Return JSON matching the supplied schema.`
+
 // EnhanceOptions controls LLM comment rewrite.
 type EnhanceOptions struct {
 	Provider modelreview.Provider
@@ -68,6 +74,52 @@ func EnhanceBodies(ctx context.Context, plan *CommentPlan, opts EnhanceOptions) 
 		c.BodySource = "llm"
 		enhanced++
 	}
+}
+
+// EnhanceSummary replaces the deterministic findings-only summary with one
+// cross-adversary synthesis. Missing providers and model failures preserve the
+// deterministic fallback; an empty plan never produces a summary.
+func EnhanceSummary(ctx context.Context, plan *CommentPlan, opts EnhanceOptions) {
+	if plan == nil || opts.Provider == nil || strings.TrimSpace(plan.ReviewBody) == "" || len(plan.Comments) == 0 {
+		return
+	}
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	input, err := json.Marshal(map[string]any{
+		"findings": plan.Comments,
+		"fallback": plan.ReviewBody,
+	})
+	if err != nil {
+		return
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result, err := opts.Provider.Review(reqCtx, modelreview.Request{
+		ProtocolVersion: modelreview.ProtocolVersion,
+		Prompt:          summaryPrompt,
+		Input:           input,
+		Schema:          json.RawMessage(bodyOutputSchema),
+		Budget: modelreview.Budget{
+			MaximumOutputTokens: 512,
+			TimeoutMS:           int(timeout / time.Millisecond),
+		},
+	})
+	if err != nil {
+		return
+	}
+	var out struct {
+		Body string `json:"body"`
+	}
+	if json.Unmarshal(result.Output, &out) != nil {
+		return
+	}
+	body := strings.TrimSpace(out.Body)
+	if body == "" || len(body) > 8<<10 {
+		return
+	}
+	plan.ReviewBody = body
 }
 
 func rewriteOne(
