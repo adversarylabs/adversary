@@ -92,9 +92,12 @@ reading other repository files through its normal SDK APIs.
 
 Local source adversaries run directly with `HostExecutor` for a fast development
 loop. Installed adversaries may use the host backend when an **official
-signature** verifies for their content digest (Ed25519; public key embedded in
-the CLI). See [official signatures](docs/official-signatures.md). Path names and
-registry hostnames alone do not grant trust.
+signature** verifies, or when a hosted private package has a valid
+platform-delegated team signature for its registry, exact repository, and
+content digest. See [artifact signatures](docs/official-signatures.md). Private
+publishes to the Adversary Labs registry are signed automatically; external
+copies such as GHCR remain untrusted. Path names and registry hostnames alone do
+not grant trust.
 Unknown publishers require a sandbox backend or `--allow-unsafe-host-execution`; that explicit
 override is not isolation. Manifest permissions are advisory by default;
 `permissions.enforcement: required` and `--no-network` fail before launch when

@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/adversarylabs/adversary/pkg/namespacesig"
 )
 
 type Client struct {
@@ -279,6 +281,41 @@ func (c Client) RecordPull(ctx context.Context, token, reference, digest string)
 		payload["digest"] = digest
 	}
 	return c.postJSON(ctx, "/v1/registry/pull", payload, token, nil)
+}
+
+func (c Client) SignNamespaceDigest(ctx context.Context, token, repository, digest string) (namespacesig.SigningResult, error) {
+	var out namespacesig.SigningResult
+	err := c.postJSON(ctx, "/v1/registry/sign", map[string]string{
+		"repository": strings.TrimSpace(repository),
+		"digest":     strings.TrimSpace(digest),
+	}, token, &out)
+	return out, err
+}
+
+func (c Client) NamespaceTrustRoot(ctx context.Context, token string) (namespacesig.Root, error) {
+	if _, err := validateBaseURL(c.BaseURL); err != nil {
+		return namespacesig.Root{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/registry/sign/root", nil)
+	if err != nil {
+		return namespacesig.Root{}, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return namespacesig.Root{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return namespacesig.Root{}, fmt.Errorf("namespace trust root request failed: %s", resp.Status)
+	}
+	var out namespacesig.Root
+	if err := decodeLimited(resp.Body, &out); err != nil {
+		return namespacesig.Root{}, err
+	}
+	return out, nil
 }
 
 // RecordUsage posts a sanitized CLI usage event (CLI version + adversary selection).

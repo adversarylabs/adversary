@@ -72,6 +72,20 @@ func (r *HTTPRegistry) GetOfficialSignatureReferrer(ctx context.Context, ref Ref
 	return data, nil
 }
 
+// GetNamespaceSignatureReferrer fetches a private namespace signature envelope.
+func (r *HTTPRegistry) GetNamespaceSignatureReferrer(ctx context.Context, ref Reference, imageDigest string) ([]byte, error) {
+	ctx, cancel := withOperationDeadline(ctx)
+	defer cancel()
+	return r.getAttachedReferrerBlob(ctx, ref, imageDigest, NamespaceSignatureMediaType, "namespace-signature")
+}
+
+// GetNamespaceTrustReferrer fetches the platform-endorsed namespace public key.
+func (r *HTTPRegistry) GetNamespaceTrustReferrer(ctx context.Context, ref Reference, imageDigest string) ([]byte, error) {
+	ctx, cancel := withOperationDeadline(ctx)
+	defer cancel()
+	return r.getAttachedReferrerBlob(ctx, ref, imageDigest, NamespaceTrustMediaType, "namespace-trust")
+}
+
 // getAttachedReferrerBlob loads a single-blob referrer of the given artifact type.
 func (r *HTTPRegistry) getAttachedReferrerBlob(ctx context.Context, ref Reference, imageDigest, artifactType, tagKind string) ([]byte, error) {
 	req, err := r.newRequest(ctx, http.MethodGet, ref, "/referrers/"+imageDigest+"?artifactType="+url.QueryEscape(artifactType), nil)
@@ -405,7 +419,7 @@ func isImageManifestMediaType(value string) bool {
 
 func allowedAttachmentBlobMediaType(mediaType string) bool {
 	switch mediaType {
-	case AdversaryManifestMediaType, ReadmeMediaType, ChecksMediaType, OfficialSignatureMediaType:
+	case AdversaryManifestMediaType, ReadmeMediaType, ChecksMediaType, OfficialSignatureMediaType, NamespaceSignatureMediaType, NamespaceTrustMediaType:
 		return true
 	default:
 		return false

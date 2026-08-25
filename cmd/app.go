@@ -478,6 +478,14 @@ func (r processOCIRegistry) GetOfficialSignatureReferrer(ctx context.Context, re
 	v, e := r.HTTPRegistry.GetOfficialSignatureReferrer(ctx, ref, imageDigest)
 	return v, networkError("OCI official signature pull", e)
 }
+func (r processOCIRegistry) GetNamespaceSignatureReferrer(ctx context.Context, ref oci.Reference, imageDigest string) ([]byte, error) {
+	v, e := r.HTTPRegistry.GetNamespaceSignatureReferrer(ctx, ref, imageDigest)
+	return v, networkError("OCI namespace signature pull", e)
+}
+func (r processOCIRegistry) GetNamespaceTrustReferrer(ctx context.Context, ref oci.Reference, imageDigest string) ([]byte, error) {
+	v, e := r.HTTPRegistry.GetNamespaceTrustReferrer(ctx, ref, imageDigest)
+	return v, networkError("OCI namespace trust pull", e)
+}
 
 type processAuthStore struct{ adversarylabs.ConfigStore }
 

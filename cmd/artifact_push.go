@@ -150,12 +150,21 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 			}
 		}
 	}
+	namespaceSignature, err := attachHostedNamespaceSignature(ctx, app, registry, ref, digest, apiURL, profile, stderr)
+	if err != nil {
+		return true, err
+	}
 
 	if err := registerExactRef(resolver, ref.Locator(), digest); err != nil {
 		return true, err
 	}
 	if format == "json" {
-		return true, writeJSON(stdout, "push", pushDTO{ref.Locator(), digest, artifactDigest})
+		result := pushDTO{CanonicalReference: ref.Locator(), Digest: digest, ManifestDigest: artifactDigest}
+		if namespaceSignature != nil {
+			result.NamespaceSignatureDigest = namespaceSignature.SignatureDigest
+			result.NamespaceTrustDigest = namespaceSignature.TrustDigest
+		}
+		return true, writeJSON(stdout, "push", result)
 	}
 	fmt.Fprintf(stdout, "Canonical reference: %s\nImage digest\n\n%s\nDigest: %s\nPublished adversary manifest referrer\n\n%s\n", ref.Locator(), digest, digest, artifactDigest)
 	return true, nil

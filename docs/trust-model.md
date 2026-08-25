@@ -14,13 +14,15 @@ silently weaken a mandatory permission.
 It is the default for explicit local source projects, which are trusted by the
 developer's direct path selection and run without a warning or unsafe flag. It
 is also acceptable for installed artifacts that carry a **verified official
-signature** (Ed25519 over the content digest; public key embedded in the CLI).
-See [official signatures](official-signatures.md). Path allowlists and registry
+signature** or a hosted private artifact whose platform-delegated team
+signature matches the registry, exact repository, and digest. See
+[artifact signatures](official-signatures.md). Path allowlists and registry
 hostnames alone do not grant trust. Trusted remote execution reports the
 publisher, immutable digest, and selected backend without an alarm-style
 warning. Team membership is not inferred from publisher names.
 
-Installed artifacts without a valid official signature are **untrusted**. Host
+Installed artifacts without a valid official or namespace signature are
+**untrusted**. Host
 execution is blocked unless the user passes `--allow-unsafe-host-execution` or
 confirms interactively on a TTY. The override prints an explicit warning with
 the adversary identity and runs as an unrestricted host process. Mutable remote

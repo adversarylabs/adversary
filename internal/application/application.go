@@ -14,6 +14,7 @@ import (
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/namespacesig"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -94,6 +95,8 @@ type OCIRegistry interface {
 	// GetOfficialSignatureReferrer returns the official signature envelope for
 	// imageDigest, or nil when none is present.
 	GetOfficialSignatureReferrer(context.Context, oci.Reference, string) ([]byte, error)
+	GetNamespaceSignatureReferrer(context.Context, oci.Reference, string) ([]byte, error)
+	GetNamespaceTrustReferrer(context.Context, oci.Reference, string) ([]byte, error)
 	Resolve(context.Context, oci.Reference) (string, error)
 	SetPlainHTTP(bool)
 }
@@ -112,6 +115,8 @@ type Repository interface {
 	ReferenceEntries() ([]repository.Entry, error)
 	SaveOfficialSignature(digest string, envelope []byte) error
 	HasVerifiedOfficialSignature(digest string) bool
+	SaveNamespaceSignature(digest string, envelope, trustBundle []byte, root namespacesig.Root) error
+	HasVerifiedNamespaceSignature(digest, registry, repository string) bool
 	MigrationStatus(string) (repository.MigrationStatus, error)
 	LeaseMaterialized(repository.Record) (*repository.MaterializationLease, error)
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
+	"github.com/adversarylabs/adversary/pkg/namespacesig"
 	"github.com/adversarylabs/adversary/pkg/oci"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -111,6 +112,12 @@ func (fakeOCIRegistry) PushAttachedReferrer(context.Context, oci.Reference, stri
 func (fakeOCIRegistry) GetOfficialSignatureReferrer(context.Context, oci.Reference, string) ([]byte, error) {
 	return nil, nil
 }
+func (fakeOCIRegistry) GetNamespaceSignatureReferrer(context.Context, oci.Reference, string) ([]byte, error) {
+	return nil, nil
+}
+func (fakeOCIRegistry) GetNamespaceTrustReferrer(context.Context, oci.Reference, string) ([]byte, error) {
+	return nil, nil
+}
 func (fakeOCIRegistry) SetPlainHTTP(bool) {}
 
 type fakeRegistryFactory struct{}
@@ -149,6 +156,10 @@ func (fakeRepo) ReferenceEntries() ([]repository.Entry, error) {
 }
 func (fakeRepo) SaveOfficialSignature(string, []byte) error { return nil }
 func (fakeRepo) HasVerifiedOfficialSignature(string) bool   { return false }
+func (fakeRepo) SaveNamespaceSignature(string, []byte, []byte, namespacesig.Root) error {
+	return nil
+}
+func (fakeRepo) HasVerifiedNamespaceSignature(string, string, string) bool { return false }
 func (fakeRepo) MigrationStatus(string) (repository.MigrationStatus, error) {
 	return repository.MigrationStatus{}, nil
 }

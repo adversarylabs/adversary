@@ -24,7 +24,10 @@ type PublisherIdentity struct {
 	// OfficialSigned is true when a valid official catalog signature was verified
 	// for this artifact digest (see pkg/officialsig).
 	OfficialSigned bool
-	Digest         string
+	// NamespaceSigned is true when a platform-delegated team signature verifies
+	// for this digest and exact registry repository.
+	NamespaceSigned bool
+	Digest          string
 }
 
 func classifyPublisher(input string, resolved ResolvedAdversary, explicitLocal bool) (PublisherIdentity, error) {
@@ -58,9 +61,9 @@ func classifyPublisher(input string, resolved ResolvedAdversary, explicitLocal b
 	return id, nil
 }
 
-// withOfficialSignature sets OfficialSigned when the local store has a verified
-// signature for the artifact digest.
-func withOfficialSignature(id PublisherIdentity, repo *repository.Repository) PublisherIdentity {
+// withArtifactSignature records any verified official or hosted namespace
+// signature for the artifact digest and source repository.
+func withArtifactSignature(id PublisherIdentity, repo *repository.Repository) PublisherIdentity {
 	if id.Local || repo == nil {
 		return id
 	}
@@ -69,6 +72,9 @@ func withOfficialSignature(id PublisherIdentity, repo *repository.Repository) Pu
 		return id
 	}
 	id.OfficialSigned = repo.HasVerifiedOfficialSignature(digest)
+	if parsed, err := oci.ParseReference(id.Reference); err == nil {
+		id.NamespaceSigned = repo.HasVerifiedNamespaceSignature(digest, parsed.Registry, parsed.Repository)
+	}
 	return id
 }
 
@@ -126,13 +132,13 @@ func (p StaticPublisherTrustPolicy) Evaluate(publisher PublisherIdentity) TrustD
 	return TrustDecision{Publisher: publisher, Trust: UnknownPublisherTrust}
 }
 
-// OfficialSignatureTrustPolicy trusts packages with a verified official
-// signature (pkg/officialsig) and local source projects. Path allowlists and
-// registry hostname are not used — only cryptographic endorsement.
+// OfficialSignatureTrustPolicy trusts packages with a verified official or
+// hosted namespace signature and local source projects. Path allowlists and a
+// registry hostname by itself are never sufficient.
 type OfficialSignatureTrustPolicy struct{}
 
 // DefaultPublisherTrustPolicy returns the production trust policy based on
-// official Ed25519 signatures verified with the CLI-embedded public keyring.
+// cryptographic signatures verified by the CLI.
 func DefaultPublisherTrustPolicy() PublisherTrustPolicy {
 	return OfficialSignatureTrustPolicy{}
 }
@@ -141,7 +147,7 @@ func (OfficialSignatureTrustPolicy) Evaluate(publisher PublisherIdentity) TrustD
 	if publisher.Local {
 		return TrustDecision{Publisher: publisher, Trust: LocalSourceTrust}
 	}
-	if publisher.OfficialSigned {
+	if publisher.OfficialSigned || publisher.NamespaceSigned {
 		return TrustDecision{Publisher: publisher, Trust: TrustedPublisherTrust}
 	}
 	return TrustDecision{Publisher: publisher, Trust: UnknownPublisherTrust}
@@ -231,7 +237,7 @@ func DecideExecutionPolicy(request ExecutionPolicyRequest) (ExecutionPolicyDecis
 				name = "adversary"
 			}
 			return ExecutionPolicyDecision{}, fmt.Errorf(
-				"untrusted adversary %q: no valid official signature\n\nHost execution of untrusted adversaries is blocked. Re-run with --allow-unsafe-host-execution to allow an unrestricted host process, or use a sandbox executor",
+				"untrusted adversary %q: no valid artifact signature\n\nHost execution of untrusted adversaries is blocked. Re-run with --allow-unsafe-host-execution to allow an unrestricted host process, or use a sandbox executor",
 				name,
 			)
 		}
