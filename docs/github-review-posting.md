@@ -32,6 +32,7 @@ adversary run https://github.com/owner/repo/pull/123 --github-review --github-su
 | `--github-pr N` | PR number (or use PR URL / Actions env) |
 | `--github-repo owner/name` | Repository (or use PR URL / `GITHUB_REPOSITORY`) |
 | `--github-submit` | Submit review as `COMMENT` (default leaves **pending**) |
+| `--github-include-summary=false` | Omit the persistent aggregate assessment/opinion while retaining finding comments |
 | `--github-min-severity` | `info`\|`low`\|`medium`\|`high`\|`critical` (default: all) |
 | `--github-api-url` | GraphQL endpoint override |
 | `--github-rest-url` | REST base override |
@@ -92,6 +93,7 @@ findings exist (class 1). Soft placement skips do not change the exit class.
 
 - Visible **findings** only (never observations, positives, or suppressed details)
 - Empty plan → no GitHub mutation
+- The aggregate summary synthesizes actual findings only; clean adversaries never add review-body noise
 - Max 50 inline comments; overflow goes to the review body
 
 ## Train without `gh`

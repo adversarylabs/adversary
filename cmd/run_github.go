@@ -169,6 +169,7 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		PullRequest: opts.githubPR,
 		MinSeverity: opts.githubMinSeverity,
 		Voice:       voiceInfo,
+		OmitSummary: !opts.githubIncludeSummary,
 	})
 
 	// Default voice rewrite: try model provider; template remains on failure/missing creds.
@@ -182,6 +183,7 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 			Provider:    provider,
 			VoicePrompt: voicePrompt,
 		})
+		githubreview.EnhanceSummary(ctx, &plan, githubreview.EnhanceOptions{Provider: provider})
 	}
 	logVoiceSource(progress, voiceInfo)
 

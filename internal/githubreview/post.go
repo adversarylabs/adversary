@@ -123,16 +123,18 @@ query($owner:String!,$name:String!,$number:Int!){
 		bodySections = append(bodySections, fmt.Sprintf("### %s — %s\n\n%s\n\n_%s_", c.Severity, c.Title, c.Body, loc))
 	}
 
-	reviewBody := strings.Join(bodySections, "\n\n---\n\n")
-	if reviewBody == "" {
-		reviewBody = "Adversary review"
+	reviewBodyContent := strings.Join(bodySections, "\n\n---\n\n")
+	reviewBody := reviewBodyContent
+	if reviewBody != "" {
+		reviewBody += "\n\n<!-- adversary-review:v1 batch -->\n"
 	}
-	reviewBody += "\n\n<!-- adversary-review:v1 batch -->\n"
 
 	input := map[string]any{
 		"pullRequestId": prID,
 		"commitOID":     headOID,
-		"body":          reviewBody,
+	}
+	if reviewBody != "" {
+		input["body"] = reviewBody
 	}
 	if len(threads) > 0 {
 		input["threads"] = threads
@@ -158,10 +160,12 @@ mutation($input:AddPullRequestReviewInput!){
 		if strings.Contains(err.Error(), "threads") || strings.Contains(err.Error(), "Field") {
 			delete(input, "threads")
 			// Fold threads into body.
+			fallbackBody := reviewBodyContent
 			for _, th := range threads {
-				reviewBody += fmt.Sprintf("\n\n**%s**\n\n%v\n", th["path"], th["body"])
+				fallbackBody += fmt.Sprintf("\n\n**%s**\n\n%v\n", th["path"], th["body"])
 			}
-			input["body"] = reviewBody
+			fallbackBody = strings.TrimSpace(fallbackBody) + "\n\n<!-- adversary-review:v1 batch -->\n"
+			input["body"] = fallbackBody
 			err = opts.Client.GraphQL(ctx, `
 mutation($input:AddPullRequestReviewInput!){
   addPullRequestReview(input:$input){
