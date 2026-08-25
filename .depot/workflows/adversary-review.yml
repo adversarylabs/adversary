@@ -26,3 +26,6 @@ jobs:
           adversaries: auto
           path: .
           include-summary: false
+          model-provider: fireworks
+          model: ${{ vars.ADVERSARY_MODEL }}
+          model-api-key: ${{ secrets.FIREWORKS_API_KEY }}
