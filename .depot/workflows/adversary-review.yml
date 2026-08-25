@@ -1,0 +1,28 @@
+name: Adversary review
+
+on:
+  pull_request:
+
+concurrency:
+  group: adversary-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Run adversaries
+        uses: adversarylabs/actions/run@5a5b0a086d760e842e7274a88cf354ba231bdd9a # v1.3.1
+        with:
+          cli-version: 2026.8.26-beta.2
+          adversaries: auto
+          path: .
+          include-summary: false
