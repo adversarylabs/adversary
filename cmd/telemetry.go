@@ -2,13 +2,18 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
 
+	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/githubreview"
 	"github.com/adversarylabs/adversary/internal/telemetry"
 	"github.com/adversarylabs/adversary/internal/version"
+	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/review"
 )
 
 // Constrained forms only — never send free text, emails, or flags as version.
@@ -44,16 +49,26 @@ func reportPull(ctx context.Context, app *application.App, apiURL, profile, refe
 	})
 }
 
-// reportRunUsage records sanitized run telemetry: CLI version + adversary selection.
-// No user, flags, paths, or repo identity.
-func reportRunUsage(ctx context.Context, app *application.App, apiURL, profile string, adversaries []string) {
+// reportRunUsage records sanitized run telemetry with aggregate outcomes. No
+// finding content, user, flags, paths, repository identity, or model inputs.
+func reportRunUsage(ctx context.Context, app *application.App, apiURL, profile string, report adversarylabs.RunUsageReport) {
 	if telemetry.Disabled() {
 		return
 	}
-	selection := telemetry.SanitizeAdversarySelection(adversaries)
+	selection := telemetry.SanitizeAdversarySelection(report.Adversaries)
 	if len(selection) == 0 {
 		return
 	}
+	report.Adversaries = selection
+	sanitizedResults := make([]adversarylabs.RunUsageAdversaryResult, 0, len(report.Results))
+	for _, result := range report.Results {
+		result.Adversary = telemetry.SanitizeAdversaryRef(result.Adversary)
+		if result.Adversary == "" {
+			continue
+		}
+		sanitizedResults = append(sanitizedResults, result)
+	}
+	report.Results = sanitizedResults
 	deps := app.Dependencies()
 	auth, ok, err := scopedAuth(deps.Auth, apiURL, profile, deps.RegistryHost)
 	if err != nil || !ok || auth.Token == "" {
@@ -64,6 +79,58 @@ func reportRunUsage(ctx context.Context, app *application.App, apiURL, profile s
 	app.StartBackground(func() {
 		metricCtx, cancel := context.WithTimeout(ctx, telemetryTimeout)
 		defer cancel()
-		_ = client.RecordUsage(metricCtx, auth.Token, "run", cliVersion, selection)
+		_ = client.RecordUsage(metricCtx, auth.Token, "run", cliVersion, report)
 	})
+}
+
+func runUsageResult(ref string, runErr error, elapsed time.Duration, envelope *review.RunEnvelope) adversarylabs.RunUsageAdversaryResult {
+	result := adversarylabs.RunUsageAdversaryResult{
+		Adversary:  ref,
+		Status:     "completed",
+		DurationMS: elapsed.Milliseconds(),
+	}
+	var findingsErr *internaladversary.FindingsError
+	switch {
+	case runErr != nil && !errors.As(runErr, &findingsErr):
+		result.Status = "failed"
+	case errors.As(runErr, &findingsErr):
+		result.Status = "findings"
+	}
+	if envelope == nil {
+		return result
+	}
+	if envelope.Result.Timing != nil && envelope.Result.Timing.TotalMS > 0 {
+		result.DurationMS = int64(envelope.Result.Timing.TotalMS)
+	}
+	for _, finding := range envelope.Result.Findings {
+		switch strings.ToLower(finding.Severity) {
+		case "critical":
+			result.CriticalCount++
+		case "high":
+			result.HighCount++
+		case "medium":
+			result.MediumCount++
+		case "low":
+			result.LowCount++
+		case "info":
+			result.InfoCount++
+		}
+	}
+	if len(envelope.Result.Findings) > 0 && result.Status != "failed" {
+		result.Status = "findings"
+	}
+	return result
+}
+
+func findRunEnvelope(envelopes []githubreview.NamedEnvelope, ref string, start int) *review.RunEnvelope {
+	if start < 0 || start > len(envelopes) {
+		start = 0
+	}
+	for i := len(envelopes) - 1; i >= start; i-- {
+		if envelopes[i].Adversary == ref {
+			envelope := envelopes[i].Envelope
+			return &envelope
+		}
+	}
+	return nil
 }

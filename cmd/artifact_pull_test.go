@@ -72,7 +72,7 @@ func (c *blockingPullAPI) RecordPull(ctx context.Context, token, reference, dige
 	}
 }
 
-func (c *blockingPullAPI) RecordUsage(context.Context, string, string, string, []string) error {
+func (c *blockingPullAPI) RecordUsage(context.Context, string, string, string, adversarylabs.RunUsageReport) error {
 	return nil
 }
 
