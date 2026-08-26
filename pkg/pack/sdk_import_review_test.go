@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/adversarylabs/adversary/pkg/manifest"
 )
 
 func TestSDKImportScannerAdversarialSyntax(t *testing.T) {
@@ -86,6 +88,16 @@ func TestSDKImportScannerScopeAndComputedLoads(t *testing.T) {
 		{"computed local dynamic import fails closed", `import("./" + target)`, true},
 		{"computed local require fails closed", `require("./" + target)`, true},
 		{"escaped template sdk specifier", "import(`\\x40adversarylabs/sdk`)", true},
+		{"commonjs destructured createRequire", `const { createRequire } = require("node:module"); const load = createRequire(import.meta.url); load("@adversarylabs/sdk")`, true},
+		{"direct iife establishes loader alias", `let load = replacement; (() => { load = require })(); load("@adversarylabs/sdk")`, true},
+		{"called helper establishes loader alias", `let load = replacement; function set() { load = require } set(); load("@adversarylabs/sdk")`, true},
+		{"conditional helper replacement preserves loader path", `let load = require; function reset() { load = replacement } flag && reset(); load("@adversarylabs/sdk")`, true},
+		{"conditional iife replacement preserves loader path", `let load = require; flag && (() => { load = replacement })(); load("@adversarylabs/sdk")`, true},
+		{"unconditional iife replacement clears loader", `let load = require; (() => { load = replacement })(); load("@adversarylabs/sdk")`, false},
+		{"ternary replacement preserves possible loader", `let load = require; flag ? load = replacement : observe(); load("@adversarylabs/sdk")`, true},
+		{"short circuit replacement preserves possible loader", `let load = require; flag && (load = replacement); load("@adversarylabs/sdk")`, true},
+		{"destructured require parameter shadows builtin", `function run({ require }) { require("@adversarylabs/sdk") }`, false},
+		{"destructured local require shadows builtin", `const { require } = replacement; require("@adversarylabs/sdk")`, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -155,6 +167,46 @@ permissions:
 	}
 	if strings.TrimSpace(string(output)) != "sdk-ok" {
 		t.Fatalf("packed CommonJS directory-main output = %q", output)
+	}
+}
+
+func TestPackFollowsCommonJSDirectoryValuedPackageMain(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "adversary.yaml", `name: local/security-reviewer
+version: 0.1.0
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.cjs
+permissions:
+  network: false
+`)
+	writeFile(t, dir, "dist/index.cjs", `require("./runtime")`+"\n")
+	writeFile(t, dir, "dist/runtime/package.json", `{"main":"lib"}`)
+	writeFile(t, dir, "dist/runtime/lib/index.cjs", `require("@adversarylabs/sdk")`+"\n")
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/package.json", `{"name":"@adversarylabs/sdk","version":"1.0.0","main":"index.js"}`)
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/index.js", `module.exports = {}`+"\n")
+
+	manifestData, err := os.ReadFile(filepath.Join(dir, "adversary.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifest.Parse(manifestData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	got, err := declaredEntrypointsNeedSDKClosure(root, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Fatal("directory-valued package main imports SDK but closure was excluded")
 	}
 }
 
