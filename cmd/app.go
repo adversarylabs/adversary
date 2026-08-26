@@ -440,8 +440,8 @@ func (c classifiedAPIClient) RecordPull(ctx context.Context, token, reference, d
 	return authError("record pull", c.inner.RecordPull(ctx, token, reference, digest))
 }
 
-func (c classifiedAPIClient) RecordUsage(ctx context.Context, token, eventType, cliVersion string, adversaries []string) error {
-	return authError("record usage", c.inner.RecordUsage(ctx, token, eventType, cliVersion, adversaries))
+func (c classifiedAPIClient) RecordUsage(ctx context.Context, token, eventType, cliVersion string, report adversarylabs.RunUsageReport) error {
+	return authError("record usage", c.inner.RecordUsage(ctx, token, eventType, cliVersion, report))
 }
 
 type processOCIRegistry struct{ *oci.HTTPRegistry }

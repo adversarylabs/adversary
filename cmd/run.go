@@ -18,6 +18,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/githubreview"
+	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/spf13/cobra"
 )
@@ -372,6 +373,9 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	// full selected set). Auto may return early if selection/start/finish
 	// callbacks fail before every selected adversary executes.
 	var ran []string
+	usageStarted := time.Now()
+	runStarted := make(map[string]time.Time)
+	var usageResults []adversarylabs.RunUsageAdversaryResult
 	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
 		ModelProvider: opts.modelProvider, Model: opts.model,
@@ -386,6 +390,7 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 			return renderRunSelections(selectionOut, result, opts.explain)
 		},
 		ReportRunStart: func(name string, index, total int) error {
+			runStarted[name] = time.Now()
 			_, err := fmt.Fprintf(progressOut, "[%d/%d] %s\n", index, total, name)
 			return err
 		},
@@ -394,6 +399,17 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 			// never entered Run (e.g. ReportRunStart failure).
 			if strings.TrimSpace(name) != "" {
 				ran = append(ran, name)
+				started := runStarted[name]
+				elapsed := time.Duration(0)
+				if !started.IsZero() {
+					elapsed = time.Since(started)
+				}
+				usageResults = append(usageResults, runUsageResult(
+					name,
+					runErr,
+					elapsed,
+					findRunEnvelope(opts.envelopes, name, 0),
+				))
 			}
 			switch {
 			case runErr == nil:
@@ -415,7 +431,11 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	})
 	// Sanitized usage: CLI version + adversaries that actually ran.
 	if !opts.dryRun && len(ran) > 0 {
-		reportRunUsage(cmd.Context(), app, valueOf(apiURL), valueOf(profile), ran)
+		reportRunUsage(cmd.Context(), app, valueOf(apiURL), valueOf(profile), adversarylabs.RunUsageReport{
+			Adversaries: ran,
+			DurationMS:  time.Since(usageStarted).Milliseconds(),
+			Results:     usageResults,
+		})
 	}
 	if err == nil && strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
@@ -549,13 +569,12 @@ func runAdversaries(
 	// Progress on multi-run or when results are redirected to a file.
 	showProgress := toFile || multi
 
-	// Sanitized usage: CLI version + requested adversary selection (1..n).
-	reportRunUsage(ctx, app, valueOf(apiURL), valueOf(profile), refs)
-
 	var items []multiRunItemDTO
 	var findingsTotal int
 	var hardErr error
 	hardRef := ""
+	usageStarted := time.Now()
+	var usageResults []adversarylabs.RunUsageAdversaryResult
 
 	for i, ref := range refs {
 		if err := ctx.Err(); err != nil {
@@ -584,10 +603,18 @@ func runAdversaries(
 			runStderr = &childErr
 		}
 
+		envelopeStart := len(opts.envelopes)
+		runStarted := time.Now()
 		err := runOneAdversary(ctx, app, opts, ref, valueOf(apiURL), valueOf(profile), runStdout, runStderr)
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
+		usageResults = append(usageResults, runUsageResult(
+			ref,
+			err,
+			time.Since(runStarted),
+			findRunEnvelope(opts.envelopes, ref, envelopeStart),
+		))
 
 		item := multiRunItemDTO{Adversary: ref}
 		// Only attach stdout when it is valid JSON so writeJSON can always encode
@@ -651,6 +678,11 @@ func runAdversaries(
 			return err
 		}
 	}
+	reportRunUsage(ctx, app, valueOf(apiURL), valueOf(profile), adversarylabs.RunUsageReport{
+		Adversaries: refs,
+		DurationMS:  time.Since(usageStarted).Milliseconds(),
+		Results:     usageResults,
+	})
 	if multi || toFile {
 		fmt.Fprintf(progressOut, "\nRan %d adversaries", len(refs))
 		if findingsTotal > 0 {

@@ -318,13 +318,34 @@ func (c Client) NamespaceTrustRoot(ctx context.Context, token string) (namespace
 	return out, nil
 }
 
-// RecordUsage posts a sanitized CLI usage event (CLI version + adversary selection).
-// The server must not store user identity from this payload.
-func (c Client) RecordUsage(ctx context.Context, token, eventType, cliVersion string, adversaries []string) error {
+// RunUsageReport contains privacy-safe aggregate outcomes only. Finding text,
+// repository identity, file paths, flags, and model inputs must never be added.
+type RunUsageReport struct {
+	Adversaries []string                  `json:"adversaries"`
+	DurationMS  int64                     `json:"duration_ms,omitempty"`
+	Results     []RunUsageAdversaryResult `json:"results,omitempty"`
+}
+
+type RunUsageAdversaryResult struct {
+	Adversary     string `json:"adversary"`
+	Status        string `json:"status,omitempty"`
+	DurationMS    int64  `json:"duration_ms,omitempty"`
+	CriticalCount int    `json:"critical_count,omitempty"`
+	HighCount     int    `json:"high_count,omitempty"`
+	MediumCount   int    `json:"medium_count,omitempty"`
+	LowCount      int    `json:"low_count,omitempty"`
+	InfoCount     int    `json:"info_count,omitempty"`
+}
+
+// RecordUsage posts a sanitized CLI usage event. Project attribution and run
+// source are derived by the server from the token, never this payload.
+func (c Client) RecordUsage(ctx context.Context, token, eventType, cliVersion string, report RunUsageReport) error {
 	payload := map[string]any{
 		"event_type":  strings.TrimSpace(eventType),
 		"cli_version": strings.TrimSpace(cliVersion),
-		"adversaries": adversaries,
+		"adversaries": report.Adversaries,
+		"duration_ms": report.DurationMS,
+		"results":     report.Results,
 	}
 	return c.postJSON(ctx, "/v1/cli/usage", payload, token, nil)
 }
