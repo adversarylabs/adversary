@@ -23,7 +23,7 @@ jobs:
       - name: Mount adversary cache
         uses: depot/cache-mount@c4ccf77f90f7fa7df6a002813c0b13f6a5943063 # v1
         with:
-          name: adversary-${{ github.event.repository.id }}-v1
+          name: adversary-${{ github.event.repository.id }}-${{ github.event.pull_request.number }}-v1
           path: /mnt/adversary
 
       - name: Run adversaries
