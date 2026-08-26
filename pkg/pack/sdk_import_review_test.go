@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -62,6 +63,41 @@ func TestSDKImportScannerLongStaticImport(t *testing.T) {
 	}
 }
 
+func TestSDKImportScannerScopeAndComputedLoads(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		want   bool
+	}{
+		{"outer alias restored after inner shadow", `const load = require; { const load = replacement; load("unrelated") } load("@adversarylabs/sdk")`, true},
+		{"conditional alias reassignment leaves loader path", `let load = require; if (flag) load = replacement; load("@adversarylabs/sdk")`, true},
+		{"require parameter is not builtin loader", `function run(require) { return require("@adversarylabs/sdk") }`, false},
+		{"imported require is not builtin loader", `import require from "./shim.js"; require("@adversarylabs/sdk")`, false},
+		{"reassigned createRequire is not trusted", `import { createRequire as cr } from "node:module"; cr = replacement; const load = cr(import.meta.url); load("@adversarylabs/sdk")`, false},
+		{"shadowed createRequire parameter is not trusted", `import { createRequire as cr } from "node:module"; function run(cr) { const load = cr(import.meta.url); load("@adversarylabs/sdk") }`, false},
+		{"arrow require parameter is not builtin loader", `const run = (require) => { return require("@adversarylabs/sdk") }`, false},
+		{"method require parameter is not builtin loader", `const object = { run(require) { return require("@adversarylabs/sdk") } }`, false},
+		{"uninitialized local require shadows builtin", `function run() { let require; return require("@adversarylabs/sdk") }`, false},
+		{"later declarator loader stays function local", `function run() { const value = 1, load = require; load("@adversarylabs/sdk") } const load = replacement; load("unrelated")`, true},
+		{"later declarator loader does not leak from function", `function run() { const value = 1, load = require } load("@adversarylabs/sdk")`, false},
+		{"uninvoked function assignment does not destroy outer loader", `let load = require; function reset() { load = replacement } load("@adversarylabs/sdk")`, true},
+		{"concatenated sdk dynamic import fails closed", `import("@adversarylabs/" + "sdk")`, true},
+		{"concatenated sdk require fails closed", `require("@adversarylabs/" + "sdk")`, true},
+		{"computed local dynamic import fails closed", `import("./" + target)`, true},
+		{"computed local require fails closed", `require("./" + target)`, true},
+		{"escaped template sdk specifier", "import(`\\x40adversarylabs/sdk`)", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens, ambiguous := lexJSTokens([]byte(tt.source))
+			got := ambiguous || tokensLoadSDK(tokens)
+			if got != tt.want {
+				t.Fatalf("needs closure=%v want=%v ambiguous=%v tokens=%#v", got, tt.want, ambiguous, tokens)
+			}
+		})
+	}
+}
+
 func TestPackRetainsSDKForReachableLocalModule(t *testing.T) {
 	dir := testProject(t)
 	writeFile(t, dir, "dist/index.js", `import "./runtime.js"`+"\n")
@@ -79,6 +115,47 @@ func TestPackRetainsSDKForReachableLocalModule(t *testing.T) {
 		}
 	}
 	t.Fatal("reachable local module imports SDK but closure was excluded")
+}
+
+func TestPackFollowsCommonJSDirectoryPackageMain(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "adversary.yaml", `name: local/security-reviewer
+version: 0.1.0
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.cjs
+permissions:
+  network: false
+`)
+	writeFile(t, dir, "dist/index.cjs", `require("./runtime")`+"\n")
+	writeFile(t, dir, "dist/runtime/package.json", `{"main":"loader.cjs"}`)
+	writeFile(t, dir, "dist/runtime/loader.cjs", `const sdk = require("@adversarylabs/sdk"); console.log(sdk.value)`+"\n")
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/package.json", `{"name":"@adversarylabs/sdk","version":"1.0.0","main":"index.js"}`)
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/index.js", `module.exports = { value: "sdk-ok" }`+"\n")
+
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer artifact.Close()
+	assertArtifactHasPath(t, artifact, "node_modules/@adversarylabs/sdk/package.json")
+	extracted := extractArtifactLayer(t, artifact)
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal("node is required for the CommonJS directory-main offline contract")
+	}
+	cmd := exec.Command(node, "dist/index.cjs")
+	cmd.Dir = extracted
+	cmd.Env = append(os.Environ(), "npm_config_offline=true", "NODE_PATH=")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("packed CommonJS directory-main entrypoint failed offline: %v\n%s", err, output)
+	}
+	if strings.TrimSpace(string(output)) != "sdk-ok" {
+		t.Fatalf("packed CommonJS directory-main output = %q", output)
+	}
 }
 
 func TestPackSelfContainedBundleInventoryIsDeterministic(t *testing.T) {
