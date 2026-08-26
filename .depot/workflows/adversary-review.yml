@@ -20,12 +20,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Mount adversary cache
+        uses: depot/cache-mount@c4ccf77f90f7fa7df6a002813c0b13f6a5943063 # v1
+        with:
+          name: adversary-${{ github.event.repository.id }}-v1
+          path: /mnt/adversary
+
       - name: Run adversaries
-        uses: adversarylabs/actions/run@5a5b0a086d760e842e7274a88cf354ba231bdd9a # v1.3.1
+        uses: adversarylabs/actions/run@5732ffce7abc90efc8ded4a8f7193dfa6469aa0d # v1.3.2
         with:
           cli-version: 2026.8.26-beta.3
           adversaries: auto
           path: .
+          data-dir: /mnt/adversary
           include-summary: false
           model-provider: fireworks
           model: ${{ vars.ADVERSARY_MODEL }}
