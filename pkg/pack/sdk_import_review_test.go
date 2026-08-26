@@ -111,6 +111,17 @@ func TestSDKImportScannerScopeAndComputedLoads(t *testing.T) {
 		{"hoisted helper establishes loader before declaration", `let load = replacement; set(); function set() { load = require } load("@adversarylabs/sdk")`, true},
 		{"hoisted last duplicate wins before declarations", `let load = replacement; set(); function set() { load = require } function set() { load = replacement } load("@adversarylabs/sdk")`, false},
 		{"called helper alias establishes loader", `let load = replacement; function set() { load = require } const invoke = set; invoke(); load("@adversarylabs/sdk")`, true},
+		{"transitive helper establishes loader", `let load = replacement; function set(){ load = require } function wrapper(){ set() } wrapper(); load("@adversarylabs/sdk")`, true},
+		{"transitive direct iife establishes loader", `let load = replacement; function set(){ load = require } (() => { set() })(); load("@adversarylabs/sdk")`, true},
+		{"helper captures loader alias", `const source = require; let load = replacement; function set(){ load = source } set(); load("@adversarylabs/sdk")`, true},
+		{"uninvoked transitive helper stays excluded", `let load = replacement; function set(){ load = require } function wrapper(){ set() } load("@adversarylabs/sdk")`, false},
+		{"parenthesized helper invocation establishes loader", `let load = replacement; function set(){ load = require } (set)(); load("@adversarylabs/sdk")`, true},
+		{"function call method invocation establishes loader", `let load = replacement; function set(){ load = require } set.call(null); load("@adversarylabs/sdk")`, true},
+		{"sdk exported subpath require", `require("@adversarylabs/sdk/review")`, true},
+		{"sdk exported subpath import", `import "@adversarylabs/sdk/protocol"`, true},
+		{"transitive helper respects block-local shadow", `let load = replacement; function set(){ load = require } function wrapper(){ const set = replacement; set() } wrapper(); load("@adversarylabs/sdk")`, false},
+		{"transitive helper resolves nested declaration", `let load = replacement; function wrapper(){ function set(){ load = require } set() } wrapper(); load("@adversarylabs/sdk")`, true},
+		{"invoked wrapper with no loader effect stays excluded", `let load = replacement; function reset(){ load = replacement } function wrapper(){ reset() } wrapper(); load("@adversarylabs/sdk")`, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -140,6 +151,73 @@ func TestPackRetainsSDKForReachableLocalModule(t *testing.T) {
 		}
 	}
 	t.Fatal("reachable local module imports SDK but closure was excluded")
+}
+
+func TestPackFollowsExtensionlessCommonJSModule(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "adversary.yaml", `name: local/security-reviewer
+version: 0.1.0
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.cjs
+permissions:
+  network: false
+`)
+	writeFile(t, dir, "dist/index.cjs", `require("./runtime")`+"\n")
+	writeFile(t, dir, "dist/runtime", `require("@adversarylabs/sdk")`+"\n")
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/package.json", `{"name":"@adversarylabs/sdk","version":"1.0.0","main":"index.js"}`)
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/index.js", `module.exports = {}`+"\n")
+
+	manifestData, err := os.ReadFile(filepath.Join(dir, "adversary.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifest.Parse(manifestData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	got, err := declaredEntrypointsNeedSDKClosure(root, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Fatal("declared CommonJS entrypoint reaches an extensionless module that imports the SDK")
+	}
+}
+
+func TestPackExtensionlessCommonJSFileWinsBeforeJSExtension(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "dist/index.cjs", `require("./runtime")`+"\n")
+	writeFile(t, dir, "dist/runtime", `module.exports = {}`+"\n")
+	writeFile(t, dir, "dist/runtime.js", `require("@adversarylabs/sdk")`+"\n")
+	manifestData, err := os.ReadFile(filepath.Join(dir, "adversary.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifest.Parse(manifestData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Runtime.Command[0] = "dist/index.cjs"
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	got, err := declaredEntrypointsNeedSDKClosure(root, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Fatal("extensionless CommonJS file resolves before the sibling .js file")
+	}
 }
 
 func TestPackFollowsCommonJSDirectoryPackageMain(t *testing.T) {

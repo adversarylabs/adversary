@@ -91,12 +91,12 @@ func declaredEntrypointsNeedSDKClosure(root *os.Root, m manifest.Manifest) (bool
 }
 
 func isJSEntrypoint(name string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".js", ".mjs", ".cjs":
-		return true
-	default:
-		return false
-	}
+	return filepath.Ext(name) == "" || hasJSExtension(name)
+}
+
+func hasJSExtension(name string) bool {
+	extension := strings.ToLower(filepath.Ext(name))
+	return extension == ".js" || extension == ".mjs" || extension == ".cjs"
 }
 
 func jsModuleNeedsSDKClosure(root *os.Root, module string) (bool, []string, error) {
@@ -138,10 +138,14 @@ func resolveLocalJSModules(root *os.Root, importer, specifier string) ([]string,
 		return nil, fmt.Errorf("local JavaScript import %q from %q escapes package root", specifier, importer)
 	}
 	candidates := []string{clean}
-	if !isJSEntrypoint(clean) {
-		candidates = append(candidates, clean+".js", clean+".mjs", clean+".cjs")
+	if !hasJSExtension(clean) {
+		cleanInfo, cleanErr := root.Stat(filepath.FromSlash(clean))
+		cleanIsFile := cleanErr == nil && !cleanInfo.IsDir()
+		if !cleanIsFile {
+			candidates = append(candidates, clean+".js", clean+".mjs", clean+".cjs")
+		}
 		packageJSON := path.Join(clean, "package.json")
-		if data, err := root.ReadFile(filepath.FromSlash(packageJSON)); err == nil {
+		if data, err := root.ReadFile(filepath.FromSlash(packageJSON)); !cleanIsFile && err == nil {
 			var packageMetadata struct {
 				Main string `json:"main"`
 			}
@@ -154,19 +158,21 @@ func resolveLocalJSModules(root *os.Root, importer, specifier string) ([]string,
 					return nil, fmt.Errorf("local JavaScript package main %q escapes package root", packageMetadata.Main)
 				}
 				candidates = append(candidates, main)
-				if !isJSEntrypoint(main) {
+				if !hasJSExtension(main) {
 					candidates = append(candidates,
 						main+".js", main+".mjs", main+".cjs",
 						path.Join(main, "index.js"), path.Join(main, "index.mjs"), path.Join(main, "index.cjs"),
 					)
 				}
 			}
-		} else if !os.IsNotExist(err) {
+		} else if !cleanIsFile && !os.IsNotExist(err) {
 			return nil, fmt.Errorf("read local JavaScript package %q: %w", packageJSON, err)
 		}
-		candidates = append(candidates,
-			path.Join(clean, "index.js"), path.Join(clean, "index.mjs"), path.Join(clean, "index.cjs"),
-		)
+		if !cleanIsFile {
+			candidates = append(candidates,
+				path.Join(clean, "index.js"), path.Join(clean, "index.mjs"), path.Join(clean, "index.cjs"),
+			)
+		}
 	}
 	resolved := make([]string, 0, 1)
 	for _, candidate := range candidates {
@@ -212,16 +218,23 @@ type jsBindingTracker struct {
 type jsBindingEffect struct {
 	name        string
 	binding     jsBinding
+	source      string
 	conditional bool
 }
 
 type jsInvokedEffects struct {
-	effects     []jsBindingEffect
+	value       *jsFunctionValue
 	conditional bool
 }
 
 type jsFunctionValue struct {
 	effects []jsBindingEffect
+	calls   []jsFunctionCall
+}
+
+type jsFunctionCall struct {
+	name  string
+	scope int
 }
 
 type jsFunctionTracker struct {
@@ -372,8 +385,10 @@ func tokensModuleLoads(tokens []jsToken) jsModuleLoads {
 	declarations := simpleJSDeclarationIndexes(tokens)
 	destructuredDeclarations := destructuredJSDeclarations(tokens)
 	functionParameters := jsFunctionBodyParameters(tokens)
-	functionDeclarations, functionAssignments, directIIFEEffects := jsFunctionMetadata(tokens, functionParameters)
+	functionDeclarations, functionAssignments, directIIFEEffects, functionValues := jsFunctionMetadata(tokens, functionParameters)
 	functionDeclarationsByScope := jsFunctionDeclarationsByScope(tokens, functionDeclarations)
+	staticFunctionValues := jsStaticFunctionValuesByScope(tokens, functionDeclarations, functionAssignments)
+	resolveJSFunctionEffects(functionValues, staticFunctionValues, jsScopeParents(tokens))
 	functions := newJSFunctionTracker(functionDeclarationsByScope[-1])
 	addSpecifier := func(token jsToken) {
 		specifier, exact := staticModuleSpecifier(token)
@@ -413,8 +428,10 @@ func tokensModuleLoads(tokens []jsToken) jsModuleLoads {
 		if isPunctuation(token, "}") {
 			bindings.pop()
 			functions.pop()
-			for _, effect := range directIIFEEffects[i].effects {
-				bindings.assign(effect.name, effect.binding, directIIFEEffects[i].conditional || effect.conditional)
+			if invoked := directIIFEEffects[i]; invoked.value != nil {
+				for _, effect := range invoked.value.effects {
+					bindings.assign(effect.name, jsResolvedEffectBinding(effect, bindings), invoked.conditional || effect.conditional)
+				}
 			}
 			continue
 		}
@@ -475,11 +492,11 @@ func tokensModuleLoads(tokens []jsToken) jsModuleLoads {
 				addSpecifier(specifier)
 			}
 		default:
-			if i+1 < len(tokens) && isPunctuation(tokens[i+1], "(") &&
+			if jsFunctionInvocationAt(tokens, i) &&
 				(i == 0 || tokens[i-1].kind != jsIdentifier || tokens[i-1].text != "function") && !identifierIsProperty(tokens, i) {
 				if functionValue, ok := functions.lookup(token.text); ok && functionValue != nil {
 					for _, effect := range functionValue.effects {
-						bindings.assign(effect.name, effect.binding, jsOperationIsConditional(tokens, i) || effect.conditional)
+						bindings.assign(effect.name, jsResolvedEffectBinding(effect, bindings), jsOperationIsConditional(tokens, i) || effect.conditional)
 					}
 				}
 			}
@@ -644,10 +661,11 @@ func staticLoaderModule(tokens []jsToken, start int) (string, bool) {
 	return staticModuleSpecifier(argument)
 }
 
-func jsFunctionMetadata(tokens []jsToken, parameters map[int][]string) (map[int]jsFunctionDeclaration, map[int]*jsFunctionValue, map[int]jsInvokedEffects) {
+func jsFunctionMetadata(tokens []jsToken, parameters map[int][]string) (map[int]jsFunctionDeclaration, map[int]*jsFunctionValue, map[int]jsInvokedEffects, []*jsFunctionValue) {
 	declarations := make(map[int]jsFunctionDeclaration)
 	assignments := make(map[int]*jsFunctionValue)
 	direct := make(map[int]jsInvokedEffects)
+	values := make([]*jsFunctionValue, 0, len(parameters))
 	for body := 0; body < len(tokens); body++ {
 		params, ok := parameters[body]
 		if !ok {
@@ -658,17 +676,21 @@ func jsFunctionMetadata(tokens []jsToken, parameters map[int][]string) (map[int]
 			continue
 		}
 		effects := jsFunctionBindingEffects(tokens, body, close, params, parameters)
-		value := &jsFunctionValue{effects: effects}
+		value := &jsFunctionValue{
+			effects: effects,
+			calls:   jsFunctionInvocations(tokens, body, close, parameters),
+		}
+		values = append(values, value)
 		if keyword, name, named := namedJSFunctionAtBody(tokens, body); named {
 			declarations[keyword] = jsFunctionDeclaration{name: name, value: value}
 		} else if target, assigned := assignedJSFunctionAtBody(tokens, body); assigned {
 			assignments[target] = value
 		}
-		if len(effects) > 0 && jsFunctionBodyIsDirectlyInvoked(tokens, close) {
-			direct[close] = jsInvokedEffects{effects: effects, conditional: jsOperationIsConditional(tokens, body)}
+		if jsFunctionBodyIsDirectlyInvoked(tokens, close) {
+			direct[close] = jsInvokedEffects{value: value, conditional: jsOperationIsConditional(tokens, body)}
 		}
 	}
-	return declarations, assignments, direct
+	return declarations, assignments, direct, values
 }
 
 func jsFunctionDeclarationsByScope(tokens []jsToken, declarations map[int]jsFunctionDeclaration) map[int]map[string]*jsFunctionValue {
@@ -691,6 +713,163 @@ func jsFunctionDeclarationsByScope(tokens []jsToken, declarations map[int]jsFunc
 		}
 	}
 	return byScope
+}
+
+func jsStaticFunctionValuesByScope(
+	tokens []jsToken,
+	declarations map[int]jsFunctionDeclaration,
+	assignments map[int]*jsFunctionValue,
+) map[int]map[string]*jsFunctionValue {
+	byScope := make(map[int]map[string]*jsFunctionValue)
+	declarationIndexes := simpleJSDeclarationIndexes(tokens)
+	destructuredDeclarations := destructuredJSDeclarations(tokens)
+	stack := []int{-1}
+	ensure := func(scope int) map[string]*jsFunctionValue {
+		if byScope[scope] == nil {
+			byScope[scope] = make(map[string]*jsFunctionValue)
+		}
+		return byScope[scope]
+	}
+	for index, token := range tokens {
+		scope := stack[len(stack)-1]
+		if declaration, ok := declarations[index]; ok {
+			ensure(scope)[declaration.name] = declaration.value
+		}
+		if declarationIndexes[index] && token.kind == jsIdentifier {
+			ensure(scope)[token.text] = assignments[index]
+		}
+		if declared := destructuredDeclarations[index]; declared != nil {
+			for name := range declared {
+				ensure(scope)[name] = nil
+			}
+		}
+		if isPunctuation(token, "{") {
+			stack = append(stack, index)
+		} else if isPunctuation(token, "}") && len(stack) > 1 {
+			stack = stack[:len(stack)-1]
+		}
+	}
+	return byScope
+}
+
+func jsScopeParents(tokens []jsToken) map[int]int {
+	parents := map[int]int{-1: -2}
+	stack := []int{-1}
+	for index, token := range tokens {
+		if isPunctuation(token, "{") {
+			parents[index] = stack[len(stack)-1]
+			stack = append(stack, index)
+		} else if isPunctuation(token, "}") && len(stack) > 1 {
+			stack = stack[:len(stack)-1]
+		}
+	}
+	return parents
+}
+
+func resolveJSFunctionEffects(
+	values []*jsFunctionValue,
+	functions map[int]map[string]*jsFunctionValue,
+	parents map[int]int,
+) {
+	for round := 0; round <= len(values); round++ {
+		changed := false
+		for _, value := range values {
+			for _, call := range value.calls {
+				callee, found := lookupStaticJSFunction(functions, parents, call.scope, call.name)
+				if !found || callee == nil || callee == value {
+					continue
+				}
+				for _, effect := range callee.effects {
+					// A helper call inside another helper is conservatively a possible
+					// path. This prevents a later static summary from erasing a loader
+					// path whose exact intra-function ordering is not represented here.
+					effect.conditional = true
+					if appendUniqueJSBindingEffect(&value.effects, effect) {
+						changed = true
+					}
+				}
+			}
+		}
+		if !changed {
+			return
+		}
+	}
+}
+
+func lookupStaticJSFunction(
+	functions map[int]map[string]*jsFunctionValue,
+	parents map[int]int,
+	scope int,
+	name string,
+) (*jsFunctionValue, bool) {
+	for scope != -2 {
+		if value, ok := functions[scope][name]; ok {
+			return value, true
+		}
+		scope = parents[scope]
+	}
+	return nil, false
+}
+
+func appendUniqueJSBindingEffect(effects *[]jsBindingEffect, candidate jsBindingEffect) bool {
+	for _, effect := range *effects {
+		if effect.name == candidate.name && effect.binding == candidate.binding &&
+			effect.source == candidate.source && effect.conditional == candidate.conditional {
+			return false
+		}
+	}
+	*effects = append(*effects, candidate)
+	return true
+}
+
+func jsFunctionInvocations(
+	tokens []jsToken,
+	body, close int,
+	functionBodies map[int][]string,
+) []jsFunctionCall {
+	calls := make([]jsFunctionCall, 0)
+	stack := []int{body}
+	for index := body + 1; index < close; index++ {
+		if _, nested := functionBodies[index]; nested {
+			if nestedClose := matchingJSPunctuation(tokens, index, "{", "}"); nestedClose > index {
+				index = nestedClose
+			}
+			continue
+		}
+		if isPunctuation(tokens[index], "{") {
+			stack = append(stack, index)
+			continue
+		}
+		if isPunctuation(tokens[index], "}") {
+			if len(stack) > 1 {
+				stack = stack[:len(stack)-1]
+			}
+			continue
+		}
+		if tokens[index].kind != jsIdentifier || identifierIsProperty(tokens, index) ||
+			!jsFunctionInvocationAt(tokens, index) ||
+			index > 0 && tokens[index-1].kind == jsIdentifier && tokens[index-1].text == "function" {
+			continue
+		}
+		calls = append(calls, jsFunctionCall{
+			name:  tokens[index].text,
+			scope: stack[len(stack)-1],
+		})
+	}
+	return calls
+}
+
+func jsFunctionInvocationAt(tokens []jsToken, index int) bool {
+	if index+1 < len(tokens) && isPunctuation(tokens[index+1], "(") {
+		return true
+	}
+	if index > 0 && index+2 < len(tokens) && isPunctuation(tokens[index-1], "(") &&
+		isPunctuation(tokens[index+1], ")") && isPunctuation(tokens[index+2], "(") {
+		return true
+	}
+	return index+3 < len(tokens) && isPunctuation(tokens[index+1], ".") &&
+		tokens[index+2].kind == jsIdentifier && tokens[index+2].text == "call" &&
+		isPunctuation(tokens[index+3], "(")
 }
 
 func namedJSFunctionAtBody(tokens []jsToken, body int) (int, string, bool) {
@@ -787,31 +966,42 @@ func jsFunctionBindingEffects(tokens []jsToken, body, close int, parameters []st
 		if locals[tokens[i].text] || declarationIndexes[i] {
 			continue
 		}
-		binding := staticJSFunctionEffectBinding(tokens, i+2, locals, imported)
+		binding, source := staticJSFunctionEffectBinding(tokens, i+2, locals, imported)
 		effects = append(effects, jsBindingEffect{
 			name:        tokens[i].text,
 			binding:     binding,
+			source:      source,
 			conditional: conditionalDepth > 0 || jsOperationIsConditional(tokens, i),
 		})
 	}
 	return effects
 }
 
-func staticJSFunctionEffectBinding(tokens []jsToken, right int, locals map[string]bool, imported map[string]jsBinding) jsBinding {
+func staticJSFunctionEffectBinding(tokens []jsToken, right int, locals map[string]bool, imported map[string]jsBinding) (jsBinding, string) {
 	if right >= len(tokens) || tokens[right].kind != jsIdentifier {
-		return jsNonLoader
+		return jsNonLoader, ""
 	}
 	if tokens[right].text == "require" && !locals["require"] && !identifierIsProperty(tokens, right) {
-		return jsLoader
+		return jsLoader, ""
 	}
 	if isModuleRequire(tokens, right+2) && tokens[right].text == "module" && !locals["module"] {
-		return jsLoader
+		return jsLoader, ""
 	}
 	if imported[tokens[right].text]&jsLoaderFactory != 0 && !locals[tokens[right].text] &&
 		right+1 < len(tokens) && isPunctuation(tokens[right+1], "(") {
-		return jsLoader
+		return jsLoader, ""
 	}
-	return jsNonLoader
+	if !locals[tokens[right].text] && !identifierIsProperty(tokens, right) {
+		return jsNonLoader, tokens[right].text
+	}
+	return jsNonLoader, ""
+}
+
+func jsResolvedEffectBinding(effect jsBindingEffect, bindings *jsBindingTracker) jsBinding {
+	if effect.source == "" {
+		return effect.binding
+	}
+	return effect.binding | bindings.lookup(effect.source)
 }
 
 func jsFunctionBodyParameters(tokens []jsToken) map[int][]string {
@@ -1096,7 +1286,8 @@ func staticModuleSpecifier(token jsToken) (string, bool) {
 }
 
 func isSDKModule(specifier string) bool {
-	return specifier == "@adversarylabs/sdk" || specifier == "@adversary/sdk"
+	return specifier == "@adversarylabs/sdk" || strings.HasPrefix(specifier, "@adversarylabs/sdk/") ||
+		specifier == "@adversary/sdk" || strings.HasPrefix(specifier, "@adversary/sdk/")
 }
 
 func isPunctuation(token jsToken, value string) bool {
