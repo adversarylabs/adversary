@@ -4,14 +4,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/adversarylabs/adversary/pkg/manifest"
 )
 
 const maxJSEntrypointScanBytes = 16 << 20
 const maxJSEntrypointTokens = 1 << 20
+const maxJSModuleGraphFiles = 4096
 
 type jsTokenKind uint8
 
@@ -53,13 +57,33 @@ func declaredEntrypointsNeedSDKClosure(root *os.Root, m manifest.Manifest) (bool
 		entrypoints = append(entrypoints, detection)
 	}
 
-	for _, entrypoint := range entrypoints {
-		needs, err := jsEntrypointNeedsSDKClosure(root, entrypoint)
+	queue := append([]string(nil), entrypoints...)
+	visited := make(map[string]struct{}, len(queue))
+	for len(queue) > 0 {
+		module := queue[0]
+		queue = queue[1:]
+		module = path.Clean(filepath.ToSlash(module))
+		if _, ok := visited[module]; ok {
+			continue
+		}
+		visited[module] = struct{}{}
+		if len(visited) > maxJSModuleGraphFiles {
+			return true, nil
+		}
+
+		needs, localModules, err := jsModuleNeedsSDKClosure(root, module)
 		if err != nil {
-			return false, fmt.Errorf("inspect JavaScript entrypoint %q for SDK imports: %w", entrypoint, err)
+			return false, fmt.Errorf("inspect JavaScript module %q for SDK imports: %w", module, err)
 		}
 		if needs {
 			return true, nil
+		}
+		for _, specifier := range localModules {
+			resolved, err := resolveLocalJSModules(root, module, specifier)
+			if err != nil {
+				return false, err
+			}
+			queue = append(queue, resolved...)
 		}
 	}
 	return false, nil
@@ -74,107 +98,250 @@ func isJSEntrypoint(name string) bool {
 	}
 }
 
-func jsEntrypointNeedsSDKClosure(root *os.Root, entrypoint string) (bool, error) {
-	f, err := root.Open(filepath.FromSlash(entrypoint))
+func jsModuleNeedsSDKClosure(root *os.Root, module string) (bool, []string, error) {
+	f, err := root.Open(filepath.FromSlash(module))
 	if err != nil {
 		// Entrypoint validation reports missing build output with its established
 		// error. There is no source to classify in that case.
 		if os.IsNotExist(err) {
-			return false, nil
+			return false, nil, nil
 		}
-		return false, err
+		return false, nil, err
 	}
 	defer f.Close()
 
 	source, err := io.ReadAll(io.LimitReader(f, maxJSEntrypointScanBytes+1))
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if len(source) > maxJSEntrypointScanBytes {
-		return true, nil
+		return true, nil, nil
 	}
 	tokens, ambiguous := lexJSTokens(source)
 	if ambiguous {
-		return true, nil
+		return true, nil, nil
 	}
-	return tokensLoadSDK(tokens), nil
+	loads := tokensModuleLoads(tokens)
+	return loads.sdk, loads.local, nil
+}
+
+func resolveLocalJSModules(root *os.Root, importer, specifier string) ([]string, error) {
+	if !strings.HasPrefix(specifier, "./") && !strings.HasPrefix(specifier, "../") {
+		return nil, nil
+	}
+	clean := path.Clean(path.Join(path.Dir(importer), specifier))
+	if clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
+		return nil, fmt.Errorf("local JavaScript import %q from %q escapes package root", specifier, importer)
+	}
+	candidates := []string{clean}
+	if !isJSEntrypoint(clean) {
+		candidates = append(candidates,
+			clean+".js", clean+".mjs", clean+".cjs",
+			path.Join(clean, "index.js"), path.Join(clean, "index.mjs"), path.Join(clean, "index.cjs"),
+		)
+	}
+	resolved := make([]string, 0, 1)
+	for _, candidate := range candidates {
+		info, err := root.Stat(filepath.FromSlash(candidate))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("resolve local JavaScript import %q from %q: %w", specifier, importer, err)
+		}
+		if !info.IsDir() && isJSEntrypoint(candidate) {
+			resolved = append(resolved, candidate)
+		}
+	}
+	return resolved, nil
+}
+
+type jsModuleLoads struct {
+	sdk   bool
+	local []string
 }
 
 func tokensLoadSDK(tokens []jsToken) bool {
+	return tokensModuleLoads(tokens).sdk
+}
+
+func tokensModuleLoads(tokens []jsToken) jsModuleLoads {
+	loads := jsModuleLoads{}
+	loaderNames := map[string]bool{"require": true}
+	createRequireNames := importedCreateRequireNames(tokens)
+	addSpecifier := func(token jsToken) {
+		specifier, exact := staticModuleSpecifier(token)
+		if !exact {
+			if token.ambiguous {
+				loads.sdk = true
+			}
+			return
+		}
+		if isSDKModule(specifier) {
+			loads.sdk = true
+		}
+		if token.escaped && (strings.Contains(specifier, "@adversarylabs") || strings.Contains(specifier, "@adversary/sdk")) {
+			// Escaped namespace text that does not decode to an exact known SDK
+			// name is still too close to distinguish safely from a deliberately
+			// obfuscated SDK load. Prefer the offline-safe closure.
+			loads.sdk = true
+		}
+		if strings.HasPrefix(specifier, "./") || strings.HasPrefix(specifier, "../") {
+			loads.local = append(loads.local, specifier)
+		}
+	}
+
 	for i, token := range tokens {
 		if token.kind != jsIdentifier {
 			continue
 		}
+		if i+2 < len(tokens) && isPunctuation(tokens[i+1], "=") {
+			right := i + 2
+			isLoader := tokens[right].kind == jsIdentifier && loaderNames[tokens[right].text] && !identifierIsProperty(tokens, right)
+			if !isLoader && isModuleRequire(tokens, right) {
+				isLoader = true
+			}
+			if !isLoader && tokens[right].kind == jsIdentifier && createRequireNames[tokens[right].text] &&
+				right+1 < len(tokens) && isPunctuation(tokens[right+1], "(") {
+				isLoader = true
+			}
+			if isLoader {
+				loaderNames[token.text] = true
+			} else {
+				delete(loaderNames, token.text)
+			}
+			continue
+		}
 		switch token.text {
-		case "require":
-			if i > 0 && tokens[i-1].kind == jsPunctuation && tokens[i-1].text == "." {
-				continue
-			}
-			if i+2 < len(tokens) && isPunctuation(tokens[i+1], "(") && sdkModuleToken(tokens[i+2]) {
-				return true
-			}
 		case "import":
-			if i+1 >= len(tokens) || isPunctuation(tokens[i+1], ".") { // import.meta
+			if identifierIsProperty(tokens, i) || i+1 >= len(tokens) || isPunctuation(tokens[i+1], ".") { // object.import / import.meta
 				continue
 			}
-			if sdkModuleToken(tokens[i+1]) { // import "@adversarylabs/sdk"
-				return true
+			if isStaticModuleToken(tokens[i+1]) { // import "@adversarylabs/sdk"
+				addSpecifier(tokens[i+1])
+				continue
 			}
 			if isPunctuation(tokens[i+1], "(") { // import("@adversarylabs/sdk")
-				if i+2 < len(tokens) && sdkModuleToken(tokens[i+2]) {
-					return true
+				if i+2 < len(tokens) && isStaticModuleToken(tokens[i+2]) {
+					addSpecifier(tokens[i+2])
 				}
 				continue
 			}
-			// Static import clauses are bounded both by token count and their
-			// statement terminator. This accepts multiline import clauses without
-			// scanning arbitrary later source for a coincidental `from` string.
-			limit := i + 64
-			if limit > len(tokens) {
-				limit = len(tokens)
-			}
-			for j := i + 1; j < limit; j++ {
-				if isPunctuation(tokens[j], ";") {
-					break
-				}
-				if tokens[j].kind == jsIdentifier && tokens[j].text == "from" && j+1 < limit && sdkModuleToken(tokens[j+1]) {
-					return true
-				}
+			if specifier, ok := staticFromSpecifier(tokens, i+1); ok {
+				addSpecifier(specifier)
 			}
 		case "export":
 			// Re-exporting the SDK is also an unresolved static module load.
-			limit := i + 64
-			if limit > len(tokens) {
-				limit = len(tokens)
+			if identifierIsProperty(tokens, i) {
+				continue
 			}
-			for j := i + 1; j < limit; j++ {
-				if isPunctuation(tokens[j], ";") {
-					break
-				}
-				if tokens[j].kind == jsIdentifier && tokens[j].text == "from" && j+1 < limit && sdkModuleToken(tokens[j+1]) {
-					return true
-				}
+			if specifier, ok := staticFromSpecifier(tokens, i+1); ok {
+				addSpecifier(specifier)
+			}
+		default:
+			if !loaderNames[token.text] || identifierIsProperty(tokens, i) && !isModuleRequire(tokens, i) {
+				continue
+			}
+			if argument, ok := loaderCallArgument(tokens, i); ok {
+				addSpecifier(argument)
 			}
 		}
 	}
-	return false
+	return loads
+}
+
+func importedCreateRequireNames(tokens []jsToken) map[string]bool {
+	names := make(map[string]bool)
+	for i, token := range tokens {
+		if token.kind != jsIdentifier || token.text != "import" || identifierIsProperty(tokens, i) {
+			continue
+		}
+		specifier, ok := staticFromSpecifier(tokens, i+1)
+		if !ok {
+			continue
+		}
+		module, exact := staticModuleSpecifier(specifier)
+		if !exact || module != "node:module" && module != "module" {
+			continue
+		}
+		for j := i + 1; j+1 < len(tokens); j++ {
+			if tokens[j].kind == jsIdentifier && tokens[j].text == "from" {
+				break
+			}
+			if tokens[j].kind != jsIdentifier || tokens[j].text != "createRequire" {
+				continue
+			}
+			name := "createRequire"
+			if j+2 < len(tokens) && tokens[j+1].kind == jsIdentifier && tokens[j+1].text == "as" && tokens[j+2].kind == jsIdentifier {
+				name = tokens[j+2].text
+			}
+			names[name] = true
+		}
+	}
+	return names
+}
+
+func staticFromSpecifier(tokens []jsToken, start int) (jsToken, bool) {
+	depth := 0
+	for i := start; i < len(tokens); i++ {
+		if depth == 0 && isPunctuation(tokens[i], ";") {
+			return jsToken{}, false
+		}
+		if isPunctuation(tokens[i], "{") || isPunctuation(tokens[i], "[") || isPunctuation(tokens[i], "(") {
+			depth++
+			continue
+		}
+		if isPunctuation(tokens[i], "}") || isPunctuation(tokens[i], "]") || isPunctuation(tokens[i], ")") {
+			if depth > 0 {
+				depth--
+			}
+			continue
+		}
+		if depth == 0 && tokens[i].kind == jsIdentifier && tokens[i].text == "from" && i+1 < len(tokens) && isStaticModuleToken(tokens[i+1]) {
+			return tokens[i+1], true
+		}
+	}
+	return jsToken{}, false
+}
+
+func loaderCallArgument(tokens []jsToken, identifier int) (jsToken, bool) {
+	open := identifier + 1
+	if open+2 < len(tokens) && isPunctuation(tokens[open], "?") && isPunctuation(tokens[open+1], ".") {
+		open += 2
+	}
+	if open >= len(tokens) || !isPunctuation(tokens[open], "(") || open+1 >= len(tokens) || !isStaticModuleToken(tokens[open+1]) {
+		return jsToken{}, false
+	}
+	return tokens[open+1], true
+}
+
+func isModuleRequire(tokens []jsToken, i int) bool {
+	return i >= 2 && tokens[i].kind == jsIdentifier && tokens[i].text == "require" &&
+		isPunctuation(tokens[i-1], ".") && tokens[i-2].kind == jsIdentifier && tokens[i-2].text == "module" &&
+		!identifierIsProperty(tokens, i-2)
+}
+
+func identifierIsProperty(tokens []jsToken, i int) bool {
+	return i > 0 && isPunctuation(tokens[i-1], ".")
+}
+
+func isStaticModuleToken(token jsToken) bool {
+	return token.kind == jsString || token.kind == jsTemplate
+}
+
+func staticModuleSpecifier(token jsToken) (string, bool) {
+	if !isStaticModuleToken(token) || token.ambiguous {
+		return "", false
+	}
+	return token.text, true
+}
+
+func isSDKModule(specifier string) bool {
+	return specifier == "@adversarylabs/sdk" || specifier == "@adversary/sdk"
 }
 
 func isPunctuation(token jsToken, value string) bool {
 	return token.kind == jsPunctuation && token.text == value
-}
-
-func sdkModuleToken(token jsToken) bool {
-	if token.kind != jsString && token.kind != jsTemplate {
-		return false
-	}
-	if !token.escaped && !token.ambiguous {
-		return token.text == "@adversarylabs/sdk" || token.text == "@adversary/sdk"
-	}
-	// Escapes and template substitutions make exact static resolution harder.
-	// If this is syntactically in a module-load position, include the closure
-	// rather than risk producing an artifact that cannot execute offline.
-	return token.ambiguous || strings.Contains(token.text, "@adversarylabs") || strings.Contains(token.text, "@adversary/sdk")
 }
 
 type jsLexer struct {
@@ -245,13 +412,13 @@ func (lexer *jsLexer) scanCode(stopAtTemplateBrace bool) {
 			lexer.scanTemplate()
 			continue
 		}
-		if isJSIdentifierStart(c) {
-			start := lexer.position
-			lexer.position++
-			for lexer.position < len(lexer.source) && isJSIdentifierPart(lexer.source[lexer.position]) {
-				lexer.position++
+		if isJSIdentifierStart(c) || c == '\\' {
+			token, ok := lexer.scanIdentifier()
+			if !ok {
+				lexer.ambiguous = true
+				continue
 			}
-			lexer.tokens = append(lexer.tokens, jsToken{kind: jsIdentifier, text: string(lexer.source[start:lexer.position])})
+			lexer.tokens = append(lexer.tokens, token)
 			continue
 		}
 		if c >= '0' && c <= '9' || c == '.' && lexer.position+1 < len(lexer.source) && lexer.source[lexer.position+1] >= '0' && lexer.source[lexer.position+1] <= '9' {
@@ -273,6 +440,73 @@ func (lexer *jsLexer) scanCode(stopAtTemplateBrace bool) {
 	if stopAtTemplateBrace && !lexer.ambiguous {
 		lexer.ambiguous = true
 	}
+}
+
+func (lexer *jsLexer) scanIdentifier() (jsToken, bool) {
+	var value strings.Builder
+	escaped := false
+	first := true
+	for lexer.position < len(lexer.source) {
+		c := lexer.source[lexer.position]
+		if c == '\\' {
+			r, next, ok := scanJSUnicodeEscape(lexer.source, lexer.position)
+			if !ok || first && !isJSIdentifierStartRune(r) || !first && !isJSIdentifierPartRune(r) {
+				return jsToken{}, false
+			}
+			value.WriteRune(r)
+			lexer.position = next
+			escaped = true
+			first = false
+			continue
+		}
+		if first && isJSIdentifierStart(c) || !first && isJSIdentifierPart(c) {
+			value.WriteByte(c)
+			lexer.position++
+			first = false
+			continue
+		}
+		break
+	}
+	if first {
+		return jsToken{}, false
+	}
+	return jsToken{kind: jsIdentifier, text: value.String(), escaped: escaped}, true
+}
+
+func scanJSUnicodeEscape(source []byte, start int) (rune, int, bool) {
+	if start+2 >= len(source) || source[start] != '\\' || source[start+1] != 'u' {
+		return 0, start, false
+	}
+	if source[start+2] == '{' {
+		end := start + 3
+		for end < len(source) && source[end] != '}' && end-start <= 9 {
+			end++
+		}
+		if end >= len(source) || source[end] != '}' || end == start+3 {
+			return 0, start, false
+		}
+		value, err := strconv.ParseUint(string(source[start+3:end]), 16, 32)
+		if err != nil || value > unicode.MaxRune {
+			return 0, start, false
+		}
+		return rune(value), end + 1, true
+	}
+	if start+6 > len(source) {
+		return 0, start, false
+	}
+	value, err := strconv.ParseUint(string(source[start+2:start+6]), 16, 16)
+	if err != nil {
+		return 0, start, false
+	}
+	return rune(value), start + 6, true
+}
+
+func isJSIdentifierStartRune(r rune) bool {
+	return r == '_' || r == '$' || unicode.IsLetter(r)
+}
+
+func isJSIdentifierPartRune(r rune) bool {
+	return isJSIdentifierStartRune(r) || unicode.IsDigit(r)
 }
 
 func (lexer *jsLexer) scanNumber() {
@@ -395,14 +629,13 @@ func (lexer *jsLexer) scanString(quote byte) jsToken {
 		if c == '\\' {
 			value.Write(lexer.source[start:lexer.position])
 			escaped = true
-			value.WriteByte(c)
-			lexer.position++
-			if lexer.position >= len(lexer.source) {
+			decoded, next, ok := scanJSStringEscape(lexer.source, lexer.position)
+			if !ok {
 				lexer.ambiguous = true
 				return jsToken{kind: jsString, text: value.String(), escaped: true, ambiguous: true}
 			}
-			value.WriteByte(lexer.source[lexer.position])
-			lexer.position++
+			value.WriteString(decoded)
+			lexer.position = next
 			start = lexer.position
 			continue
 		}
@@ -410,6 +643,50 @@ func (lexer *jsLexer) scanString(quote byte) jsToken {
 	}
 	lexer.ambiguous = true
 	return jsToken{kind: jsString, ambiguous: true}
+}
+
+func scanJSStringEscape(source []byte, slash int) (string, int, bool) {
+	if slash+1 >= len(source) || source[slash] != '\\' {
+		return "", slash, false
+	}
+	c := source[slash+1]
+	switch c {
+	case 'x':
+		if slash+4 > len(source) {
+			return "", slash, false
+		}
+		value, err := strconv.ParseUint(string(source[slash+2:slash+4]), 16, 8)
+		if err != nil {
+			return "", slash, false
+		}
+		return string(rune(value)), slash + 4, true
+	case 'u':
+		r, next, ok := scanJSUnicodeEscape(source, slash)
+		return string(r), next, ok
+	case '\n':
+		return "", slash + 2, true
+	case '\r':
+		if slash+2 < len(source) && source[slash+2] == '\n' {
+			return "", slash + 3, true
+		}
+		return "", slash + 2, true
+	case 'n':
+		return "\n", slash + 2, true
+	case 'r':
+		return "\r", slash + 2, true
+	case 't':
+		return "\t", slash + 2, true
+	case 'b':
+		return "\b", slash + 2, true
+	case 'f':
+		return "\f", slash + 2, true
+	case 'v':
+		return "\v", slash + 2, true
+	case '0':
+		return "\x00", slash + 2, true
+	default:
+		return string(c), slash + 2, true
+	}
 }
 
 func (lexer *jsLexer) scanTemplate() {

@@ -401,6 +401,12 @@ func TestPackSDKImportsExecuteOffline(t *testing.T) {
 		{name: "ESM side effect import", entrypoint: "dist/index.js", packageName: "@adversarylabs/sdk", source: `import "@adversarylabs/sdk"; console.log(globalThis.__sdkLoaded);`},
 		{name: "dynamic import", entrypoint: "dist/index.js", packageName: "@adversarylabs/sdk", source: `const sdk = await import("@adversarylabs/sdk"); console.log(sdk.default.value);`},
 		{name: "CommonJS require", entrypoint: "dist/index.cjs", packageName: "@adversary/sdk", source: `const sdk = require("@adversary/sdk"); console.log(sdk.value);`},
+		{name: "CommonJS module require", entrypoint: "dist/index.cjs", packageName: "@adversarylabs/sdk", source: `const sdk = module.require("@adversarylabs/sdk"); console.log(sdk.value);`},
+		{name: "CommonJS optional require", entrypoint: "dist/index.cjs", packageName: "@adversarylabs/sdk", source: `const sdk = require?.("@adversarylabs/sdk"); console.log(sdk.value);`},
+		{name: "CommonJS loader alias", entrypoint: "dist/index.cjs", packageName: "@adversarylabs/sdk", source: `const load = require; const sdk = load("@adversarylabs/sdk"); console.log(sdk.value);`},
+		{name: "CommonJS escaped loader", entrypoint: "dist/index.cjs", packageName: "@adversarylabs/sdk", source: `const sdk = requ\u0069re("@adversarylabs/sdk"); console.log(sdk.value);`},
+		{name: "ESM createRequire alias", entrypoint: "dist/index.js", packageName: "@adversarylabs/sdk", source: `import { createRequire } from "node:module"; const load = createRequire(import.meta.url); const sdk = load("@adversarylabs/sdk"); console.log(sdk.value);`},
+		{name: "ESM escaped specifier", entrypoint: "dist/index.js", packageName: "@adversarylabs/sdk", source: `import sdk from "\x40adversarylabs/sdk"; console.log(sdk.value);`},
 	}
 
 	for _, tt := range tests {
@@ -499,6 +505,73 @@ func TestSDKImportScannerFailsClosedForAmbiguousImports(t *testing.T) {
 				t.Fatalf("scanner excluded ambiguous SDK import: %s", source)
 			}
 		})
+	}
+}
+
+func TestSDKImportScannerRecognizesOnlyRealModuleLoads(t *testing.T) {
+	longNames := make([]string, 80)
+	for i := range longNames {
+		longNames[i] = fmt.Sprintf("name%d", i)
+	}
+	tests := []struct {
+		name   string
+		source string
+		want   bool
+	}{
+		{name: "module require", source: `const sdk = module.require("@adversarylabs/sdk")`, want: true},
+		{name: "optional require", source: `const sdk = require?.("@adversarylabs/sdk")`, want: true},
+		{name: "loader alias", source: `const load = require; load("@adversarylabs/sdk")`, want: true},
+		{name: "createRequire alias", source: `import { createRequire } from "node:module"; const load = createRequire(import.meta.url); load("@adversarylabs/sdk")`, want: true},
+		{name: "escaped specifier", source: `import "\x40adversarylabs/sdk"`, want: true},
+		{name: "escaped loader identifier", source: `requ\u0069re("@adversarylabs/sdk")`, want: true},
+		{name: "long static import", source: "import { " + strings.Join(longNames, ", ") + ` } from "@adversarylabs/sdk"`, want: true},
+		{name: "object import method", source: `object.import("@adversarylabs/sdk")`, want: false},
+		{name: "object require method", source: `object.require("@adversarylabs/sdk")`, want: false},
+		{name: "reassigned loader alias", source: `let load = require; load = replacement; load("@adversarylabs/sdk")`, want: false},
+		{name: "loader alias declared after call", source: `load("@adversarylabs/sdk"); const load = require`, want: false},
+		{name: "ordinary string", source: `const text = "import '@adversarylabs/sdk'"`, want: false},
+		{name: "comment", source: `// require("@adversarylabs/sdk")`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens, ambiguous := lexJSTokens([]byte(tt.source))
+			got := ambiguous || tokensLoadSDK(tokens)
+			if got != tt.want {
+				t.Fatalf("needs SDK closure = %v, want %v; ambiguous=%v tokens=%#v", got, tt.want, ambiguous, tokens)
+			}
+		})
+	}
+}
+
+func TestPackFollowsReachableLocalModulesForSDKImports(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "package.json", `{"type":"module"}`)
+	writeFile(t, dir, "dist/index.js", `import "./runtime.js"`+"\n")
+	writeFile(t, dir, "dist/runtime.js", `import sdk from "@adversarylabs/sdk"; console.log(sdk.value)`+"\n")
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/package.json", `{"name":"@adversarylabs/sdk","version":"1.0.0","main":"index.js"}`)
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/index.js", `module.exports = { value: "sdk-ok" }`+"\n")
+
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer artifact.Close()
+	assertArtifactHasPath(t, artifact, "node_modules/@adversarylabs/sdk/package.json")
+
+	extracted := extractArtifactLayer(t, artifact)
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal("node is required for the reachable local module offline contract")
+	}
+	cmd := exec.Command(node, "dist/index.js")
+	cmd.Dir = extracted
+	cmd.Env = append(os.Environ(), "npm_config_offline=true", "NODE_PATH=")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("packed local-module entrypoint failed offline: %v\n%s", err, output)
+	}
+	if strings.TrimSpace(string(output)) != "sdk-ok" {
+		t.Fatalf("packed local-module entrypoint output = %q", output)
 	}
 }
 
