@@ -122,6 +122,17 @@ func TestSDKImportScannerScopeAndComputedLoads(t *testing.T) {
 		{"transitive helper respects block-local shadow", `let load = replacement; function set(){ load = require } function wrapper(){ const set = replacement; set() } wrapper(); load("@adversarylabs/sdk")`, false},
 		{"transitive helper resolves nested declaration", `let load = replacement; function wrapper(){ function set(){ load = require } set() } wrapper(); load("@adversarylabs/sdk")`, true},
 		{"invoked wrapper with no loader effect stays excluded", `let load = replacement; function reset(){ load = replacement } function wrapper(){ reset() } wrapper(); load("@adversarylabs/sdk")`, false},
+		{"wrapper uses helper reassigned to loader", `let load = replacement; let set = replacement; set = () => { load = require }; function wrapper(){ set() } wrapper(); load("@adversarylabs/sdk")`, true},
+		{"wrapper uses helper reassigned away from loader", `let load = replacement; let set = () => { load = require }; set = replacement; function wrapper(){ set() } wrapper(); load("@adversarylabs/sdk")`, false},
+		{"wrapper keeps helper identity from invocation time", `let load = replacement; let set = () => { load = require }; function wrapper(){ set() } wrapper(); set = replacement; load("@adversarylabs/sdk")`, true},
+		{"later helper reassignment does not affect earlier wrapper", `let load = replacement; let set = replacement; function wrapper(){ set() } wrapper(); set = () => { load = require }; load("@adversarylabs/sdk")`, false},
+		{"wrapper invokes helper alias", `let load = replacement; function set(){ load = require } const invoke = set; function wrapper(){ invoke() } wrapper(); load("@adversarylabs/sdk")`, true},
+		{"wrapper parameter shadows outer helper", `let load = replacement; function set(){ load = require } function wrapper(set){ set() } wrapper(replacement); load("@adversarylabs/sdk")`, false},
+		{"wrapper destructured parameter shadows outer helper", `let load = replacement; function set(){ load = require } function wrapper({set}){ set() } wrapper({set: replacement}); load("@adversarylabs/sdk")`, false},
+		{"optional helper invocation establishes possible loader", `let load = replacement; function set(){ load = require } set?.(); load("@adversarylabs/sdk")`, true},
+		{"apply helper invocation establishes loader", `let load = replacement; function set(){ load = require } set.apply(null, []); load("@adversarylabs/sdk")`, true},
+		{"double parenthesized helper invocation establishes loader", `let load = replacement; function set(){ load = require } ((set))(); load("@adversarylabs/sdk")`, true},
+		{"bound helper invocation establishes loader", `let load = replacement; function set(){ load = require } set.bind(null)(); load("@adversarylabs/sdk")`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -217,6 +228,45 @@ func TestPackExtensionlessCommonJSFileWinsBeforeJSExtension(t *testing.T) {
 	}
 	if got {
 		t.Fatal("extensionless CommonJS file resolves before the sibling .js file")
+	}
+}
+
+func TestPackPackageMainExtensionlessFileWinsBeforeSiblingAndChild(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "adversary.yaml", `name: local/security-reviewer
+version: 0.1.0
+runtime:
+  name: node
+  version: "22"
+  command:
+    - dist/index.cjs
+permissions:
+  network: false
+`)
+	writeFile(t, dir, "dist/index.cjs", `require("./runtime")`+"\n")
+	writeFile(t, dir, "dist/runtime/package.json", `{"main":"lib/entry"}`)
+	writeFile(t, dir, "dist/runtime/lib/entry", `module.exports = {}`+"\n")
+	writeFile(t, dir, "dist/runtime/lib/entry.js", `require("@adversarylabs/sdk")`+"\n")
+
+	manifestData, err := os.ReadFile(filepath.Join(dir, "adversary.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifest.Parse(manifestData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	got, err := declaredEntrypointsNeedSDKClosure(root, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Fatal("package main exact extensionless file must win before sibling and child candidates")
 	}
 }
 
