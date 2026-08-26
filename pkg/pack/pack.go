@@ -150,7 +150,7 @@ func Check(opts Options) (result Preflight, err error) {
 			return result, err
 		}
 	}
-	files, err := collectAndBuildLayerTo(root, dir, io.Discard)
+	files, err := collectAndBuildLayerTo(root, dir, io.Discard, m)
 	if err != nil {
 		return result, err
 	}
@@ -301,7 +301,7 @@ func Create(ctx context.Context, opts Options) (Artifact, error) {
 			}
 		}()
 		hash := sha256.New()
-		files, err = collectAndBuildLayerTo(root, dir, io.MultiWriter(tmp, hash))
+		files, err = collectAndBuildLayerTo(root, dir, io.MultiWriter(tmp, hash), m)
 		if err == nil {
 			err = tmp.Sync()
 		}
@@ -416,7 +416,7 @@ type packFile interface {
 
 var openPackFile = func(root *os.Root, name string) (packFile, error) { return root.Open(name) }
 
-func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, error) {
+func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer, m manifest.Manifest) ([]File, error) {
 	ignore := loadIgnore(dir)
 	files := make([]File, 0)
 	gz, err := gzip.NewWriterLevel(dst, gzip.BestCompression)
@@ -492,10 +492,18 @@ func collectAndBuildLayerTo(root *os.Root, dir string, dst io.Writer) ([]File, e
 		return nil, errors.Join(err, tw.Close(), gz.Close())
 	}
 	// node_modules is ignored by default so packages stay free of dev tooling.
-	// Include the published TypeScript SDK (and its production deps) so packed
-	// artifacts run offline without a vendored copy under vendor/adversary-sdk.
-	if err := appendRuntimeSDKNodeModules(root, addFile); err != nil {
+	// An unbundled JavaScript entrypoint still needs the published SDK and its
+	// production dependencies to run offline. A self-contained bundle does not:
+	// appending the closure there would defeat bundling and can add hundreds of
+	// files after ignore filtering has already run.
+	needsSDKClosure, err := declaredEntrypointsNeedSDKClosure(root, m)
+	if err != nil {
 		return nil, errors.Join(err, tw.Close(), gz.Close())
+	}
+	if needsSDKClosure {
+		if err := appendRuntimeSDKNodeModules(root, addFile); err != nil {
+			return nil, errors.Join(err, tw.Close(), gz.Close())
+		}
 	}
 	if err := errors.Join(tw.Close(), gz.Close()); err != nil {
 		return nil, err
