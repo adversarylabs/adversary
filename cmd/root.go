@@ -129,5 +129,6 @@ func isTypedCommandError(err error) bool {
 	var protocol *internaladversary.ProtocolError
 	var execution *internaladversary.ExecutionError
 	var autoExecution *internaladversary.AutoExecutionError
-	return errors.As(err, &appErr) || errors.As(err, &findings) || errors.As(err, &child) || errors.As(err, &protocol) || errors.As(err, &execution) || errors.As(err, &autoExecution)
+	var syncErr *accessibleAdversarySyncError
+	return errors.As(err, &appErr) || errors.As(err, &findings) || errors.As(err, &child) || errors.As(err, &protocol) || errors.As(err, &execution) || errors.As(err, &autoExecution) || errors.As(err, &syncErr)
 }

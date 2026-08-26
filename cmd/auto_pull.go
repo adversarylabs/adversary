@@ -29,7 +29,9 @@ import (
 // publish — so ensure pins the catalog version onto the pull reference.
 //
 // Catalog list failures warn and return nil so offline use continues, except
-// context cancellation/deadline which always propagate.
+// context cancellation/deadline which always propagate. Once the catalog is
+// available, any package pull failure makes the automatic run fail rather than
+// silently selecting from an incomplete candidate set.
 func ensureAccessibleAdversaries(
 	ctx context.Context,
 	app *application.App,
@@ -134,7 +136,19 @@ func ensureAccessibleAdversaries(
 		fmt.Fprintf(stderr, " · %d failed", failed)
 	}
 	fmt.Fprintln(stderr)
+	if failed > 0 {
+		return &accessibleAdversarySyncError{Failed: failed, Total: n}
+	}
 	return nil
+}
+
+type accessibleAdversarySyncError struct {
+	Failed int
+	Total  int
+}
+
+func (e *accessibleAdversarySyncError) Error() string {
+	return fmt.Sprintf("failed to install %d of %d accessible adversaries", e.Failed, e.Total)
 }
 
 func ensureWriterIsTTY(w io.Writer) bool {

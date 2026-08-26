@@ -43,6 +43,10 @@ func ExitCode(err error) int {
 	if errors.As(err, &autoExecutionErr) {
 		return 3
 	}
+	var syncErr *accessibleAdversarySyncError
+	if errors.As(err, &syncErr) {
+		return 3
+	}
 	if application.IsKind(err, "usage") || application.IsKind(err, "configuration") || application.IsKind(err, "confirmation") {
 		return 2
 	}

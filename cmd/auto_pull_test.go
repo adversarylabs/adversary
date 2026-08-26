@@ -118,8 +118,10 @@ func TestEnsureAccessibleAdversariesPinsCatalogVersionOnUntaggedRef(t *testing.T
 		t.Fatal(err)
 	}
 
-	if err := ensureAccessibleAdversaries(context.Background(), app, api.URL, "work", &stderr); err != nil {
-		t.Fatal(err)
+	err = ensureAccessibleAdversaries(context.Background(), app, api.URL, "work", &stderr)
+	var syncErr *accessibleAdversarySyncError
+	if !errors.As(err, &syncErr) || syncErr.Failed != 1 || syncErr.Total != 1 {
+		t.Fatalf("err = %#v, want one failed accessible adversary", err)
 	}
 	// OCI distribution resolves tags via .../manifests/<tag>.
 	if !strings.Contains(seenPath, "/manifests/0.0.5") {
@@ -199,8 +201,10 @@ func TestEnsureAccessibleAdversariesPrefersNewestVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ensureAccessibleAdversaries(context.Background(), app, server.URL, "work", &stderr); err != nil {
-		t.Fatal(err)
+	err = ensureAccessibleAdversaries(context.Background(), app, server.URL, "work", &stderr)
+	var syncErr *accessibleAdversarySyncError
+	if !errors.As(err, &syncErr) || syncErr.Failed != 2 || syncErr.Total != 2 {
+		t.Fatalf("err = %#v, want two failed accessible adversaries", err)
 	}
 	out := stderr.String()
 	if !strings.Contains(out, "Ensuring 2 accessible adversaries") {
@@ -248,8 +252,10 @@ func TestEnsureAccessibleAdversariesStatusLines(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ensureAccessibleAdversaries(context.Background(), app, server.URL, "work", &stderr); err != nil {
-		t.Fatal(err)
+	err = ensureAccessibleAdversaries(context.Background(), app, server.URL, "work", &stderr)
+	var syncErr *accessibleAdversarySyncError
+	if !errors.As(err, &syncErr) || syncErr.Failed != 2 || syncErr.Total != 2 {
+		t.Fatalf("err = %#v, want two failed accessible adversaries", err)
 	}
 	out := stderr.String()
 	if !strings.Contains(out, "adversarylabs/go-cli") && !strings.Contains(out, "go-cli") {
