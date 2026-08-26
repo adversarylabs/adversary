@@ -43,6 +43,17 @@ func TestParseValid(t *testing.T) {
 	}
 }
 
+func TestParseAllowsExtensionlessNodeEntrypoint(t *testing.T) {
+	input := strings.Replace(valid, "command: [dist/index.js]", "command: [dist/index]", 1)
+	m, err := Parse([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Runtime.Command[0]; got != "dist/index" {
+		t.Fatalf("runtime command = %q", got)
+	}
+}
+
 func TestParseDetectionContract(t *testing.T) {
 	input := strings.Replace(valid, "runtime:\n", `detection:
   files: [Dockerfile, "**/Dockerfile"]
@@ -199,7 +210,7 @@ func TestValidateProjectChecksDeclaredRuntimeConsistency(t *testing.T) {
 	if err := m.ValidateProject(dir); err != nil {
 		t.Fatal(err)
 	}
-	m.Runtime.Command[0] = "bin/tool"
+	m.Runtime.Command[0] = "bin/tool.ts"
 	if err := m.ValidateProject(dir); err == nil || !strings.Contains(err.Error(), "JavaScript") {
 		t.Fatalf("error = %v", err)
 	}

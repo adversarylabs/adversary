@@ -594,7 +594,8 @@ func validateNodeEntrypoint(entrypoint string) error {
 	if clean != entrypoint {
 		return errors.New("Node entry point must be lexically normalized")
 	}
-	if !(strings.HasSuffix(entrypoint, ".js") || strings.HasSuffix(entrypoint, ".mjs") || strings.HasSuffix(entrypoint, ".cjs")) {
+	extension := strings.ToLower(filepath.Ext(entrypoint))
+	if extension != "" && extension != ".js" && extension != ".mjs" && extension != ".cjs" {
 		return errors.New("must be a JavaScript entry point for runtime.name node")
 	}
 	return nil

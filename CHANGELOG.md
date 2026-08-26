@@ -11,6 +11,8 @@ existing one.
 
 ## Unreleased
 
+- Packing preserves self-contained JavaScript bundles instead of appending the
+  installed SDK dependency closure when no unresolved SDK import remains.
 - Model provider and model can be selected per run with flags, and Fireworks is
   supported through its structured Chat Completions API.
 - Model-backed adversaries can request a CLI-owned, authenticated review broker

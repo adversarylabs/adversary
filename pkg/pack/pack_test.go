@@ -348,6 +348,7 @@ func TestDefaultIgnoreRules(t *testing.T) {
 
 func TestPackIncludesPublishedSDKNodeModules(t *testing.T) {
 	dir := testProject(t)
+	writeFile(t, dir, "dist/index.js", `import "@adversarylabs/sdk";`+"\n")
 	writeFile(t, dir, "node_modules/@adversarylabs/sdk/package.json", `{"name":"@adversarylabs/sdk","version":"0.1.16","type":"module","main":"./dist/index.js","dependencies":{"ajv":"^8.0.0"}}`)
 	writeFile(t, dir, "node_modules/@adversarylabs/sdk/dist/index.js", "export const ok = true\n")
 	writeFile(t, dir, "node_modules/ajv/package.json", `{"name":"ajv","version":"8.0.0"}`)
@@ -381,6 +382,240 @@ func TestPackIncludesPublishedSDKNodeModules(t *testing.T) {
 	} {
 		if got[ban] {
 			t.Fatalf("dev or unrelated node_modules packed: %s", ban)
+		}
+	}
+}
+
+func TestPackSDKImportsExecuteOffline(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal("node is required for the packed SDK offline execution contract")
+	}
+	tests := []struct {
+		name        string
+		entrypoint  string
+		packageName string
+		source      string
+	}{
+		{name: "ESM from import", entrypoint: "dist/index.js", packageName: "@adversarylabs/sdk", source: `import sdk from "@adversarylabs/sdk"; console.log(sdk.value);`},
+		{name: "ESM side effect import", entrypoint: "dist/index.js", packageName: "@adversarylabs/sdk", source: `import "@adversarylabs/sdk"; console.log(globalThis.__sdkLoaded);`},
+		{name: "dynamic import", entrypoint: "dist/index.js", packageName: "@adversarylabs/sdk", source: `const sdk = await import("@adversarylabs/sdk"); console.log(sdk.default.value);`},
+		{name: "CommonJS require", entrypoint: "dist/index.cjs", packageName: "@adversary/sdk", source: `const sdk = require("@adversary/sdk"); console.log(sdk.value);`},
+		{name: "CommonJS module require", entrypoint: "dist/index.cjs", packageName: "@adversarylabs/sdk", source: `const sdk = module.require("@adversarylabs/sdk"); console.log(sdk.value);`},
+		{name: "CommonJS optional require", entrypoint: "dist/index.cjs", packageName: "@adversarylabs/sdk", source: `const sdk = require?.("@adversarylabs/sdk"); console.log(sdk.value);`},
+		{name: "CommonJS loader alias", entrypoint: "dist/index.cjs", packageName: "@adversarylabs/sdk", source: `const load = require; const sdk = load("@adversarylabs/sdk"); console.log(sdk.value);`},
+		{name: "CommonJS escaped loader", entrypoint: "dist/index.cjs", packageName: "@adversarylabs/sdk", source: `const sdk = requ\u0069re("@adversarylabs/sdk"); console.log(sdk.value);`},
+		{name: "ESM createRequire alias", entrypoint: "dist/index.js", packageName: "@adversarylabs/sdk", source: `import { createRequire } from "node:module"; const load = createRequire(import.meta.url); const sdk = load("@adversarylabs/sdk"); console.log(sdk.value);`},
+		{name: "ESM escaped specifier", entrypoint: "dist/index.js", packageName: "@adversarylabs/sdk", source: `import sdk from "\x40adversarylabs/sdk"; console.log(sdk.value);`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := testProject(t)
+			writeFile(t, dir, "package.json", `{"type":"module"}`)
+			writeFile(t, dir, "adversary.yaml", fmt.Sprintf(`name: local/security-reviewer
+version: 0.1.0
+runtime:
+  name: node
+  version: "22"
+  command:
+    - %s
+permissions:
+  network: false
+`, tt.entrypoint))
+			writeFile(t, dir, tt.entrypoint, tt.source+"\n")
+			writeFile(t, dir, "node_modules/"+tt.packageName+"/package.json", fmt.Sprintf(`{"name":%q,"version":"1.0.0","main":"index.js","dependencies":{"sdk-runtime-dep":"1.0.0"}}`, tt.packageName))
+			writeFile(t, dir, "node_modules/"+tt.packageName+"/index.js", `const value = require("sdk-runtime-dep"); globalThis.__sdkLoaded = value; module.exports = { value };`+"\n")
+			writeFile(t, dir, "node_modules/sdk-runtime-dep/package.json", `{"name":"sdk-runtime-dep","version":"1.0.0","main":"index.js"}`)
+			writeFile(t, dir, "node_modules/sdk-runtime-dep/index.js", `module.exports = "sdk-ok";`+"\n")
+
+			artifact, err := Create(context.Background(), Options{Dir: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer artifact.Close()
+			assertArtifactHasPath(t, artifact, "node_modules/"+tt.packageName+"/package.json")
+			assertArtifactHasPath(t, artifact, "node_modules/sdk-runtime-dep/index.js")
+
+			second, err := Create(context.Background(), Options{Dir: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer second.Close()
+			if artifact.LayerDigest != second.LayerDigest || !reflect.DeepEqual(artifact.Files, second.Files) {
+				t.Fatalf("SDK inventory is not deterministic: %s != %s", artifact.LayerDigest, second.LayerDigest)
+			}
+
+			extracted := extractArtifactLayer(t, artifact)
+			cmd := exec.Command(node, filepath.FromSlash(tt.entrypoint))
+			cmd.Dir = extracted
+			cmd.Env = append(os.Environ(), "npm_config_offline=true", "NODE_PATH=")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("packed entrypoint failed offline: %v\n%s", err, output)
+			}
+			if strings.TrimSpace(string(output)) != "sdk-ok" {
+				t.Fatalf("packed entrypoint output = %q", output)
+			}
+		})
+	}
+}
+
+func TestPackSelfContainedBundleExcludesInstalledSDKClosure(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/package.json", `{"name":"@adversarylabs/sdk","version":"1.0.0","main":"index.js"}`)
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/index.js", "should-not-ship\n")
+	writeFile(t, dir, "dist/index.js", `#!/usr/bin/env node
+// node_modules/@adversarylabs/sdk/dist/index.js
+// import "@adversarylabs/sdk";
+/* require("@adversarylabs/sdk") */
+const generatedPath = "node_modules/@adversarylabs/sdk/dist/index.js";
+const fakeImport = 'import sdk from "@adversarylabs/sdk"';
+const fakeRequire = `+"`require(\"@adversarylabs/sdk\") ${\"still template text\"}`"+`;
+const fakeRegex = /require\("@adversarylabs\/sdk"\)/;
+if (false) /import\("@adversarylabs\/sdk"\)/.test("");
+const ratio = 0.2 / 2;
+const dividedRegex = /safe/ / 2;
+const postIncrementDivision = ratio++ / 2;
+console.log(generatedPath, fakeImport, fakeRequire, fakeRegex, ratio, dividedRegex, postIncrementDivision);
+`)
+
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer artifact.Close()
+	for _, file := range artifact.Files {
+		if strings.HasPrefix(file.Path, "node_modules/") {
+			t.Fatalf("self-contained bundle unexpectedly packed %s", file.Path)
+		}
+	}
+}
+
+func TestSDKImportScannerFailsClosedForAmbiguousImports(t *testing.T) {
+	for name, source := range map[string]string{
+		"escaped static specifier":       `import "@adversarylabs/\\x73dk";`,
+		"computed dynamic import":        "import(`@adversarylabs/${name}`);",
+		"template interpolation require": "const value = `${require(\"@adversarylabs/sdk\")}`;",
+		"unterminated comment":           `/* generated bundle`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			tokens, ambiguous := lexJSTokens([]byte(source))
+			if !ambiguous && !tokensLoadSDK(tokens) {
+				t.Fatalf("scanner excluded ambiguous SDK import: %s", source)
+			}
+		})
+	}
+}
+
+func TestSDKImportScannerRecognizesOnlyRealModuleLoads(t *testing.T) {
+	longNames := make([]string, 80)
+	for i := range longNames {
+		longNames[i] = fmt.Sprintf("name%d", i)
+	}
+	tests := []struct {
+		name   string
+		source string
+		want   bool
+	}{
+		{name: "module require", source: `const sdk = module.require("@adversarylabs/sdk")`, want: true},
+		{name: "optional require", source: `const sdk = require?.("@adversarylabs/sdk")`, want: true},
+		{name: "loader alias", source: `const load = require; load("@adversarylabs/sdk")`, want: true},
+		{name: "createRequire alias", source: `import { createRequire } from "node:module"; const load = createRequire(import.meta.url); load("@adversarylabs/sdk")`, want: true},
+		{name: "escaped specifier", source: `import "\x40adversarylabs/sdk"`, want: true},
+		{name: "escaped loader identifier", source: `requ\u0069re("@adversarylabs/sdk")`, want: true},
+		{name: "long static import", source: "import { " + strings.Join(longNames, ", ") + ` } from "@adversarylabs/sdk"`, want: true},
+		{name: "object import method", source: `object.import("@adversarylabs/sdk")`, want: false},
+		{name: "object require method", source: `object.require("@adversarylabs/sdk")`, want: false},
+		{name: "reassigned loader alias", source: `let load = require; load = replacement; load("@adversarylabs/sdk")`, want: false},
+		{name: "loader alias declared after call", source: `load("@adversarylabs/sdk"); const load = require`, want: false},
+		{name: "ordinary string", source: `const text = "import '@adversarylabs/sdk'"`, want: false},
+		{name: "comment", source: `// require("@adversarylabs/sdk")`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens, ambiguous := lexJSTokens([]byte(tt.source))
+			got := ambiguous || tokensLoadSDK(tokens)
+			if got != tt.want {
+				t.Fatalf("needs SDK closure = %v, want %v; ambiguous=%v tokens=%#v", got, tt.want, ambiguous, tokens)
+			}
+		})
+	}
+}
+
+func TestPackFollowsReachableLocalModulesForSDKImports(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "package.json", `{"type":"module"}`)
+	writeFile(t, dir, "dist/index.js", `import "./runtime.js"`+"\n")
+	writeFile(t, dir, "dist/runtime.js", `import sdk from "@adversarylabs/sdk"; console.log(sdk.value)`+"\n")
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/package.json", `{"name":"@adversarylabs/sdk","version":"1.0.0","main":"index.js"}`)
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/index.js", `module.exports = { value: "sdk-ok" }`+"\n")
+
+	artifact, err := Create(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer artifact.Close()
+	assertArtifactHasPath(t, artifact, "node_modules/@adversarylabs/sdk/package.json")
+
+	extracted := extractArtifactLayer(t, artifact)
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal("node is required for the reachable local module offline contract")
+	}
+	cmd := exec.Command(node, "dist/index.js")
+	cmd.Dir = extracted
+	cmd.Env = append(os.Environ(), "npm_config_offline=true", "NODE_PATH=")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("packed local-module entrypoint failed offline: %v\n%s", err, output)
+	}
+	if strings.TrimSpace(string(output)) != "sdk-ok" {
+		t.Fatalf("packed local-module entrypoint output = %q", output)
+	}
+}
+
+func assertArtifactHasPath(t *testing.T, artifact Artifact, want string) {
+	t.Helper()
+	for _, file := range artifact.Files {
+		if file.Path == want {
+			return
+		}
+	}
+	t.Fatalf("artifact missing %s", want)
+}
+
+func extractArtifactLayer(t *testing.T, artifact Artifact) string {
+	t.Helper()
+	dir := t.TempDir()
+	gz, err := gzip.NewReader(bytes.NewReader(readArtifactLayer(t, artifact)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return dir
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		clean := filepath.Clean(filepath.FromSlash(header.Name))
+		if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			t.Fatalf("unsafe test artifact path %q", header.Name)
+		}
+		target := filepath.Join(dir, clean)
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, data, os.FileMode(header.Mode)); err != nil {
+			t.Fatal(err)
 		}
 	}
 }
