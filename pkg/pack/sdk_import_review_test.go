@@ -98,6 +98,19 @@ func TestSDKImportScannerScopeAndComputedLoads(t *testing.T) {
 		{"short circuit replacement preserves possible loader", `let load = require; flag && (load = replacement); load("@adversarylabs/sdk")`, true},
 		{"destructured require parameter shadows builtin", `function run({ require }) { require("@adversarylabs/sdk") }`, false},
 		{"destructured local require shadows builtin", `const { require } = replacement; require("@adversarylabs/sdk")`, false},
+		{"called arrow establishes loader", `let load = replacement; const set = () => { load = require }; set(); load("@adversarylabs/sdk")`, true},
+		{"called function expression establishes loader", `let load = replacement; const set = function () { load = require }; set(); load("@adversarylabs/sdk")`, true},
+		{"conditional named helper establishes possible loader", `let load = replacement; function set() { if (flag) load = require } set(); load("@adversarylabs/sdk")`, true},
+		{"conditional iife establishes possible loader", `let load = replacement; (() => { if (flag) load = require })(); load("@adversarylabs/sdk")`, true},
+		{"named helper establishes module require", `let load = replacement; function set() { load = module.require } set(); load("@adversarylabs/sdk")`, true},
+		{"named helper establishes createRequire loader", `import { createRequire as cr } from "node:module"; let load = replacement; function set() { load = cr(import.meta.url) } set(); load("@adversarylabs/sdk")`, true},
+		{"shadowed helper call does not invoke outer helper", `let load = replacement; function set() { load = require } { const set = replacement; set() } load("@adversarylabs/sdk")`, false},
+		{"inaccessible nested helper does not bind top level call", `let load = replacement; function outer() { function set() { load = require } } set(); load("@adversarylabs/sdk")`, false},
+		{"later duplicate function declaration wins nonloader", `let load = replacement; function set() { load = require } function set() { load = replacement } set(); load("@adversarylabs/sdk")`, false},
+		{"later duplicate function declaration wins loader", `let load = replacement; function set() { load = replacement } function set() { load = require } set(); load("@adversarylabs/sdk")`, true},
+		{"hoisted helper establishes loader before declaration", `let load = replacement; set(); function set() { load = require } load("@adversarylabs/sdk")`, true},
+		{"hoisted last duplicate wins before declarations", `let load = replacement; set(); function set() { load = require } function set() { load = replacement } load("@adversarylabs/sdk")`, false},
+		{"called helper alias establishes loader", `let load = replacement; function set() { load = require } const invoke = set; invoke(); load("@adversarylabs/sdk")`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -207,6 +220,35 @@ permissions:
 	}
 	if !got {
 		t.Fatal("directory-valued package main imports SDK but closure was excluded")
+	}
+}
+
+func TestPackFollowsQueryQualifiedLocalModule(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, "dist/index.js", `import "./runtime.js?variant=review"`+"\n")
+	writeFile(t, dir, "dist/runtime.js", `import "@adversarylabs/sdk"`+"\n")
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/package.json", `{"name":"@adversarylabs/sdk","version":"1.0.0","main":"index.js"}`)
+	writeFile(t, dir, "node_modules/@adversarylabs/sdk/index.js", "export const ok = true\n")
+
+	manifestData, err := os.ReadFile(filepath.Join(dir, "adversary.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifest.Parse(manifestData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	got, err := declaredEntrypointsNeedSDKClosure(root, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Fatal("query-qualified reachable local module imports SDK but closure was excluded")
 	}
 }
 
