@@ -133,18 +133,18 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 	// Attach README.md and CHECKS.md as OCI referrers (same pattern as adversary.yaml)
 	// so the catalog site can show versioned product content.
 	if docsErr != nil {
-		fmt.Fprintf(stderr, "Warning: could not extract catalog docs from package layer: %v\n", docsErr)
+		return true, fmt.Errorf("extract catalog docs from package layer: %w", docsErr)
 	} else {
 		if readme := docs["README.md"]; len(readme) > 0 {
 			if _, _, err := registry.PushAttachedReferrer(ctx, ref, digest, oci.ReadmeMediaType, "README.md", "adversary-readme", readme); err != nil {
-				fmt.Fprintf(stderr, "Warning: could not publish README referrer: %v\n", err)
+				return true, fmt.Errorf("publish README referrer: %w", err)
 			} else {
 				fmt.Fprintln(stderr, "Published README.md referrer")
 			}
 		}
 		if checks := docs["CHECKS.md"]; len(checks) > 0 {
 			if _, _, err := registry.PushAttachedReferrer(ctx, ref, digest, oci.ChecksMediaType, "CHECKS.md", "adversary-checks", checks); err != nil {
-				fmt.Fprintf(stderr, "Warning: could not publish CHECKS referrer: %v\n", err)
+				return true, fmt.Errorf("publish CHECKS referrer: %w", err)
 			} else {
 				fmt.Fprintln(stderr, "Published CHECKS.md referrer")
 			}

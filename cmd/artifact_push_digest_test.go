@@ -181,3 +181,31 @@ func TestPushDigestCanonicalizationFailureDoesNotRetargetReference(t *testing.T)
 		})
 	}
 }
+
+func TestPushFailsWhenCatalogDocumentReferrerFails(t *testing.T) {
+	registry := newTestOCIRegistry()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPut && strings.Contains(req.URL.Path, "adversary-readme") {
+			http.Error(w, "fixture", http.StatusInternalServerError)
+			return
+		}
+		registry.ServeHTTP(w, req)
+	})
+	fixture := makePushDigestFixture(t, handler)
+
+	var stdout, stderr bytes.Buffer
+	_, err := pushUnified(
+		context.Background(),
+		fixture.app,
+		fixture.app.Dependencies().Resolver,
+		&stdout,
+		&stderr,
+		[]string{fixture.generic, fixture.remoteRef},
+		"",
+		"",
+		"text",
+	)
+	if err == nil || !strings.Contains(err.Error(), "publish README referrer") {
+		t.Fatalf("push error = %v", err)
+	}
+}
