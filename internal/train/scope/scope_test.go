@@ -262,6 +262,29 @@ func TestNonActionableHumanCommentRejectsSuccessfulVerificationReport(t *testing
 	}
 }
 
+func TestNonActionableHumanCommentRejectsBotInvocationOnly(t *testing.T) {
+	for _, body := range []string{
+		"@copilot",
+		"@copilot please explain bro",
+		"@coderabbitai review this PR",
+		"@github-copilot please take a look at this again",
+	} {
+		reason, rejected := NonActionableHumanComment(body)
+		if !rejected || !strings.Contains(reason, "bot-directed process command") {
+			t.Fatalf("bot invocation became gold: body=%q rejected=%v reason=%q", body, rejected, reason)
+		}
+	}
+
+	for _, body := range []string{
+		"@copilot this unlocked write can race with the reader; guard it with the worker mutex",
+		"@copilot the tooltip omits lang while the visible text localizes it; keep them consistent",
+	} {
+		if reason, rejected := NonActionableHumanComment(body); rejected {
+			t.Fatalf("technical concern mentioning a bot was rejected: body=%q reason=%q", body, reason)
+		}
+	}
+}
+
 func TestNonActionableReplyKeepsUnresolvedFollowUp(t *testing.T) {
 	body := "I pushed the earlier cleanup, but could this still leak when the cancellation path wins the race?"
 	if reason, rejected := NonActionableReply(body); rejected {
