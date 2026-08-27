@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,45 @@ import (
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
+
+func TestPushCommandSilencesRuntimeUsageAndErrors(t *testing.T) {
+	cmd := newPushCommand(nil, new(string), new(string))
+	if !cmd.SilenceUsage || !cmd.SilenceErrors {
+		t.Fatalf("SilenceUsage=%t SilenceErrors=%t", cmd.SilenceUsage, cmd.SilenceErrors)
+	}
+}
+
+type canceledLookupResolver struct {
+	application.Resolver
+}
+
+func (canceledLookupResolver) HasExact(string) (bool, error) {
+	return false, nil
+}
+
+func (canceledLookupResolver) Lookup(context.Context, string) (application.Resolution, error) {
+	return application.Resolution{}, errors.New("lookup failed")
+}
+
+func TestPushPrefersContextCancellationToLookupFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := pushUnified(
+		ctx,
+		nil,
+		canceledLookupResolver{},
+		io.Discard,
+		io.Discard,
+		[]string{"security-reviewer:1.4.2"},
+		"",
+		"",
+		"text",
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("push error = %v, want context.Canceled", err)
+	}
+}
 
 func TestPushCommitsRegistryDigestWhenAlgorithmChanges(t *testing.T) {
 	remote := newTestOCIRegistry()
@@ -179,5 +219,33 @@ func TestPushDigestCanonicalizationFailureDoesNotRetargetReference(t *testing.T)
 				t.Fatalf("equivalent record missing: %#v err=%v", got, resolveErr)
 			}
 		})
+	}
+}
+
+func TestPushFailsWhenCatalogDocumentReferrerFails(t *testing.T) {
+	registry := newTestOCIRegistry()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPut && strings.Contains(req.URL.Path, "adversary-readme") {
+			http.Error(w, "fixture", http.StatusInternalServerError)
+			return
+		}
+		registry.ServeHTTP(w, req)
+	})
+	fixture := makePushDigestFixture(t, handler)
+
+	var stdout, stderr bytes.Buffer
+	_, err := pushUnified(
+		context.Background(),
+		fixture.app,
+		fixture.app.Dependencies().Resolver,
+		&stdout,
+		&stderr,
+		[]string{fixture.generic, fixture.remoteRef},
+		"",
+		"",
+		"text",
+	)
+	if err == nil || !strings.Contains(err.Error(), "publish README referrer") {
+		t.Fatalf("push error = %v", err)
 	}
 }
