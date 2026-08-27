@@ -238,6 +238,30 @@ func TestNonActionableReplyRejectsContributorResolutionUpdate(t *testing.T) {
 	}
 }
 
+func TestNonActionableReplyRejectsReviewerAgreement(t *testing.T) {
+	body := "You are right - that is probably what we want. :+1:"
+	reason, rejected := NonActionableReply(body)
+	if !rejected || !strings.Contains(reason, "agreement") {
+		t.Fatalf("reviewer agreement was not rejected: rejected=%v reason=%q", rejected, reason)
+	}
+}
+
+func TestNonActionableHumanCommentRejectsSuccessfulVerificationReport(t *testing.T) {
+	body := "Verified Go 1.25.9 SHA256 checksums against go.dev - all four match. Confirmed the linux/amd64 download locally."
+	reason, rejected := NonActionableHumanComment(body)
+	if !rejected || !strings.Contains(reason, "verification report") {
+		t.Fatalf("successful verification report became a concern: rejected=%v reason=%q", rejected, reason)
+	}
+	for _, concern := range []string{
+		"Verified the checksum, but it does not match the upstream release.",
+		"Verified locally; please add coverage for the missing architecture.",
+	} {
+		if reason, rejected := NonActionableHumanComment(concern); rejected {
+			t.Fatalf("real verification concern was rejected as %q: %q", reason, concern)
+		}
+	}
+}
+
 func TestNonActionableReplyKeepsUnresolvedFollowUp(t *testing.T) {
 	body := "I pushed the earlier cleanup, but could this still leak when the cancellation path wins the race?"
 	if reason, rejected := NonActionableReply(body); rejected {
