@@ -453,6 +453,9 @@ func NonActionableHumanComment(body string) (reason string, ok bool) {
 	if lower == "" {
 		return "empty comment", true
 	}
+	if isBotInvocationOnly(lower) {
+		return "bot-directed process command without a technical concern", true
+	}
 	if isContextDependentReviewFragment(lower) {
 		return "context-dependent fragment without a self-contained concern", true
 	}
@@ -472,6 +475,43 @@ func NonActionableHumanComment(body string) (reason string, ok bool) {
 		return "approval / praise summary without an unresolved request", true
 	}
 	return "", false
+}
+
+// isBotInvocationOnly recognizes the small command vocabulary humans use to
+// ask an automated reviewer to speak. These messages are conversation control,
+// not review claims. Keep the allowlist deliberately narrow: a bot mention that
+// also names a mechanism or consequence remains actionable human evidence.
+func isBotInvocationOnly(body string) bool {
+	if strings.Contains(body, "`") {
+		return false
+	}
+	allowed := map[string]bool{
+		"a": true, "again": true, "analyze": true, "answer": true,
+		"at": true, "bro": true, "change": true, "changes": true,
+		"check": true, "code": true, "comment": true, "explain": true,
+		"help": true, "here": true, "it": true, "look": true,
+		"on": true, "please": true, "pls": true, "pr": true,
+		"respond": true, "review": true, "summarise": true, "summarize": true,
+		"take": true, "that": true, "the": true, "this": true,
+		"thoughts": true, "why": true,
+	}
+	foundBot := false
+	commandWords := 0
+	for _, raw := range strings.Fields(strings.ToLower(strings.TrimSpace(body))) {
+		token := strings.Trim(raw, " \t\r\n.,:;!?()[]{}<>\"'")
+		if token == "" {
+			continue
+		}
+		if strings.HasPrefix(token, "@") && isReviewBot(strings.TrimPrefix(token, "@")) {
+			foundBot = true
+			continue
+		}
+		if !allowed[token] {
+			return false
+		}
+		commandWords++
+	}
+	return foundBot && commandWords <= 8
 }
 
 func isContextDependentReviewFragment(lower string) bool {

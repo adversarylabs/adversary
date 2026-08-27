@@ -240,6 +240,21 @@ func TestBuildCasesGradesCompleteReviewThreadDisposition(t *testing.T) {
 		}
 	})
 
+	t.Run("bot invocation reply never becomes gold", func(t *testing.T) {
+		got := buildThreadDispositionFixture(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", `[
+  {"id":11,"pull_request_review_id":10,"user":{"login":"reviewer"},"body":"The visible time is localized but the tooltip is not; please keep them consistent.","path":"timeline.tsx","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:01:00Z"},
+  {"id":12,"pull_request_review_id":10,"in_reply_to_id":11,"user":{"login":"reviewer"},"body":"@copilot please explain bro","path":"timeline.tsx","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:02:00Z"}
+]`)
+		approved := approvedConcernLabels(got)
+		if len(approved) != 1 || !strings.HasPrefix(approved[0].ID, "c-11-") {
+			t.Fatalf("approved concerns = %#v, want only the technical root", approved)
+		}
+		reply := concernLabelByCommentID(t, got, 12)
+		if reply.Approved || !strings.Contains(reply.ScopeReason, "bot-directed process command") {
+			t.Fatalf("bot invocation reply became gold: %+v", reply)
+		}
+	})
+
 	t.Run("later author fix retains accepted root concern", func(t *testing.T) {
 		got := buildThreadDispositionFixture(t, "cccccccccccccccccccccccccccccccccccccccc", `[
   {"id":11,"pull_request_review_id":10,"user":{"login":"reviewer"},"body":"This unsynchronized write can race with the reader; guard it with the worker mutex.","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:01:00Z"},
@@ -258,7 +273,33 @@ func TestBuildCasesGradesCompleteReviewThreadDisposition(t *testing.T) {
 	})
 }
 
+func TestBuildCasesRejectsBotInvocationAsSeparateLaterReview(t *testing.T) {
+	reviews := `[
+  {"id":10,"html_url":"https://github.com/acme/r/pull/7#pullrequestreview-10","user":{"login":"reviewer"},"body":"","state":"COMMENTED","commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","submitted_at":"2024-01-02T01:00:00Z"},
+  {"id":20,"html_url":"https://github.com/acme/r/pull/7#pullrequestreview-20","user":{"login":"reviewer"},"body":"","state":"COMMENTED","commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","submitted_at":"2024-01-03T01:00:00Z"}
+]`
+	comments := `[
+  {"id":11,"pull_request_review_id":10,"user":{"login":"reviewer"},"body":"The visible time is localized but the tooltip is not; please keep them consistent.","path":"timeline.tsx","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:01:00Z"},
+  {"id":12,"pull_request_review_id":20,"in_reply_to_id":11,"user":{"login":"reviewer"},"body":"@copilot please explain bro","path":"timeline.tsx","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-03T01:01:00Z"}
+]`
+	got := buildThreadDispositionFixtureWithReviews(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", reviews, comments)
+	reply := concernLabelByCommentID(t, got, 12)
+	if reply.Approved || !strings.Contains(reply.ScopeReason, "bot-directed process command") {
+		t.Fatalf("later bot invocation review became gold: %+v", reply)
+	}
+}
+
 func buildThreadDispositionFixture(t *testing.T, finalHead, comments string) []*cases.Case {
+	t.Helper()
+	reviews := `[{
+  "id":10,"html_url":"https://github.com/acme/r/pull/7#pullrequestreview-10",
+  "user":{"login":"reviewer"},"body":"","state":"CHANGES_REQUESTED",
+  "commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","submitted_at":"2024-01-02T01:00:00Z"
+}]`
+	return buildThreadDispositionFixtureWithReviews(t, finalHead, reviews, comments)
+}
+
+func buildThreadDispositionFixtureWithReviews(t *testing.T, finalHead, reviews, comments string) []*cases.Case {
 	t.Helper()
 	dir := t.TempDir()
 	pull := `{
@@ -266,11 +307,6 @@ func buildThreadDispositionFixture(t *testing.T, finalHead, comments string) []*
   "base":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
   "head":{"sha":"` + finalHead + `"},"user":{"login":"pull-author"}
 }`
-	reviews := `[{
-  "id":10,"html_url":"https://github.com/acme/r/pull/7#pullrequestreview-10",
-  "user":{"login":"reviewer"},"body":"","state":"CHANGES_REQUESTED",
-  "commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","submitted_at":"2024-01-02T01:00:00Z"
-}]`
 	for name, body := range map[string]string{"pull.json": pull, "reviews.json": reviews, "review-comments.json": comments} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
