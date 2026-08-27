@@ -67,6 +67,7 @@ type FollowUpCommit struct {
 type Comment struct {
 	ID                 int64     `json:"id" yaml:"id"`
 	Kind               string    `json:"kind" yaml:"kind"` // review-comment | issue-comment | review-body
+	URL                string    `json:"url,omitempty" yaml:"url,omitempty"`
 	Author             string    `json:"author" yaml:"author"`
 	Body               string    `json:"body" yaml:"body"`
 	Path               string    `json:"path,omitempty" yaml:"path,omitempty"`
@@ -108,6 +109,11 @@ type ExpectedConcern struct {
 	// reviewer comment. It is interpretation evidence for routing and issue
 	// abstraction only; it is never a gold concern and is not used by scoring.
 	ThreadContext []ReviewThreadContext `json:"thread_context,omitempty" yaml:"thread_context,omitempty"`
+	// ThreadDisposition records the final, deterministic disposition of the
+	// complete inline discussion so local evidence can distinguish unresolved,
+	// reiterated, withdrawn, and author-reported-fix threads.
+	ThreadDisposition    string `json:"thread_disposition,omitempty" yaml:"thread_disposition,omitempty"`
+	ThreadDispositionURL string `json:"thread_disposition_url,omitempty" yaml:"thread_disposition_url,omitempty"`
 }
 
 // ReviewThreadContext is a non-gold message adjacent to a reviewer concern.
@@ -115,6 +121,7 @@ type ExpectedConcern struct {
 // explanation for a second human review finding.
 type ReviewThreadContext struct {
 	CommentID int64     `json:"comment_id" yaml:"comment_id"`
+	URL       string    `json:"url,omitempty" yaml:"url,omitempty"`
 	Author    string    `json:"author" yaml:"author"`
 	Role      string    `json:"role" yaml:"role"` // reviewer | pull_request_author
 	Body      string    `json:"body" yaml:"body"`

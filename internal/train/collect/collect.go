@@ -46,6 +46,7 @@ type CollectOptions struct {
 
 type rawReviewComment struct {
 	ID                    int64          `json:"id"`
+	HTMLURL               string         `json:"html_url"`
 	Body                  string         `json:"body"`
 	Path                  string         `json:"path"`
 	Line                  int            `json:"line"`
@@ -266,6 +267,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	}
 	var reviews []struct {
 		ID                    int64          `json:"id"`
+		HTMLURL               string         `json:"html_url"`
 		Body                  string         `json:"body"`
 		State                 string         `json:"state"`
 		CommitID              string         `json:"commit_id"`
@@ -326,7 +328,8 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 	round := 0
 	byReviewedSHA := make(map[string]*cases.Case)
 	commentContext := make(map[commentKey]reviewCommentContext, len(reviews)+len(comments))
-	threadContext := buildReviewThreadContext(comments, prObj.User.Login)
+	threadContext := buildReviewThreadContext(comments, prObj.User.Login, prObj.HTMLURL)
+	threadDisposition := buildReviewThreadDisposition(comments, prObj.User.Login, prObj.HTMLURL)
 	automatedReviews := make(map[int64]bool, len(reviews))
 	for _, rev := range reviews {
 		automated := automatedGitHubProvenance(rev.User, rev.PerformedViaGitHubApp) || scope.IsAutomatedReviewArtifact(rev.Body)
@@ -334,12 +337,16 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		automatedReviews[rev.ID] = automated
 	}
 	for _, comment := range comments {
+		disposition := threadDisposition[comment.ID]
 		commentContext[commentKey{kind: "review-comment", id: comment.ID}] = reviewCommentContext{
-			inReplyToID:     comment.InReplyToID,
-			automatedParent: automatedReviews[comment.PullRequestReviewID],
-			automatedAuthor: automatedGitHubProvenance(comment.User, comment.PerformedViaGitHubApp),
-			threadContext:   threadContext[comment.ID],
-			diffHunk:        comment.DiffHunk,
+			inReplyToID:                comment.InReplyToID,
+			automatedParent:            automatedReviews[comment.PullRequestReviewID],
+			automatedAuthor:            automatedGitHubProvenance(comment.User, comment.PerformedViaGitHubApp),
+			threadContext:              threadContext[comment.ID],
+			threadDisposition:          disposition.kind,
+			threadDispositionCommentID: disposition.commentID,
+			threadDispositionURL:       disposition.url,
+			diffHunk:                   comment.DiffHunk,
 		}
 	}
 	for _, rev := range reviews {
@@ -370,6 +377,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 				revComments = append(revComments, cases.Comment{
 					ID:               c.ID,
 					Kind:             "review-comment",
+					URL:              githubCommentURL(prObj.HTMLURL, c.HTMLURL, "discussion_r", c.ID),
 					Author:           c.User.Login,
 					Body:             c.Body,
 					Path:             c.Path,
@@ -397,6 +405,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			revComments = append([]cases.Comment{{
 				ID:              rev.ID,
 				Kind:            "review-body",
+				URL:             githubCommentURL(prObj.HTMLURL, rev.HTMLURL, "pullrequestreview-", rev.ID),
 				Author:          rev.User.Login,
 				Body:            rev.Body,
 				CreatedAt:       submitted,
@@ -481,7 +490,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			}
 			created, _ := time.Parse(time.RFC3339, c.CreatedAt)
 			allComments = append(allComments, cases.Comment{
-				ID: c.ID, Kind: "review-comment", Author: c.User.Login, Body: c.Body,
+				ID: c.ID, Kind: "review-comment", URL: githubCommentURL(prObj.HTMLURL, c.HTMLURL, "discussion_r", c.ID), Author: c.User.Login, Body: c.Body,
 				Path: c.Path, Line: c.Line, OriginalCommitID: oc, CreatedAt: created,
 			})
 		}
@@ -513,12 +522,15 @@ type commentKey struct {
 }
 
 type reviewCommentContext struct {
-	inReplyToID     int64
-	automatedParent bool
-	automatedAuthor bool
-	threadContext   []cases.ReviewThreadContext
-	reviewSummary   string
-	diffHunk        string
+	inReplyToID                int64
+	automatedParent            bool
+	automatedAuthor            bool
+	threadContext              []cases.ReviewThreadContext
+	threadDisposition          string
+	threadDispositionCommentID int64
+	threadDispositionURL       string
+	reviewSummary              string
+	diffHunk                   string
 }
 
 // applyScope routes each label to the best adversary (or none).
@@ -562,7 +574,10 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 		body = scope.NormalizeReviewComment(body)
 		labels[i].Summary = body
 		if matched != nil {
-			labels[i].ThreadContext = append([]cases.ReviewThreadContext(nil), commentContext[commentKey{kind: matched.Kind, id: matched.ID}].threadContext...)
+			ctx := commentContext[commentKey{kind: matched.Kind, id: matched.ID}]
+			labels[i].ThreadContext = append([]cases.ReviewThreadContext(nil), ctx.threadContext...)
+			labels[i].ThreadDisposition = ctx.threadDisposition
+			labels[i].ThreadDispositionURL = ctx.threadDispositionURL
 		}
 		if authorOK != nil && !authorOK(author) {
 			labels[i].Scope = string(scope.OutOfScope)
@@ -606,6 +621,24 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 					labels[i].OwnerAdversary = ""
 					labels[i].ScopeReason = reason
 					labels[i].ScopeMethod = "thread-metadata"
+					continue
+				}
+			}
+			switch ctx.threadDisposition {
+			case "withdrawn":
+				labels[i].Scope = string(scope.OutOfScope)
+				labels[i].Approved = false
+				labels[i].OwnerAdversary = ""
+				labels[i].ScopeReason = "reviewer withdrew the concern after the author explanation"
+				labels[i].ScopeMethod = "thread-disposition"
+				continue
+			case "reiterated":
+				if matched.ID != ctx.threadDispositionCommentID {
+					labels[i].Scope = string(scope.OutOfScope)
+					labels[i].Approved = false
+					labels[i].OwnerAdversary = ""
+					labels[i].ScopeReason = "earlier thread message superseded by the reviewer's final reiterated concern"
+					labels[i].ScopeMethod = "thread-disposition"
 					continue
 				}
 			}
@@ -709,7 +742,7 @@ const (
 // buildReviewThreadContext retains only nearby messages from the same inline
 // review thread. Context is attached to an existing comment candidate; this
 // function cannot create a label or make any message gold.
-func buildReviewThreadContext(comments []rawReviewComment, pullAuthor string) map[int64][]cases.ReviewThreadContext {
+func buildReviewThreadContext(comments []rawReviewComment, pullAuthor, pullURL string) map[int64][]cases.ReviewThreadContext {
 	byID := make(map[int64]rawReviewComment, len(comments))
 	for _, comment := range comments {
 		byID[comment.ID] = comment
@@ -793,6 +826,7 @@ func buildReviewThreadContext(comments []rawReviewComment, pullAuthor string) ma
 			createdAt, _ := time.Parse(time.RFC3339, item.comment.CreatedAt)
 			out[target.ID] = append(out[target.ID], cases.ReviewThreadContext{
 				CommentID: item.comment.ID,
+				URL:       githubCommentURL(pullURL, item.comment.HTMLURL, "discussion_r", item.comment.ID),
 				Author:    item.comment.User.Login,
 				Role:      role,
 				Body:      body,
@@ -802,6 +836,104 @@ func buildReviewThreadContext(comments []rawReviewComment, pullAuthor string) ma
 		}
 	}
 	return out
+}
+
+type threadDisposition struct {
+	kind      string
+	commentID int64
+	url       string
+}
+
+// buildReviewThreadDisposition reconstructs each inline discussion from
+// in_reply_to_id. Only a reply from the root reviewer after an author response
+// can withdraw or reiterate that reviewer's concern; author explanations alone
+// cannot erase gold, while a concrete author fix is retained as accepted gold.
+func buildReviewThreadDisposition(comments []rawReviewComment, pullAuthor, pullURL string) map[int64]threadDisposition {
+	byID := make(map[int64]rawReviewComment, len(comments))
+	for _, comment := range comments {
+		byID[comment.ID] = comment
+	}
+	rootID := func(id int64) int64 {
+		seen := map[int64]bool{}
+		for id != 0 && !seen[id] {
+			seen[id] = true
+			comment, ok := byID[id]
+			if !ok || comment.InReplyToID == 0 {
+				return id
+			}
+			id = comment.InReplyToID
+		}
+		return id
+	}
+	threads := map[int64][]rawReviewComment{}
+	for _, comment := range comments {
+		root := rootID(comment.ID)
+		if root != 0 {
+			threads[root] = append(threads[root], comment)
+		}
+	}
+	out := make(map[int64]threadDisposition, len(comments))
+	for root, thread := range threads {
+		sort.SliceStable(thread, func(i, j int) bool { return thread[i].CreatedAt < thread[j].CreatedAt })
+		rootComment, ok := byID[root]
+		if !ok || pullAuthor == "" || strings.EqualFold(rootComment.User.Login, pullAuthor) {
+			continue
+		}
+		authorReplied := false
+		disposition := threadDisposition{}
+		for _, message := range thread {
+			if message.ID == root {
+				continue
+			}
+			if strings.EqualFold(message.User.Login, pullAuthor) {
+				authorReplied = true
+				if scope.IsThreadResolutionUpdate(message.Body) &&
+					(disposition.kind == "" || disposition.kind == "author-reported-fix") {
+					disposition = threadDisposition{
+						kind: "author-reported-fix", commentID: message.ID,
+						url: githubCommentURL(pullURL, message.HTMLURL, "discussion_r", message.ID),
+					}
+				}
+				continue
+			}
+			if !authorReplied || !strings.EqualFold(message.User.Login, rootComment.User.Login) {
+				continue
+			}
+			kind := ""
+			switch {
+			case scope.IsThreadAgreementReply(message.Body), scope.IsThreadResolutionUpdate(message.Body):
+				kind = "withdrawn"
+			default:
+				if _, nonActionable := scope.NonActionableReply(message.Body); nonActionable {
+					// Explanatory reviewer context neither withdraws nor reiterates
+					// the root concern.
+					continue
+				}
+				kind = "reiterated"
+			}
+			disposition = threadDisposition{
+				kind: kind, commentID: message.ID,
+				url: githubCommentURL(pullURL, message.HTMLURL, "discussion_r", message.ID),
+			}
+		}
+		if disposition.kind == "" {
+			continue
+		}
+		for _, message := range thread {
+			out[message.ID] = disposition
+		}
+	}
+	return out
+}
+
+func githubCommentURL(pullURL, explicitURL, anchor string, id int64) string {
+	if strings.TrimSpace(explicitURL) != "" {
+		return explicitURL
+	}
+	if strings.TrimSpace(pullURL) == "" || id == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s#%s%d", pullURL, anchor, id)
 }
 
 func truncateContextRunes(value string, limit int) string {

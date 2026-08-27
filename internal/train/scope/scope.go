@@ -465,6 +465,9 @@ func NonActionableHumanComment(body string) (reason string, ok bool) {
 	if isDismissiveResolution(lower) {
 		return "rebuttal / no-action-needed response, not a review request", true
 	}
+	if isVerificationOnlySummary(lower) {
+		return "successful verification report without an unresolved request", true
+	}
 	if (isApprovalOrNonDefect(body) || isPraiseSummary(lower)) && !hasReviewRequest(lower) {
 		return "approval / praise summary without an unresolved request", true
 	}
@@ -501,22 +504,17 @@ func NonActionableReply(body string) (reason string, ok bool) {
 	if isStatusOnlyReply(lower) {
 		return "short acknowledgement / status reply, not an unresolved reviewer concern", true
 	}
+	if IsThreadResolutionUpdate(body) {
+		return "review-thread resolution update, not an unresolved reviewer concern", true
+	}
+	if IsThreadAgreementReply(body) {
+		return "reviewer agreement / withdrawal after thread explanation", true
+	}
 	if reason, ok := NonActionableHumanComment(body); ok {
 		return reason, true
 	}
 	if hasReviewRequest(lower) {
 		return "", false
-	}
-	resolutionUpdates := []string{
-		"i pushed", "we pushed", "i've pushed", "i have pushed", "pushed a fix", "pushed an update",
-		"i fixed", "we fixed", "i've fixed", "i have fixed", "we have fixed",
-		"i updated", "we updated", "i've updated", "i have updated", "we have updated",
-		"i changed", "we changed", "addressed in commit", "resolved in commit",
-	}
-	for _, marker := range resolutionUpdates {
-		if strings.Contains(lower, marker) {
-			return "review-thread resolution update, not an unresolved reviewer concern", true
-		}
 	}
 	explanations := []string{
 		"for context", "the reason ", "this is because", "that's because",
@@ -533,6 +531,68 @@ func NonActionableReply(body string) (reason string, ok bool) {
 		}
 	}
 	return "", false
+}
+
+// IsThreadResolutionUpdate reports a concrete author fix/status update while
+// keeping replies that introduce a new unresolved request actionable.
+func IsThreadResolutionUpdate(body string) bool {
+	lower := strings.ToLower(strings.TrimSpace(body))
+	if isStatusOnlyReply(lower) {
+		return true
+	}
+	if hasReviewRequest(lower) {
+		return false
+	}
+	resolutionUpdates := []string{
+		"i pushed", "we pushed", "i've pushed", "i have pushed", "pushed a fix", "pushed an update",
+		"i fixed", "we fixed", "i've fixed", "i have fixed", "we have fixed",
+		"i updated", "we updated", "i've updated", "i have updated", "we have updated",
+		"i changed", "we changed", "addressed in commit", "resolved in commit",
+	}
+	for _, marker := range resolutionUpdates {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsThreadAgreementReply recognizes an explicit reviewer withdrawal or
+// agreement. Collection calls it only after a pull-request-author response in
+// the same reconstructed inline thread.
+func IsThreadAgreementReply(body string) bool {
+	lower := strings.ToLower(strings.TrimSpace(body))
+	if hasReviewRequest(lower) || containsDefectAsk(lower) {
+		return false
+	}
+	switch strings.Trim(lower, " \t\r\n.!:+1👍") {
+	case "thanks", "thank you", "sounds good", "sgtm", "lgtm", "agreed", "fair enough":
+		return true
+	}
+	for _, marker := range []string{
+		"you are right", "you're right", "you’re right", "that makes sense",
+		"makes sense to me", "probably what we want", "fair enough", "works for me",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isVerificationOnlySummary(lower string) bool {
+	if !strings.HasPrefix(strings.TrimSpace(lower), "verified ") || hasReviewRequest(lower) || containsDefectAsk(lower) {
+		return false
+	}
+	if !strings.Contains(lower, "confirmed ") || (!strings.Contains(lower, " match") && !strings.Contains(lower, "matches")) {
+		return false
+	}
+	for _, failure := range []string{"mismatch", "does not match", "did not match", "failed", "invalid", "incorrect"} {
+		if strings.Contains(lower, failure) {
+			return false
+		}
+	}
+	return true
 }
 
 // isStatusOnlyReply recognizes short review-thread acknowledgements without

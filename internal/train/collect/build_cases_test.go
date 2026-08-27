@@ -169,7 +169,7 @@ func TestBuildReviewThreadContextIsBoundedAndThreadLocal(t *testing.T) {
 		rawComment(99, 0, "other-reviewer", "unrelated concern", "2024-01-02T01:00:30Z"),
 		rawComment(100, 99, "other-author", "unrelated explanation", "2024-01-02T01:01:30Z"),
 	}
-	got := buildReviewThreadContext(comments, "author")[1]
+	got := buildReviewThreadContext(comments, "author", "https://github.com/acme/r/pull/7")[1]
 	if len(got) != maxThreadContextMessages {
 		t.Fatalf("context messages = %d, want bound %d: %#v", len(got), maxThreadContextMessages, got)
 	}
@@ -189,6 +189,140 @@ func TestBuildReviewThreadContextIsBoundedAndThreadLocal(t *testing.T) {
 	if got[0].Role != "pull_request_author" || got[1].Role != "reviewer" {
 		t.Fatalf("speaker roles not explicit: %#v", got)
 	}
+}
+
+func TestBuildCasesGradesCompleteReviewThreadDisposition(t *testing.T) {
+	t.Run("reviewer withdrawal produces no gold", func(t *testing.T) {
+		got := buildThreadDispositionFixture(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", `[
+  {"id":11,"html_url":"https://github.com/acme/r/pull/7#discussion_r11","pull_request_review_id":10,"user":{"login":"reviewer"},"body":"Could this unsynchronized write race with the reader?","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:01:00Z"},
+  {"id":12,"html_url":"https://github.com/acme/r/pull/7#discussion_r12","pull_request_review_id":10,"in_reply_to_id":11,"user":{"login":"pull-author"},"body":"The caller already holds the worker mutex for both operations.","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:02:00Z"},
+  {"id":13,"html_url":"https://github.com/acme/r/pull/7#discussion_r13","pull_request_review_id":10,"in_reply_to_id":11,"user":{"login":"reviewer"},"body":"You are right - that is probably what we want.","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:03:00Z"},
+  {"id":14,"pull_request_review_id":10,"in_reply_to_id":11,"user":{"login":"pull-author"},"body":"Thanks, resolved.","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:04:00Z"}
+]`)
+		if approved := approvedConcernLabels(got); len(approved) != 0 {
+			t.Fatalf("approved concerns = %#v, want none after explicit withdrawal", approved)
+		}
+		root := concernLabelByCommentID(t, got, 11)
+		if root.ThreadDisposition != "withdrawn" || root.ThreadDispositionURL != "https://github.com/acme/r/pull/7#discussion_r13" {
+			t.Fatalf("withdrawal evidence was not preserved: %+v", root)
+		}
+		if got[0].Comments[0].URL != "https://github.com/acme/r/pull/7#discussion_r11" ||
+			len(root.ThreadContext) != 3 || root.ThreadContext[1].URL != "https://github.com/acme/r/pull/7#discussion_r13" {
+			t.Fatalf("canonical comment URLs were not preserved: comments=%#v context=%#v", got[0].Comments, root.ThreadContext)
+		}
+	})
+
+	t.Run("reviewer reiteration retains only final concern", func(t *testing.T) {
+		got := buildThreadDispositionFixture(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", `[
+  {"id":11,"pull_request_review_id":10,"user":{"login":"reviewer"},"body":"Could this unsynchronized write race with the reader?","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:01:00Z"},
+  {"id":12,"pull_request_review_id":10,"in_reply_to_id":11,"user":{"login":"pull-author"},"body":"The caller currently holds a lock here.","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:02:00Z"},
+  {"id":13,"pull_request_review_id":10,"in_reply_to_id":11,"user":{"login":"reviewer"},"body":"Please add an assertion proving every caller holds that mutex.","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:03:00Z"}
+]`)
+		approved := approvedConcernLabels(got)
+		if len(approved) != 1 || !strings.HasPrefix(approved[0].ID, "c-13-") || approved[0].ThreadDisposition != "reiterated" {
+			t.Fatalf("approved concerns = %#v, want only final reviewer reiteration", approved)
+		}
+		root := concernLabelByCommentID(t, got, 11)
+		if root.Approved || root.ScopeMethod != "thread-disposition" {
+			t.Fatalf("superseded root remained gold: %+v", root)
+		}
+	})
+
+	t.Run("reviewer explanation does not erase root concern", func(t *testing.T) {
+		got := buildThreadDispositionFixture(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", `[
+  {"id":11,"pull_request_review_id":10,"user":{"login":"reviewer"},"body":"This unsynchronized write can race with the reader; guard it with the worker mutex.","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:01:00Z"},
+  {"id":12,"pull_request_review_id":10,"in_reply_to_id":11,"user":{"login":"pull-author"},"body":"The caller currently holds a different lock here.","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:02:00Z"},
+  {"id":13,"pull_request_review_id":10,"in_reply_to_id":11,"user":{"login":"reviewer"},"body":"For context, the worker mutex is the one that protects this map.","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:03:00Z"}
+]`)
+		approved := approvedConcernLabels(got)
+		if len(approved) != 1 || !strings.HasPrefix(approved[0].ID, "c-11-") || approved[0].ThreadDisposition != "" {
+			t.Fatalf("approved concerns = %#v, want unresolved root concern", approved)
+		}
+	})
+
+	t.Run("later author fix retains accepted root concern", func(t *testing.T) {
+		got := buildThreadDispositionFixture(t, "cccccccccccccccccccccccccccccccccccccccc", `[
+  {"id":11,"pull_request_review_id":10,"user":{"login":"reviewer"},"body":"This unsynchronized write can race with the reader; guard it with the worker mutex.","path":"worker.go","line":10,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2024-01-02T01:01:00Z"},
+  {"id":12,"html_url":"https://github.com/acme/r/pull/7#discussion_r12","pull_request_review_id":10,"in_reply_to_id":11,"user":{"login":"pull-author"},"body":"You're right. I pushed a fix that takes the worker mutex and added a regression test.","path":"worker.go","line":10,"original_commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","commit_id":"cccccccccccccccccccccccccccccccccccccccc","created_at":"2024-01-03T01:02:00Z"}
+]`)
+		approved := approvedConcernLabels(got)
+		if len(approved) != 1 || !strings.HasPrefix(approved[0].ID, "c-11-") {
+			t.Fatalf("approved concerns = %#v, want the accepted root concern", approved)
+		}
+		if approved[0].ThreadDisposition != "author-reported-fix" || approved[0].ThreadDispositionURL != "https://github.com/acme/r/pull/7#discussion_r12" {
+			t.Fatalf("accepted-fix disposition missing: %+v", approved[0])
+		}
+		if got[0].PullRequest.FinalHeadSHA != "cccccccccccccccccccccccccccccccccccccccc" {
+			t.Fatalf("final head = %q, want later fixed commit", got[0].PullRequest.FinalHeadSHA)
+		}
+	})
+}
+
+func buildThreadDispositionFixture(t *testing.T, finalHead, comments string) []*cases.Case {
+	t.Helper()
+	dir := t.TempDir()
+	pull := `{
+  "number":7,"title":"review thread disposition","html_url":"https://github.com/acme/r/pull/7",
+  "base":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "head":{"sha":"` + finalHead + `"},"user":{"login":"pull-author"}
+}`
+	reviews := `[{
+  "id":10,"html_url":"https://github.com/acme/r/pull/7#pullrequestreview-10",
+  "user":{"login":"reviewer"},"body":"","state":"CHANGES_REQUESTED",
+  "commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","submitted_at":"2024-01-02T01:00:00Z"
+}]`
+	for name, body := range map[string]string{"pull.json": pull, "reviews.json": reviews, "review-comments.json": comments} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := &scope.Router{Candidates: []scope.Candidate{{
+		ID: "person-maintainer", AdversaryName: "person-maintainer", Mission: "Everything is in scope. Do not exclude nits.",
+	}}}
+	got, err := BuildCasesFromCacheFiltered("acme", "r", 7, dir, nil, router, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("cases = %d, want one", len(got))
+	}
+	return got
+}
+
+func approvedConcernLabels(reviewCases []*cases.Case) []cases.ExpectedConcern {
+	var out []cases.ExpectedConcern
+	for _, reviewCase := range reviewCases {
+		out = append(out, cases.ApprovedLabels(reviewCase.Labels.ExpectedConcerns)...)
+	}
+	return out
+}
+
+func concernLabelByCommentID(t *testing.T, reviewCases []*cases.Case, id int64) cases.ExpectedConcern {
+	t.Helper()
+	prefix := "c-" + itoaTest(id) + "-"
+	for _, reviewCase := range reviewCases {
+		for _, label := range reviewCase.Labels.ExpectedConcerns {
+			if strings.HasPrefix(label.ID, prefix) {
+				return label
+			}
+		}
+	}
+	t.Fatalf("missing concern label for comment %d", id)
+	return cases.ExpectedConcern{}
+}
+
+func itoaTest(value int64) string {
+	if value == 0 {
+		return "0"
+	}
+	var digits [20]byte
+	i := len(digits)
+	for value > 0 {
+		i--
+		digits[i] = byte('0' + value%10)
+		value /= 10
+	}
+	return string(digits[i:])
 }
 
 func rawComment(id, inReplyTo int64, author, body, createdAt string) rawReviewComment {
