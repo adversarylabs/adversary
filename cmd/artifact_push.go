@@ -32,8 +32,10 @@ func newPushCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 	var format string
 	var legacyJSON bool
 	cmd := &cobra.Command{
-		Use:   "push <local-ref> [remote-ref]",
-		Short: "Push a locally packed adversary to an OCI registry",
+		Use:           "push <local-ref> [remote-ref]",
+		Short:         "Push a locally packed adversary to an OCI registry",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		Example: `  adversary push dockerfile-reviewer:0.1.0
   adversary push security-reviewer:0.1.0 ghcr.io/acme/security-reviewer:0.1.0
   adversary push sha256:abc123 ghcr.io/acme/security-reviewer:0.1.0
@@ -61,6 +63,9 @@ func pushUnified(ctx context.Context, app *application.App, resolver application
 	hasExact, _ := resolver.HasExact(args[0])
 	resolution, err := resolver.Lookup(ctx, args[0])
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return true, ctxErr
+		}
 		if os.IsNotExist(err) && !hasExact {
 			return true, fmt.Errorf("artifact %q is not present in the unified repository", args[0])
 		}

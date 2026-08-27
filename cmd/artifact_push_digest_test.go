@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,45 @@ import (
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
+
+func TestPushCommandSilencesRuntimeUsageAndErrors(t *testing.T) {
+	cmd := newPushCommand(nil, new(string), new(string))
+	if !cmd.SilenceUsage || !cmd.SilenceErrors {
+		t.Fatalf("SilenceUsage=%t SilenceErrors=%t", cmd.SilenceUsage, cmd.SilenceErrors)
+	}
+}
+
+type canceledLookupResolver struct {
+	application.Resolver
+}
+
+func (canceledLookupResolver) HasExact(string) (bool, error) {
+	return false, nil
+}
+
+func (canceledLookupResolver) Lookup(context.Context, string) (application.Resolution, error) {
+	return application.Resolution{}, errors.New("lookup failed")
+}
+
+func TestPushPrefersContextCancellationToLookupFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := pushUnified(
+		ctx,
+		nil,
+		canceledLookupResolver{},
+		io.Discard,
+		io.Discard,
+		[]string{"security-reviewer:1.4.2"},
+		"",
+		"",
+		"text",
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("push error = %v, want context.Canceled", err)
+	}
+}
 
 func TestPushCommitsRegistryDigestWhenAlgorithmChanges(t *testing.T) {
 	remote := newTestOCIRegistry()
