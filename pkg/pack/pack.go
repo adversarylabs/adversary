@@ -1112,7 +1112,9 @@ func stageProject(ctx context.Context, source *os.Root, dir string, policy build
 			return nil
 		}
 		top := strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
-		if top == "dist" || top == ".git" || top == ".publication-locks" || (policy.excludeNodeModules && top == "node_modules") {
+		if top == "dist" || top == ".git" || top == ".publication-locks" ||
+			top == ".adversary-train" || top == ".worktrees" ||
+			(policy.excludeNodeModules && top == "node_modules") {
 			return filepath.SkipDir
 		}
 		rel = filepath.ToSlash(rel)
