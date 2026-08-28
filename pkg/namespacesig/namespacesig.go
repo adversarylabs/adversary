@@ -166,13 +166,29 @@ func validateEnvelope(envelope Envelope) error {
 	if envelope.SpecVersion != SpecVersion || envelope.MediaType != SignatureMediaType {
 		return fmt.Errorf("unsupported namespace signature format")
 	}
-	if !validRegistry(envelope.Registry) || !strings.HasPrefix(envelope.Repository, envelope.Namespace+"/") || strings.Count(envelope.Repository, "/") != 1 || !validNamespace(envelope.Namespace) || strings.TrimSpace(envelope.TeamID) == "" || strings.TrimSpace(envelope.KeyID) == "" || strings.TrimSpace(envelope.SignedAt) == "" {
+	if !validRegistry(envelope.Registry) || !validRepository(envelope.Repository, envelope.Namespace) || !validNamespace(envelope.Namespace) || strings.TrimSpace(envelope.TeamID) == "" || strings.TrimSpace(envelope.KeyID) == "" || strings.TrimSpace(envelope.SignedAt) == "" {
 		return fmt.Errorf("incomplete namespace signature")
 	}
 	if !sha256Digest.MatchString(envelope.SubjectDigest) {
 		return fmt.Errorf("invalid namespace signature subject digest")
 	}
 	return nil
+}
+
+func validRepository(repository, namespace string) bool {
+	if !strings.HasPrefix(repository, namespace+"/") {
+		return false
+	}
+	parts := strings.Split(repository, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if !namespaceFormat.MatchString(part) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateTrustBundle(bundle TrustBundle) error {

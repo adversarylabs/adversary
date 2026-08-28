@@ -305,40 +305,27 @@ func inventoryNameKey(item inventoryItem) string {
 // isRetiredPublisherInventory reports whether an entry is a retired official-
 // registry path that the free catalog no longer publishes:
 //   - registry.adversarylabs.ai/adversarylabs/<name> (old publisher namespace)
-//   - registry.adversarylabs.ai/library/<flat-name> when the package name is
-//     flat (go-cli, secrets). Multi-segment names (go/cli, local/tool) stay
-//     visible so local packs of domain/dev adversaries still appear.
+//
+// Team-owned adversarylabs/* source packages stay hidden from the catalog
+// inventory. Promoted library/* packages are canonical catalog entries.
 //
 // Domain catalog refs and non-official registries (localhost, GHCR, …) stay.
 func isRetiredPublisherInventory(item inventoryItem) bool {
 	name := strings.ToLower(strings.TrimSpace(item.Name))
+	host, repo, ok := splitInventoryReference(item.Reference)
+	if ok && host == officialRegistryHost {
+		ns, rest, hasRest := strings.Cut(repo, "/")
+		if ns == "library" {
+			return !hasRest || rest == ""
+		}
+		if ns == "adversarylabs" {
+			return true
+		}
+	}
 	if strings.HasPrefix(name, "adversarylabs/") {
 		return true
 	}
-
-	host, repo, ok := splitInventoryReference(item.Reference)
-	if !ok {
-		return false
-	}
-	if host != officialRegistryHost {
-		return false
-	}
-	ns, rest, hasRest := strings.Cut(repo, "/")
-	switch ns {
-	case "adversarylabs":
-		return true
-	case "library":
-		if !hasRest || rest == "" {
-			return true
-		}
-		// Flat short-name pack path for a flat package name → retired catalog shape.
-		if name == "" || !strings.Contains(name, "/") {
-			return true
-		}
-		return false
-	default:
-		return false
-	}
+	return false
 }
 
 // splitInventoryReference extracts host and repository path from an OCI-ish

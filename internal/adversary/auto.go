@@ -224,12 +224,12 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 		if err != nil || resolved.Manifest == nil {
 			continue
 		}
-		// Skip retired official catalog paths (library/flat, adversarylabs/* publisher).
-		// Domain ids (go/cli, container/dockerfile) remain eligible.
+		// Team-owned adversarylabs/* source packages are explicit-only. Promoted
+		// library/* packages are the automatic catalog candidates.
 		if isRetiredAutoReference(entry.CanonicalReference, resolved.Manifest.Name) {
 			continue
 		}
-		candidate := DetectionCandidate{Name: resolved.Manifest.Name, Reference: entry.CanonicalReference, Digest: entry.Digest, Manifest: *resolved.Manifest}
+		candidate := DetectionCandidate{Name: catalogCandidateName(entry.CanonicalReference, resolved.Manifest.Name), Reference: entry.CanonicalReference, Digest: entry.Digest, Manifest: *resolved.Manifest}
 		if existing, ok := byDigest[candidate.Digest]; ok {
 			if preferCandidateReference(candidate, existing) {
 				byDigest[candidate.Digest] = candidate
@@ -384,8 +384,6 @@ func packageFamiliesMatch(a, b string) bool {
 	return false
 }
 
-// officialMetaPackage is the platform self-review package published under the
-// adversarylabs/ publisher path. All other adversarylabs/* names are retired.
 const officialMetaPackage = "adversarylabs/adversary"
 
 // isRetiredAutoReference skips official catalog paths the free catalog no longer
@@ -393,18 +391,12 @@ const officialMetaPackage = "adversarylabs/adversary"
 // except the intentional meta package adversarylabs/adversary.
 func isRetiredAutoReference(reference, manifestName string) bool {
 	name := strings.ToLower(strings.TrimSpace(manifestName))
-	if name == officialMetaPackage {
-		return false
-	}
-	if strings.HasPrefix(name, "adversarylabs/") {
-		return true
-	}
 	parsed, err := oci.ParseReference(reference)
 	if err != nil {
-		return false
+		return strings.HasPrefix(name, "adversarylabs/") && name != officialMetaPackage
 	}
 	if !strings.EqualFold(parsed.Registry, officialRegistryHost) {
-		return false
+		return strings.HasPrefix(name, "adversarylabs/") && name != officialMetaPackage
 	}
 	ns, rest, hasRest := strings.Cut(parsed.Repository, "/")
 	switch strings.ToLower(ns) {
@@ -412,17 +404,20 @@ func isRetiredAutoReference(reference, manifestName string) bool {
 		// Keep the meta package; retire historical publisher clones (go-cli, …).
 		return !strings.EqualFold(rest, "adversary")
 	case "library":
-		if !hasRest || rest == "" {
-			return true
-		}
-		// Flat short-name under library for a flat package name → retired.
-		if name == "" || !strings.Contains(name, "/") {
-			return true
-		}
-		return false
+		return !hasRest || rest == ""
 	default:
-		return false
+		return strings.HasPrefix(name, "adversarylabs/") && name != officialMetaPackage
 	}
+}
+
+func catalogCandidateName(reference, manifestName string) string {
+	parsed, err := oci.ParseReference(reference)
+	if err == nil && strings.EqualFold(parsed.Registry, officialRegistryHost) {
+		if strings.HasPrefix(strings.ToLower(parsed.Repository), "library/") {
+			return parsed.Repository[len("library/"):]
+		}
+	}
+	return manifestName
 }
 
 func isLocalDevRegistry(host string) bool {
@@ -481,10 +476,12 @@ func referencePreferenceScore(ref string) int {
 	parts := strings.Split(parsed.Repository, "/")
 	if len(parts) > 0 {
 		switch strings.ToLower(parts[0]) {
-		case "adversarylabs":
-			score += 20
 		case "library":
-			// legacy default namespace; lose to domain catalog paths
+			// Reserved promoted catalog namespace.
+			score += 70
+		case "adversarylabs":
+			// Team-owned source package; prefer its promoted library alias.
+			score += 20
 		default:
 			// domain path (go/, container/, …) preferred
 			if len(parts) >= 2 {

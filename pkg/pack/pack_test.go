@@ -1449,6 +1449,35 @@ func TestBuildSnapshotAllowsContainedDependencySymlinkChain(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshotExcludesLocalWorkspaces(t *testing.T) {
+	dir := testProject(t)
+	writeFile(t, dir, ".adversary-train/checkouts/package/source.ts", "training")
+	writeFile(t, dir, ".worktrees/feature/source.ts", "worktree")
+	for _, link := range []string{
+		".adversary-train/checkouts/package/tool",
+		".worktrees/feature/tool",
+	} {
+		if err := os.Symlink("source.ts", filepath.Join(dir, filepath.FromSlash(link))); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	stage, err := stageProject(context.Background(), root, dir, buildSnapshotPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(stage)
+	for _, excluded := range []string{".adversary-train", ".worktrees"} {
+		if _, err := os.Stat(filepath.Join(stage, excluded)); !os.IsNotExist(err) {
+			t.Fatalf("excluded workspace %q exists in stage: %v", excluded, err)
+		}
+	}
+}
+
 func TestBuildSnapshotRejectsDependencySymlinkSwap(t *testing.T) {
 	dir := testProject(t)
 	writeFile(t, dir, "node_modules/pkg/bin/tool", "inside")

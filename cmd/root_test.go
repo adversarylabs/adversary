@@ -602,7 +602,7 @@ func TestDefaultAdversaryLabsPushRefUsesStoredNamespace(t *testing.T) {
 	}
 }
 
-func TestDefaultAdversaryLabsPushRefPreservesManifestNamespace(t *testing.T) {
+func TestDefaultAdversaryLabsPushRefAlwaysUsesAuthenticatedNamespace(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("ADVERSARY_REGISTRY_HOST", "localhost:5000")
 	configStore, err := adversarylabs.DefaultConfigStore()
@@ -624,7 +624,7 @@ func TestDefaultAdversaryLabsPushRefPreservesManifestNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "localhost:5000/replicated/feature-toggles:0.0.1"
+	want := "localhost:5000/different-team/replicated/feature-toggles:0.0.1"
 	if ref != want {
 		t.Fatalf("ref = %q, want %q", ref, want)
 	}

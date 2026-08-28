@@ -23,8 +23,9 @@ Each name appears once. STATUS is installed, catalog, or outdated (see adversary
 
 Flags filter after status is computed, so --installed still shows outdated rows.
 
-Retired official paths (…/adversarylabs/… and flat …/library/go-cli style
-packs) are hidden. Domain catalog ids (go/cli, security/secrets, …) remain.
+Team-owned adversarylabs/* source packages are hidden from catalog inventory.
+Promoted library/* packages appear under their catalog ids (go/cli,
+security/secrets, …).
 
 Remote entries require network access and, for private catalog results, login.
 If the remote catalog is unavailable, local adversaries are still searched.`,
