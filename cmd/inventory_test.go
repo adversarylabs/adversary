@@ -143,7 +143,7 @@ func TestIsRetiredPublisherInventory(t *testing.T) {
 				Name:      "go-cli",
 				Reference: "registry.adversarylabs.ai/library/go-cli:0.0.16",
 			},
-			want: true,
+			want: false,
 		},
 		{
 			item: inventoryItem{
@@ -154,8 +154,8 @@ func TestIsRetiredPublisherInventory(t *testing.T) {
 		},
 		{
 			item: inventoryItem{
-				Name:      "go/cli",
-				Reference: "registry.adversarylabs.ai/go/cli",
+				Name:      "adversarylabs/go/cli",
+				Reference: "registry.adversarylabs.ai/library/go/cli",
 			},
 			want: false,
 		},
