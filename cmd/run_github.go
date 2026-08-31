@@ -167,6 +167,7 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 	plan := githubreview.ProjectFindings(envelopes, githubreview.ProjectOptions{
 		Repository:  owner + "/" + repo,
 		PullRequest: opts.githubPR,
+		HeadSHA:     opts.resolvedHeadSHA,
 		MinSeverity: opts.githubMinSeverity,
 		Voice:       voiceInfo,
 		OmitSummary: !opts.githubIncludeSummary,

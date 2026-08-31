@@ -100,3 +100,11 @@ findings exist (class 1). Soft placement skips do not change the exit class.
 
 `adversary train` collect/discover/org expansion uses the same direct GitHub
 HTTP client. Set a token env var; install of the `gh` CLI is not required.
+
+## Learn from replies
+
+Use [`adversary feedback ingest`](./github-feedback.md) from a
+`pull_request_review_comment` workflow to capture substantive human rebuttals,
+open a gated adversary-engineering issue, and acknowledge in the original thread
+that the feedback was learned from. Raw replies never change review behavior
+directly.
