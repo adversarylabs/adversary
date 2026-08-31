@@ -37,9 +37,11 @@ const (
 type Mode string
 
 const (
-	ModeAuto  Mode = "auto"
-	ModeOff   Mode = "off"
-	ModeForce Mode = "force"
+	ModeAuto       Mode = "auto"
+	ModeOff        Mode = "off"
+	ModeForce      Mode = "force"
+	ModeGraph      Mode = "graph"
+	ModeGraphForce Mode = "graph-force"
 )
 
 // ParseMode parses CLI mode strings.
@@ -51,8 +53,12 @@ func ParseMode(s string) (Mode, error) {
 		return ModeOff, nil
 	case "force", "rebuild":
 		return ModeForce, nil
+	case "graph", "v2":
+		return ModeGraph, nil
+	case "graph-force", "v2-force":
+		return ModeGraphForce, nil
 	default:
-		return "", fmt.Errorf("repo-index mode must be auto, off, or force (got %q)", s)
+		return "", fmt.Errorf("repo-index mode must be auto, off, force, graph, or graph-force (got %q)", s)
 	}
 }
 
@@ -777,7 +783,13 @@ func EnsureForRun(repoPath string, mode Mode, verbose bool, stderr io.Writer) (i
 	if verbose {
 		log = stderr
 	}
-	h, err := Ensure(repoPath, mode, log)
+	v1Mode := mode
+	if mode == ModeGraph {
+		v1Mode = ModeAuto
+	} else if mode == ModeGraphForce {
+		v1Mode = ModeForce
+	}
+	h, err := Ensure(repoPath, v1Mode, log)
 	if err != nil {
 		return "", err
 	}

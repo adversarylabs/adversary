@@ -245,6 +245,15 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	if indexDir != "" {
 		config.Env[repoindex.EnvRepoIndex] = indexDir
 	}
+	if indexMode == repoindex.ModeGraph || indexMode == repoindex.ModeGraphForce {
+		graph, graphErr := repoindex.EnsureV2(repoPath, indexMode, stderr)
+		if graphErr != nil {
+			return fmt.Errorf("repo graph: %w", graphErr)
+		}
+		if graph != nil {
+			config.Env[repoindex.EnvRepoGraph] = graph.Dir
+		}
+	}
 	if opts.Verbose {
 		PrintVerboseLoad(stderr, opts.AdversaryRef, resolved)
 	}

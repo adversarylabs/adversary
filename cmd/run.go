@@ -268,7 +268,7 @@ review base/head and optional posting context. Posting still requires
 	_ = cmd.Flags().MarkDeprecated("no-build", "local builds are skipped by default; omit this flag")
 	cmd.Flags().DurationVar(&opts.runTimeout, "timeout", 0, "maximum adversary execution time (0 disables the deadline)")
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
-	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "auto", "local repository index for adversary navigation: auto, off, or force")
+	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "auto", "local repository index: auto, off, force, graph, or graph-force")
 	cmd.Flags().BoolVar(&opts.noCompose, "no-compose", false, "do not expand adversary.yaml uses composition; run only the named refs")
 
 	cmd.Flags().BoolVar(&opts.githubReview, "github-review", false, "build a GitHub PR comment plan and post (unless --github-dry-run)")

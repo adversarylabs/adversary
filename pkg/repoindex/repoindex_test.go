@@ -195,6 +195,12 @@ func TestParseMode(t *testing.T) {
 	if _, err := ParseMode("nope"); err == nil {
 		t.Fatal("expected error")
 	}
+	if m, err := ParseMode("v2"); err != nil || m != ModeGraph {
+		t.Fatal(m, err)
+	}
+	if m, err := ParseMode("graph-force"); err != nil || m != ModeGraphForce {
+		t.Fatal(m, err)
+	}
 }
 
 func write(t *testing.T, root, rel, body string) {
