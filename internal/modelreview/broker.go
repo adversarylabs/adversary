@@ -66,7 +66,7 @@ func (b Broker) Start(ctx context.Context) (*Session, error) {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      11 * time.Minute,
+		WriteTimeout:      31 * time.Minute,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
