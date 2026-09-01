@@ -324,3 +324,13 @@ func TestFireworksReasoningEffortPreservesSmallStructuredOutputBudgets(t *testin
 		t.Fatalf("12,000-token effort = %q", effort)
 	}
 }
+
+func TestFireworksCompatibleStructuredOutputAcceptsOneJSONFence(t *testing.T) {
+	output, ok := compatibleStructuredOutput("```json\n{\"decision\":\"approve\"}\n```")
+	if !ok || string(output) != `{"decision":"approve"}` {
+		t.Fatalf("ok=%v output=%s", ok, output)
+	}
+	if _, ok := compatibleStructuredOutput("Result:\n```json\n{}\n```"); ok {
+		t.Fatal("surrounding prose must remain invalid")
+	}
+}
