@@ -686,6 +686,68 @@ func TestBuildProjectParsesBuildScriptStrictly(t *testing.T) {
 	}
 }
 
+func TestBuildProjectInstallsDependenciesFromLockfile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "package.json", `{"name":"x","version":"1.0.0","scripts":{"build":"tsc"}}`)
+	writeFile(t, dir, "package-lock.json", `{"lockfileVersion":3}`)
+	// No node_modules and no dist: the local builder should `npm ci` first.
+
+	var commands [][]string
+	environment := BuildEnvironment{
+		NPM:         filepath.Join(t.TempDir(), "npm"),
+		Node:        filepath.Join(t.TempDir(), "node"),
+		Environment: []string{"PATH=/usr/bin"},
+		Run: func(_ context.Context, _ string, args []string, workingDir string, _ []string, _, _ io.Writer, _ bool) ([]byte, error) {
+			if len(args) == 1 && args[0] == "--version" {
+				return []byte("v22.14.0\n"), nil
+			}
+			commands = append(commands, args)
+			switch {
+			case len(args) == 1 && args[0] == "ci":
+				return nil, os.MkdirAll(filepath.Join(workingDir, "node_modules"), 0755)
+			case len(args) == 2 && args[0] == "run" && args[1] == "build":
+				if err := os.MkdirAll(filepath.Join(workingDir, "dist"), 0755); err != nil {
+					return nil, err
+				}
+				return nil, os.WriteFile(filepath.Join(workingDir, "dist", "index.js"), []byte("built"), 0644)
+			}
+			return nil, nil
+		},
+	}
+	if err := BuildProjectWithEnvironment(context.Background(), BuildOptions{Dir: dir, Builder: "local", BuildStateDir: filepath.Join(t.TempDir(), "state")}, environment); err != nil {
+		t.Fatal(err)
+	}
+
+	var sawCI, sawBuild bool
+	for _, c := range commands {
+		if len(c) == 1 && c[0] == "ci" {
+			sawCI = true
+		}
+		if len(c) == 2 && c[0] == "run" && c[1] == "build" {
+			if !sawCI {
+				t.Fatalf("npm run build ran before npm ci: %v", commands)
+			}
+			sawBuild = true
+		}
+	}
+	if !sawCI || !sawBuild {
+		t.Fatalf("expected npm ci then npm run build, got %v", commands)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "dist", "index.js")); err != nil || string(got) != "built" {
+		t.Fatalf("published dist=%q err=%v", got, err)
+	}
+}
+
+func TestBuildProjectRequiresLockfileToInstall(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "package.json", `{"name":"x","version":"1.0.0","scripts":{"build":"tsc"}}`)
+	// No node_modules and no lockfile: nothing reproducible to install from.
+	err := BuildProject(context.Background(), BuildOptions{Dir: dir, Builder: "local"})
+	if err == nil || !strings.Contains(err.Error(), "node_modules was not found") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestBuildProjectValidatesBeforeFilesystemAccess(t *testing.T) {
 	if err := BuildProject(context.Background(), BuildOptions{Dir: filepath.Join(t.TempDir(), "missing"), Builder: "spaceship"}); err == nil || !strings.Contains(err.Error(), "unsupported builder") {
 		t.Fatalf("error = %v", err)
