@@ -750,7 +750,12 @@ func BuildProjectWithEnvironment(ctx context.Context, opts BuildOptions, environ
 					return nil
 				}
 			}
-			return fmt.Errorf("build failed: node_modules was not found; run npm install or use --builder docker")
+			// With a lockfile we can install deps ourselves; buildWithLocalNPM
+			// runs `npm ci` in the staged copy before building. Without one there
+			// is nothing reproducible to install from.
+			if !hasNodeLockfile(root) {
+				return fmt.Errorf("build failed: node_modules was not found and no package-lock.json or npm-shrinkwrap.json to install from; run npm install or use --builder docker")
+			}
 		}
 		return buildWithLocalNPM(ctx, state, root, dir, opts.Stdout, opts.Stderr, opts.AllowStaleDist, environment)
 	case "docker":
@@ -961,6 +966,17 @@ func validateBuilder(builder string) error {
 	return nil
 }
 
+// hasNodeLockfile reports whether the project has an npm lockfile that
+// `npm ci` can install from.
+func hasNodeLockfile(root *os.Root) bool {
+	for _, name := range []string{"package-lock.json", "npm-shrinkwrap.json"} {
+		if _, err := root.Stat(name); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func buildWithLocalNPM(ctx context.Context, state, root *os.Root, dir string, stdout, stderr io.Writer, allowStale bool, environment BuildEnvironment) error {
 	npm, err := environment.NPM, environment.NPMError
 	if npm == "" || err != nil {
@@ -984,6 +1000,14 @@ func buildWithLocalNPM(ctx context.Context, state, root *os.Root, dir string, st
 	defer os.RemoveAll(stage)
 	if environment.Run == nil {
 		return fmt.Errorf("build process dependency is required")
+	}
+	// Install dependencies into the staged copy when they are absent, so a
+	// clean checkout (node_modules is conventionally gitignored) builds without
+	// a separate install step. The original project directory is untouched.
+	if _, statErr := os.Stat(filepath.Join(stage, "node_modules")); statErr != nil {
+		if _, err := environment.Run(ctx, npm, []string{"ci"}, stage, withPathPrefix(environment.Environment, filepath.Dir(npm)), stdout, stderr, false); err != nil {
+			return fmt.Errorf("build failed: npm ci: %w", err)
+		}
 	}
 	if _, err := environment.Run(ctx, npm, []string{"run", "build"}, stage, withPathPrefix(environment.Environment, filepath.Dir(npm)), stdout, stderr, false); err != nil {
 		return fmt.Errorf("build failed: %w", err)
