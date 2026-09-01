@@ -208,6 +208,32 @@ func TestProviderConfigOverridesEnvironmentSelection(t *testing.T) {
 	}
 }
 
+func TestHTTPClientFromEnvironmentCanDisableKeepAlives(t *testing.T) {
+	lookup := func(values map[string]string) LookupEnv {
+		return func(name string) (string, bool) {
+			value, ok := values[name]
+			return value, ok
+		}
+	}
+	client := HTTPClientFromEnvironment(lookup(map[string]string{DisableKeepAlivesEnv: "true"}))
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T", client.Transport)
+	}
+	if !transport.DisableKeepAlives {
+		t.Fatal("DisableKeepAlives = false")
+	}
+
+	defaultClient := HTTPClientFromEnvironment(lookup(nil))
+	defaultTransport, ok := defaultClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("default transport = %T", defaultClient.Transport)
+	}
+	if defaultTransport.DisableKeepAlives {
+		t.Fatal("default DisableKeepAlives = true")
+	}
+}
+
 func TestOpenAIProviderUsesResponsesStructuredOutput(t *testing.T) {
 	var authorization string
 	var payload map[string]any

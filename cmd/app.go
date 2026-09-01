@@ -352,7 +352,7 @@ func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladv
 		provider, err := modelreview.ProviderFromConfig(modelreview.Config{
 			Provider: opts.ModelProvider,
 			Model:    opts.Model,
-		}, p.environment.Lookup, http.DefaultClient)
+		}, p.environment.Lookup, modelreview.HTTPClientFromEnvironment(p.environment.Lookup))
 		if err != nil {
 			return modelreview.Broker{}, err
 		}
