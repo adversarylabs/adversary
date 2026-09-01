@@ -53,8 +53,10 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 	var response struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
@@ -72,7 +74,33 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 			}, nil
 		}
 	}
-	return Result{}, &ProviderError{Code: "fireworks_missing_output", Message: "fireworks response did not contain structured output"}
+	return Result{}, &ProviderError{
+		Code:    "fireworks_missing_output",
+		Message: fireworksMissingOutputMessage(response.Choices),
+	}
+}
+
+func fireworksMissingOutputMessage(choices []struct {
+	Message struct {
+		Content          string `json:"content"`
+		ReasoningContent string `json:"reasoning_content"`
+	} `json:"message"`
+	FinishReason string `json:"finish_reason"`
+}) string {
+	details := make([]string, 0, len(choices))
+	for index, choice := range choices {
+		details = append(details, fmt.Sprintf(
+			"choice[%d]: finish=%q content_bytes=%d reasoning_bytes=%d",
+			index,
+			choice.FinishReason,
+			len(choice.Message.Content),
+			len(choice.Message.ReasoningContent),
+		))
+	}
+	if len(details) == 0 {
+		return "fireworks response did not contain structured output (choices=0)"
+	}
+	return "fireworks response did not contain structured output (" + strings.Join(details, "; ") + ")"
 }
 
 // compatibleStructuredOutput accepts either raw JSON or one JSON code fence.

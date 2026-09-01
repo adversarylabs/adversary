@@ -334,3 +334,32 @@ func TestFireworksCompatibleStructuredOutputAcceptsOneJSONFence(t *testing.T) {
 		t.Fatal("surrounding prose must remain invalid")
 	}
 }
+
+func TestFireworksProviderReportsBoundedMissingOutputDiagnostics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"finish_reason": "length",
+				"message": map[string]any{
+					"content":           "",
+					"reasoning_content": "internal reasoning",
+				},
+			}},
+		})
+	}))
+	defer server.Close()
+	provider := &FireworksProvider{
+		APIKey:  "secret",
+		ModelID: "reviewer",
+		BaseURL: server.URL,
+		Client:  server.Client(),
+	}
+	_, err := provider.Review(context.Background(), validRequest)
+	if err == nil {
+		t.Fatal("expected missing output error")
+	}
+	want := `fireworks response did not contain structured output (choice[0]: finish="length" content_bytes=0 reasoning_bytes=18)`
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err, want)
+	}
+}
