@@ -7,15 +7,16 @@ import (
 )
 
 const (
-	ProviderEnv          = "ADVERSARY_MODEL_PROVIDER"
-	ModelEnv             = "ADVERSARY_MODEL"
-	OpenAIKeyEnv         = "OPENAI_API_KEY"
-	OpenAIBaseURLEnv     = "ADVERSARY_OPENAI_BASE_URL"
-	AnthropicKeyEnv      = "ANTHROPIC_API_KEY"
-	AnthropicBaseURLEnv  = "ADVERSARY_ANTHROPIC_BASE_URL"
-	FireworksKeyEnv      = "FIREWORKS_API_KEY"
-	FireworksBaseURLEnv  = "ADVERSARY_FIREWORKS_BASE_URL"
-	DisableKeepAlivesEnv = "ADVERSARY_MODEL_DISABLE_KEEP_ALIVES"
+	ProviderEnv                 = "ADVERSARY_MODEL_PROVIDER"
+	ModelEnv                    = "ADVERSARY_MODEL"
+	OpenAIKeyEnv                = "OPENAI_API_KEY"
+	OpenAIBaseURLEnv            = "ADVERSARY_OPENAI_BASE_URL"
+	AnthropicKeyEnv             = "ANTHROPIC_API_KEY"
+	AnthropicBaseURLEnv         = "ADVERSARY_ANTHROPIC_BASE_URL"
+	FireworksKeyEnv             = "FIREWORKS_API_KEY"
+	FireworksBaseURLEnv         = "ADVERSARY_FIREWORKS_BASE_URL"
+	FireworksReasoningEffortEnv = "ADVERSARY_FIREWORKS_REASONING_EFFORT"
+	DisableKeepAlivesEnv        = "ADVERSARY_MODEL_DISABLE_KEEP_ALIVES"
 )
 
 type LookupEnv func(string) (string, bool)
@@ -93,14 +94,29 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		if fireworksKey == "" {
 			return nil, fmt.Errorf("%s is required for model provider fireworks", FireworksKeyEnv)
 		}
+		reasoningEffort, err := fireworksReasoningEffortFromEnvironment(lookup)
+		if err != nil {
+			return nil, err
+		}
 		return &FireworksProvider{
-			APIKey:  fireworksKey,
-			ModelID: model,
-			BaseURL: valueOrDefault(normalizedEnv(lookup, FireworksBaseURLEnv), "https://api.fireworks.ai/inference"),
-			Client:  client,
+			APIKey:          fireworksKey,
+			ModelID:         model,
+			BaseURL:         valueOrDefault(normalizedEnv(lookup, FireworksBaseURLEnv), "https://api.fireworks.ai/inference"),
+			Client:          client,
+			ReasoningEffort: reasoningEffort,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported %s %q (supported: openai, anthropic, fireworks)", ProviderEnv, provider)
+	}
+}
+
+func fireworksReasoningEffortFromEnvironment(lookup LookupEnv) (string, error) {
+	effort := strings.ToLower(normalizedEnv(lookup, FireworksReasoningEffortEnv))
+	switch effort {
+	case "", "none", "low", "medium", "high":
+		return effort, nil
+	default:
+		return "", fmt.Errorf("unsupported %s %q (supported: none, low, medium, high)", FireworksReasoningEffortEnv, effort)
 	}
 }
 

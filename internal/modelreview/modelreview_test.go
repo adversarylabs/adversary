@@ -168,16 +168,32 @@ func TestProviderFromEnvironmentRequiresUnambiguousKeyAndExplicitModel(t *testin
 		t.Fatalf("provider = %s/%s", provider.Name(), provider.Model())
 	}
 	provider, err = ProviderFromEnvironment(lookup(map[string]string{
-		FireworksKeyEnv: "secret",
-		ModelEnv:        "accounts/fireworks/models/reviewer",
+		FireworksKeyEnv:             "secret",
+		FireworksReasoningEffortEnv: "none",
+		ModelEnv:                    "accounts/fireworks/models/reviewer",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fireworks, ok := provider.(*FireworksProvider)
-	if !ok || fireworks.Model() != "accounts/fireworks/models/reviewer" ||
+	if !ok || fireworks.Model() != "accounts/fireworks/models/reviewer" || fireworks.ReasoningEffort != "none" ||
 		fireworks.BaseURL != "https://api.fireworks.ai/inference" {
 		t.Fatalf("provider = %#v", provider)
+	}
+}
+
+func TestProviderFromEnvironmentRejectsInvalidFireworksReasoningEffort(t *testing.T) {
+	values := map[string]string{
+		FireworksKeyEnv:             "secret",
+		FireworksReasoningEffortEnv: "maximum",
+		ModelEnv:                    "accounts/fireworks/models/reviewer",
+	}
+	_, err := ProviderFromEnvironment(func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), FireworksReasoningEffortEnv) {
+		t.Fatalf("invalid reasoning effort error = %v", err)
 	}
 }
 
@@ -319,10 +335,11 @@ func TestFireworksProviderUsesChatCompletionsStructuredOutput(t *testing.T) {
 	}))
 	defer server.Close()
 	provider := &FireworksProvider{
-		APIKey:  "secret",
-		ModelID: "accounts/fireworks/models/reviewer",
-		BaseURL: server.URL,
-		Client:  server.Client(),
+		APIKey:          "secret",
+		ModelID:         "accounts/fireworks/models/reviewer",
+		BaseURL:         server.URL,
+		Client:          server.Client(),
+		ReasoningEffort: "none",
 	}
 	result, err := provider.Review(context.Background(), validRequest)
 	if err != nil {
@@ -336,7 +353,7 @@ func TestFireworksProviderUsesChatCompletionsStructuredOutput(t *testing.T) {
 	if format["type"] != "json_schema" || jsonSchema["name"] != "adversary_model_review" {
 		t.Fatalf("response_format = %#v", format)
 	}
-	if payload["reasoning_effort"] != "low" {
+	if payload["reasoning_effort"] != "none" {
 		t.Fatalf("reasoning_effort = %#v", payload["reasoning_effort"])
 	}
 	messages := payload["messages"].([]any)
