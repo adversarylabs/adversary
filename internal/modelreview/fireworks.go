@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 type FireworksProvider struct {
@@ -64,14 +65,37 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 		return Result{}, fmt.Errorf("decode fireworks response: %w", err)
 	}
 	for _, choice := range response.Choices {
-		if json.Valid([]byte(choice.Message.Content)) {
+		if output, ok := compatibleStructuredOutput(choice.Message.Content); ok {
 			return Result{
-				Output: json.RawMessage(choice.Message.Content),
+				Output: output,
 				Usage:  Usage{InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens},
 			}, nil
 		}
 	}
 	return Result{}, &ProviderError{Code: "fireworks_missing_output", Message: "fireworks response did not contain structured output"}
+}
+
+// compatibleStructuredOutput accepts either raw JSON or one JSON code fence.
+// A few OpenAI-compatible servers honor the schema semantically but still
+// wrap the value in Markdown. Additional prose remains invalid.
+func compatibleStructuredOutput(content string) (json.RawMessage, bool) {
+	trimmed := strings.TrimSpace(content)
+	if json.Valid([]byte(trimmed)) {
+		return json.RawMessage(trimmed), true
+	}
+	newline := strings.IndexByte(trimmed, '\n')
+	if newline < 0 || !strings.HasSuffix(trimmed, "```") {
+		return nil, false
+	}
+	opener := strings.TrimSpace(trimmed[:newline])
+	if opener != "```" && !strings.EqualFold(opener, "```json") {
+		return nil, false
+	}
+	body := strings.TrimSpace(strings.TrimSuffix(trimmed[newline+1:], "```"))
+	if !json.Valid([]byte(body)) {
+		return nil, false
+	}
+	return json.RawMessage(body), true
 }
 
 func fireworksReasoningEffort(maximumOutputTokens int) string {
