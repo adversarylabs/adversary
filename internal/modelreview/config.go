@@ -7,14 +7,15 @@ import (
 )
 
 const (
-	ProviderEnv         = "ADVERSARY_MODEL_PROVIDER"
-	ModelEnv            = "ADVERSARY_MODEL"
-	OpenAIKeyEnv        = "OPENAI_API_KEY"
-	OpenAIBaseURLEnv    = "ADVERSARY_OPENAI_BASE_URL"
-	AnthropicKeyEnv     = "ANTHROPIC_API_KEY"
-	AnthropicBaseURLEnv = "ADVERSARY_ANTHROPIC_BASE_URL"
-	FireworksKeyEnv     = "FIREWORKS_API_KEY"
-	FireworksBaseURLEnv = "ADVERSARY_FIREWORKS_BASE_URL"
+	ProviderEnv          = "ADVERSARY_MODEL_PROVIDER"
+	ModelEnv             = "ADVERSARY_MODEL"
+	OpenAIKeyEnv         = "OPENAI_API_KEY"
+	OpenAIBaseURLEnv     = "ADVERSARY_OPENAI_BASE_URL"
+	AnthropicKeyEnv      = "ANTHROPIC_API_KEY"
+	AnthropicBaseURLEnv  = "ADVERSARY_ANTHROPIC_BASE_URL"
+	FireworksKeyEnv      = "FIREWORKS_API_KEY"
+	FireworksBaseURLEnv  = "ADVERSARY_FIREWORKS_BASE_URL"
+	DisableKeepAlivesEnv = "ADVERSARY_MODEL_DISABLE_KEEP_ALIVES"
 )
 
 type LookupEnv func(string) (string, bool)
@@ -22,6 +23,16 @@ type LookupEnv func(string) (string, bool)
 type Config struct {
 	Provider string
 	Model    string
+}
+
+// HTTPClientFromEnvironment returns a provider client with the standard Go
+// transport settings. Long-running requests to local or overlay-network model
+// servers can opt out of pooled connections so every review round starts on a
+// fresh socket rather than reusing one the remote server has silently dropped.
+func HTTPClientFromEnvironment(lookup LookupEnv) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableKeepAlives = envEnabled(lookup, DisableKeepAlivesEnv)
+	return &http.Client{Transport: transport}
 }
 
 func ProviderFromEnvironment(lookup LookupEnv, client *http.Client) (Provider, error) {
@@ -120,4 +131,12 @@ func valueOrDefault(value, fallback string) string {
 		return fallback
 	}
 	return strings.TrimRight(value, "/")
+}
+
+func envEnabled(lookup LookupEnv, name string) bool {
+	if lookup == nil {
+		return false
+	}
+	value := normalizedEnv(lookup, name)
+	return strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
 }

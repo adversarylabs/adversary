@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/pack"
 )
@@ -152,6 +154,32 @@ func TestProcessRuntimeModelFlagsOverrideEnvironment(t *testing.T) {
 	}
 	if broker.Provider.Name() != "fireworks" || broker.Provider.Model() != "accounts/fireworks/models/reviewer" {
 		t.Fatalf("provider = %s/%s", broker.Provider.Name(), broker.Provider.Model())
+	}
+}
+
+func TestProcessRuntimeDisablesProviderKeepAlivesFromEnvironment(t *testing.T) {
+	environment := internaladversary.NewProcessEnvironment([]string{
+		"ADVERSARY_MODEL_DISABLE_KEEP_ALIVES=true",
+		"FIREWORKS_API_KEY=fireworks-secret",
+	}, false)
+	runner := (processRuntime{environment: environment}).runner(application.AdversaryRunOptions{
+		ModelProvider: "fireworks",
+		Model:         "glm-5.2",
+	})
+	broker, err := runner.ModelBrokerFactory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, ok := broker.Provider.(*modelreview.FireworksProvider)
+	if !ok {
+		t.Fatalf("provider = %T", broker.Provider)
+	}
+	transport, ok := provider.Client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T", provider.Client.Transport)
+	}
+	if !transport.DisableKeepAlives {
+		t.Fatal("DisableKeepAlives = false")
 	}
 }
 
