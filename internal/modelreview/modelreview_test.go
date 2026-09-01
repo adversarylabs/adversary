@@ -330,8 +330,12 @@ func TestFireworksCompatibleStructuredOutputAcceptsOneJSONFence(t *testing.T) {
 	if !ok || string(output) != `{"decision":"approve"}` {
 		t.Fatalf("ok=%v output=%s", ok, output)
 	}
-	if _, ok := compatibleStructuredOutput("Result:\n```json\n{}\n```"); ok {
-		t.Fatal("surrounding prose must remain invalid")
+	output, ok = compatibleStructuredOutput("Result:\n```json\n{\"decision\":\"approve\"}\n```\nDone.")
+	if !ok || string(output) != `{"decision":"approve"}` {
+		t.Fatalf("wrapped ok=%v output=%s", ok, output)
+	}
+	if _, ok := compatibleStructuredOutput("Result unavailable"); ok {
+		t.Fatal("content without a JSON object or array must remain invalid")
 	}
 }
 

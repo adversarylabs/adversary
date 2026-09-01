@@ -103,27 +103,37 @@ func fireworksMissingOutputMessage(choices []struct {
 	return "fireworks response did not contain structured output (" + strings.Join(details, "; ") + ")"
 }
 
-// compatibleStructuredOutput accepts either raw JSON or one JSON code fence.
-// A few OpenAI-compatible servers honor the schema semantically but still
-// wrap the value in Markdown. Additional prose remains invalid.
+// compatibleStructuredOutput accepts raw JSON and common wrappers emitted by
+// OpenAI-compatible servers that honor the schema semantically but not at the
+// transport boundary. The broker still validates the extracted value against
+// the requested schema before returning it to the adversary.
 func compatibleStructuredOutput(content string) (json.RawMessage, bool) {
 	trimmed := strings.TrimSpace(content)
 	if json.Valid([]byte(trimmed)) {
 		return json.RawMessage(trimmed), true
 	}
 	newline := strings.IndexByte(trimmed, '\n')
-	if newline < 0 || !strings.HasSuffix(trimmed, "```") {
-		return nil, false
+	if newline >= 0 && strings.HasSuffix(trimmed, "```") {
+		opener := strings.TrimSpace(trimmed[:newline])
+		if opener == "```" || strings.EqualFold(opener, "```json") {
+			body := strings.TrimSpace(strings.TrimSuffix(trimmed[newline+1:], "```"))
+			if json.Valid([]byte(body)) {
+				return json.RawMessage(body), true
+			}
+		}
 	}
-	opener := strings.TrimSpace(trimmed[:newline])
-	if opener != "```" && !strings.EqualFold(opener, "```json") {
-		return nil, false
+
+	for index := range trimmed {
+		if trimmed[index] != '{' && trimmed[index] != '[' {
+			continue
+		}
+		decoder := json.NewDecoder(strings.NewReader(trimmed[index:]))
+		var output json.RawMessage
+		if err := decoder.Decode(&output); err == nil && json.Valid(output) {
+			return output, true
+		}
 	}
-	body := strings.TrimSpace(strings.TrimSuffix(trimmed[newline+1:], "```"))
-	if !json.Valid([]byte(body)) {
-		return nil, false
-	}
-	return json.RawMessage(body), true
+	return nil, false
 }
 
 func fireworksReasoningEffort(maximumOutputTokens int) string {
