@@ -47,6 +47,7 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 		{"role": "user", "content": fireworksReviewInput(request)},
 	}
 	var lastResponse fireworksResponse
+	var lastSchemaError error
 	usage := Usage{}
 	for attempt := 0; attempt <= p.StructuredOutputRetries; attempt++ {
 		attemptMessages := messages
@@ -84,16 +85,27 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 		}
 		usage.InputTokens += response.Usage.PromptTokens
 		usage.OutputTokens += response.Usage.CompletionTokens
+		lastSchemaError = nil
 		for _, choice := range response.Choices {
 			if output, ok := compatibleStructuredOutput(choice.Message.Content); ok {
-				return Result{Output: output, Usage: usage}, nil
+				if err := ValidateOutput(request.Schema, output); err == nil {
+					return Result{Output: output, Usage: usage}, nil
+				} else {
+					lastSchemaError = err
+				}
 			}
 		}
 		lastResponse = response
 	}
+	code := "fireworks_missing_output"
+	message := fireworksMissingOutputMessage(lastResponse.Choices, p.IncludeContentDiagnostics)
+	if lastSchemaError != nil {
+		code = "fireworks_invalid_output"
+		message = fmt.Sprintf("fireworks structured output failed schema validation after retries: %v", lastSchemaError)
+	}
 	return Result{}, &ProviderError{
-		Code:    "fireworks_missing_output",
-		Message: fireworksMissingOutputMessage(lastResponse.Choices, p.IncludeContentDiagnostics),
+		Code:    code,
+		Message: message,
 	}
 }
 

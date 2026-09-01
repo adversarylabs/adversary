@@ -480,6 +480,38 @@ func TestFireworksProviderRetriesMissingStructuredOutputWithCorrection(t *testin
 	}
 }
 
+func TestFireworksProviderRetriesStructuredOutputOutsideSchema(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		content := `{"wrong":true}`
+		if requests == 2 {
+			content = `{"decision":"approve"}`
+		}
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"finish_reason": "stop",
+				"message":       map[string]any{"content": content},
+			}},
+		})
+	}))
+	defer server.Close()
+	provider := &FireworksProvider{
+		APIKey:                  "secret",
+		ModelID:                 "reviewer",
+		BaseURL:                 server.URL,
+		Client:                  server.Client(),
+		StructuredOutputRetries: 1,
+	}
+	result, err := provider.Review(context.Background(), validRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || string(result.Output) != `{"decision":"approve"}` {
+		t.Fatalf("requests=%d output=%s", requests, result.Output)
+	}
+}
+
 func TestFireworksProviderCanIncludeBoundedContentDiagnostic(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		_ = json.NewEncoder(response).Encode(map[string]any{
