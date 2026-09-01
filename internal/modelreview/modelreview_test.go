@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 var validRequest = Request{
@@ -70,6 +71,9 @@ func TestBrokerAuthenticatesAndValidatesProviderOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
+	if session.server.IdleTimeout != 31*time.Minute {
+		t.Fatalf("broker idle timeout = %s", session.server.IdleTimeout)
+	}
 	data, _ := json.Marshal(validRequest)
 
 	request, err := http.NewRequest(http.MethodPost, session.Endpoint, bytes.NewReader(data))
