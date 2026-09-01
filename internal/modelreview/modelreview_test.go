@@ -92,6 +92,9 @@ func TestBrokerAuthenticatesAndValidatesProviderOutput(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.StatusCode, body)
 	}
+	if !response.Close {
+		t.Fatal("model broker response should close the loopback connection")
+	}
 	var envelope Response
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		t.Fatal(err)

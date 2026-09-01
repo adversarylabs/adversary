@@ -74,6 +74,11 @@ func (b Broker) Start(ctx context.Context) (*Session, error) {
 		MaxHeaderBytes: 16 << 10,
 		BaseContext:    func(net.Listener) context.Context { return ctx },
 	}
+	// Repository retrieval can leave a loopback HTTP connection idle for
+	// minutes while local tools run. Some fetch clients retain a stale pooled
+	// socket across that gap and exhaust their retries on it. A fresh loopback
+	// connection per review round is cheap and deterministic.
+	session.server.SetKeepAlivesEnabled(false)
 	go func() {
 		err := session.server.Serve(listener)
 		if errors.Is(err, http.ErrServerClosed) {
