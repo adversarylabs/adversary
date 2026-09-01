@@ -67,9 +67,12 @@ func (b Broker) Start(ctx context.Context) (*Session, error) {
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      31 * time.Minute,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    16 << 10,
-		BaseContext:       func(net.Listener) context.Context { return ctx },
+		// Repository-backed reviews can spend several minutes executing local
+		// tools between broker requests. Keep loopback connections alive across
+		// those gaps so clients do not race a server-closed pooled connection.
+		IdleTimeout:    31 * time.Minute,
+		MaxHeaderBytes: 16 << 10,
+		BaseContext:    func(net.Listener) context.Context { return ctx },
 	}
 	go func() {
 		err := session.server.Serve(listener)
