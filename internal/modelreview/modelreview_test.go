@@ -168,17 +168,35 @@ func TestProviderFromEnvironmentRequiresUnambiguousKeyAndExplicitModel(t *testin
 		t.Fatalf("provider = %s/%s", provider.Name(), provider.Model())
 	}
 	provider, err = ProviderFromEnvironment(lookup(map[string]string{
-		FireworksKeyEnv:             "secret",
-		FireworksReasoningEffortEnv: "none",
-		ModelEnv:                    "accounts/fireworks/models/reviewer",
+		FireworksKeyEnv:               "secret",
+		FireworksReasoningEffortEnv:   "none",
+		FireworksStructuredRetriesEnv: "2",
+		ModelContentDiagnosticsEnv:    "true",
+		ModelEnv:                      "accounts/fireworks/models/reviewer",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fireworks, ok := provider.(*FireworksProvider)
 	if !ok || fireworks.Model() != "accounts/fireworks/models/reviewer" || fireworks.ReasoningEffort != "none" ||
+		fireworks.StructuredOutputRetries != 2 || !fireworks.IncludeContentDiagnostics ||
 		fireworks.BaseURL != "https://api.fireworks.ai/inference" {
 		t.Fatalf("provider = %#v", provider)
+	}
+}
+
+func TestProviderFromEnvironmentRejectsInvalidFireworksStructuredRetries(t *testing.T) {
+	values := map[string]string{
+		FireworksKeyEnv:               "secret",
+		FireworksStructuredRetriesEnv: "4",
+		ModelEnv:                      "accounts/fireworks/models/reviewer",
+	}
+	_, err := ProviderFromEnvironment(func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), FireworksStructuredRetriesEnv) {
+		t.Fatalf("invalid structured retry error = %v", err)
 	}
 }
 
@@ -415,5 +433,72 @@ func TestFireworksProviderReportsBoundedMissingOutputDiagnostics(t *testing.T) {
 	want := `fireworks response did not contain structured output (choice[0]: finish="length" content_bytes=0 reasoning_bytes=18)`
 	if err.Error() != want {
 		t.Fatalf("error = %q, want %q", err, want)
+	}
+}
+
+func TestFireworksProviderRetriesMissingStructuredOutputWithCorrection(t *testing.T) {
+	requests := 0
+	var lastPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		if err := json.NewDecoder(request.Body).Decode(&lastPayload); err != nil {
+			t.Fatal(err)
+		}
+		content := "I should inspect the repository first."
+		if requests == 2 {
+			content = `{"decision":"approve"}`
+		}
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"finish_reason": "stop",
+				"message":       map[string]any{"content": content},
+			}},
+			"usage": map[string]any{"prompt_tokens": 10, "completion_tokens": 4},
+		})
+	}))
+	defer server.Close()
+	provider := &FireworksProvider{
+		APIKey:                  "secret",
+		ModelID:                 "reviewer",
+		BaseURL:                 server.URL,
+		Client:                  server.Client(),
+		StructuredOutputRetries: 1,
+	}
+	result, err := provider.Review(context.Background(), validRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || string(result.Output) != `{"decision":"approve"}` {
+		t.Fatalf("requests=%d output=%s", requests, result.Output)
+	}
+	if result.Usage != (Usage{InputTokens: 20, OutputTokens: 8}) {
+		t.Fatalf("usage = %#v", result.Usage)
+	}
+	messages := lastPayload["messages"].([]any)
+	if len(messages) != 3 || !strings.Contains(messages[2].(map[string]any)["content"].(string), "only one JSON value") {
+		t.Fatalf("retry messages = %#v", messages)
+	}
+}
+
+func TestFireworksProviderCanIncludeBoundedContentDiagnostic(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"finish_reason": "stop",
+				"message":       map[string]any{"content": strings.Repeat("x", 700)},
+			}},
+		})
+	}))
+	defer server.Close()
+	provider := &FireworksProvider{
+		APIKey:                    "secret",
+		ModelID:                   "reviewer",
+		BaseURL:                   server.URL,
+		Client:                    server.Client(),
+		IncludeContentDiagnostics: true,
+	}
+	_, err := provider.Review(context.Background(), validRequest)
+	if err == nil || !strings.Contains(err.Error(), `content_preview="`) || len(err.Error()) > 700 {
+		t.Fatalf("bounded diagnostic = %q", err)
 	}
 }

@@ -3,20 +3,23 @@ package modelreview
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
 const (
-	ProviderEnv                 = "ADVERSARY_MODEL_PROVIDER"
-	ModelEnv                    = "ADVERSARY_MODEL"
-	OpenAIKeyEnv                = "OPENAI_API_KEY"
-	OpenAIBaseURLEnv            = "ADVERSARY_OPENAI_BASE_URL"
-	AnthropicKeyEnv             = "ANTHROPIC_API_KEY"
-	AnthropicBaseURLEnv         = "ADVERSARY_ANTHROPIC_BASE_URL"
-	FireworksKeyEnv             = "FIREWORKS_API_KEY"
-	FireworksBaseURLEnv         = "ADVERSARY_FIREWORKS_BASE_URL"
-	FireworksReasoningEffortEnv = "ADVERSARY_FIREWORKS_REASONING_EFFORT"
-	DisableKeepAlivesEnv        = "ADVERSARY_MODEL_DISABLE_KEEP_ALIVES"
+	ProviderEnv                   = "ADVERSARY_MODEL_PROVIDER"
+	ModelEnv                      = "ADVERSARY_MODEL"
+	OpenAIKeyEnv                  = "OPENAI_API_KEY"
+	OpenAIBaseURLEnv              = "ADVERSARY_OPENAI_BASE_URL"
+	AnthropicKeyEnv               = "ANTHROPIC_API_KEY"
+	AnthropicBaseURLEnv           = "ADVERSARY_ANTHROPIC_BASE_URL"
+	FireworksKeyEnv               = "FIREWORKS_API_KEY"
+	FireworksBaseURLEnv           = "ADVERSARY_FIREWORKS_BASE_URL"
+	FireworksReasoningEffortEnv   = "ADVERSARY_FIREWORKS_REASONING_EFFORT"
+	FireworksStructuredRetriesEnv = "ADVERSARY_FIREWORKS_STRUCTURED_RETRIES"
+	ModelContentDiagnosticsEnv    = "ADVERSARY_MODEL_CONTENT_DIAGNOSTICS"
+	DisableKeepAlivesEnv          = "ADVERSARY_MODEL_DISABLE_KEEP_ALIVES"
 )
 
 type LookupEnv func(string) (string, bool)
@@ -98,16 +101,34 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		if err != nil {
 			return nil, err
 		}
+		structuredRetries, err := boundedIntegerFromEnvironment(lookup, FireworksStructuredRetriesEnv, 0, 3)
+		if err != nil {
+			return nil, err
+		}
 		return &FireworksProvider{
-			APIKey:          fireworksKey,
-			ModelID:         model,
-			BaseURL:         valueOrDefault(normalizedEnv(lookup, FireworksBaseURLEnv), "https://api.fireworks.ai/inference"),
-			Client:          client,
-			ReasoningEffort: reasoningEffort,
+			APIKey:                    fireworksKey,
+			ModelID:                   model,
+			BaseURL:                   valueOrDefault(normalizedEnv(lookup, FireworksBaseURLEnv), "https://api.fireworks.ai/inference"),
+			Client:                    client,
+			ReasoningEffort:           reasoningEffort,
+			StructuredOutputRetries:   structuredRetries,
+			IncludeContentDiagnostics: envEnabled(lookup, ModelContentDiagnosticsEnv),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported %s %q (supported: openai, anthropic, fireworks)", ProviderEnv, provider)
 	}
+}
+
+func boundedIntegerFromEnvironment(lookup LookupEnv, name string, minimum, maximum int) (int, error) {
+	value := normalizedEnv(lookup, name)
+	if value == "" {
+		return minimum, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < minimum || parsed > maximum {
+		return 0, fmt.Errorf("%s must be an integer from %d through %d", name, minimum, maximum)
+	}
+	return parsed, nil
 }
 
 func fireworksReasoningEffortFromEnvironment(lookup LookupEnv) (string, error) {
