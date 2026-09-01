@@ -9,10 +9,11 @@ import (
 )
 
 type FireworksProvider struct {
-	APIKey  string
-	ModelID string
-	BaseURL string
-	Client  *http.Client
+	APIKey          string
+	ModelID         string
+	BaseURL         string
+	Client          *http.Client
+	ReasoningEffort string
 }
 
 func (p *FireworksProvider) Name() string  { return "fireworks" }
@@ -24,11 +25,9 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 		return Result{}, fmt.Errorf("decode model schema: %w", err)
 	}
 	payload := map[string]any{
-		"model":      p.ModelID,
-		"max_tokens": request.Budget.MaximumOutputTokens,
-		"reasoning_effort": fireworksReasoningEffort(
-			request.Budget.MaximumOutputTokens,
-		),
+		"model":            p.ModelID,
+		"max_tokens":       request.Budget.MaximumOutputTokens,
+		"reasoning_effort": p.reasoningEffort(request.Budget.MaximumOutputTokens),
 		"messages": []map[string]any{
 			{"role": "system", "content": request.Prompt},
 			{"role": "user", "content": fireworksReviewInput(request)},
@@ -78,6 +77,13 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 		Code:    "fireworks_missing_output",
 		Message: fireworksMissingOutputMessage(response.Choices),
 	}
+}
+
+func (p *FireworksProvider) reasoningEffort(maximumOutputTokens int) string {
+	if p.ReasoningEffort != "" {
+		return p.ReasoningEffort
+	}
+	return fireworksReasoningEffort(maximumOutputTokens)
 }
 
 func fireworksMissingOutputMessage(choices []struct {
