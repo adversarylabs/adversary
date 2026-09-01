@@ -170,6 +170,7 @@ func TestProviderFromEnvironmentRequiresUnambiguousKeyAndExplicitModel(t *testin
 	provider, err = ProviderFromEnvironment(lookup(map[string]string{
 		FireworksKeyEnv:               "secret",
 		FireworksReasoningEffortEnv:   "none",
+		FireworksResponseFormatEnv:    "json_object",
 		FireworksStructuredRetriesEnv: "2",
 		ModelContentDiagnosticsEnv:    "true",
 		ModelEnv:                      "accounts/fireworks/models/reviewer",
@@ -179,9 +180,24 @@ func TestProviderFromEnvironmentRequiresUnambiguousKeyAndExplicitModel(t *testin
 	}
 	fireworks, ok := provider.(*FireworksProvider)
 	if !ok || fireworks.Model() != "accounts/fireworks/models/reviewer" || fireworks.ReasoningEffort != "none" ||
-		fireworks.StructuredOutputRetries != 2 || !fireworks.IncludeContentDiagnostics ||
+		fireworks.ResponseFormat != "json_object" || fireworks.StructuredOutputRetries != 2 || !fireworks.IncludeContentDiagnostics ||
 		fireworks.BaseURL != "https://api.fireworks.ai/inference" {
 		t.Fatalf("provider = %#v", provider)
+	}
+}
+
+func TestProviderFromEnvironmentRejectsInvalidFireworksResponseFormat(t *testing.T) {
+	values := map[string]string{
+		FireworksKeyEnv:            "secret",
+		FireworksResponseFormatEnv: "yaml",
+		ModelEnv:                   "reviewer",
+	}
+	_, err := ProviderFromEnvironment(func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), FireworksResponseFormatEnv) {
+		t.Fatalf("invalid response format error = %v", err)
 	}
 }
 
@@ -381,6 +397,48 @@ func TestFireworksProviderUsesChatCompletionsStructuredOutput(t *testing.T) {
 	}
 	if result.Usage != (Usage{InputTokens: 14, OutputTokens: 3}) {
 		t.Fatalf("usage = %#v", result.Usage)
+	}
+}
+
+func TestFireworksProviderCanUseJSONModeWithLocalSchemaValidation(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"content": `{"decision":"approve"}`,
+			}}},
+		})
+	}))
+	defer server.Close()
+	provider := &FireworksProvider{
+		APIKey:          "secret",
+		ModelID:         "auto",
+		BaseURL:         server.URL,
+		Client:          server.Client(),
+		ResponseFormat:  "json_object",
+		ReasoningEffort: "none",
+	}
+	result, err := provider.Review(context.Background(), validRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Output) != `{"decision":"approve"}` {
+		t.Fatalf("result=%s", result.Output)
+	}
+	format := payload["response_format"].(map[string]any)
+	if format["type"] != "json_object" || len(format) != 1 {
+		t.Fatalf("response_format = %#v", format)
+	}
+	if payload["reasoning_effort"] != "none" {
+		t.Fatalf("reasoning_effort = %#v", payload["reasoning_effort"])
+	}
+	messages := payload["messages"].([]any)
+	user := messages[1].(map[string]any)["content"].(string)
+	if !strings.Contains(user, string(validRequest.Schema)) {
+		t.Fatalf("schema missing from prompt: %q", user)
 	}
 }
 

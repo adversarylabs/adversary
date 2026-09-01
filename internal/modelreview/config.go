@@ -17,6 +17,7 @@ const (
 	FireworksKeyEnv               = "FIREWORKS_API_KEY"
 	FireworksBaseURLEnv           = "ADVERSARY_FIREWORKS_BASE_URL"
 	FireworksReasoningEffortEnv   = "ADVERSARY_FIREWORKS_REASONING_EFFORT"
+	FireworksResponseFormatEnv    = "ADVERSARY_FIREWORKS_RESPONSE_FORMAT"
 	FireworksStructuredRetriesEnv = "ADVERSARY_FIREWORKS_STRUCTURED_RETRIES"
 	ModelContentDiagnosticsEnv    = "ADVERSARY_MODEL_CONTENT_DIAGNOSTICS"
 	DisableKeepAlivesEnv          = "ADVERSARY_MODEL_DISABLE_KEEP_ALIVES"
@@ -105,17 +106,34 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		if err != nil {
 			return nil, err
 		}
+		responseFormat, err := fireworksResponseFormatFromEnvironment(lookup)
+		if err != nil {
+			return nil, err
+		}
 		return &FireworksProvider{
 			APIKey:                    fireworksKey,
 			ModelID:                   model,
 			BaseURL:                   valueOrDefault(normalizedEnv(lookup, FireworksBaseURLEnv), "https://api.fireworks.ai/inference"),
 			Client:                    client,
 			ReasoningEffort:           reasoningEffort,
+			ResponseFormat:            responseFormat,
 			StructuredOutputRetries:   structuredRetries,
 			IncludeContentDiagnostics: envEnabled(lookup, ModelContentDiagnosticsEnv),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported %s %q (supported: openai, anthropic, fireworks)", ProviderEnv, provider)
+	}
+}
+
+func fireworksResponseFormatFromEnvironment(lookup LookupEnv) (string, error) {
+	format := strings.ToLower(normalizedEnv(lookup, FireworksResponseFormatEnv))
+	switch format {
+	case "", "json_schema":
+		return "json_schema", nil
+	case "json_object":
+		return format, nil
+	default:
+		return "", fmt.Errorf("unsupported %s %q (supported: json_schema, json_object)", FireworksResponseFormatEnv, format)
 	}
 }
 

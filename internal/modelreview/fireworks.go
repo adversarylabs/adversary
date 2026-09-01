@@ -14,6 +14,7 @@ type FireworksProvider struct {
 	BaseURL                   string
 	Client                    *http.Client
 	ReasoningEffort           string
+	ResponseFormat            string
 	StructuredOutputRetries   int
 	IncludeContentDiagnostics bool
 }
@@ -62,13 +63,7 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 			"max_tokens":       request.Budget.MaximumOutputTokens,
 			"reasoning_effort": p.reasoningEffort(request.Budget.MaximumOutputTokens),
 			"messages":         attemptMessages,
-			"response_format": map[string]any{
-				"type": "json_schema",
-				"json_schema": map[string]any{
-					"name":   "adversary_model_review",
-					"schema": schema,
-				},
-			},
+			"response_format":  p.responseFormat(schema),
 		}
 		data, status, err := postJSON(ctx, p.Client, p.BaseURL+"/v1/chat/completions", map[string]string{
 			"authorization": "Bearer " + p.APIKey,
@@ -106,6 +101,19 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 	return Result{}, &ProviderError{
 		Code:    code,
 		Message: message,
+	}
+}
+
+func (p *FireworksProvider) responseFormat(schema any) map[string]any {
+	if p.ResponseFormat == "json_object" {
+		return map[string]any{"type": "json_object"}
+	}
+	return map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   "adversary_model_review",
+			"schema": schema,
+		},
 	}
 }
 
