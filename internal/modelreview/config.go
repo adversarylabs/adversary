@@ -21,8 +21,9 @@ const (
 type LookupEnv func(string) (string, bool)
 
 type Config struct {
-	Provider string
-	Model    string
+	Provider        string
+	Model           string
+	ReasoningEffort string
 }
 
 func ProviderFromEnvironment(lookup LookupEnv, client *http.Client) (Provider, error) {
@@ -63,9 +64,12 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		if openAIKey == "" {
 			return nil, fmt.Errorf("%s is required for model provider openai", OpenAIKeyEnv)
 		}
-		reasoningEffort := strings.ToLower(normalizedEnv(lookup, OpenAIReasoningEffortEnv))
+		reasoningEffort := strings.ToLower(strings.TrimSpace(config.ReasoningEffort))
+		if reasoningEffort == "" {
+			reasoningEffort = strings.ToLower(normalizedEnv(lookup, OpenAIReasoningEffortEnv))
+		}
 		if !validOpenAIReasoningEffort(reasoningEffort) {
-			return nil, fmt.Errorf("unsupported %s %q (supported: none, low, medium, high, xhigh, max)", OpenAIReasoningEffortEnv, reasoningEffort)
+			return nil, fmt.Errorf("unsupported OpenAI reasoning effort %q (supported: none, low, medium, high, xhigh, max; configure with %s)", reasoningEffort, OpenAIReasoningEffortEnv)
 		}
 		return &OpenAIProvider{
 			APIKey:          openAIKey,
@@ -75,6 +79,9 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 			Client:          client,
 		}, nil
 	case "anthropic":
+		if strings.TrimSpace(config.ReasoningEffort) != "" {
+			return nil, fmt.Errorf("model reasoning effort is only supported by the OpenAI provider")
+		}
 		if anthropicKey == "" {
 			return nil, fmt.Errorf("%s is required for model provider anthropic", AnthropicKeyEnv)
 		}
@@ -85,6 +92,9 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 			Client:  client,
 		}, nil
 	case "fireworks":
+		if strings.TrimSpace(config.ReasoningEffort) != "" {
+			return nil, fmt.Errorf("model reasoning effort is only supported by the OpenAI provider")
+		}
 		if fireworksKey == "" {
 			return nil, fmt.Errorf("%s is required for model provider fireworks", FireworksKeyEnv)
 		}

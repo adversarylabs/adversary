@@ -149,6 +149,7 @@ type Runtime interface {
 type AdversaryRunOptions struct {
 	AdversaryRef, RepoPath, BaseRef, HeadRef, Builder, Format string
 	ModelProvider, Model                                      string
+	ModelReasoningEffort                                      string
 	Force, KeepTemp, NoNetwork, Verbose, IncludeSuppressed    bool
 	Shell, AllFiles, AllowUnsafeHostExecution                 bool
 	// MuteChildStderr keeps host-process diagnostics out of the progress stream
@@ -171,6 +172,7 @@ type AdversaryAutoOptions struct {
 	RepoPath, BaseRef, HeadRef                     string
 	AllFiles                                       bool
 	ModelProvider, Model                           string
+	ModelReasoningEffort                           string
 	MinimumConfidence                              detection.Confidence
 	Includes, Excludes                             []string
 	All, DryRun, Explain, AllowUnsafeHostExecution bool

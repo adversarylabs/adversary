@@ -30,6 +30,7 @@ type runOptions struct {
 	builder                  string
 	modelProvider            string
 	model                    string
+	modelReasoningEffort     string
 	force                    bool
 	format                   string
 	json                     bool
@@ -161,6 +162,7 @@ review base/head and optional posting context. Posting still requires
 			}
 			opts.modelProvider = strings.ToLower(strings.TrimSpace(opts.modelProvider))
 			opts.model = strings.TrimSpace(opts.model)
+			opts.modelReasoningEffort = strings.ToLower(strings.TrimSpace(opts.modelReasoningEffort))
 			switch opts.modelProvider {
 			case "", "openai", "anthropic", "fireworks":
 			default:
@@ -171,6 +173,17 @@ review base/head and optional posting context. Posting still requires
 			}
 			if cmd.Flags().Changed("model") && opts.model == "" {
 				return fmt.Errorf("--model must not be empty")
+			}
+			switch opts.modelReasoningEffort {
+			case "", "none", "low", "medium", "high", "xhigh", "max":
+			default:
+				return fmt.Errorf("--model-reasoning-effort must be none, low, medium, high, xhigh, or max")
+			}
+			if cmd.Flags().Changed("model-reasoning-effort") && opts.modelReasoningEffort == "" {
+				return fmt.Errorf("--model-reasoning-effort must not be empty")
+			}
+			if opts.modelReasoningEffort != "" && opts.modelProvider != "" && opts.modelProvider != "openai" {
+				return fmt.Errorf("--model-reasoning-effort requires --model-provider openai")
 			}
 			if opts.shell && opts.noNetwork {
 				return fmt.Errorf("--shell cannot be combined with --no-network because the host shell cannot enforce network isolation")
@@ -243,6 +256,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().StringVar(&opts.builder, "builder", "local", "build mechanism for local adversaries: local or docker")
 	cmd.Flags().StringVar(&opts.modelProvider, "model-provider", "", "model provider: openai, anthropic, or fireworks (overrides ADVERSARY_MODEL_PROVIDER)")
 	cmd.Flags().StringVar(&opts.model, "model", "", "provider model identifier (overrides ADVERSARY_MODEL)")
+	cmd.Flags().StringVar(&opts.modelReasoningEffort, "model-reasoning-effort", "", "OpenAI reasoning effort: none, low, medium, high, xhigh, or max (overrides ADVERSARY_OPENAI_REASONING_EFFORT)")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "run even when triggers.files_changed does not match")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "print the versioned review result envelope as JSON")
@@ -378,7 +392,7 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	var usageResults []adversarylabs.RunUsageAdversaryResult
 	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
-		ModelProvider: opts.modelProvider, Model: opts.model,
+		ModelProvider: opts.modelProvider, Model: opts.model, ModelReasoningEffort: opts.modelReasoningEffort,
 		MinimumConfidence: minimum,
 		Includes:          opts.includes, Excludes: opts.excludes,
 		All: opts.all, DryRun: opts.dryRun, Explain: opts.explain, Format: opts.format,
@@ -791,6 +805,7 @@ func runOneAdversary(
 		Builder:                  opts.builder,
 		ModelProvider:            opts.modelProvider,
 		Model:                    opts.model,
+		ModelReasoningEffort:     opts.modelReasoningEffort,
 		Force:                    opts.force,
 		Format:                   opts.format,
 		KeepTemp:                 opts.keepTemp,

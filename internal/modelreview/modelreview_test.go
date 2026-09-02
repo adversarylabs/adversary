@@ -254,6 +254,43 @@ func TestProviderRejectsInvalidOpenAIReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestProviderConfigOverridesOpenAIReasoningEffortEnvironment(t *testing.T) {
+	values := map[string]string{
+		OpenAIKeyEnv:             "secret",
+		OpenAIReasoningEffortEnv: "high",
+	}
+	provider, err := ProviderFromConfig(Config{
+		Provider:        "openai",
+		Model:           "reviewer",
+		ReasoningEffort: " Medium ",
+	}, func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openAI, ok := provider.(*OpenAIProvider)
+	if !ok || openAI.ReasoningEffort != "medium" {
+		t.Fatalf("provider = %#v", provider)
+	}
+}
+
+func TestProviderRejectsExplicitReasoningEffortForOtherProviders(t *testing.T) {
+	values := map[string]string{FireworksKeyEnv: "secret"}
+	_, err := ProviderFromConfig(Config{
+		Provider:        "fireworks",
+		Model:           "reviewer",
+		ReasoningEffort: "medium",
+	}, func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "only supported") {
+		t.Fatalf("reasoning provider error = %v", err)
+	}
+}
+
 func TestAnthropicProviderUsesForcedStructuredTool(t *testing.T) {
 	var apiKey string
 	var payload map[string]any

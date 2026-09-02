@@ -176,8 +176,9 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 	// BuildRewritePrompt (inside EnhanceBodies) wraps agent/voice.md so Example maintainer
 	// comments banks are used as few-shot style when generating comment text.
 	if provider, err := modelreview.ProviderFromConfig(modelreview.Config{
-		Provider: opts.modelProvider,
-		Model:    opts.model,
+		Provider:        opts.modelProvider,
+		Model:           opts.model,
+		ReasoningEffort: opts.modelReasoningEffort,
 	}, githubapi.LookupEnv, nil); err == nil && provider != nil {
 		githubreview.EnhanceBodies(ctx, &plan, githubreview.EnhanceOptions{
 			Provider:    provider,

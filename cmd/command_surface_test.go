@@ -329,6 +329,9 @@ func TestInvalidRunFlagsDoNoRuntimeWorkOrOutput(t *testing.T) {
 		"model provider":      {"run", "example", "--model-provider", "unknown"},
 		"empty provider":      {"run", "example", "--model-provider", " "},
 		"empty model":         {"run", "example", "--model", " "},
+		"reasoning effort":    {"run", "example", "--model-provider", "openai", "--model-reasoning-effort", "extreme"},
+		"empty reasoning":     {"run", "example", "--model-reasoning-effort", " "},
+		"reasoning provider":  {"run", "example", "--model-provider", "fireworks", "--model-reasoning-effort", "medium"},
 		"shell json":          {"run", "example", "--shell", "--format", "json"},
 		"debug verbose":       {"run", "example", "--debug", "--verbose"},
 	} {
@@ -377,6 +380,26 @@ func TestRunCommandForwardsPathAndPartialRefsForAutomaticCompletion(t *testing.T
 	}
 	if spy.opts.RepoPath != "/repo" || spy.opts.BaseRef != "main" || spy.opts.HeadRef != "" || spy.opts.AllFiles ||
 		spy.opts.ModelProvider != "fireworks" || spy.opts.Model != "accounts/fireworks/models/reviewer" {
+		t.Fatalf("options = %#v", spy.opts)
+	}
+}
+
+func TestRunCommandForwardsOpenAIReasoningEffort(t *testing.T) {
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut)
+	deps := base.Dependencies()
+	spy := &recordingRunRuntime{inner: deps.Runtime}
+	deps.Runtime = spy
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"run", "example", "--model-provider", "OpenAI", "--model", "reviewer", "--model-reasoning-effort", " Medium "})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if spy.opts.ModelProvider != "openai" || spy.opts.Model != "reviewer" || spy.opts.ModelReasoningEffort != "medium" {
 		t.Fatalf("options = %#v", spy.opts)
 	}
 }

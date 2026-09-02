@@ -77,6 +77,26 @@ func TestRunWithoutRefsForwardsSelectionControls(t *testing.T) {
 	}
 }
 
+func TestRunWithoutRefsForwardsOpenAIReasoningEffort(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr)
+	deps := base.Dependencies()
+	stub := &autoStubRuntime{inner: deps.Runtime}
+	deps.Runtime = stub
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{"run", "--dry-run", "--no-pull", "--model-provider", "openai", "--model", "reviewer", "--model-reasoning-effort", "high"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if stub.opts.ModelReasoningEffort != "high" {
+		t.Fatalf("options = %#v", stub.opts)
+	}
+}
+
 func TestRunWithoutRefsNoMatchIsSuccessfulAndConcise(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr)

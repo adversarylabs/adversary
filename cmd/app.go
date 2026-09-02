@@ -270,7 +270,7 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 	// multi-run progress stays a clean status list (Node stack traces are noisy).
 	runner := p.runner(application.AdversaryRunOptions{
 		Stdout: opts.Stdout, Stderr: opts.Stderr,
-		ModelProvider: opts.ModelProvider, Model: opts.Model,
+		ModelProvider: opts.ModelProvider, Model: opts.Model, ModelReasoningEffort: opts.ModelReasoningEffort,
 		MuteChildStderr: true,
 	})
 	internalOptions := internaladversary.AutoOptions{
@@ -350,8 +350,9 @@ func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladv
 	shell := func() ([]string, error) { return internaladversary.PlatformShell(p.node.LookPath) }
 	modelBrokerFactory := func() (modelreview.Broker, error) {
 		provider, err := modelreview.ProviderFromConfig(modelreview.Config{
-			Provider: opts.ModelProvider,
-			Model:    opts.Model,
+			Provider:        opts.ModelProvider,
+			Model:           opts.Model,
+			ReasoningEffort: opts.ModelReasoningEffort,
 		}, p.environment.Lookup, http.DefaultClient)
 		if err != nil {
 			return modelreview.Broker{}, err
