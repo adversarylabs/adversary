@@ -55,6 +55,7 @@ type runOptions struct {
 	runTimeout               time.Duration
 	buildTimeout             time.Duration
 	repoIndex                string
+	composeConcurrency       int
 
 	// GitHub review (opt-in posting / plan).
 	githubReview         bool
@@ -93,9 +94,9 @@ If a package lists uses: in adversary.yaml, the CLI expands composition
 (transitively), runs each member, and keeps GitHub comment voice from the
 entry package(s).
 
-With no adversary references, run pulls every adversary you can access (unless
---no-pull), detects which apply to the resolved review scope, and runs the
-selected set. Use --all to skip detection and run every installed adversary.
+With no adversary references or only a pull request URL, run selects review/code,
+which expands its generalist and specialist composition. Use --all to select
+across every adversary you can access instead.
 Use --all-files for a whole-repository scan instead of change inference.
 
 A GitHub pull request URL may be passed as a positional argument to set the
@@ -192,6 +193,9 @@ review base/head and optional posting context. Posting still requires
 			if opts.runTimeout < 0 || opts.buildTimeout < 0 || opts.detectionTimeout < 0 {
 				return fmt.Errorf("timeouts cannot be negative")
 			}
+			if opts.composeConcurrency < 1 {
+				return fmt.Errorf("--compose-concurrency must be at least 1")
+			}
 			opts.format = format
 			if opts.json {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
@@ -218,9 +222,12 @@ review base/head and optional posting context. Posting still requires
 			}
 
 			var runErr error
-			if len(args) == 0 {
+			if len(args) == 0 && wantsAutomaticSelection(cmd, opts) {
 				runErr = runAutomaticSelection(cmd, app, opts, apiURL, profile, resultOut, progressOut)
 			} else {
+				if len(args) == 0 {
+					args = []string{"review/code"}
+				}
 				if err := rejectAutomaticOnlyFlags(cmd, opts); err != nil {
 					return err
 				}
@@ -267,7 +274,8 @@ review base/head and optional posting context. Posting still requires
 	_ = cmd.Flags().MarkDeprecated("no-build", "local builds are skipped by default; omit this flag")
 	cmd.Flags().DurationVar(&opts.runTimeout, "timeout", 0, "maximum adversary execution time (0 disables the deadline)")
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
-	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "auto", "local repository index: auto, off, force, graph, or graph-force")
+	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "graph", "local repository index: auto, off, force, graph, or graph-force")
+	cmd.Flags().IntVar(&opts.composeConcurrency, "compose-concurrency", 5, "maximum composed reviewers to run concurrently")
 	cmd.Flags().BoolVar(&opts.noCompose, "no-compose", false, "do not expand adversary.yaml uses composition; run only the named refs")
 	_ = cmd.Flags().MarkHidden("no-compose")
 
@@ -283,6 +291,11 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().StringVar(&opts.githubRESTURL, "github-rest-url", "", "REST API base override (default https://api.github.com)")
 
 	return cmd
+}
+
+func wantsAutomaticSelection(cmd *cobra.Command, opts *runOptions) bool {
+	return opts.all || opts.noPull || opts.dryRun || opts.explain || len(opts.includes) > 0 || len(opts.excludes) > 0 ||
+		cmd.Flags().Changed("min-confidence") || cmd.Flags().Changed("detection-timeout")
 }
 
 func rejectAutomaticOnlyFlags(cmd *cobra.Command, opts *runOptions) error {
@@ -539,8 +552,10 @@ func runAdversaries(
 	apiURL, profile *string,
 	resultOut, progressOut io.Writer,
 ) error {
+	entryRefs := append([]string(nil), refs...)
 	for i := range refs {
 		refs[i] = canonicalCatalogReference(refs[i])
+		entryRefs[i] = refs[i]
 	}
 	// --shell is a single interactive package session. Skip uses expansion entirely
 	// so we never pull a composition graph, never re-expand after auto-install, and
@@ -561,6 +576,9 @@ func runAdversaries(
 	refs = expanded
 	if opts.shell && len(refs) > 1 {
 		return fmt.Errorf("--shell requires exactly one adversary reference")
+	}
+	if !noCompose && len(entryRefs) == 1 && len(refs) > 1 {
+		return runComposedAdversaries(ctx, app, opts, entryRefs[0], refs, valueOf(apiURL), valueOf(profile), resultOut, progressOut)
 	}
 
 	multi := len(refs) > 1

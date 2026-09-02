@@ -61,6 +61,7 @@ func Expand(roots []string, load Loader, opts Options) (Result, error) {
 
 	var out Result
 	seen := map[string]struct{}{}
+	seenPackages := map[string]struct{}{}
 	type item struct {
 		ref    string
 		depth  int
@@ -92,6 +93,15 @@ func Expand(roots []string, load Loader, opts Options) (Result, error) {
 
 		m, packageDir, err := load.Load(cur.ref)
 		runRef := cur.ref
+		if err == nil {
+			identity := strings.ToLower(strings.TrimSpace(m.Name)) + "@" + strings.TrimSpace(m.Version)
+			if identity != "@" {
+				if _, ok := seenPackages[identity]; ok {
+					continue
+				}
+				seenPackages[identity] = struct{}{}
+			}
+		}
 		if err == nil && packageDir != "" {
 			if canon, canonErr := canonicalPath(packageDir); canonErr == nil {
 				// Alias every path form of this package dir so ./pkg, /abs/pkg,

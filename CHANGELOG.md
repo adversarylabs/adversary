@@ -11,6 +11,12 @@ existing one.
 
 ## Unreleased
 
+- `adversary run` now defaults to the `review/code` composition. The generalist
+  reviews the full change while manifest-matched specialists run concurrently
+  on scoped changed files with repository-graph context.
+- Composed reviews now emit one conservatively deduplicated result and retain
+  every contributing reviewer in finding metadata. `--no-compose` remains
+  supported for controlled evaluation but is hidden from normal help.
 - Packing preserves self-contained JavaScript bundles instead of appending the
   installed SDK dependency closure when no unresolved SDK import remains.
 - Model provider and model can be selected per run with flags, and Fireworks is

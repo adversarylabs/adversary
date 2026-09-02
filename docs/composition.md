@@ -39,13 +39,20 @@ adversary run person/torvalds --path ./app --github-review
 # Language pack
 adversary run go --path ./myservice
 
-# Run only the named package (no expansion)
-adversary run person/torvalds --no-compose --path ./app
+# Default product: review/code plus its specialists
+adversary run --path ./app
 ```
 
 Expansion is **transitive** (depth cap 8), **deduped**, and **cycle-safe**.
 Missing members fail the run (fail closed). Registry members are auto-pulled
 when not installed, same as a direct `adversary run <ref>`.
+
+One-root compositions execute with bounded parallelism (five reviewers by
+default; configurable with `--compose-concurrency`). The root generalist sees
+the full change. Each child receives only changed files selected by its
+declarative manifest, while retaining access to the repository graph for
+context. The CLI emits one result, conservatively deduplicates overlapping
+findings, and records every contributing reviewer in finding metadata.
 
 Progress shows the expanded set when composition adds members:
 
@@ -70,8 +77,8 @@ for file layout, train banking, and rewrite behavior.
 | `lang/go` | go package voice if any, else CLI default | go-* members |
 | `go/concurrency` | that package only | leaf only |
 
-Findings keep their real adversary id for provenance; bodies can be rewritten
-with the entry persona.
+Findings record their contributing adversary ids in `compositionSources`
+metadata; bodies can be rewritten with the entry persona.
 
 ## Suggested products
 
@@ -88,10 +95,12 @@ wording; meta packages only change the default member set.
 
 | Flag | Meaning |
 |------|---------|
-| `--no-compose` | Do not expand `uses`; run only the refs on the command line |
+| `--compose-concurrency` | Maximum composed reviewers running concurrently (default 5) |
 
-Automatic selection (`adversary run` with no refs) does **not** expand `uses`
-yet; composition applies to **explicit** references.
+`adversary run` with no refs selects `review/code` and expands its composition.
+`--all` retains catalog-wide automatic selection. The internal `--no-compose`
+compatibility flag remains available to controlled training and evaluation
+workflows, but is intentionally hidden from normal CLI help.
 
 ## Related
 

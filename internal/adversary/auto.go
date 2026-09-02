@@ -183,6 +183,9 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 		}
 		if !opts.AllFiles {
 			ctxCopy := reviewContext
+			if len(selection.Result.RelevantFiles) > 0 {
+				ctxCopy = ReviewContextForFiles(reviewContext, selection.Result.RelevantFiles)
+			}
 			runOpts.ReviewContext = &ctxCopy
 		}
 		err := a.Runner.Run(ctx, runOpts)

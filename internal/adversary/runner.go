@@ -40,7 +40,8 @@ type RunOptions struct {
 	BuildTimeout             time.Duration
 	ReviewContext            *detection.Context
 	ReferenceIdentity        string
-	// RepoIndexMode controls local repo index ensure (auto|off|force). Empty = auto.
+	// RepoIndexMode controls local repo index ensure. Empty retains the runtime's
+	// compatibility default; the CLI product default is graph.
 	RepoIndexMode string
 	// OnEnvelope is invoked with the decoded protocol envelope after suppression
 	// stripping and before/after rendering. Callers use it for post-run projection.
@@ -258,6 +259,18 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		PrintVerboseLoad(stderr, opts.AdversaryRef, resolved)
 	}
 
+	scopedByManifest := false
+	if opts.ReviewContext != nil && resolved.Manifest != nil && !opts.Force && !opts.AllFiles {
+		scoped, declared := ScopeReviewContext(*resolved.Manifest, *opts.ReviewContext)
+		if declared {
+			opts.ReviewContext = &scoped
+			scopedByManifest = true
+			if opts.Verbose {
+				fmt.Fprintf(stderr, "Review route: %d relevant changed files\n", len(scoped.ChangedFiles))
+			}
+		}
+	}
+
 	baseRef, headRef := opts.BaseRef, opts.HeadRef
 	var changedFiles []string
 	if opts.ReviewContext != nil {
@@ -279,15 +292,19 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		}
 	}
 
-	if resolved.Manifest != nil && len(resolved.Manifest.Triggers.FilesChanged) > 0 && (opts.ReviewContext != nil || opts.BaseRef != "" || opts.HeadRef != "") {
-		if !ShouldRunForChangedFiles(resolved.Manifest.Triggers.FilesChanged, changedFiles, opts.Force || opts.AllFiles) {
+	if resolved.Manifest != nil && (scopedByManifest || len(resolved.Manifest.Triggers.FilesChanged) > 0) && (opts.ReviewContext != nil || opts.BaseRef != "" || opts.HeadRef != "") {
+		if len(changedFiles) == 0 || (!scopedByManifest && !ShouldRunForChangedFiles(resolved.Manifest.Triggers.FilesChanged, changedFiles, opts.Force || opts.AllFiles)) {
+			skipSummary := "No changed files matched triggers.files_changed."
+			if scopedByManifest {
+				skipSummary = "No changed files matched this adversary's review scope."
+			}
 			skipped := review.RunEnvelope{
 				ProtocolVersion: review.ProtocolVersion,
 				Result: review.ReviewResult{
 					Adversary:    review.ReviewAdversary{Name: resolved.Name},
 					Target:       review.ReviewTarget{Repository: repoPath},
 					Positives:    []review.Note{},
-					Observations: []review.Note{{Key: "run-skipped", Summary: "No changed files matched triggers.files_changed."}},
+					Observations: []review.Note{{Key: "run-skipped", Summary: skipSummary}},
 					Findings:     []review.Finding{},
 					Suppressed:   review.Suppressed{},
 				},
