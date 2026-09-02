@@ -64,3 +64,25 @@ func TestAggregateComposedReviewKeepsDistinctNearbyFindings(t *testing.T) {
 		t.Fatalf("findings = %#v", got.Result.Findings)
 	}
 }
+
+func TestAggregateComposedReviewKeepsEmptyFindingsProtocolValid(t *testing.T) {
+	root := review.RunEnvelope{ProtocolVersion: 1, Result: review.ReviewResult{
+		Adversary: review.ReviewAdversary{Name: "review/code", Version: "0.0.4"},
+		Target:    review.ReviewTarget{Repository: "repo"}, Positives: []review.Note{},
+		Observations: []review.Note{}, Findings: []review.Finding{}, Suppressed: review.Suppressed{},
+	}}
+	got, err := aggregateComposedReview("review/code", []composedRunResult{{ref: "review/code", envelope: &root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) == "" || got.Result.Findings == nil {
+		t.Fatalf("clean composite findings must be an array: %s", encoded)
+	}
+	if _, err := review.DecodeRunEnvelope(encoded); err != nil {
+		t.Fatalf("clean aggregate is not a valid review envelope: %v", err)
+	}
+}

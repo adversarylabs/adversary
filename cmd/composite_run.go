@@ -173,11 +173,14 @@ func aggregateComposedReview(root string, runs []composedRunResult) (review.RunE
 		Metadata: compositionReviewerMetadata(runs),
 	})
 	aggregate.Result.Adversary.Name = root
-	aggregate.Result.Findings = nil
+	// The review protocol requires findings to be present as an array. Starting
+	// from nil here serializes a clean composite review as `"findings": null`,
+	// which downstream protocol decoders must reject.
+	aggregate.Result.Findings = []review.Finding{}
 	aggregate.Result.SuppressedFindings = nil
 	aggregate.Result.Suppressed = review.Suppressed{}
 
-	var merged []review.Finding
+	merged := []review.Finding{}
 	var suppressed []review.Finding
 	for _, run := range runs {
 		if run.envelope == nil {
