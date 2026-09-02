@@ -66,7 +66,12 @@ func runComposedAdversaries(
 			local.envelopes = nil
 			var stdout, stderr strings.Builder
 			runStarted := time.Now()
-			err := runOneAdversary(ctx, app, &local, ref, apiURL, profile, &stdout, &stderr)
+			// Manifest composition uses stable catalog IDs such as go/concurrency,
+			// while installed official packages are stored under library/... refs.
+			// Apply the same catalog-boundary normalization to composed children that
+			// runAdversaries applies to top-level CLI arguments.
+			executionRef := canonicalCatalogReference(ref)
+			err := runOneAdversary(ctx, app, &local, executionRef, apiURL, profile, &stdout, &stderr)
 			result := composedRunResult{ref: ref, err: err, stderr: stderr.String(), duration: time.Since(runStarted)}
 			if len(local.envelopes) > 0 {
 				envelope := local.envelopes[len(local.envelopes)-1].Envelope
