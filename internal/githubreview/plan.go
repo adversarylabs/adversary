@@ -27,7 +27,11 @@ type VoiceInfo struct {
 // PlannedComment is one finding projected for a PR review thread or body.
 type PlannedComment struct {
 	FindingID       string `json:"findingId"`
+	RuleID          string `json:"ruleId,omitempty"`
 	Adversary       string `json:"adversary"`
+	Package         string `json:"package,omitempty"`
+	PackageVersion  string `json:"packageVersion,omitempty"`
+	HeadSHA         string `json:"headSha,omitempty"`
 	Severity        string `json:"severity"`
 	Confidence      string `json:"confidence"`
 	Title           string `json:"title"`

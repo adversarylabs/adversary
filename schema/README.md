@@ -54,3 +54,7 @@ number withheld from `findings`. When suppressed details are requested, the
 optional `suppressedFindings` array is present and its length equals that total.
 
 Terminal rendering is intentionally outside these data contracts.
+
+`adversary.feedback.v1.schema.json` defines the durable local record produced by
+`adversary feedback ingest`. A feedback record is an auditable improvement
+candidate, not an automatic package change or suppression directive.

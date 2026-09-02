@@ -11,6 +11,9 @@ existing one.
 
 ## Unreleased
 
+- `adversary feedback ingest` captures trusted human rebuttals to marked GitHub
+  review comments, opens deduplicated adversary improvement issues, and
+  acknowledges in the original thread after durable handoff.
 - Packing preserves self-contained JavaScript bundles instead of appending the
   installed SDK dependency closure when no unresolved SDK import remains.
 - Model provider and model can be selected per run with flags, and Fireworks is

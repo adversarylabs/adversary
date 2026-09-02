@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adversarylabs.dev/schemas/adversary.feedback.v1.schema.json",
+  "title": "Adversary feedback record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "capturedAt", "repository", "pullRequest", "rootCommentId", "replyCommentId", "responder", "trusted", "marker", "classification", "classificationReason", "thread"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-f0-9]{24}$" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "pullRequest": { "type": "integer", "minimum": 1 },
+    "pullUrl": { "type": "string" },
+    "rootCommentId": { "type": "integer", "minimum": 1 },
+    "replyCommentId": { "type": "integer", "minimum": 1 },
+    "replyUrl": { "type": "string" },
+    "responder": { "type": "string", "minLength": 1 },
+    "association": { "type": "string" },
+    "trusted": { "type": "boolean" },
+    "marker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "adversary", "package", "findingId"],
+      "properties": {
+        "version": { "type": "integer", "enum": [1, 2] },
+        "adversary": { "type": "string", "minLength": 1 },
+        "package": { "type": "string", "minLength": 1 },
+        "packageVersion": { "type": "string" },
+        "findingId": { "type": "string", "minLength": 1 },
+        "ruleId": { "type": "string" },
+        "headSha": { "type": "string" },
+        "location": { "type": "string" }
+      }
+    },
+    "reviewedHead": { "type": "string" },
+    "currentHead": { "type": "string" },
+    "path": { "type": "string" },
+    "line": { "type": "integer", "minimum": 0 },
+    "classification": { "enum": ["confirmed-finding", "false-positive-candidate", "repository-local-exception", "needs-clarification", "needs-triage"] },
+    "classificationReason": { "type": "string", "minLength": 1 },
+    "thread": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "author", "body"],
+        "properties": {
+          "id": { "type": "integer", "minimum": 1 },
+          "url": { "type": "string" },
+          "author": { "type": "string", "minLength": 1 },
+          "authorAssociation": { "type": "string" },
+          "body": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "root": { "type": "boolean" },
+          "feedbackReply": { "type": "boolean" }
+        }
+      }
+    },
+    "issueUrl": { "type": "string" },
+    "acknowledgementUrl": { "type": "string" }
+  }
+}

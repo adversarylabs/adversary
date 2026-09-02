@@ -6,6 +6,7 @@ Usage:
 
 Available Commands:
   completion  Generate shell completion code
+  feedback    Capture human feedback on Adversary pull-request comments
   help        Help about any command
   init        Create a new adversary project
   inspect     Inspect a locally stored adversary or local runtime configuration
