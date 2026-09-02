@@ -241,6 +241,8 @@ func Ensure(absRepo string, mode Mode, stderr io.Writer) (*Handle, error) {
 		return nil, err
 	}
 	dir := filepath.Join(root, SchemaVersion, RepoKey(absRepo))
+	unlock := lockEnsure("v1:" + dir)
+	defer unlock()
 	metaPath := filepath.Join(dir, metaFile)
 
 	if mode != ModeForce {
