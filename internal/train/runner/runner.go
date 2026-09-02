@@ -368,6 +368,9 @@ func defaultModelProvider() string {
 	if os.Getenv("FIREWORKS_API_KEY") != "" {
 		return "fireworks"
 	}
+	if os.Getenv("CAMEL_API_KEY") != "" {
+		return "camel"
+	}
 	return "openai"
 }
 
@@ -377,6 +380,8 @@ func defaultModel(provider string) string {
 		return "claude-sonnet-4-20250514"
 	case "fireworks":
 		return "accounts/fireworks/models/llama-v3p1-70b-instruct"
+	case "camel", "camel-stream":
+		return "auto"
 	default:
 		return "gpt-4o-mini"
 	}

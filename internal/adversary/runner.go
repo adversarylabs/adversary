@@ -733,6 +733,7 @@ func (c RunConfig) RuntimeSpec() RuntimeSpec {
 			modelreview.OpenAIKeyEnv,
 			modelreview.AnthropicKeyEnv,
 			modelreview.FireworksKeyEnv,
+			modelreview.CamelKeyEnv,
 		},
 		Shell:       c.Options.Shell,
 		Publisher:   c.Resolved.Publisher,

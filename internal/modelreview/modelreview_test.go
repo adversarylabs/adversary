@@ -157,7 +157,7 @@ func TestProviderFromEnvironmentRequiresUnambiguousKeyAndExplicitModel(t *testin
 	if _, err := ProviderFromEnvironment(lookup(map[string]string{OpenAIKeyEnv: "secret"}), nil); err == nil || !strings.Contains(err.Error(), ModelEnv) {
 		t.Fatalf("missing model error = %v", err)
 	}
-	if _, err := ProviderFromEnvironment(lookup(map[string]string{OpenAIKeyEnv: "one", AnthropicKeyEnv: "two", FireworksKeyEnv: "three", ModelEnv: "reviewer"}), nil); err == nil || !strings.Contains(err.Error(), ProviderEnv) {
+	if _, err := ProviderFromEnvironment(lookup(map[string]string{OpenAIKeyEnv: "one", AnthropicKeyEnv: "two", FireworksKeyEnv: "three", CamelKeyEnv: "four", ModelEnv: "reviewer"}), nil); err == nil || !strings.Contains(err.Error(), ProviderEnv) {
 		t.Fatalf("ambiguous provider error = %v", err)
 	}
 	provider, err := ProviderFromEnvironment(lookup(map[string]string{AnthropicKeyEnv: "secret", ModelEnv: "reviewer"}), nil)
@@ -182,6 +182,27 @@ func TestProviderFromEnvironmentRequiresUnambiguousKeyAndExplicitModel(t *testin
 	if !ok || fireworks.Model() != "accounts/fireworks/models/reviewer" || fireworks.ReasoningEffort != "none" ||
 		fireworks.ResponseFormat != "json_object" || fireworks.StructuredOutputRetries != 2 || !fireworks.IncludeContentDiagnostics ||
 		fireworks.BaseURL != "https://api.fireworks.ai/inference" {
+		t.Fatalf("provider = %#v", provider)
+	}
+}
+
+func TestProviderFromConfigUsesCamelNamespace(t *testing.T) {
+	values := map[string]string{
+		CamelKeyEnv:               "qaml_live_test",
+		CamelReasoningEffortEnv:   "none",
+		CamelStructuredRetriesEnv: "2",
+	}
+	provider, err := ProviderFromConfig(Config{Provider: "camel", Model: "auto"}, func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	camel, ok := provider.(*CamelProvider)
+	if !ok || camel.Name() != "camel" || camel.Model() != "auto" || camel.APIKey != "qaml_live_test" ||
+		camel.BaseURL != "https://stream.camelai.com" || camel.ResponseFormat != "json_object" ||
+		camel.ReasoningEffort != "none" || camel.StructuredOutputRetries != 2 {
 		t.Fatalf("provider = %#v", provider)
 	}
 }
@@ -397,6 +418,26 @@ func TestFireworksProviderUsesChatCompletionsStructuredOutput(t *testing.T) {
 	}
 	if result.Usage != (Usage{InputTokens: 14, OutputTokens: 3}) {
 		t.Fatalf("usage = %#v", result.Usage)
+	}
+}
+
+func TestCamelProviderUsesCamelIdentityAndChatCompletions(t *testing.T) {
+	var authorization, path string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		authorization = request.Header.Get("authorization")
+		path = request.URL.Path
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": `{"decision":"approve"}`}}},
+		})
+	}))
+	defer server.Close()
+	provider := &CamelProvider{APIKey: "qaml_live_test", ModelID: "auto", BaseURL: server.URL, Client: server.Client(), ResponseFormat: "json_object"}
+	result, err := provider.Review(context.Background(), validRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Name() != "camel" || authorization != "Bearer qaml_live_test" || path != "/v1/chat/completions" || string(result.Output) != `{"decision":"approve"}` {
+		t.Fatalf("provider=%q authorization=%q path=%q result=%s", provider.Name(), authorization, path, result.Output)
 	}
 }
 

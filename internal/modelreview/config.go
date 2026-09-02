@@ -19,6 +19,11 @@ const (
 	FireworksReasoningEffortEnv   = "ADVERSARY_FIREWORKS_REASONING_EFFORT"
 	FireworksResponseFormatEnv    = "ADVERSARY_FIREWORKS_RESPONSE_FORMAT"
 	FireworksStructuredRetriesEnv = "ADVERSARY_FIREWORKS_STRUCTURED_RETRIES"
+	CamelKeyEnv                   = "CAMEL_API_KEY"
+	CamelBaseURLEnv               = "ADVERSARY_CAMEL_BASE_URL"
+	CamelReasoningEffortEnv       = "ADVERSARY_CAMEL_REASONING_EFFORT"
+	CamelResponseFormatEnv        = "ADVERSARY_CAMEL_RESPONSE_FORMAT"
+	CamelStructuredRetriesEnv     = "ADVERSARY_CAMEL_STRUCTURED_RETRIES"
 	ModelContentDiagnosticsEnv    = "ADVERSARY_MODEL_CONTENT_DIAGNOSTICS"
 	DisableKeepAlivesEnv          = "ADVERSARY_MODEL_DISABLE_KEEP_ALIVES"
 )
@@ -55,11 +60,12 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 	openAIKey := normalizedEnv(lookup, OpenAIKeyEnv)
 	anthropicKey := normalizedEnv(lookup, AnthropicKeyEnv)
 	fireworksKey := normalizedEnv(lookup, FireworksKeyEnv)
+	camelKey := normalizedEnv(lookup, CamelKeyEnv)
 	if provider == "" {
-		configured := configuredProviders(openAIKey, anthropicKey, fireworksKey)
+		configured := configuredProviders(openAIKey, anthropicKey, fireworksKey, camelKey)
 		switch len(configured) {
 		case 0:
-			return nil, fmt.Errorf("model access requires %s, %s, or %s", OpenAIKeyEnv, AnthropicKeyEnv, FireworksKeyEnv)
+			return nil, fmt.Errorf("model access requires %s, %s, %s, or %s", OpenAIKeyEnv, AnthropicKeyEnv, FireworksKeyEnv, CamelKeyEnv)
 		case 1:
 			provider = configured[0]
 		default:
@@ -120,20 +126,50 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 			StructuredOutputRetries:   structuredRetries,
 			IncludeContentDiagnostics: envEnabled(lookup, ModelContentDiagnosticsEnv),
 		}, nil
+	case "camel", "camel-stream":
+		if camelKey == "" {
+			return nil, fmt.Errorf("%s is required for model provider camel", CamelKeyEnv)
+		}
+		reasoningEffort, err := reasoningEffortFromEnvironment(lookup, CamelReasoningEffortEnv)
+		if err != nil {
+			return nil, err
+		}
+		structuredRetries, err := boundedIntegerFromEnvironment(lookup, CamelStructuredRetriesEnv, 0, 3)
+		if err != nil {
+			return nil, err
+		}
+		responseFormat, err := responseFormatFromEnvironment(lookup, CamelResponseFormatEnv, "json_object")
+		if err != nil {
+			return nil, err
+		}
+		return &CamelProvider{
+			APIKey:                    camelKey,
+			ModelID:                   model,
+			BaseURL:                   valueOrDefault(normalizedEnv(lookup, CamelBaseURLEnv), "https://stream.camelai.com"),
+			Client:                    client,
+			ReasoningEffort:           reasoningEffort,
+			ResponseFormat:            responseFormat,
+			StructuredOutputRetries:   structuredRetries,
+			IncludeContentDiagnostics: envEnabled(lookup, ModelContentDiagnosticsEnv),
+		}, nil
 	default:
-		return nil, fmt.Errorf("unsupported %s %q (supported: openai, anthropic, fireworks)", ProviderEnv, provider)
+		return nil, fmt.Errorf("unsupported %s %q (supported: openai, anthropic, fireworks, camel)", ProviderEnv, provider)
 	}
 }
 
 func fireworksResponseFormatFromEnvironment(lookup LookupEnv) (string, error) {
-	format := strings.ToLower(normalizedEnv(lookup, FireworksResponseFormatEnv))
+	return responseFormatFromEnvironment(lookup, FireworksResponseFormatEnv, "json_schema")
+}
+
+func responseFormatFromEnvironment(lookup LookupEnv, name, defaultFormat string) (string, error) {
+	format := strings.ToLower(normalizedEnv(lookup, name))
 	switch format {
-	case "", "json_schema":
-		return "json_schema", nil
-	case "json_object":
+	case "":
+		return defaultFormat, nil
+	case "json_schema", "json_object":
 		return format, nil
 	default:
-		return "", fmt.Errorf("unsupported %s %q (supported: json_schema, json_object)", FireworksResponseFormatEnv, format)
+		return "", fmt.Errorf("unsupported %s %q (supported: json_schema, json_object)", name, format)
 	}
 }
 
@@ -150,16 +186,20 @@ func boundedIntegerFromEnvironment(lookup LookupEnv, name string, minimum, maxim
 }
 
 func fireworksReasoningEffortFromEnvironment(lookup LookupEnv) (string, error) {
-	effort := strings.ToLower(normalizedEnv(lookup, FireworksReasoningEffortEnv))
+	return reasoningEffortFromEnvironment(lookup, FireworksReasoningEffortEnv)
+}
+
+func reasoningEffortFromEnvironment(lookup LookupEnv, name string) (string, error) {
+	effort := strings.ToLower(normalizedEnv(lookup, name))
 	switch effort {
 	case "", "none", "low", "medium", "high":
 		return effort, nil
 	default:
-		return "", fmt.Errorf("unsupported %s %q (supported: none, low, medium, high)", FireworksReasoningEffortEnv, effort)
+		return "", fmt.Errorf("unsupported %s %q (supported: none, low, medium, high)", name, effort)
 	}
 }
 
-func configuredProviders(openAIKey, anthropicKey, fireworksKey string) []string {
+func configuredProviders(openAIKey, anthropicKey, fireworksKey, camelKey string) []string {
 	var configured []string
 	for _, candidate := range []struct {
 		name string
@@ -168,6 +208,7 @@ func configuredProviders(openAIKey, anthropicKey, fireworksKey string) []string 
 		{name: "openai", key: openAIKey},
 		{name: "anthropic", key: anthropicKey},
 		{name: "fireworks", key: fireworksKey},
+		{name: "camel", key: camelKey},
 	} {
 		if candidate.key != "" {
 			configured = append(configured, candidate.name)

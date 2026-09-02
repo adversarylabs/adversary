@@ -122,6 +122,8 @@ func NewModelIssueBriefWriterFromEnvironment(lookup modelreview.LookupEnv, clien
 			providerName = "anthropic"
 		case envValue(lookup, modelreview.FireworksKeyEnv) != "":
 			providerName = "fireworks"
+		case envValue(lookup, modelreview.CamelKeyEnv) != "":
+			providerName = "camel"
 		default:
 			return nil, fmt.Errorf("no model credential available for train issue briefs")
 		}
@@ -133,6 +135,8 @@ func NewModelIssueBriefWriterFromEnvironment(lookup modelreview.LookupEnv, clien
 			model = "claude-sonnet-4-20250514"
 		case "fireworks":
 			model = "accounts/fireworks/models/llama-v3p1-70b-instruct"
+		case "camel", "camel-stream":
+			model = "auto"
 		default:
 			model = "gpt-5-mini"
 		}

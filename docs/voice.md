@@ -140,7 +140,7 @@ style only. JSON input includes severity, title, template body, path/line, and
 
 **Model flags** (shared with analysis when configured):
 
-- `--model-provider` (`openai` | `anthropic` | `fireworks`)  
+- `--model-provider` (`openai` | `anthropic` | `fireworks` | `camel`)
 - `--model`  
 
 Env overrides: `ADVERSARY_MODEL_PROVIDER`, `ADVERSARY_MODEL`.

@@ -159,17 +159,28 @@ adversary run adversarylabs/example \
   --model "accounts/fireworks/models/your-model-id"
 ```
 
+camelStream is a first-class OpenAI-compatible provider and uses Camel's own
+credential namespace:
+
+```sh
+export CAMEL_API_KEY="qaml_live_..."
+adversary run review/code \
+  --model-provider camel \
+  --model auto
+```
+
 Flags override `ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Without a
-provider flag or environment value, the CLI infers `openai`, `anthropic`, or
-`fireworks` only when exactly one of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
-`FIREWORKS_API_KEY` is configured. API tokens are intentionally not accepted as
-flags because command arguments can leak through process listings and shell
-history.
+provider flag or environment value, the CLI infers `openai`, `anthropic`,
+`fireworks`, or `camel` only when exactly one of `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, or `CAMEL_API_KEY` is configured. API
+tokens are intentionally not accepted as flags because command arguments can
+leak through process listings and shell history.
 
 `ADVERSARY_OPENAI_BASE_URL`, `ADVERSARY_ANTHROPIC_BASE_URL`, and
-`ADVERSARY_FIREWORKS_BASE_URL` override provider endpoints for compatible
-gateways and testing. Model-backed execution currently uses the host executor
-because sandbox and container loopback routing is not yet available.
+`ADVERSARY_FIREWORKS_BASE_URL`, and `ADVERSARY_CAMEL_BASE_URL` override provider
+endpoints for compatible gateways and testing. Model-backed execution currently
+uses the host executor because sandbox and container loopback routing is not yet
+available.
 `--no-network` applies to the adversary child; provider network access remains
 isolated in the CLI-owned broker.
 

@@ -19,15 +19,28 @@ type FireworksProvider struct {
 	IncludeContentDiagnostics bool
 }
 
-type fireworksResponse struct {
-	Choices []fireworksChoice `json:"choices"`
+// CamelProvider talks to camelStream's OpenAI-compatible Chat Completions
+// endpoint using Camel's own credential and configuration namespace.
+type CamelProvider struct {
+	APIKey                    string
+	ModelID                   string
+	BaseURL                   string
+	Client                    *http.Client
+	ReasoningEffort           string
+	ResponseFormat            string
+	StructuredOutputRetries   int
+	IncludeContentDiagnostics bool
+}
+
+type chatCompletionsResponse struct {
+	Choices []chatCompletionsChoice `json:"choices"`
 	Usage   struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 	} `json:"usage"`
 }
 
-type fireworksChoice struct {
+type chatCompletionsChoice struct {
 	Message struct {
 		Content          string `json:"content"`
 		ReasoningContent string `json:"reasoning_content"`
@@ -39,18 +52,29 @@ func (p *FireworksProvider) Name() string  { return "fireworks" }
 func (p *FireworksProvider) Model() string { return p.ModelID }
 
 func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result, error) {
+	return reviewChatCompletions(ctx, p.Name(), p.APIKey, p.ModelID, p.BaseURL, p.Client, p.ReasoningEffort, p.ResponseFormat, p.StructuredOutputRetries, p.IncludeContentDiagnostics, request)
+}
+
+func (p *CamelProvider) Name() string  { return "camel" }
+func (p *CamelProvider) Model() string { return p.ModelID }
+
+func (p *CamelProvider) Review(ctx context.Context, request Request) (Result, error) {
+	return reviewChatCompletions(ctx, p.Name(), p.APIKey, p.ModelID, p.BaseURL, p.Client, p.ReasoningEffort, p.ResponseFormat, p.StructuredOutputRetries, p.IncludeContentDiagnostics, request)
+}
+
+func reviewChatCompletions(ctx context.Context, providerName, apiKey, modelID, baseURL string, client *http.Client, reasoningEffort, responseFormat string, structuredOutputRetries int, includeContentDiagnostics bool, request Request) (Result, error) {
 	var schema any
 	if err := json.Unmarshal(request.Schema, &schema); err != nil {
 		return Result{}, fmt.Errorf("decode model schema: %w", err)
 	}
 	messages := []map[string]any{
 		{"role": "system", "content": request.Prompt},
-		{"role": "user", "content": fireworksReviewInput(request)},
+		{"role": "user", "content": chatCompletionsReviewInput(request)},
 	}
-	var lastResponse fireworksResponse
+	var lastResponse chatCompletionsResponse
 	var lastSchemaError error
 	usage := Usage{}
-	for attempt := 0; attempt <= p.StructuredOutputRetries; attempt++ {
+	for attempt := 0; attempt <= structuredOutputRetries; attempt++ {
 		attemptMessages := messages
 		if attempt > 0 {
 			attemptMessages = append(append([]map[string]any{}, messages...), map[string]any{
@@ -59,24 +83,24 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 			})
 		}
 		payload := map[string]any{
-			"model":            p.ModelID,
+			"model":            modelID,
 			"max_tokens":       request.Budget.MaximumOutputTokens,
-			"reasoning_effort": p.reasoningEffort(request.Budget.MaximumOutputTokens),
+			"reasoning_effort": chatCompletionsReasoningEffort(reasoningEffort, request.Budget.MaximumOutputTokens),
 			"messages":         attemptMessages,
-			"response_format":  p.responseFormat(schema),
+			"response_format":  chatCompletionsResponseFormat(responseFormat, schema),
 		}
-		data, status, err := postJSON(ctx, p.Client, p.BaseURL+"/v1/chat/completions", map[string]string{
-			"authorization": "Bearer " + p.APIKey,
+		data, status, err := postJSON(ctx, client, baseURL+"/v1/chat/completions", map[string]string{
+			"authorization": "Bearer " + apiKey,
 		}, payload)
 		if err != nil {
 			return Result{}, err
 		}
 		if status < 200 || status >= 300 {
-			return Result{}, providerHTTPError(p.Name(), status, data)
+			return Result{}, providerHTTPError(providerName, status, data)
 		}
-		var response fireworksResponse
+		var response chatCompletionsResponse
 		if err := json.Unmarshal(data, &response); err != nil {
-			return Result{}, fmt.Errorf("decode fireworks response: %w", err)
+			return Result{}, fmt.Errorf("decode %s response: %w", providerName, err)
 		}
 		usage.InputTokens += response.Usage.PromptTokens
 		usage.OutputTokens += response.Usage.CompletionTokens
@@ -92,11 +116,11 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 		}
 		lastResponse = response
 	}
-	code := "fireworks_missing_output"
-	message := fireworksMissingOutputMessage(lastResponse.Choices, p.IncludeContentDiagnostics)
+	code := providerName + "_missing_output"
+	message := chatCompletionsMissingOutputMessage(providerName, lastResponse.Choices, includeContentDiagnostics)
 	if lastSchemaError != nil {
-		code = "fireworks_invalid_output"
-		message = fmt.Sprintf("fireworks structured output failed schema validation after retries: %v", lastSchemaError)
+		code = providerName + "_invalid_output"
+		message = fmt.Sprintf("%s structured output failed schema validation after retries: %v", providerName, lastSchemaError)
 	}
 	return Result{}, &ProviderError{
 		Code:    code,
@@ -104,8 +128,8 @@ func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result
 	}
 }
 
-func (p *FireworksProvider) responseFormat(schema any) map[string]any {
-	if p.ResponseFormat == "json_object" {
+func chatCompletionsResponseFormat(responseFormat string, schema any) map[string]any {
+	if responseFormat == "json_object" {
 		return map[string]any{"type": "json_object"}
 	}
 	return map[string]any{
@@ -117,14 +141,14 @@ func (p *FireworksProvider) responseFormat(schema any) map[string]any {
 	}
 }
 
-func (p *FireworksProvider) reasoningEffort(maximumOutputTokens int) string {
-	if p.ReasoningEffort != "" {
-		return p.ReasoningEffort
+func chatCompletionsReasoningEffort(reasoningEffort string, maximumOutputTokens int) string {
+	if reasoningEffort != "" {
+		return reasoningEffort
 	}
-	return fireworksReasoningEffort(maximumOutputTokens)
+	return defaultChatCompletionsReasoningEffort(maximumOutputTokens)
 }
 
-func fireworksMissingOutputMessage(choices []fireworksChoice, includeContent bool) string {
+func chatCompletionsMissingOutputMessage(providerName string, choices []chatCompletionsChoice, includeContent bool) string {
 	details := make([]string, 0, len(choices))
 	for index, choice := range choices {
 		detail := fmt.Sprintf(
@@ -140,9 +164,21 @@ func fireworksMissingOutputMessage(choices []fireworksChoice, includeContent boo
 		details = append(details, detail)
 	}
 	if len(details) == 0 {
-		return "fireworks response did not contain structured output (choices=0)"
+		return providerName + " response did not contain structured output (choices=0)"
 	}
-	return "fireworks response did not contain structured output (" + strings.Join(details, "; ") + ")"
+	return providerName + " response did not contain structured output (" + strings.Join(details, "; ") + ")"
+}
+
+func (p *FireworksProvider) responseFormat(schema any) map[string]any {
+	return chatCompletionsResponseFormat(p.ResponseFormat, schema)
+}
+
+func (p *FireworksProvider) reasoningEffort(maximumOutputTokens int) string {
+	return chatCompletionsReasoningEffort(p.ReasoningEffort, maximumOutputTokens)
+}
+
+func fireworksMissingOutputMessage(choices []chatCompletionsChoice, includeContent bool) string {
+	return chatCompletionsMissingOutputMessage("fireworks", choices, includeContent)
 }
 
 func boundedContentPreview(content string, maximumBytes int) string {
@@ -185,14 +221,18 @@ func compatibleStructuredOutput(content string) (json.RawMessage, bool) {
 	return nil, false
 }
 
-func fireworksReasoningEffort(maximumOutputTokens int) string {
+func defaultChatCompletionsReasoningEffort(maximumOutputTokens int) string {
 	if maximumOutputTokens <= 2_000 {
 		return "none"
 	}
 	return "low"
 }
 
-func fireworksReviewInput(request Request) string {
+func fireworksReasoningEffort(maximumOutputTokens int) string {
+	return defaultChatCompletionsReasoningEffort(maximumOutputTokens)
+}
+
+func chatCompletionsReviewInput(request Request) string {
 	return "Review input:\n" + string(request.Input) +
 		"\n\nReturn only JSON matching this schema:\n" + string(request.Schema)
 }

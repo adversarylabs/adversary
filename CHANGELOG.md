@@ -21,6 +21,8 @@ existing one.
   installed SDK dependency closure when no unresolved SDK import remains.
 - Model provider and model can be selected per run with flags, and Fireworks is
   supported through its structured Chat Completions API.
+- camelStream is supported directly with `--model-provider camel --model auto`,
+  `CAMEL_API_KEY`, and Camel-specific endpoint and structured-output settings.
 - Model-backed adversaries can request a CLI-owned, authenticated review broker
   with provider credentials kept out of the adversary process.
 - CLI audit remediation is being delivered as dependency-ordered pull requests.

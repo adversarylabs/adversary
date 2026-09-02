@@ -113,6 +113,7 @@ review base/head and optional posting context. Posting still requires
   adversary run adversarylabs/dockerfile --base main --head feature
   adversary run adversarylabs/go-cli adversarylabs/secrets --all-files
   adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id
+  adversary run review/code --model-provider camel --model auto
   adversary run --all --all-files --output-file review.txt
   adversary run go-cli secrets --format json --output-file results.json
   adversary run https://github.com/owner/repo/pull/123
@@ -162,9 +163,9 @@ review base/head and optional posting context. Posting still requires
 			opts.modelProvider = strings.ToLower(strings.TrimSpace(opts.modelProvider))
 			opts.model = strings.TrimSpace(opts.model)
 			switch opts.modelProvider {
-			case "", "openai", "anthropic", "fireworks":
+			case "", "openai", "anthropic", "fireworks", "camel", "camel-stream":
 			default:
-				return fmt.Errorf("--model-provider must be openai, anthropic, or fireworks")
+				return fmt.Errorf("--model-provider must be openai, anthropic, fireworks, or camel")
 			}
 			if cmd.Flags().Changed("model-provider") && opts.modelProvider == "" {
 				return fmt.Errorf("--model-provider must not be empty")
@@ -247,7 +248,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().StringVar(&opts.base, "base", "", "git base ref (defaults to the detected default branch when --head is set)")
 	cmd.Flags().StringVar(&opts.head, "head", "", "git head ref (defaults to HEAD when --base is set)")
 	cmd.Flags().StringVar(&opts.builder, "builder", "local", "build mechanism for local adversaries: local or docker")
-	cmd.Flags().StringVar(&opts.modelProvider, "model-provider", "", "model provider: openai, anthropic, or fireworks (overrides ADVERSARY_MODEL_PROVIDER)")
+	cmd.Flags().StringVar(&opts.modelProvider, "model-provider", "", "model provider: openai, anthropic, fireworks, or camel (overrides ADVERSARY_MODEL_PROVIDER)")
 	cmd.Flags().StringVar(&opts.model, "model", "", "provider model identifier (overrides ADVERSARY_MODEL)")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "run even when triggers.files_changed does not match")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
