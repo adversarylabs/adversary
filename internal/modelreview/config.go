@@ -7,14 +7,15 @@ import (
 )
 
 const (
-	ProviderEnv         = "ADVERSARY_MODEL_PROVIDER"
-	ModelEnv            = "ADVERSARY_MODEL"
-	OpenAIKeyEnv        = "OPENAI_API_KEY"
-	OpenAIBaseURLEnv    = "ADVERSARY_OPENAI_BASE_URL"
-	AnthropicKeyEnv     = "ANTHROPIC_API_KEY"
-	AnthropicBaseURLEnv = "ADVERSARY_ANTHROPIC_BASE_URL"
-	FireworksKeyEnv     = "FIREWORKS_API_KEY"
-	FireworksBaseURLEnv = "ADVERSARY_FIREWORKS_BASE_URL"
+	ProviderEnv              = "ADVERSARY_MODEL_PROVIDER"
+	ModelEnv                 = "ADVERSARY_MODEL"
+	OpenAIKeyEnv             = "OPENAI_API_KEY"
+	OpenAIBaseURLEnv         = "ADVERSARY_OPENAI_BASE_URL"
+	OpenAIReasoningEffortEnv = "ADVERSARY_OPENAI_REASONING_EFFORT"
+	AnthropicKeyEnv          = "ANTHROPIC_API_KEY"
+	AnthropicBaseURLEnv      = "ADVERSARY_ANTHROPIC_BASE_URL"
+	FireworksKeyEnv          = "FIREWORKS_API_KEY"
+	FireworksBaseURLEnv      = "ADVERSARY_FIREWORKS_BASE_URL"
 )
 
 type LookupEnv func(string) (string, bool)
@@ -62,11 +63,16 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		if openAIKey == "" {
 			return nil, fmt.Errorf("%s is required for model provider openai", OpenAIKeyEnv)
 		}
+		reasoningEffort := strings.ToLower(normalizedEnv(lookup, OpenAIReasoningEffortEnv))
+		if !validOpenAIReasoningEffort(reasoningEffort) {
+			return nil, fmt.Errorf("unsupported %s %q (supported: none, low, medium, high, xhigh, max)", OpenAIReasoningEffortEnv, reasoningEffort)
+		}
 		return &OpenAIProvider{
-			APIKey:  openAIKey,
-			ModelID: model,
-			BaseURL: valueOrDefault(normalizedEnv(lookup, OpenAIBaseURLEnv), "https://api.openai.com"),
-			Client:  client,
+			APIKey:          openAIKey,
+			ModelID:         model,
+			BaseURL:         valueOrDefault(normalizedEnv(lookup, OpenAIBaseURLEnv), "https://api.openai.com"),
+			ReasoningEffort: reasoningEffort,
+			Client:          client,
 		}, nil
 	case "anthropic":
 		if anthropicKey == "" {
@@ -90,6 +96,15 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported %s %q (supported: openai, anthropic, fireworks)", ProviderEnv, provider)
+	}
+}
+
+func validOpenAIReasoningEffort(value string) bool {
+	switch value {
+	case "", "none", "low", "medium", "high", "xhigh", "max":
+		return true
+	default:
+		return false
 	}
 }
 

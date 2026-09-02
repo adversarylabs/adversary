@@ -218,7 +218,10 @@ func TestOpenAIProviderUsesResponsesStructuredOutput(t *testing.T) {
 		})
 	}))
 	defer server.Close()
-	provider := &OpenAIProvider{APIKey: "secret", ModelID: "reviewer", BaseURL: server.URL, Client: server.Client()}
+	provider := &OpenAIProvider{
+		APIKey: "secret", ModelID: "reviewer", BaseURL: server.URL,
+		ReasoningEffort: "high", Client: server.Client(),
+	}
 	result, err := provider.Review(context.Background(), validRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -229,6 +232,25 @@ func TestOpenAIProviderUsesResponsesStructuredOutput(t *testing.T) {
 	format := payload["text"].(map[string]any)["format"].(map[string]any)
 	if format["type"] != "json_schema" || format["strict"] != true {
 		t.Fatalf("format = %#v", format)
+	}
+	reasoning := payload["reasoning"].(map[string]any)
+	if reasoning["effort"] != "high" {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+}
+
+func TestProviderRejectsInvalidOpenAIReasoningEffort(t *testing.T) {
+	_, err := ProviderFromEnvironment(func(name string) (string, bool) {
+		values := map[string]string{
+			OpenAIKeyEnv:             "secret",
+			ModelEnv:                 "gpt-5.4-mini",
+			OpenAIReasoningEffortEnv: "maximum-ish",
+		}
+		value, ok := values[name]
+		return value, ok
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), OpenAIReasoningEffortEnv) {
+		t.Fatalf("invalid reasoning effort error = %v", err)
 	}
 }
 

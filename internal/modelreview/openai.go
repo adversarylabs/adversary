@@ -8,10 +8,11 @@ import (
 )
 
 type OpenAIProvider struct {
-	APIKey  string
-	ModelID string
-	BaseURL string
-	Client  *http.Client
+	APIKey          string
+	ModelID         string
+	BaseURL         string
+	ReasoningEffort string
+	Client          *http.Client
 }
 
 func (p *OpenAIProvider) Name() string  { return "openai" }
@@ -36,6 +37,9 @@ func (p *OpenAIProvider) Review(ctx context.Context, request Request) (Result, e
 				"schema": schema,
 			},
 		},
+	}
+	if p.ReasoningEffort != "" {
+		payload["reasoning"] = map[string]any{"effort": p.ReasoningEffort}
 	}
 	data, status, err := postJSON(ctx, p.Client, p.BaseURL+"/v1/responses", map[string]string{
 		"authorization": "Bearer " + p.APIKey,
