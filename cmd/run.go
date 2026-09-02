@@ -91,7 +91,7 @@ func newRunCommand(app *application.App, apiURL, profile *string) *cobra.Command
 With one or more adversary references, those adversaries run explicitly.
 If a package lists uses: in adversary.yaml, the CLI expands composition
 (transitively), runs each member, and keeps GitHub comment voice from the
-entry package(s). Use --no-compose to run only the named refs.
+entry package(s).
 
 With no adversary references, run pulls every adversary you can access (unless
 --no-pull), detects which apply to the resolved review scope, and runs the
@@ -109,7 +109,6 @@ review base/head and optional posting context. Posting still requires
   adversary run adversarylabs/dockerfile
   adversary run ./local-adversary --path ../project
   adversary run person/torvalds --path ../app
-  adversary run ./go-meta --no-compose
   adversary run adversarylabs/dockerfile --base main --head feature
   adversary run adversarylabs/go-cli adversarylabs/secrets --all-files
   adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id
@@ -270,6 +269,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
 	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "auto", "local repository index: auto, off, force, graph, or graph-force")
 	cmd.Flags().BoolVar(&opts.noCompose, "no-compose", false, "do not expand adversary.yaml uses composition; run only the named refs")
+	_ = cmd.Flags().MarkHidden("no-compose")
 
 	cmd.Flags().BoolVar(&opts.githubReview, "github-review", false, "build a GitHub PR comment plan and post (unless --github-dry-run)")
 	cmd.Flags().BoolVar(&opts.githubDryRun, "github-dry-run", false, "with --github-review: plan/place only; never mutate GitHub")
