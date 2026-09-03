@@ -116,7 +116,7 @@ func TestMaybeGitHubReviewPostsPartialStatusAndKeepsInlineFindings(t *testing.T)
 					Findings:  []review.Finding{{ID: "f", Title: "Finding", Category: "correctness", Severity: "high", Confidence: "high", Summary: "A concrete issue", Evidence: []review.Evidence{{File: "a.go", Line: &line}}}},
 				}}}}
 			}
-			if err := maybeGitHubReview(context.Background(), opts, envs, io.Discard); err != nil {
+			if err := maybeGitHubReview(context.Background(), nil, opts, envs, "", "", io.Discard); err != nil {
 				t.Fatal(err)
 			}
 			body, _ := addInput["body"].(string)
