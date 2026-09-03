@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -128,7 +129,8 @@ func runStatus(results []adversarylabs.RunUsageAdversaryResult) string {
 func randomHex(bytes int) string {
 	b := make([]byte, bytes)
 	if _, err := rand.Read(b); err != nil {
-		return strings.Repeat("0", bytes*2)
+		fallback := sha256.Sum256([]byte(strconv.FormatInt(time.Now().UnixNano(), 10)))
+		return hex.EncodeToString(fallback[:bytes])
 	}
 	return hex.EncodeToString(b)
 }
@@ -222,7 +224,8 @@ func AppendOTLPFile(path string, payload []byte) error {
 // configured. An endpoint ending before /v1/traces receives that suffix.
 func ExportOTLPHTTP(ctx context.Context, payload []byte) error {
 	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
-	if endpoint == "" {
+	perSignalEndpoint := endpoint != ""
+	if !perSignalEndpoint {
 		endpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	}
 	if endpoint == "" {
@@ -232,7 +235,10 @@ func ExportOTLPHTTP(ctx context.Context, payload []byte) error {
 	if err != nil {
 		return fmt.Errorf("parse OTLP endpoint: %w", err)
 	}
-	if !strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/v1/traces") {
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("OTLP endpoint must use http or https")
+	}
+	if !perSignalEndpoint && !strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/v1/traces") {
 		u.Path = strings.TrimRight(u.Path, "/") + "/v1/traces"
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
@@ -240,7 +246,11 @@ func ExportOTLPHTTP(ctx context.Context, payload []byte) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	for _, pair := range strings.Split(os.Getenv("OTEL_EXPORTER_OTLP_HEADERS"), ",") {
+	headers := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS")
+	if strings.TrimSpace(headers) == "" {
+		headers = os.Getenv("OTEL_EXPORTER_OTLP_HEADERS")
+	}
+	for _, pair := range strings.Split(headers, ",") {
 		key, value, ok := strings.Cut(strings.TrimSpace(pair), "=")
 		if ok && key != "" {
 			req.Header.Set(key, value)
