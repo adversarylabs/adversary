@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	maxSourceBytes = 12 << 10
-	maxTotalBytes  = 96 << 10
-	maxExamples    = 3
+	maxExplicitBytes = 8 << 10
+	maxExemplarBytes = 4 << 10
+	maxTotalBytes    = 48 << 10
+	maxExamples      = 3
 )
 
 // Context is deliberately evidence, not a pre-interpreted list of rules. The
@@ -118,7 +119,7 @@ func Discover(root string, changedPaths []string) (Context, error) {
 		if !ok {
 			continue
 		}
-		content, truncated, readErr := readBounded(path, min(maxSourceBytes, budget))
+		content, truncated, readErr := readBounded(path, min(maxExplicitBytes, budget))
 		if readErr != nil {
 			if os.IsNotExist(readErr) || errors.Is(readErr, fs.ErrInvalid) {
 				continue
@@ -261,7 +262,7 @@ func discoverExemplars(root, changedPath string, budget int) ([]Exemplar, int, e
 		if len(result) == maxExamples || budget <= 0 {
 			break
 		}
-		content, truncated, readErr := readBounded(candidate.path, min(maxSourceBytes, budget))
+		content, truncated, readErr := readBounded(candidate.path, min(maxExemplarBytes, budget))
 		if readErr != nil {
 			continue
 		}
