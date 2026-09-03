@@ -90,6 +90,9 @@ func TestPostCreatesPendingReview(t *testing.T) {
 	if res.ReviewID != "RV_1" || res.State != "COMMENTED" {
 		t.Fatalf("%#v gql=%v", res, gqlBodies)
 	}
+	if res.Posted != 1 || len(res.PostedComments) != 1 || res.PostedComments[0].FindingID != "f1" {
+		t.Fatalf("posted comments = %#v", res.PostedComments)
+	}
 }
 
 func TestPostInlineOnlyReviewOmitsBody(t *testing.T) {

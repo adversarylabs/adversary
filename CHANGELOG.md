@@ -11,6 +11,9 @@ existing one.
 
 ## Unreleased
 
+- GitHub reviews register posted inline findings with Adversary Labs, retrieve
+  repository-scoped maintainer feedback before later model-backed reviews, and
+  embed provenance-rich v2 markers for SaaS polling.
 - Packing preserves self-contained JavaScript bundles instead of appending the
   installed SDK dependency closure when no unresolved SDK import remains.
 - Model provider and model can be selected per run with flags, and Fireworks is

@@ -69,11 +69,12 @@ type runOptions struct {
 	githubRESTURL        string
 
 	// Filled by peel/resolve.
-	prURL           *githubapi.PRRef
-	tempPRDir       string
-	worktreeRoot    string // source repo when tempPRDir is a linked worktree
-	resolvedHeadSHA string
-	envelopes       []githubreview.NamedEnvelope
+	prURL                *githubapi.PRRef
+	tempPRDir            string
+	worktreeRoot         string // source repo when tempPRDir is a linked worktree
+	resolvedHeadSHA      string
+	envelopes            []githubreview.NamedEnvelope
+	reviewFeedbackPrompt string
 	// Local adversary package roots (for agent/voice.md resolution).
 	adversaryPackageRoots []string
 	// noCompose skips expanding adversary.yaml uses (composition).
@@ -212,6 +213,7 @@ review base/head and optional posting context. Posting still requires
 			if err := resolvePRRunContext(cmd.Context(), opts, progressOut); err != nil {
 				return err
 			}
+			loadGitHubReviewFeedback(cmd.Context(), app, opts, valueOf(apiURL), valueOf(profile), progressOut)
 			// Register cleanup only after resolve may set tempPRDir / worktree root.
 			if opts.tempPRDir != "" || (opts.worktreeRoot != "" && opts.githubPR > 0) {
 				prNum := opts.githubPR
@@ -228,7 +230,7 @@ review base/head and optional posting context. Posting still requires
 				runErr = runAdversaries(cmd.Context(), app, opts, args, apiURL, profile, resultOut, progressOut)
 			}
 			// Still project/post when only findings error.
-			postErr := maybeGitHubReview(cmd.Context(), opts, opts.envelopes, progressOut)
+			postErr := maybeGitHubReview(cmd.Context(), app, opts, opts.envelopes, valueOf(apiURL), valueOf(profile), progressOut)
 			if postErr != nil {
 				// Policy A: post failure wins over findings (exit 4).
 				return postErr
@@ -379,8 +381,9 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
 		ModelProvider: opts.modelProvider, Model: opts.model,
-		MinimumConfidence: minimum,
-		Includes:          opts.includes, Excludes: opts.excludes,
+		ReviewFeedbackPrompt: opts.reviewFeedbackPrompt,
+		MinimumConfidence:    minimum,
+		Includes:             opts.includes, Excludes: opts.excludes,
 		All: opts.all, DryRun: opts.dryRun, Explain: opts.explain, Format: opts.format,
 		AllowUnsafeHostExecution: opts.allowUnsafeHostExecution, IncludeSuppressed: opts.includeSuppressed,
 		RunTimeout: opts.runTimeout, DetectionTimeout: opts.detectionTimeout,
@@ -807,6 +810,7 @@ func runOneAdversary(
 		Stdout:                   stdout,
 		Stderr:                   stderr,
 		OnEnvelope:               collectEnvelope(&opts.envelopes, ref),
+		ReviewFeedbackPrompt:     opts.reviewFeedbackPrompt,
 	}
 	err := app.Dependencies().Runtime.Run(ctx, runOpts)
 	if errors.Is(err, context.Canceled) {

@@ -26,11 +26,12 @@ type PostOptions struct {
 
 // PostResult is returned after a successful create/submit.
 type PostResult struct {
-	ReviewID  string
-	ReviewURL string
-	State     string
-	Posted    int
-	BodyOnly  int
+	ReviewID       string
+	ReviewURL      string
+	State          string
+	Posted         int
+	BodyOnly       int
+	PostedComments []PlannedComment
 }
 
 // Post creates a pending PR review (optionally submits as COMMENT).
@@ -90,6 +91,7 @@ query($owner:String!,$name:String!,$number:Int!){
 		bodySections = append(bodySections, strings.TrimSpace(plan.ReviewBody))
 	}
 	inline := 0
+	var postedComments []PlannedComment
 	for _, c := range plan.Comments {
 		if c.Placement == "unplaceable" {
 			continue
@@ -112,6 +114,7 @@ query($owner:String!,$name:String!,$number:Int!){
 				th["line"] = *c.Anchor.EndLine
 			}
 			threads = append(threads, th)
+			postedComments = append(postedComments, c)
 			inline++
 			continue
 		}
@@ -159,6 +162,7 @@ mutation($input:AddPullRequestReviewInput!){
 		// Fallback: body-only pending review if threads field rejected.
 		if strings.Contains(err.Error(), "threads") || strings.Contains(err.Error(), "Field") {
 			delete(input, "threads")
+			postedComments = nil
 			// Fold threads into body.
 			fallbackBody := reviewBodyContent
 			for _, th := range threads {
@@ -179,12 +183,14 @@ mutation($input:AddPullRequestReviewInput!){
 	}
 
 	res := &PostResult{
-		ReviewID:  mut.AddPullRequestReview.PullRequestReview.ID,
-		ReviewURL: mut.AddPullRequestReview.PullRequestReview.URL,
-		State:     mut.AddPullRequestReview.PullRequestReview.State,
-		Posted:    len(threads),
-		BodyOnly:  len(bodySections),
+		ReviewID:       mut.AddPullRequestReview.PullRequestReview.ID,
+		ReviewURL:      mut.AddPullRequestReview.PullRequestReview.URL,
+		State:          mut.AddPullRequestReview.PullRequestReview.State,
+		Posted:         len(threads),
+		BodyOnly:       len(bodySections),
+		PostedComments: postedComments,
 	}
+	res.Posted = len(postedComments)
 
 	if opts.Submit && res.ReviewID != "" {
 		var sub struct {

@@ -18,8 +18,11 @@ import (
 
 type Broker struct {
 	Provider Provider
-	Entropy  io.Reader
-	Listen   func(network, address string) (net.Listener, error)
+	// PromptSuffix is trusted caller-owned context appended to every package
+	// model request. It is not exposed as a process environment variable.
+	PromptSuffix string
+	Entropy      io.Reader
+	Listen       func(network, address string) (net.Listener, error)
 }
 
 type Session struct {
@@ -61,7 +64,7 @@ func (b Broker) Start(ctx context.Context) (*Session, error) {
 		done:     make(chan error, 1),
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/review", session.reviewHandler(ctx, b.Provider))
+	mux.HandleFunc("/v1/review", session.reviewHandler(ctx, b.Provider, b.PromptSuffix))
 	session.server = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -97,7 +100,7 @@ func (s *Session) Close() error {
 	return s.closeErr
 }
 
-func (s *Session) reviewHandler(parent context.Context, provider Provider) http.HandlerFunc {
+func (s *Session) reviewHandler(parent context.Context, provider Provider, promptSuffix string) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("content-type", "application/json")
 		response.Header().Set("cache-control", "no-store")
@@ -128,6 +131,17 @@ func (s *Session) reviewHandler(parent context.Context, provider Provider) http.
 		if err != nil {
 			writeError(response, http.StatusBadRequest, "invalid_model_request", err.Error(), false)
 			return
+		}
+		if suffix := strings.TrimSpace(promptSuffix); suffix != "" {
+			const separator = "\n\n---\n\n"
+			prompt := strings.TrimSpace(modelRequest.Prompt)
+			available := MaxPromptBytes - len(prompt) - len(separator)
+			if available > 0 {
+				if len(suffix) > available {
+					suffix = strings.ToValidUTF8(suffix[:available], "")
+				}
+				modelRequest.Prompt = prompt + separator + suffix
+			}
 		}
 		timeout := time.Duration(modelRequest.Budget.TimeoutMS) * time.Millisecond
 		reviewContext, cancel := context.WithTimeout(parent, timeout)

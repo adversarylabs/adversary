@@ -271,7 +271,8 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 	runner := p.runner(application.AdversaryRunOptions{
 		Stdout: opts.Stdout, Stderr: opts.Stderr,
 		ModelProvider: opts.ModelProvider, Model: opts.Model,
-		MuteChildStderr: true,
+		ReviewFeedbackPrompt: opts.ReviewFeedbackPrompt,
+		MuteChildStderr:      true,
 	})
 	internalOptions := internaladversary.AutoOptions{
 		ReviewContext: reviewContext, AllFiles: allFiles,
@@ -356,7 +357,10 @@ func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladv
 		if err != nil {
 			return modelreview.Broker{}, err
 		}
-		return modelreview.Broker{Provider: provider, Entropy: rand.Reader, Listen: net.Listen}, nil
+		return modelreview.Broker{
+			Provider: provider, Entropy: rand.Reader, Listen: net.Listen,
+			PromptSuffix: opts.ReviewFeedbackPrompt,
+		}, nil
 	}
 	// Host process streams default to CLI stderr so review rendering can own stdout.
 	childOut, childErr := opts.Stderr, opts.Stderr

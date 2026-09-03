@@ -63,8 +63,9 @@ func TestBrokerAuthenticatesAndValidatesProviderOutput(t *testing.T) {
 		Usage:  Usage{InputTokens: 20, OutputTokens: 4},
 	}}
 	session, err := (Broker{
-		Provider: provider,
-		Entropy:  bytes.NewReader(bytes.Repeat([]byte{0x42}, 32)),
+		Provider:     provider,
+		PromptSuffix: "Repository feedback memory: caller holds the lock.",
+		Entropy:      bytes.NewReader(bytes.Repeat([]byte{0x42}, 32)),
 	}).Start(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +98,10 @@ func TestBrokerAuthenticatesAndValidatesProviderOutput(t *testing.T) {
 	}
 	if len(provider.requests) != 1 {
 		t.Fatalf("provider calls = %d", len(provider.requests))
+	}
+	if !strings.Contains(provider.requests[0].Prompt, "caller holds the lock") ||
+		!strings.HasPrefix(provider.requests[0].Prompt, validRequest.Prompt) {
+		t.Fatalf("provider prompt = %q", provider.requests[0].Prompt)
 	}
 
 	unauthorized, _ := http.NewRequest(http.MethodPost, session.Endpoint, bytes.NewReader(data))

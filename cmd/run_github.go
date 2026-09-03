@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/githubreview"
 	"github.com/adversarylabs/adversary/internal/modelreview"
+	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
 
@@ -47,6 +49,15 @@ func resolvePRRunContext(ctx context.Context, opts *runOptions, progress io.Writ
 		}
 		opts.githubPR = opts.prURL.Number
 		opts.githubRepo = opts.prURL.Owner + "/" + opts.prURL.Repo
+	}
+	if opts.prURL == nil && opts.githubReview && (opts.githubRepo == "" || opts.githubPR <= 0) {
+		repository, number := githubreview.ActionsContext(githubapi.LookupEnv)
+		if opts.githubRepo == "" {
+			opts.githubRepo = repository
+		}
+		if opts.githubPR <= 0 {
+			opts.githubPR = number
+		}
 	}
 
 	if opts.prURL == nil && !opts.githubReview {
@@ -130,7 +141,7 @@ func (o *runOptions) githubRepoOwner() (owner, repo string) {
 	return parts[0], parts[1]
 }
 
-func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []githubreview.NamedEnvelope, progress io.Writer) error {
+func maybeGitHubReview(ctx context.Context, app *application.App, opts *runOptions, envelopes []githubreview.NamedEnvelope, apiURL, profile string, progress io.Writer) error {
 	if !opts.githubReview {
 		return nil
 	}
@@ -167,6 +178,7 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 	plan := githubreview.ProjectFindings(envelopes, githubreview.ProjectOptions{
 		Repository:  owner + "/" + repo,
 		PullRequest: opts.githubPR,
+		HeadSHA:     opts.resolvedHeadSHA,
 		MinSeverity: opts.githubMinSeverity,
 		Voice:       voiceInfo,
 		OmitSummary: !opts.githubIncludeSummary,
@@ -243,7 +255,7 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		}
 	}
 
-	_, err := githubreview.Post(ctx, plan, githubreview.PostOptions{
+	result, err := githubreview.Post(ctx, plan, githubreview.PostOptions{
 		Client: client,
 		Owner:  owner,
 		Repo:   repo,
@@ -253,7 +265,79 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 			fmt.Fprintln(progress, s)
 		},
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	registerGitHubReviewWatch(ctx, app, opts, apiURL, profile, result, progress)
+	return nil
+}
+
+func loadGitHubReviewFeedback(ctx context.Context, app *application.App, opts *runOptions, apiURL, profile string, progress io.Writer) {
+	if !opts.githubReview || opts.githubDryRun || opts.githubRepo == "" || opts.githubPR <= 0 {
+		return
+	}
+	deps := app.Dependencies()
+	auth, ok, err := scopedAuth(deps.Auth, apiURL, profile, deps.RegistryHost)
+	if err != nil || !ok || auth.Token == "" {
+		return
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	client := adversarylabs.NewClientWithBaseURL(adversarylabs.ConfigStore{}, apiURL)
+	memories, err := client.ReviewFeedbackMemory(requestCtx, auth.Token, opts.githubRepo, nil)
+	if err != nil {
+		fmt.Fprintf(progress, "Warning: could not load review feedback memory: %v\n", err)
+		return
+	}
+	opts.reviewFeedbackPrompt = adversarylabs.BuildReviewFeedbackPrompt(memories)
+	if len(memories) > 0 {
+		fmt.Fprintf(progress, "Loaded %d repository feedback memor%s for this review.\n", len(memories), pluralY(len(memories)))
+	}
+}
+
+func registerGitHubReviewWatch(
+	ctx context.Context,
+	app *application.App,
+	opts *runOptions,
+	apiURL, profile string,
+	result *githubreview.PostResult,
+	progress io.Writer,
+) {
+	if result == nil || result.ReviewID == "" || len(result.PostedComments) == 0 {
+		return
+	}
+	deps := app.Dependencies()
+	auth, ok, err := scopedAuth(deps.Auth, apiURL, profile, deps.RegistryHost)
+	if err != nil || !ok || auth.Token == "" {
+		fmt.Fprintln(progress, "Warning: review posted but feedback watching requires an authenticated Adversary Labs CI session.")
+		return
+	}
+	watch := adversarylabs.ReviewWatch{
+		Repository: opts.githubRepo, PullRequest: opts.githubPR,
+		ReviewNodeID: result.ReviewID, HeadSHA: opts.resolvedHeadSHA,
+	}
+	for _, comment := range result.PostedComments {
+		watch.Comments = append(watch.Comments, adversarylabs.ReviewWatchComment{
+			Adversary: comment.Adversary, PackageName: comment.Package,
+			PackageVersion: comment.PackageVersion, FindingID: comment.FindingID,
+			RuleID: comment.RuleID, Path: comment.Anchor.Path, Body: comment.Body,
+		})
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	client := adversarylabs.NewClientWithBaseURL(adversarylabs.ConfigStore{}, apiURL)
+	if err := client.RegisterReviewWatch(requestCtx, auth.Token, watch); err != nil {
+		fmt.Fprintf(progress, "Warning: review posted but feedback watch registration failed: %v\n", err)
+		return
+	}
+	fmt.Fprintf(progress, "Feedback watch registered for %d review comment(s).\n", len(watch.Comments))
+}
+
+func pluralY(count int) string {
+	if count == 1 {
+		return "y"
+	}
+	return "ies"
 }
 
 func logVoiceSource(progress io.Writer, voiceInfo githubreview.VoiceInfo) {

@@ -58,6 +58,8 @@ See [composition](docs/composition.md) for `adversary.yaml` `uses` (language pac
 and persona entrypoints that expand to specialist adversaries).
 See [comment voice](docs/voice.md) for `agent/voice.md`, example banks, and GitHub
 rewrite with `--github-review`.
+See [review feedback](docs/github-feedback.md) for the SaaS-owned learning loop
+that watches replies and steers later reviews.
 
 ## Automatic review scope
 
