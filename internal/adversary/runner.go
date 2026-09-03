@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/modelreview"
+	"github.com/adversarylabs/adversary/internal/repopolicy"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repoindex"
@@ -460,6 +461,16 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		if brokerErr != nil {
 			cancelRun()
 			return fmt.Errorf("configure model broker: %w", brokerErr)
+		}
+		repositoryContext, contextErr := repopolicy.Discover(repoPath, changedFiles)
+		if contextErr != nil {
+			cancelRun()
+			return fmt.Errorf("discover repository conventions: %w", contextErr)
+		}
+		broker.RepositoryContext, contextErr = json.Marshal(repositoryContext)
+		if contextErr != nil {
+			cancelRun()
+			return fmt.Errorf("encode repository conventions: %w", contextErr)
 		}
 		modelSession, brokerErr = broker.Start(runCtx)
 		if brokerErr != nil {

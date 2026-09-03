@@ -119,6 +119,44 @@ func TestBrokerAuthenticatesAndValidatesProviderOutput(t *testing.T) {
 	}
 }
 
+func TestBrokerAttachesRepositoryConventionsToEveryRequest(t *testing.T) {
+	provider := &fixtureProvider{result: Result{Output: json.RawMessage(`{"decision":"approve"}`)}}
+	session, err := (Broker{
+		Provider:          provider,
+		RepositoryContext: json.RawMessage(`{"version":1,"explicitSources":[{"path":"AGENTS.md"}]}`),
+	}).Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	data, _ := json.Marshal(validRequest)
+	request, _ := http.NewRequest(http.MethodPost, session.Endpoint, bytes.NewReader(data))
+	request.Header.Set("authorization", "Bearer "+session.Token)
+	request.Header.Set("x-adversary-model-protocol", "1")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status=%d body=%s", response.StatusCode, body)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider calls = %d", len(provider.requests))
+	}
+	var input map[string]json.RawMessage
+	if err := json.Unmarshal(provider.requests[0].Input, &input); err != nil {
+		t.Fatal(err)
+	}
+	if len(input["__adversaryRepositoryConventions"]) == 0 {
+		t.Fatalf("repository conventions missing from %#v", input)
+	}
+	if !strings.Contains(provider.requests[0].Prompt, "several independent, applicable examples") {
+		t.Fatalf("repository convention guidance missing from prompt: %q", provider.requests[0].Prompt)
+	}
+}
+
 func TestBrokerRejectsProviderOutputOutsideRequestedSchema(t *testing.T) {
 	provider := &fixtureProvider{result: Result{Output: json.RawMessage(`{"decision":"maybe"}`)}}
 	session, err := (Broker{Provider: provider}).Start(context.Background())
