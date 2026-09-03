@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -74,6 +75,9 @@ func (c *blockingPullAPI) RecordPull(ctx context.Context, token, reference, dige
 
 func (c *blockingPullAPI) RecordUsage(context.Context, string, string, string, adversarylabs.RunUsageReport) error {
 	return nil
+}
+func (c *blockingPullAPI) PullTelemetry(context.Context, string, string) (json.RawMessage, error) {
+	return nil, nil
 }
 
 type pullMetricAPIFactory struct {

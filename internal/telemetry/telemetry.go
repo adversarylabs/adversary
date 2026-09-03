@@ -59,6 +59,13 @@ func DisabledWith(getenv func(string) string) bool {
 	if envTruthy(getenv("ADVERSARY_NO_TELEMETRY")) {
 		return true
 	}
+	// OpenTelemetry's standard global SDK opt-out and trace-exporter opt-out.
+	if envTruthy(getenv("OTEL_SDK_DISABLED")) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(getenv("OTEL_TRACES_EXPORTER")), "none") {
+		return true
+	}
 	if v := strings.TrimSpace(getenv("ADVERSARY_TELEMETRY")); v != "" {
 		switch strings.ToLower(v) {
 		case "0", "false", "off", "no", "disabled":

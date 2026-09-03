@@ -4,6 +4,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -85,6 +86,7 @@ type APIClient interface {
 	Whoami(context.Context, string) (adversarylabs.WhoamiResponse, error)
 	RecordPull(ctx context.Context, token, reference, digest string) error
 	RecordUsage(ctx context.Context, token, eventType, cliVersion string, report adversarylabs.RunUsageReport) error
+	PullTelemetry(ctx context.Context, token, traceID string) (json.RawMessage, error)
 }
 type APIFactory interface{ New(string) APIClient }
 type OCIRegistry interface {

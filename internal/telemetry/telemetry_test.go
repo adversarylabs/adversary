@@ -33,6 +33,19 @@ func TestDisabledWith(t *testing.T) {
 	}) {
 		t.Fatal("ADVERSARY_TELEMETRY=1 should leave enabled")
 	}
+	for key, value := range map[string]string{
+		"OTEL_SDK_DISABLED":    "true",
+		"OTEL_TRACES_EXPORTER": "none",
+	} {
+		if !DisabledWith(func(k string) string {
+			if k == key {
+				return value
+			}
+			return ""
+		}) {
+			t.Fatalf("%s=%s should disable telemetry", key, value)
+		}
+	}
 }
 
 func TestSanitizeAdversarySelection(t *testing.T) {

@@ -21,6 +21,7 @@ Available Commands:
   search      Search adversaries available to you (local store and registry)
   sign        Sign a published adversary and attach the official signature referrer
   store       Inspect and maintain the artifact repository
+  telemetry   Inspect privacy-safe run telemetry
   train       Train adversary packages from PR review history (draft gaps; stateful)
   validate    Validate an adversary project with the canonical v1 manifest parser
   version     Print the adversary version

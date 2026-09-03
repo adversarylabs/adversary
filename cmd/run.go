@@ -18,6 +18,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/githubreview"
+	"github.com/adversarylabs/adversary/internal/telemetry"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/spf13/cobra"
@@ -56,6 +57,9 @@ type runOptions struct {
 	buildTimeout             time.Duration
 	repoIndex                string
 	composeConcurrency       int
+	tagValues                []string
+	telemetryTags            map[string]string
+	telemetryFile            string
 	reviewContext            *detection.Context
 	reviewAssignment         *detection.ReviewAssignment
 
@@ -199,6 +203,10 @@ review base/head and optional posting context. Posting still requires
 			if opts.composeConcurrency < 1 {
 				return fmt.Errorf("--compose-concurrency must be at least 1")
 			}
+			opts.telemetryTags, err = telemetry.ParseTags(opts.tagValues)
+			if err != nil {
+				return err
+			}
 			opts.format = format
 			if opts.json {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
@@ -279,6 +287,8 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
 	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "graph", "local repository index: auto, off, force, graph, or graph-force")
 	cmd.Flags().IntVar(&opts.composeConcurrency, "compose-concurrency", 5, "maximum composed reviewers to run concurrently")
+	cmd.Flags().StringArrayVar(&opts.tagValues, "tag", nil, "attach a telemetry tag as key=value (repeatable; use benchmark=true for benchmark runs)")
+	cmd.Flags().StringVar(&opts.telemetryFile, "telemetry-file", "", "append OpenTelemetry JSON traces to this file")
 	cmd.Flags().BoolVar(&opts.noCompose, "no-compose", false, "do not expand adversary.yaml uses composition; run only the named refs")
 	_ = cmd.Flags().MarkHidden("no-compose")
 
@@ -448,9 +458,11 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	// Sanitized usage: CLI version + adversaries that actually ran.
 	if !opts.dryRun && len(ran) > 0 {
 		reportRunUsage(cmd.Context(), app, valueOf(apiURL), valueOf(profile), adversarylabs.RunUsageReport{
-			Adversaries: ran,
-			DurationMS:  time.Since(usageStarted).Milliseconds(),
-			Results:     usageResults,
+			Adversaries:   ran,
+			DurationMS:    time.Since(usageStarted).Milliseconds(),
+			Results:       usageResults,
+			Tags:          opts.telemetryTags,
+			TelemetryFile: opts.telemetryFile,
 		})
 	}
 	if err == nil && strings.TrimSpace(opts.outputFile) != "" {
@@ -700,9 +712,11 @@ func runAdversaries(
 		}
 	}
 	reportRunUsage(ctx, app, valueOf(apiURL), valueOf(profile), adversarylabs.RunUsageReport{
-		Adversaries: refs,
-		DurationMS:  time.Since(usageStarted).Milliseconds(),
-		Results:     usageResults,
+		Adversaries:   refs,
+		DurationMS:    time.Since(usageStarted).Milliseconds(),
+		Results:       usageResults,
+		Tags:          opts.telemetryTags,
+		TelemetryFile: opts.telemetryFile,
 	})
 	if multi || toFile {
 		fmt.Fprintf(progressOut, "\nRan %d adversaries", len(refs))

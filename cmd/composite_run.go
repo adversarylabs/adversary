@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,8 @@ type composedRunResult struct {
 	err      error
 	stderr   string
 	duration time.Duration
+	started  time.Time
+	ended    time.Time
 }
 
 // runComposedAdversaries executes a composition root and its children in
@@ -99,7 +102,8 @@ func runComposedAdversaries(
 			// runAdversaries applies to top-level CLI arguments.
 			executionRef := canonicalCatalogReference(job.ref)
 			err := runOneAdversary(ctx, app, &local, executionRef, apiURL, profile, &stdout, &stderr)
-			result := composedRunResult{ref: job.ref, scope: job.scope, err: err, stderr: stderr.String(), duration: time.Since(runStarted)}
+			runEnded := time.Now()
+			result := composedRunResult{ref: job.ref, scope: job.scope, err: err, stderr: stderr.String(), duration: runEnded.Sub(runStarted), started: runStarted, ended: runEnded}
 			if len(local.envelopes) > 0 {
 				envelope := local.envelopes[len(local.envelopes)-1].Envelope
 				result.envelope = &envelope
@@ -116,7 +120,11 @@ func runComposedAdversaries(
 	var hardErr error
 	findingsBeforeDedupe := 0
 	for i, result := range results {
-		usage = append(usage, runUsageResult(result.ref, result.err, result.duration, result.envelope))
+		usageResult := runUsageResult(result.ref, result.err, result.duration, result.envelope)
+		usageResult.Scope = result.scope
+		usageResult.StartedAtUnixNano = strconv.FormatInt(result.started.UnixNano(), 10)
+		usageResult.EndedAtUnixNano = strconv.FormatInt(result.ended.UnixNano(), 10)
+		usage = append(usage, usageResult)
 		if result.envelope != nil {
 			findingsBeforeDedupe += len(result.envelope.Result.Findings)
 		}
@@ -156,9 +164,11 @@ func runComposedAdversaries(
 	}
 
 	reportRunUsage(ctx, app, apiURL, profile, adversarylabs.RunUsageReport{
-		Adversaries: refs,
-		DurationMS:  time.Since(started).Milliseconds(),
-		Results:     usage,
+		Adversaries:   refs,
+		DurationMS:    time.Since(started).Milliseconds(),
+		Results:       usage,
+		Tags:          opts.telemetryTags,
+		TelemetryFile: opts.telemetryFile,
 	})
 	fmt.Fprintf(progressOut, "\nRan %d exhaustive review jobs across %d reviewers · findings: %d → %d after deduplication\n", len(jobs), len(refs), findingsBeforeDedupe, len(aggregate.Result.Findings))
 	if strings.TrimSpace(opts.outputFile) != "" {
