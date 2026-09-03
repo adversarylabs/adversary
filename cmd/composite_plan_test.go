@@ -1,0 +1,110 @@
+package cmd
+
+import (
+	"context"
+	"io"
+	"testing"
+
+	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
+	"github.com/adversarylabs/adversary/pkg/detection"
+)
+
+type plannerGit struct {
+	resolution internaladversary.RunScopeResolution
+	regions    []detection.ReviewRegion
+}
+
+func (*plannerGit) ChangedFiles(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
+func (g *plannerGit) ResolveRunScope(context.Context, internaladversary.RunScopeRequest) (internaladversary.RunScopeResolution, error) {
+	return g.resolution, nil
+}
+
+func (g *plannerGit) ChangedRegions(context.Context, string, detection.Context) ([]detection.ReviewRegion, error) {
+	return append([]detection.ReviewRegion(nil), g.regions...), nil
+}
+
+func TestGroupReviewRegionsHasNoGroupCap(t *testing.T) {
+	var regions []detection.ReviewRegion
+	for i := 0; i < 9; i++ {
+		regions = append(regions, detection.ReviewRegion{Path: string(rune('a'+i)) + ".go", StartLine: 1, EndLine: 1})
+	}
+	groups := groupReviewRegions(regions, nil)
+	if len(groups) != 9 {
+		t.Fatalf("groups = %d, want all 9", len(groups))
+	}
+}
+
+func TestGroupReviewRegionsCombinesNearbyAndGraphRelatedHunks(t *testing.T) {
+	regions := []detection.ReviewRegion{
+		{Path: "a.go", StartLine: 1, EndLine: 5},
+		{Path: "a.go", StartLine: 40, EndLine: 45},
+		{Path: "a.go", StartLine: 200, EndLine: 205},
+		{Path: "b.go", StartLine: 1, EndLine: 2},
+	}
+	relations := map[string]map[string]struct{}{"a.go": {"b.go": {}}}
+	groups := groupReviewRegions(regions, relations)
+	if len(groups) != 1 || len(groups[0]) != 4 {
+		t.Fatalf("groups = %#v, want one graph-connected group", groups)
+	}
+}
+
+func TestGroupReviewRegionsKeepsDistantHunksSeparate(t *testing.T) {
+	regions := []detection.ReviewRegion{
+		{Path: "a.go", StartLine: 1, EndLine: 5},
+		{Path: "a.go", StartLine: 200, EndLine: 205},
+	}
+	groups := groupReviewRegions(regions, nil)
+	if len(groups) != 2 {
+		t.Fatalf("groups = %d, want 2", len(groups))
+	}
+}
+
+func TestProcessRuntimePlansEveryResolvedGroup(t *testing.T) {
+	changed := make([]detection.ChangedFile, 0, 6)
+	regions := make([]detection.ReviewRegion, 0, 6)
+	for i := 0; i < 6; i++ {
+		path := string(rune('a'+i)) + ".go"
+		changed = append(changed, detection.ChangedFile{Path: path, Status: detection.StatusModified})
+		regions = append(regions, detection.ReviewRegion{Path: path, StartLine: 10, EndLine: 15})
+	}
+	reviewContext := &detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeBranchComparison, BaseRef: "main", HeadRef: "HEAD", MergeBase: "abc", ChangedFiles: changed}
+	git := &plannerGit{resolution: internaladversary.RunScopeResolution{ReviewContext: reviewContext}, regions: regions}
+	plan, err := (processRuntime{git: git}).planCompositeReview(context.Background(), &runOptions{path: reviewContext.RepositoryRoot, repoIndex: "off"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.FullContext == nil || len(plan.Groups) != 6 {
+		t.Fatalf("plan = %#v, want all 6 groups", plan)
+	}
+	for i, group := range plan.Groups {
+		if group.ID == "" || len(group.Assignment.Regions) != 1 || len(group.Context.ChangedFiles) != 1 {
+			t.Fatalf("group[%d] = %#v", i, group)
+		}
+	}
+}
+
+func TestExhaustiveComposedRunJobsRoutesEveryReviewerToEveryGroup(t *testing.T) {
+	full := &detection.Context{SchemaVersion: detection.SchemaVersion}
+	plan := compositeReviewPlan{FullContext: full}
+	for i := 0; i < 7; i++ {
+		id := string(rune('a' + i))
+		plan.Groups = append(plan.Groups, compositeReviewGroup{ID: id, Assignment: detection.ReviewAssignment{ID: id}})
+	}
+	refs := []string{"review/code", "go/concurrency", "review/conventions"}
+	jobs := exhaustiveComposedRunJobs("review/code", refs, plan)
+	if len(jobs) != 1+len(plan.Groups)*len(refs) {
+		t.Fatalf("jobs = %d, want %d", len(jobs), 1+len(plan.Groups)*len(refs))
+	}
+	counts := map[string]int{}
+	for _, job := range jobs[1:] {
+		counts[job.ref]++
+	}
+	for _, ref := range refs {
+		if counts[ref] != len(plan.Groups) {
+			t.Fatalf("%s jobs = %d, want %d", ref, counts[ref], len(plan.Groups))
+		}
+	}
+}

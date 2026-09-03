@@ -73,6 +73,20 @@ type ChangedFile struct {
 	Deletions    *int              `json:"deletions,omitempty"`
 }
 
+// ReviewRegion identifies changed lines assigned to one focused review pass.
+type ReviewRegion struct {
+	Path      string `json:"path"`
+	StartLine int    `json:"startLine"`
+	EndLine   int    `json:"endLine"`
+}
+
+// ReviewAssignment is a host-selected slice of a larger change. Reviewers may
+// read broader context, but findings must be caused by one of these regions.
+type ReviewAssignment struct {
+	ID      string         `json:"id"`
+	Regions []ReviewRegion `json:"regions"`
+}
+
 type Context struct {
 	SchemaVersion   string        `json:"schemaVersion"`
 	RepositoryRoot  string        `json:"repositoryRoot"`

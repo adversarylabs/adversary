@@ -56,6 +56,8 @@ type runOptions struct {
 	buildTimeout             time.Duration
 	repoIndex                string
 	composeConcurrency       int
+	reviewContext            *detection.Context
+	reviewAssignment         *detection.ReviewAssignment
 
 	// GitHub review (opt-in posting / plan).
 	githubReview         bool
@@ -823,6 +825,8 @@ func runOneAdversary(
 		RunTimeout:               opts.runTimeout,
 		BuildTimeout:             opts.buildTimeout,
 		RepoIndexMode:            opts.repoIndex,
+		ReviewContext:            opts.reviewContext,
+		ReviewAssignment:         opts.reviewAssignment,
 		Stdout:                   stdout,
 		Stderr:                   stderr,
 		OnEnvelope:               collectEnvelope(&opts.envelopes, ref),

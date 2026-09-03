@@ -157,9 +157,10 @@ type AdversaryRunOptions struct {
 	Build                    bool
 	RunTimeout, BuildTimeout time.Duration
 	// RepoIndexMode is auto|off|force for local repo navigation index (empty = auto).
-	RepoIndexMode  string
-	Stdout, Stderr io.Writer
-	ReviewContext  *detection.Context
+	RepoIndexMode    string
+	Stdout, Stderr   io.Writer
+	ReviewContext    *detection.Context
+	ReviewAssignment *detection.ReviewAssignment
 	// OnEnvelope captures the decoded review protocol result for post-run steps.
 	OnEnvelope func(any)
 }

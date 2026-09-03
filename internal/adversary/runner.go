@@ -40,6 +40,7 @@ type RunOptions struct {
 	RunTimeout               time.Duration
 	BuildTimeout             time.Duration
 	ReviewContext            *detection.Context
+	ReviewAssignment         *detection.ReviewAssignment
 	ReferenceIdentity        string
 	// RepoIndexMode controls local repo index ensure. Empty retains the runtime's
 	// compatibility default; the CLI product default is graph.
@@ -472,6 +473,13 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			cancelRun()
 			return fmt.Errorf("encode repository conventions: %w", contextErr)
 		}
+		if assignment := reviewAssignmentForFiles(opts.ReviewAssignment, changedFiles); assignment != nil {
+			broker.ReviewAssignment, contextErr = json.Marshal(assignment)
+			if contextErr != nil {
+				cancelRun()
+				return fmt.Errorf("encode review assignment: %w", contextErr)
+			}
+		}
 		modelSession, brokerErr = broker.Start(runCtx)
 		if brokerErr != nil {
 			cancelRun()
@@ -554,6 +562,26 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		return &FindingsError{Count: len(envelope.Result.Findings)}
 	}
 	return nil
+}
+
+func reviewAssignmentForFiles(assignment *detection.ReviewAssignment, files []string) *detection.ReviewAssignment {
+	if assignment == nil {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		allowed[file] = struct{}{}
+	}
+	filtered := &detection.ReviewAssignment{ID: assignment.ID, Regions: []detection.ReviewRegion{}}
+	for _, region := range assignment.Regions {
+		if _, ok := allowed[region.Path]; ok {
+			filtered.Regions = append(filtered.Regions, region)
+		}
+	}
+	if len(filtered.Regions) == 0 {
+		return nil
+	}
+	return filtered
 }
 
 func executorRepositoryRoot(backend ExecutorBackend, hostPath string) string {

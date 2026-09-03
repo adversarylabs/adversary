@@ -18,11 +18,20 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/githubreview"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
 
+type composedRunJob struct {
+	ref        string
+	scope      string
+	context    *detection.Context
+	assignment *detection.ReviewAssignment
+}
+
 type composedRunResult struct {
 	ref      string
+	scope    string
 	envelope *review.RunEnvelope
 	err      error
 	stderr   string
@@ -43,19 +52,35 @@ func runComposedAdversaries(
 	resultOut, progressOut io.Writer,
 ) error {
 	started := time.Now()
-	results := make([]composedRunResult, len(refs))
-	limit := min(opts.composeConcurrency, len(refs))
+	jobs := make([]composedRunJob, 0, len(refs))
+	if planner, ok := app.Dependencies().Runtime.(compositeReviewPlanner); ok {
+		plan, err := planner.planCompositeReview(ctx, opts, progressOut)
+		if err != nil {
+			return fmt.Errorf("plan composed review: %w", err)
+		}
+		if plan.FullContext != nil && len(plan.Groups) > 0 {
+			jobs = exhaustiveComposedRunJobs(root, refs, plan)
+			fmt.Fprintf(progressOut, "Review plan: %d changed-hunk groups · %d exhaustive review jobs · concurrency %d\n", len(plan.Groups), len(jobs), opts.composeConcurrency)
+		}
+	}
+	if len(jobs) == 0 {
+		for _, ref := range refs {
+			jobs = append(jobs, composedRunJob{ref: ref, scope: "full-change"})
+		}
+	}
+	results := make([]composedRunResult, len(jobs))
+	limit := min(opts.composeConcurrency, len(jobs))
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
-	for i, ref := range refs {
-		i, ref := i, ref
+	for i, job := range jobs {
+		i, job := i, job
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				results[i] = composedRunResult{ref: ref, err: ctx.Err()}
+				results[i] = composedRunResult{ref: job.ref, scope: job.scope, err: ctx.Err()}
 				return
 			}
 			defer func() { <-sem }()
@@ -64,15 +89,17 @@ func runComposedAdversaries(
 			local.format = "json"
 			local.outputFile = ""
 			local.envelopes = nil
+			local.reviewContext = job.context
+			local.reviewAssignment = job.assignment
 			var stdout, stderr strings.Builder
 			runStarted := time.Now()
 			// Manifest composition uses stable catalog IDs such as go/concurrency,
 			// while installed official packages are stored under library/... refs.
 			// Apply the same catalog-boundary normalization to composed children that
 			// runAdversaries applies to top-level CLI arguments.
-			executionRef := canonicalCatalogReference(ref)
+			executionRef := canonicalCatalogReference(job.ref)
 			err := runOneAdversary(ctx, app, &local, executionRef, apiURL, profile, &stdout, &stderr)
-			result := composedRunResult{ref: ref, err: err, stderr: stderr.String(), duration: time.Since(runStarted)}
+			result := composedRunResult{ref: job.ref, scope: job.scope, err: err, stderr: stderr.String(), duration: time.Since(runStarted)}
 			if len(local.envelopes) > 0 {
 				envelope := local.envelopes[len(local.envelopes)-1].Envelope
 				result.envelope = &envelope
@@ -102,11 +129,15 @@ func runComposedAdversaries(
 		default:
 			status = "failed: " + compactRunFailure(result.err, result.stderr)
 			if hardErr == nil {
-				hardErr = fmt.Errorf("adversary %q failed: %w", result.ref, result.err)
+				hardErr = fmt.Errorf("adversary %q (%s) failed: %w", result.ref, result.scope, result.err)
 			}
 		}
 		writeProgressDiagnostics(progressOut, result.stderr)
-		fmt.Fprintf(progressOut, "[%d/%d] %-36s %s\n", i+1, len(results), result.ref, status)
+		label := result.ref
+		if result.scope != "" {
+			label += " [" + result.scope + "]"
+		}
+		fmt.Fprintf(progressOut, "[%d/%d] %-52s %s\n", i+1, len(results), label, status)
 	}
 
 	aggregate, err := aggregateComposedReview(root, results)
@@ -129,7 +160,7 @@ func runComposedAdversaries(
 		DurationMS:  time.Since(started).Milliseconds(),
 		Results:     usage,
 	})
-	fmt.Fprintf(progressOut, "\nRan %d reviewers concurrently · findings: %d → %d after deduplication\n", len(refs), findingsBeforeDedupe, len(aggregate.Result.Findings))
+	fmt.Fprintf(progressOut, "\nRan %d exhaustive review jobs across %d reviewers · findings: %d → %d after deduplication\n", len(jobs), len(refs), findingsBeforeDedupe, len(aggregate.Result.Findings))
 	if strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
 	}
@@ -142,8 +173,20 @@ func runComposedAdversaries(
 	return nil
 }
 
+func exhaustiveComposedRunJobs(root string, refs []string, plan compositeReviewPlan) []composedRunJob {
+	jobs := []composedRunJob{{ref: root, scope: "full-change", context: plan.FullContext}}
+	for i := range plan.Groups {
+		group := &plan.Groups[i]
+		for _, ref := range refs {
+			jobs = append(jobs, composedRunJob{ref: ref, scope: group.ID, context: &group.Context, assignment: &group.Assignment})
+		}
+	}
+	return jobs
+}
+
 type findingSource struct {
 	Adversary string `json:"adversary"`
+	Scope     string `json:"scope,omitempty"`
 	FindingID string `json:"findingId"`
 	RuleID    string `json:"ruleId,omitempty"`
 }
@@ -151,7 +194,7 @@ type findingSource struct {
 func aggregateComposedReview(root string, runs []composedRunResult) (review.RunEnvelope, error) {
 	var aggregate review.RunEnvelope
 	for _, run := range runs {
-		if run.envelope != nil && run.ref == root {
+		if run.envelope != nil && run.ref == root && run.scope == "full-change" {
 			aggregate = *run.envelope
 			break
 		}
@@ -192,10 +235,10 @@ func aggregateComposedReview(root string, runs []composedRunResult) (review.RunE
 			continue
 		}
 		for _, finding := range run.envelope.Result.Findings {
-			merged = mergeComposedFinding(merged, finding, run.ref)
+			merged = mergeComposedFinding(merged, finding, run.ref, run.scope)
 		}
 		for _, finding := range run.envelope.Result.SuppressedFindings {
-			suppressed = mergeComposedFinding(suppressed, finding, run.ref)
+			suppressed = mergeComposedFinding(suppressed, finding, run.ref, run.scope)
 		}
 		aggregate.Result.Suppressed.Observations += run.envelope.Result.Suppressed.Observations
 		aggregate.Result.Suppressed.Findings += run.envelope.Result.Suppressed.Findings
@@ -218,6 +261,7 @@ func aggregateComposedReview(root string, runs []composedRunResult) (review.RunE
 func compositionReviewerMetadata(runs []composedRunResult) json.RawMessage {
 	type reviewerStatus struct {
 		Adversary string `json:"adversary"`
+		Scope     string `json:"scope,omitempty"`
 		Status    string `json:"status"`
 	}
 	metadata := struct {
@@ -235,7 +279,7 @@ func compositionReviewerMetadata(runs []composedRunResult) json.RawMessage {
 		if run.envelope != nil && reviewWasSkipped(run.envelope.Result) {
 			status = "skipped"
 		}
-		metadata.Reviewers = append(metadata.Reviewers, reviewerStatus{Adversary: run.ref, Status: status})
+		metadata.Reviewers = append(metadata.Reviewers, reviewerStatus{Adversary: run.ref, Scope: run.scope, Status: status})
 	}
 	encoded, _ := json.Marshal(metadata)
 	return encoded
@@ -250,12 +294,12 @@ func reviewWasSkipped(result review.ReviewResult) bool {
 	return false
 }
 
-func mergeComposedFinding(existing []review.Finding, finding review.Finding, ref string) []review.Finding {
-	source := findingSource{Adversary: ref, FindingID: finding.ID, RuleID: finding.RuleID}
+func mergeComposedFinding(existing []review.Finding, finding review.Finding, ref, scope string) []review.Finding {
+	source := findingSource{Adversary: ref, Scope: scope, FindingID: finding.ID, RuleID: finding.RuleID}
 	finding.Metadata = addFindingSource(finding.Metadata, source)
 	match := duplicateFindingIndex(existing, finding)
 	if match < 0 {
-		finding.ID = uniqueFindingID(existing, finding.ID, ref)
+		finding.ID = uniqueFindingID(existing, finding.ID, ref+"\x00"+scope)
 		return append(existing, finding)
 	}
 	mergeFinding(&existing[match], finding, source)
@@ -273,7 +317,7 @@ func addFindingSource(raw json.RawMessage, source findingSource) json.RawMessage
 		_ = json.Unmarshal(data, &sources)
 	}
 	for _, current := range sources {
-		if current.Adversary == source.Adversary && current.FindingID == source.FindingID {
+		if current.Adversary == source.Adversary && current.Scope == source.Scope && current.FindingID == source.FindingID {
 			encoded, _ := json.Marshal(metadata)
 			return encoded
 		}

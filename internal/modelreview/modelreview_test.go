@@ -58,6 +58,24 @@ func TestDecodeRequestIsStrictAndBounded(t *testing.T) {
 	}
 }
 
+func TestAttachReviewAssignmentFocusesWithoutReplacingInput(t *testing.T) {
+	assignment := json.RawMessage(`{"id":"group-005","regions":[{"path":"main.go","startLine":20,"endLine":27}]}`)
+	got, err := attachReviewAssignment(validRequest, assignment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input map[string]json.RawMessage
+	if err := json.Unmarshal(got.Input, &input); err != nil {
+		t.Fatal(err)
+	}
+	if len(input["files"]) == 0 || len(input["__adversaryReviewAssignment"]) == 0 {
+		t.Fatalf("focused input did not preserve original data and assignment: %#v", input)
+	}
+	if !strings.Contains(got.Prompt, "report only defects introduced or exposed by the assigned changed regions") {
+		t.Fatalf("assignment boundary missing from prompt: %q", got.Prompt)
+	}
+}
+
 func TestBrokerAuthenticatesAndValidatesProviderOutput(t *testing.T) {
 	provider := &fixtureProvider{result: Result{
 		Output: json.RawMessage(`{"decision":"approve"}`),
