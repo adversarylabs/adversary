@@ -56,3 +56,25 @@ func TestRecordUsagePostsAggregateOutcomes(t *testing.T) {
 		}
 	}
 }
+
+func TestPullTelemetryReturnsOTLPJSON(t *testing.T) {
+	client := Client{
+		BaseURL: "https://api.test",
+		HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/v1/cli/telemetry/0123456789abcdef0123456789abcdef" {
+				t.Fatalf("path = %q", req.URL.Path)
+			}
+			if got := req.Header.Get("Authorization"); got != "Bearer token" {
+				t.Fatalf("authorization = %q", got)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"resourceSpans":[]}`)), Header: make(http.Header)}, nil
+		})},
+	}
+	raw, err := client.PullTelemetry(context.Background(), "token", "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"resourceSpans":[]}` {
+		t.Fatalf("raw = %s", raw)
+	}
+}

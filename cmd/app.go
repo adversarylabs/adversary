@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +35,10 @@ import (
 	"github.com/adversarylabs/adversary/pkg/review"
 	"golang.org/x/term"
 )
+
+func openTelemetryOutput(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+}
 
 type processTimer struct{ *time.Timer }
 
@@ -442,6 +447,10 @@ func (c classifiedAPIClient) RecordPull(ctx context.Context, token, reference, d
 
 func (c classifiedAPIClient) RecordUsage(ctx context.Context, token, eventType, cliVersion string, report adversarylabs.RunUsageReport) error {
 	return authError("record usage", c.inner.RecordUsage(ctx, token, eventType, cliVersion, report))
+}
+func (c classifiedAPIClient) PullTelemetry(ctx context.Context, token, traceID string) (json.RawMessage, error) {
+	v, e := c.inner.PullTelemetry(ctx, token, traceID)
+	return v, authError("pull telemetry", e)
 }
 
 type processOCIRegistry struct{ *oci.HTTPRegistry }

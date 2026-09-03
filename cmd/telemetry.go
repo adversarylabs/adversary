@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,7 +53,7 @@ func reportPull(ctx context.Context, app *application.App, apiURL, profile, refe
 // reportRunUsage records sanitized run telemetry with aggregate outcomes. No
 // finding content, user, flags, paths, repository identity, or model inputs.
 func reportRunUsage(ctx context.Context, app *application.App, apiURL, profile string, report adversarylabs.RunUsageReport) {
-	if telemetry.Disabled() {
+	if report.TelemetryDisabled || telemetry.Disabled() {
 		return
 	}
 	selection := telemetry.SanitizeAdversarySelection(report.Adversaries)
@@ -69,12 +70,26 @@ func reportRunUsage(ctx context.Context, app *application.App, apiURL, profile s
 		sanitizedResults = append(sanitizedResults, result)
 	}
 	report.Results = sanitizedResults
+	ended := time.Now()
+	started := ended.Add(-time.Duration(report.DurationMS) * time.Millisecond)
+	report = telemetry.BuildTrace(report, started, ended)
+	cliVersion := sanitizeCLIVersion(version.Version)
+	otlp, err := telemetry.OTLPJSON(report, cliVersion)
+	if err == nil && report.TelemetryFile != "" {
+		_ = telemetry.AppendOTLPFile(report.TelemetryFile, otlp)
+	}
+	if err == nil {
+		app.StartBackground(func() {
+			metricCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			_ = telemetry.ExportOTLPHTTP(metricCtx, otlp)
+		})
+	}
 	deps := app.Dependencies()
 	auth, ok, err := scopedAuth(deps.Auth, apiURL, profile, deps.RegistryHost)
 	if err != nil || !ok || auth.Token == "" {
 		return
 	}
-	cliVersion := sanitizeCLIVersion(version.Version)
 	client := deps.API.New(apiURL)
 	app.StartBackground(func() {
 		metricCtx, cancel := context.WithTimeout(ctx, telemetryTimeout)
@@ -84,10 +99,13 @@ func reportRunUsage(ctx context.Context, app *application.App, apiURL, profile s
 }
 
 func runUsageResult(ref string, runErr error, elapsed time.Duration, envelope *review.RunEnvelope) adversarylabs.RunUsageAdversaryResult {
+	ended := time.Now()
 	result := adversarylabs.RunUsageAdversaryResult{
-		Adversary:  ref,
-		Status:     "completed",
-		DurationMS: elapsed.Milliseconds(),
+		Adversary:         ref,
+		Status:            "completed",
+		DurationMS:        elapsed.Milliseconds(),
+		StartedAtUnixNano: strconv.FormatInt(ended.Add(-elapsed).UnixNano(), 10),
+		EndedAtUnixNano:   strconv.FormatInt(ended.UnixNano(), 10),
 	}
 	var findingsErr *internaladversary.FindingsError
 	switch {

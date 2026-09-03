@@ -46,6 +46,8 @@ func TestRunUsageResultContainsOnlyAggregateSeverities(t *testing.T) {
 		HighCount:     1,
 		MediumCount:   1,
 	}
+	got.StartedAtUnixNano = ""
+	got.EndedAtUnixNano = ""
 	if got != want {
 		t.Fatalf("result = %#v, want %#v", got, want)
 	}

@@ -192,6 +192,26 @@ configuration or the selected Adversary profile as documented in
 command history. Pass service-account tokens through `--token-stdin`; the CLI
 does not accept them as command-line values.
 
+## Run telemetry
+
+Authenticated runs report privacy-safe OpenTelemetry timing spans to
+Adversary Labs. The trace contains adversary identifiers, group identifiers,
+durations, statuses, and aggregate finding counts. It never contains source
+code, repository identity, file paths, prompts, or finding text.
+
+Attach short labels with repeatable `--tag key=value`. Benchmark harnesses
+should pass `--tag benchmark=true`; these traces are stored for comparison but
+hidden from normal project analytics by default. `--telemetry-file trace.jsonl`
+appends each completed run as OTLP/HTTP JSON, and `adversary telemetry pull
+<trace-id>` retrieves an authorized stored trace in the same format. Standard
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, headers,
+and timeout variables send a copy to another OTLP/HTTP collector.
+
+Telemetry is disabled for one run with `--no-telemetry`, or globally by any of `DO_NOT_TRACK=1`,
+`ADVERSARY_DO_NOT_TRACK=1`, `ADVERSARY_NO_TELEMETRY=1`,
+`ADVERSARY_TELEMETRY=0`, `OTEL_SDK_DISABLED=true`, or
+`OTEL_TRACES_EXPORTER=none`.
+
 ## Output and exits
 
 Text is the default. `--format json` emits exactly one versioned JSON document

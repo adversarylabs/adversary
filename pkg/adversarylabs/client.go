@@ -319,22 +319,46 @@ func (c Client) NamespaceTrustRoot(ctx context.Context, token string) (namespace
 }
 
 // RunUsageReport contains privacy-safe aggregate outcomes only. Finding text,
-// repository identity, file paths, flags, and model inputs must never be added.
+// repository identity, file paths, model inputs, and flags other than explicit
+// bounded telemetry tags must never be added.
 type RunUsageReport struct {
-	Adversaries []string                  `json:"adversaries"`
-	DurationMS  int64                     `json:"duration_ms,omitempty"`
-	Results     []RunUsageAdversaryResult `json:"results,omitempty"`
+	Adversaries       []string                  `json:"adversaries"`
+	DurationMS        int64                     `json:"duration_ms,omitempty"`
+	Results           []RunUsageAdversaryResult `json:"results,omitempty"`
+	TraceID           string                    `json:"trace_id,omitempty"`
+	Tags              map[string]string         `json:"tags,omitempty"`
+	Spans             []RunUsageSpan            `json:"spans,omitempty"`
+	TelemetryFile     string                    `json:"-"`
+	TelemetryDisabled bool                      `json:"-"`
 }
 
 type RunUsageAdversaryResult struct {
-	Adversary     string `json:"adversary"`
-	Status        string `json:"status,omitempty"`
-	DurationMS    int64  `json:"duration_ms,omitempty"`
-	CriticalCount int    `json:"critical_count,omitempty"`
-	HighCount     int    `json:"high_count,omitempty"`
-	MediumCount   int    `json:"medium_count,omitempty"`
-	LowCount      int    `json:"low_count,omitempty"`
-	InfoCount     int    `json:"info_count,omitempty"`
+	Adversary         string `json:"adversary"`
+	Status            string `json:"status,omitempty"`
+	DurationMS        int64  `json:"duration_ms,omitempty"`
+	CriticalCount     int    `json:"critical_count,omitempty"`
+	HighCount         int    `json:"high_count,omitempty"`
+	MediumCount       int    `json:"medium_count,omitempty"`
+	LowCount          int    `json:"low_count,omitempty"`
+	InfoCount         int    `json:"info_count,omitempty"`
+	Scope             string `json:"scope,omitempty"`
+	StartedAtUnixNano string `json:"started_at_unix_nano,omitempty"`
+	EndedAtUnixNano   string `json:"ended_at_unix_nano,omitempty"`
+}
+
+// RunUsageSpan is a privacy-safe OpenTelemetry-compatible span. Attributes are
+// restricted by the CLI to aggregate execution metadata; source, paths,
+// prompts, finding text, and repository identity are never included.
+type RunUsageSpan struct {
+	TraceID           string         `json:"trace_id"`
+	SpanID            string         `json:"span_id"`
+	ParentSpanID      string         `json:"parent_span_id,omitempty"`
+	Name              string         `json:"name"`
+	Kind              int            `json:"kind,omitempty"`
+	StartTimeUnixNano string         `json:"start_time_unix_nano"`
+	EndTimeUnixNano   string         `json:"end_time_unix_nano"`
+	Status            string         `json:"status"`
+	Attributes        map[string]any `json:"attributes,omitempty"`
 }
 
 // RecordUsage posts a sanitized CLI usage event. Project attribution and run
@@ -346,8 +370,36 @@ func (c Client) RecordUsage(ctx context.Context, token, eventType, cliVersion st
 		"adversaries": report.Adversaries,
 		"duration_ms": report.DurationMS,
 		"results":     report.Results,
+		"trace_id":    report.TraceID,
+		"tags":        report.Tags,
+		"spans":       report.Spans,
 	}
 	return c.postJSON(ctx, "/v1/cli/usage", payload, token, nil)
+}
+
+// PullTelemetry retrieves a sanitized run trace as OTLP/HTTP JSON.
+func (c Client) PullTelemetry(ctx context.Context, token, traceID string) (json.RawMessage, error) {
+	if _, err := validateBaseURL(c.BaseURL); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/cli/telemetry/"+url.PathEscape(strings.TrimSpace(traceID)), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("request failed: %s", resp.Status)
+	}
+	var out json.RawMessage
+	if err := decodeLimited(resp.Body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c Client) postJSON(ctx context.Context, path string, payload any, token string, out any) error {
