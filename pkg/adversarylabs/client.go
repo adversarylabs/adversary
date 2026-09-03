@@ -322,13 +322,14 @@ func (c Client) NamespaceTrustRoot(ctx context.Context, token string) (namespace
 // repository identity, file paths, model inputs, and flags other than explicit
 // bounded telemetry tags must never be added.
 type RunUsageReport struct {
-	Adversaries   []string                  `json:"adversaries"`
-	DurationMS    int64                     `json:"duration_ms,omitempty"`
-	Results       []RunUsageAdversaryResult `json:"results,omitempty"`
-	TraceID       string                    `json:"trace_id,omitempty"`
-	Tags          map[string]string         `json:"tags,omitempty"`
-	Spans         []RunUsageSpan            `json:"spans,omitempty"`
-	TelemetryFile string                    `json:"-"`
+	Adversaries       []string                  `json:"adversaries"`
+	DurationMS        int64                     `json:"duration_ms,omitempty"`
+	Results           []RunUsageAdversaryResult `json:"results,omitempty"`
+	TraceID           string                    `json:"trace_id,omitempty"`
+	Tags              map[string]string         `json:"tags,omitempty"`
+	Spans             []RunUsageSpan            `json:"spans,omitempty"`
+	TelemetryFile     string                    `json:"-"`
+	TelemetryDisabled bool                      `json:"-"`
 }
 
 type RunUsageAdversaryResult struct {

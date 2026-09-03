@@ -207,7 +207,7 @@ appends each completed run as OTLP/HTTP JSON, and `adversary telemetry pull
 `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, headers,
 and timeout variables send a copy to another OTLP/HTTP collector.
 
-Telemetry is disabled by any of `DO_NOT_TRACK=1`,
+Telemetry is disabled for one run with `--no-telemetry`, or globally by any of `DO_NOT_TRACK=1`,
 `ADVERSARY_DO_NOT_TRACK=1`, `ADVERSARY_NO_TELEMETRY=1`,
 `ADVERSARY_TELEMETRY=0`, `OTEL_SDK_DISABLED=true`, or
 `OTEL_TRACES_EXPORTER=none`.

@@ -53,7 +53,7 @@ func reportPull(ctx context.Context, app *application.App, apiURL, profile, refe
 // reportRunUsage records sanitized run telemetry with aggregate outcomes. No
 // finding content, user, flags, paths, repository identity, or model inputs.
 func reportRunUsage(ctx context.Context, app *application.App, apiURL, profile string, report adversarylabs.RunUsageReport) {
-	if telemetry.Disabled() {
+	if report.TelemetryDisabled || telemetry.Disabled() {
 		return
 	}
 	selection := telemetry.SanitizeAdversarySelection(report.Adversaries)

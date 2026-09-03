@@ -164,11 +164,12 @@ func runComposedAdversaries(
 	}
 
 	reportRunUsage(ctx, app, apiURL, profile, adversarylabs.RunUsageReport{
-		Adversaries:   refs,
-		DurationMS:    time.Since(started).Milliseconds(),
-		Results:       usage,
-		Tags:          opts.telemetryTags,
-		TelemetryFile: opts.telemetryFile,
+		Adversaries:       refs,
+		DurationMS:        time.Since(started).Milliseconds(),
+		Results:           usage,
+		Tags:              opts.telemetryTags,
+		TelemetryFile:     opts.telemetryFile,
+		TelemetryDisabled: opts.noTelemetry,
 	})
 	fmt.Fprintf(progressOut, "\nRan %d exhaustive review jobs across %d reviewers · findings: %d → %d after deduplication\n", len(jobs), len(refs), findingsBeforeDedupe, len(aggregate.Result.Findings))
 	if strings.TrimSpace(opts.outputFile) != "" {
