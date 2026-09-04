@@ -87,6 +87,15 @@ func BuildTrace(report adversarylabs.RunUsageReport, started, ended time.Time) a
 			"adversary.run.findings.low":      result.LowCount,
 			"adversary.run.findings.info":     result.InfoCount,
 		}
+		if result.GroupCount > 0 {
+			attrs["adversary.run.group_count"] = result.GroupCount
+		}
+		if result.RegionCount > 0 {
+			attrs["adversary.run.region_count"] = result.RegionCount
+		}
+		if result.ChangedLineCount > 0 {
+			attrs["adversary.run.changed_line_count"] = result.ChangedLineCount
+		}
 		if result.Scope != "" {
 			attrs["adversary.run.scope"] = result.Scope
 		}
@@ -96,7 +105,36 @@ func BuildTrace(report adversarylabs.RunUsageReport, started, ended time.Time) a
 			EndTimeUnixNano: unixNanoString(childEnd), Status: result.Status, Attributes: attrs,
 		})
 	}
+	for _, phase := range report.Phases {
+		phaseStart, phaseEnd := parsePhaseTimes(phase, started, ended)
+		status := phase.Status
+		if status == "" {
+			status = "completed"
+		}
+		report.Spans = append(report.Spans, adversarylabs.RunUsageSpan{
+			TraceID: report.TraceID, SpanID: randomHex(8), ParentSpanID: rootID,
+			Name: "adversary phase", Kind: 1, StartTimeUnixNano: unixNanoString(phaseStart),
+			EndTimeUnixNano: unixNanoString(phaseEnd), Status: status, Attributes: map[string]any{
+				"adversary.run.phase":       phase.Name,
+				"adversary.run.duration_ms": phaseEnd.Sub(phaseStart).Milliseconds(),
+			},
+		})
+	}
 	return report
+}
+
+func parsePhaseTimes(phase adversarylabs.RunUsagePhase, fallbackStart, fallbackEnd time.Time) (time.Time, time.Time) {
+	start, end := fallbackStart, fallbackEnd
+	if n, err := strconv.ParseInt(phase.StartedAtUnixNano, 10, 64); err == nil && n > 0 {
+		start = time.Unix(0, n)
+	}
+	if n, err := strconv.ParseInt(phase.EndedAtUnixNano, 10, 64); err == nil && n > 0 {
+		end = time.Unix(0, n)
+	}
+	if end.Before(start) {
+		end = start
+	}
+	return start, end
 }
 
 func parseResultTimes(result adversarylabs.RunUsageAdversaryResult, fallbackStart, fallbackEnd time.Time) (time.Time, time.Time) {

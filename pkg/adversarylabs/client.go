@@ -325,11 +325,21 @@ type RunUsageReport struct {
 	Adversaries       []string                  `json:"adversaries"`
 	DurationMS        int64                     `json:"duration_ms,omitempty"`
 	Results           []RunUsageAdversaryResult `json:"results,omitempty"`
+	Phases            []RunUsagePhase           `json:"phases,omitempty"`
 	TraceID           string                    `json:"trace_id,omitempty"`
 	Tags              map[string]string         `json:"tags,omitempty"`
 	Spans             []RunUsageSpan            `json:"spans,omitempty"`
 	TelemetryFile     string                    `json:"-"`
 	TelemetryDisabled bool                      `json:"-"`
+}
+
+// RunUsagePhase records a fixed, privacy-safe orchestration phase. Names are
+// selected by the CLI; callers cannot attach repository or source metadata.
+type RunUsagePhase struct {
+	Name              string `json:"name"`
+	Status            string `json:"status,omitempty"`
+	StartedAtUnixNano string `json:"started_at_unix_nano"`
+	EndedAtUnixNano   string `json:"ended_at_unix_nano"`
 }
 
 type RunUsageAdversaryResult struct {
@@ -342,6 +352,9 @@ type RunUsageAdversaryResult struct {
 	LowCount          int    `json:"low_count,omitempty"`
 	InfoCount         int    `json:"info_count,omitempty"`
 	Scope             string `json:"scope,omitempty"`
+	GroupCount        int    `json:"group_count,omitempty"`
+	RegionCount       int    `json:"region_count,omitempty"`
+	ChangedLineCount  int    `json:"changed_line_count,omitempty"`
 	StartedAtUnixNano string `json:"started_at_unix_nano,omitempty"`
 	EndedAtUnixNano   string `json:"ended_at_unix_nano,omitempty"`
 }
@@ -370,6 +383,7 @@ func (c Client) RecordUsage(ctx context.Context, token, eventType, cliVersion st
 		"adversaries": report.Adversaries,
 		"duration_ms": report.DurationMS,
 		"results":     report.Results,
+		"phases":      report.Phases,
 		"trace_id":    report.TraceID,
 		"tags":        report.Tags,
 		"spans":       report.Spans,
