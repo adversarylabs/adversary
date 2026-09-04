@@ -1,11 +1,37 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
+
+func TestRetryableComposedRunFailure(t *testing.T) {
+	if !retryableComposedRunFailure(context.Background(), errors.New("host execution failed"), "model_timeout") {
+		t.Fatal("model timeout should be retried")
+	}
+	if !retryableComposedRunFailure(context.Background(), errors.New("HTTP 503"), "") {
+		t.Fatal("provider 503 should be retried")
+	}
+	if !retryableComposedRunFailure(context.Background(), errors.New("camel model request failed: Service Unavailable"), "") {
+		t.Fatal("provider service unavailable should be retried")
+	}
+	if retryableComposedRunFailure(context.Background(), &internaladversary.FindingsError{Count: 1}, "model_timeout") {
+		t.Fatal("a findings exit is successful and must not be retried")
+	}
+	if retryableComposedRunFailure(context.Background(), errors.New("invalid manifest"), "") {
+		t.Fatal("deterministic package errors should not be retried")
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if retryableComposedRunFailure(cancelled, errors.New("context deadline exceeded"), "") {
+		t.Fatal("a cancelled parent context must not be retried")
+	}
+}
 
 func TestAggregateComposedReviewDeduplicatesAndRetainsSources(t *testing.T) {
 	line := 12
