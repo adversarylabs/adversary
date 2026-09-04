@@ -58,3 +58,14 @@ func TestRunUsageResultReflectsFailure(t *testing.T) {
 		t.Fatalf("failed status = %q", got)
 	}
 }
+
+func TestRunUsageResultDistinguishesSkippedInvocation(t *testing.T) {
+	envelope := review.RunEnvelope{Result: review.ReviewResult{
+		Observations: []review.Note{{Key: "run-skipped", Summary: "No changed files matched."}},
+	}}
+
+	got := runUsageResult("go/security", nil, time.Second, &envelope)
+	if got.Status != "skipped" {
+		t.Fatalf("status = %q, want skipped", got.Status)
+	}
+}
