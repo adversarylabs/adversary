@@ -22,6 +22,7 @@ const (
 var officialCatalogDomains = map[string]struct{}{
 	"go": {}, "ci": {}, "container": {}, "security": {}, "review": {},
 	"infra": {}, "deps": {}, "meta": {}, "cloud": {}, "lang": {}, "web": {}, "factory": {},
+	"adversarylabs": {},
 }
 
 // pathExists is injected in tests.

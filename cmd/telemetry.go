@@ -117,6 +117,13 @@ func runUsageResult(ref string, runErr error, elapsed time.Duration, envelope *r
 	if envelope == nil {
 		return result
 	}
+	// The runner emits a protocol-valid envelope when an invoked adversary opts
+	// out because the resolved review scope does not match. Preserve that
+	// invocation in telemetry without counting it as a performed code review.
+	if reviewWasSkipped(envelope.Result) {
+		result.Status = "skipped"
+		return result
+	}
 	if envelope.Result.Timing != nil && envelope.Result.Timing.TotalMS > 0 {
 		result.DurationMS = int64(envelope.Result.Timing.TotalMS)
 	}

@@ -83,6 +83,9 @@ func TestSanitizeOfficialDomainsOnly(t *testing.T) {
 	if got := SanitizeAdversaryRef("ci/gitlab-ci"); got != "ci/gitlab-ci" {
 		t.Fatalf("got %q", got)
 	}
+	if got := SanitizeAdversaryRef("adversarylabs/adversary"); got != "adversarylabs/adversary" {
+		t.Fatalf("meta adversary got %q", got)
+	}
 	if got := SanitizeAdversaryRef("internal/x"); got != "local" {
 		t.Fatalf("non-official domain got %q want local", got)
 	}
