@@ -123,6 +123,60 @@ func TestEnsureV2CacheDirtyFingerprintAndPublicationRecovery(t *testing.T) {
 	}
 }
 
+func TestEnsureV2SharesCacheAcrossIdenticalWorktrees(t *testing.T) {
+	root := t.TempDir()
+	run(t, root, "git", "init")
+	run(t, root, "git", "config", "user.email", "t@example.com")
+	run(t, root, "git", "config", "user.name", "t")
+	write(t, root, "main.go", "package main\n\nfunc main() {}\n")
+	run(t, root, "git", "add", ".")
+	run(t, root, "git", "commit", "-m", "init")
+
+	clone := filepath.Join(t.TempDir(), "clone")
+	run(t, "", "git", "clone", "--quiet", root, clone)
+	t.Setenv("ADVERSARY_REPO_INDEX_DIR", t.TempDir())
+
+	first, err := EnsureV2(root, ModeAuto, nil)
+	if err != nil || first == nil || !first.Meta.Rebuilt {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	second, err := EnsureV2(clone, ModeAuto, nil)
+	if err != nil || second == nil {
+		t.Fatalf("second=%#v err=%v", second, err)
+	}
+	if second.Meta.Rebuilt {
+		t.Fatal("expected identical worktree at a different path to reuse graph cache")
+	}
+	if first.Dir != second.Dir {
+		t.Fatalf("cache directories differ: %s vs %s", first.Dir, second.Dir)
+	}
+}
+
+func TestV2LineColumnLookup(t *testing.T) {
+	body := []byte("first\nsecond\n")
+	record := v2FileRecord{body: body, lineStarts: lineStartOffsets(body)}
+	for _, test := range []struct {
+		offset, line, column int
+	}{
+		{0, 1, 1},
+		{5, 1, 6},
+		{6, 2, 1},
+		{12, 2, 7},
+		{13, 3, 1},
+	} {
+		line, column := record.lineColumn(test.offset)
+		if line != test.line || column != test.column {
+			t.Fatalf("offset %d: got %d:%d, want %d:%d", test.offset, line, column, test.line, test.column)
+		}
+	}
+	unicodeBody := []byte("const π = value")
+	unicodeRecord := v2FileRecord{body: unicodeBody, lineStarts: lineStartOffsets(unicodeBody)}
+	line, column := unicodeRecord.lineColumn(len("const π"))
+	if line != 1 || column != 8 {
+		t.Fatalf("unicode position: got %d:%d, want 1:8", line, column)
+	}
+}
+
 func TestV2ParseFailureIsRecordedWithoutPoisoningGraph(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "go.mod", "module example.com/app\n\ngo 1.22\n")

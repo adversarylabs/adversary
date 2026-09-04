@@ -111,8 +111,19 @@ func CacheRoot() (string, error) {
 }
 
 // RepoKey hashes the absolute repo path into a stable directory name.
+//
+// Deprecated: indexes are content-addressed by Fingerprint so identical git
+// worktrees can share an index even when they live at different paths.
 func RepoKey(absRepo string) string {
 	sum := sha256.Sum256([]byte(filepath.Clean(absRepo)))
+	return hex.EncodeToString(sum[:16])
+}
+
+// FingerprintKey returns the on-disk cache key for a repository fingerprint.
+// Fingerprints are SHA-256 hex strings produced internally, but hashing again
+// keeps this boundary safe if a future fingerprint format contains separators.
+func FingerprintKey(fingerprint string) string {
+	sum := sha256.Sum256([]byte(fingerprint))
 	return hex.EncodeToString(sum[:16])
 }
 
@@ -126,7 +137,6 @@ func Fingerprint(absRepo string) (string, error) {
 	absRepo = filepath.Clean(absRepo)
 	h := sha256.New()
 	_, _ = io.WriteString(h, SchemaVersion+"\n")
-	_, _ = io.WriteString(h, absRepo+"\n")
 
 	if isGitRepo(absRepo) {
 		head, err := gitOutput(absRepo, "rev-parse", "HEAD")
@@ -240,7 +250,7 @@ func Ensure(absRepo string, mode Mode, stderr io.Writer) (*Handle, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(root, SchemaVersion, RepoKey(absRepo))
+	dir := filepath.Join(root, SchemaVersion, FingerprintKey(fp))
 	unlock := lockEnsure("v1:" + dir)
 	defer unlock()
 	metaPath := filepath.Join(dir, metaFile)

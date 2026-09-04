@@ -117,6 +117,35 @@ func TestFingerprintDistinguishesDirtyContent(t *testing.T) {
 	}
 }
 
+func TestEnsureSharesCacheAcrossIdenticalWorktrees(t *testing.T) {
+	root := t.TempDir()
+	run(t, root, "git", "init")
+	run(t, root, "git", "config", "user.email", "t@example.com")
+	run(t, root, "git", "config", "user.name", "t")
+	write(t, root, "main.go", "package main\n\nfunc main() {}\n")
+	run(t, root, "git", "add", ".")
+	run(t, root, "git", "commit", "-m", "init")
+
+	clone := filepath.Join(t.TempDir(), "clone")
+	run(t, "", "git", "clone", "--quiet", root, clone)
+	t.Setenv("ADVERSARY_REPO_INDEX_DIR", t.TempDir())
+
+	first, err := Ensure(root, ModeAuto, nil)
+	if err != nil || first == nil || !first.Meta.Rebuilt {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	second, err := Ensure(clone, ModeAuto, nil)
+	if err != nil || second == nil {
+		t.Fatalf("second=%#v err=%v", second, err)
+	}
+	if second.Meta.Rebuilt {
+		t.Fatal("expected identical worktree at a different path to reuse cache")
+	}
+	if first.Dir != second.Dir {
+		t.Fatalf("cache directories differ: %s vs %s", first.Dir, second.Dir)
+	}
+}
+
 func TestGoAndTSImportEdges(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("ADVERSARY_REPO_INDEX_DIR", t.TempDir())

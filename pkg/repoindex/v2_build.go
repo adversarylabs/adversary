@@ -13,8 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const v2SchemaSQL = `
@@ -53,13 +55,14 @@ CREATE INDEX test_links_source ON test_links(source_file_id,source_symbol_id);
 `
 
 type v2FileRecord struct {
-	id       int64
-	path     string
-	language string
-	module   string
-	body     []byte
-	goFile   *ast.File
-	fset     *token.FileSet
+	id         int64
+	path       string
+	language   string
+	module     string
+	body       []byte
+	lineStarts []int
+	goFile     *ast.File
+	fset       *token.FileSet
 }
 
 type v2SymbolDraft struct {
@@ -83,6 +86,7 @@ type v2BuildState struct {
 	fileByPath   map[string]*v2FileRecord
 	symbols      []v2SymbolDraft
 	byName       map[string][]*v2SymbolDraft
+	byFile       map[string][]*v2SymbolDraft
 	byFileName   map[string][]*v2SymbolDraft
 	byModuleName map[string][]*v2SymbolDraft
 	edges        int
@@ -116,7 +120,7 @@ func EnsureV2(absRepo string, mode Mode, stderr io.Writer) (*V2Handle, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(root, V2SchemaVersion, RepoKey(absRepo))
+	dir := filepath.Join(root, V2SchemaVersion, FingerprintKey(fingerprint))
 	unlock := lockEnsure("v2:" + dir)
 	defer unlock()
 	if err := recoverV2Publication(dir); err != nil {
@@ -168,7 +172,7 @@ func BuildV2(absRepo, dir, fingerprint string) (V2Meta, error) {
 		_ = db.Close()
 		return V2Meta{}, err
 	}
-	state := &v2BuildState{db: db, fileByPath: map[string]*v2FileRecord{}, byName: map[string][]*v2SymbolDraft{}, byFileName: map[string][]*v2SymbolDraft{}, byModuleName: map[string][]*v2SymbolDraft{}}
+	state := &v2BuildState{db: db, fileByPath: map[string]*v2FileRecord{}, byName: map[string][]*v2SymbolDraft{}, byFile: map[string][]*v2SymbolDraft{}, byFileName: map[string][]*v2SymbolDraft{}, byModuleName: map[string][]*v2SymbolDraft{}}
 	if err := state.index(absRepo); err != nil {
 		_ = db.Close()
 		return V2Meta{}, err
@@ -260,7 +264,7 @@ func (state *v2BuildState) index(absRepo string) error {
 		if err != nil {
 			return err
 		}
-		record := v2FileRecord{id: id, path: path, language: language, module: module, body: body}
+		record := v2FileRecord{id: id, path: path, language: language, module: module, body: body, lineStarts: lineStartOffsets(body)}
 		state.files = append(state.files, record)
 		state.fileByPath[path] = &state.files[len(state.files)-1]
 	}
@@ -354,7 +358,7 @@ func (state *v2BuildState) parseTypeScript(record *v2FileRecord) {
 	for _, match := range tsDeclaration.FindAllSubmatchIndex(record.body, -1) {
 		kind := string(record.body[match[2]:match[3]])
 		name := string(record.body[match[4]:match[5]])
-		line, column := byteLineColumn(record.body, match[4])
+		line, column := record.lineColumn(match[4])
 		state.symbols = append(state.symbols, v2SymbolDraft{fileID: record.id, filePath: record.path, module: record.module, name: name, kind: kind, startLine: line, startColumn: column, endLine: line, endColumn: column + len(name), exported: ast.IsExported(name) || bytesBeforeContainsExport(record.body, match[0], match[4])})
 	}
 }
@@ -381,6 +385,7 @@ func (state *v2BuildState) insertSymbols() error {
 			return err
 		}
 		state.byName[symbol.name] = append(state.byName[symbol.name], symbol)
+		state.byFile[symbol.filePath] = append(state.byFile[symbol.filePath], symbol)
 		state.byFileName[symbol.filePath+"\x00"+symbol.name] = append(state.byFileName[symbol.filePath+"\x00"+symbol.name], symbol)
 		state.byModuleName[symbol.module+"\x00"+symbol.name] = append(state.byModuleName[symbol.module+"\x00"+symbol.name], symbol)
 	}
@@ -500,7 +505,7 @@ var tsIdentifier = regexp.MustCompile(`\b[A-Za-z_$][A-Za-z0-9_$]*\b`)
 func (state *v2BuildState) insertTSRelations(statement *sql.Stmt, record *v2FileRecord) error {
 	for _, match := range tsCall.FindAllSubmatchIndex(record.body, -1) {
 		name := string(record.body[match[2]:match[3]])
-		line, column := byteLineColumn(record.body, match[2])
+		line, column := record.lineColumn(match[2])
 		from := state.enclosingSymbol(record.path, line, column)
 		target := state.resolveSymbol(record, name)
 		if err := state.insertResolvedEdge(statement, record, from, target, name, "calls", line, column, "typescript"); err != nil {
@@ -513,7 +518,7 @@ func (state *v2BuildState) insertTSRelations(statement *sql.Stmt, record *v2File
 		if target == nil || target.filePath == record.path && target.startColumn == match[0] {
 			continue
 		}
-		line, column := byteLineColumn(record.body, match[0])
+		line, column := record.lineColumn(match[0])
 		from := state.enclosingSymbol(record.path, line, column)
 		if err := state.insertResolvedEdge(statement, record, from, target, name, "references", line, column, "typescript"); err != nil {
 			return err
@@ -594,7 +599,7 @@ func (state *v2BuildState) resolveSymbol(record *v2FileRecord, name string) *v2S
 
 func (state *v2BuildState) enclosingSymbol(path string, line, column int) *v2SymbolDraft {
 	var best *v2SymbolDraft
-	for _, symbol := range state.symbols {
+	for _, symbol := range state.byFile[path] {
 		if symbol.filePath != path || line < symbol.startLine || line > symbol.endLine {
 			continue
 		}
@@ -602,8 +607,7 @@ func (state *v2BuildState) enclosingSymbol(path string, line, column int) *v2Sym
 			continue
 		}
 		if best == nil || symbol.endLine-symbol.startLine < best.endLine-best.startLine {
-			copy := symbol
-			best = &copy
+			best = symbol
 		}
 	}
 	return best
@@ -695,19 +699,27 @@ func isGoDeclarationIdentifier(file *ast.File, identifier *ast.Ident) bool {
 	return false
 }
 
-func byteLineColumn(body []byte, offset int) (line, column int) {
-	line, column = 1, 1
-	for index, char := range body {
-		if index >= offset {
-			break
-		}
-		if char == '\n' {
-			line, column = line+1, 1
-		} else {
-			column++
+func lineStartOffsets(body []byte) []int {
+	starts := []int{0}
+	for offset, value := range body {
+		if value == '\n' {
+			starts = append(starts, offset+1)
 		}
 	}
-	return line, column
+	return starts
+}
+
+func (record *v2FileRecord) lineColumn(offset int) (line, column int) {
+	if offset < 0 {
+		offset = 0
+	} else if offset > len(record.body) {
+		offset = len(record.body)
+	}
+	index := sort.Search(len(record.lineStarts), func(i int) bool { return record.lineStarts[i] > offset }) - 1
+	if index < 0 {
+		index = 0
+	}
+	return index + 1, utf8.RuneCount(record.body[record.lineStarts[index]:offset]) + 1
 }
 
 func bytesBeforeContainsExport(body []byte, start, end int) bool {
