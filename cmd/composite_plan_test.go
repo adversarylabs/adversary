@@ -116,7 +116,7 @@ func TestRoutedComposedRunJobsFiltersAndBatchesWithoutDroppingRegions(t *testing
 		},
 	}
 	refs := []string{"review/code", "lang/go", "lang/typescript"}
-	jobs, stats := routedComposedRunJobs("review/code", refs, plan, 300, 0, true)
+	jobs, stats := routedComposedRunJobs("review/code", refs, plan, 300, 0, true, false)
 	if len(jobs) != 6 { // root full + code(2) + go(2) + TypeScript(1)
 		t.Fatalf("jobs = %d, want 6: %#v", len(jobs), jobs)
 	}
@@ -150,7 +150,7 @@ func TestRoutedComposedRunJobsCanKeepRootToFullChange(t *testing.T) {
 		},
 	}
 
-	jobs, stats := routedComposedRunJobs("review/code", []string{"review/code", "lang/go"}, plan, 300, 0, false)
+	jobs, stats := routedComposedRunJobs("review/code", []string{"review/code", "lang/go"}, plan, 300, 0, false, false)
 	if len(jobs) != 2 {
 		t.Fatalf("jobs = %d, want root full-change plus one specialist: %#v", len(jobs), jobs)
 	}
@@ -158,6 +158,47 @@ func TestRoutedComposedRunJobsCanKeepRootToFullChange(t *testing.T) {
 		t.Fatalf("unexpected jobs: %#v", jobs)
 	}
 	if stats.CandidateAssignments != 1 || stats.RoutedAssignments != 1 {
+		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestRoutedComposedRunJobsCanKeepBroadChildrenToFullChange(t *testing.T) {
+	full := &detection.Context{SchemaVersion: detection.SchemaVersion, ChangedFiles: []detection.ChangedFile{
+		{Path: "a.go", Status: detection.StatusModified},
+		{Path: "b.go", Status: detection.StatusModified},
+	}}
+	group := func(id, path string) compositeReviewGroup {
+		region := detection.ReviewRegion{Path: path, StartLine: 1, EndLine: 20}
+		return compositeReviewGroup{
+			ID:         id,
+			Context:    internaladversary.ReviewContextForFiles(*full, []string{path}),
+			Assignment: detection.ReviewAssignment{ID: id, Regions: []detection.ReviewRegion{region}},
+		}
+	}
+	plan := compositeReviewPlan{
+		FullContext: full,
+		Groups: []compositeReviewGroup{
+			group("group-001", "a.go"),
+			group("group-002", "b.go"),
+		},
+		Manifests: map[string]manifest.Manifest{
+			"review/code":        {Detection: manifest.Detection{Files: []string{"**/*"}}},
+			"review/conventions": {Detection: manifest.Detection{Files: []string{"**/*"}}},
+			"lang/go":            {Detection: manifest.Detection{Files: []string{"**/*.go"}}},
+		},
+	}
+
+	jobs, stats := routedComposedRunJobs("review/code", []string{"review/code", "review/conventions", "lang/go"}, plan, 300, 0, false, true)
+	if len(jobs) != 3 {
+		t.Fatalf("jobs = %d, want root full-change, one broad full-change, and one scoped batch: %#v", len(jobs), jobs)
+	}
+	if jobs[1].ref != "review/conventions" || jobs[1].scope != "full-change" || jobs[1].groups != 2 || jobs[1].regions != 2 || jobs[1].lines != 40 {
+		t.Fatalf("unexpected broad job: %#v", jobs[1])
+	}
+	if jobs[2].ref != "lang/go" || jobs[2].scope != "batch-001" {
+		t.Fatalf("unexpected scoped job: %#v", jobs[2])
+	}
+	if stats.CandidateAssignments != 4 || stats.RoutedAssignments != 4 || stats.Batches != 2 {
 		t.Fatalf("stats = %#v", stats)
 	}
 }

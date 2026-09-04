@@ -61,6 +61,7 @@ type runOptions struct {
 	composeBatchGroups       int
 	composeExhaustive        bool
 	composeRootFullOnly      bool
+	composeBroadFullOnly     bool
 	tagValues                []string
 	telemetryTags            map[string]string
 	telemetryFile            string
@@ -302,6 +303,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().IntVar(&opts.composeBatchGroups, "compose-batch-groups", 0, "maximum independent change groups in each routed specialist batch (0 is unlimited)")
 	cmd.Flags().BoolVar(&opts.composeExhaustive, "compose-exhaustive", false, "run every composed reviewer against every review group")
 	cmd.Flags().BoolVar(&opts.composeRootFullOnly, "compose-root-full-only", false, "run the composition root only against the full change")
+	cmd.Flags().BoolVar(&opts.composeBroadFullOnly, "compose-broad-full-only", false, "run composed reviewers without selective file scope only against the full change")
 	cmd.Flags().StringArrayVar(&opts.tagValues, "tag", nil, "attach a telemetry tag as key=value (repeatable; use benchmark=true for benchmark runs)")
 	cmd.Flags().StringVar(&opts.telemetryFile, "telemetry-file", "", "append OpenTelemetry JSON traces to this file")
 	cmd.Flags().BoolVar(&opts.noTelemetry, "no-telemetry", false, "disable all run telemetry for this command")
@@ -310,6 +312,7 @@ review base/head and optional posting context. Posting still requires
 	_ = cmd.Flags().MarkHidden("compose-exhaustive")
 	_ = cmd.Flags().MarkHidden("compose-batch-groups")
 	_ = cmd.Flags().MarkHidden("compose-root-full-only")
+	_ = cmd.Flags().MarkHidden("compose-broad-full-only")
 
 	cmd.Flags().BoolVar(&opts.githubReview, "github-review", false, "build a GitHub PR comment plan and post (unless --github-dry-run)")
 	cmd.Flags().BoolVar(&opts.githubDryRun, "github-dry-run", false, "with --github-review: plan/place only; never mutate GitHub")
