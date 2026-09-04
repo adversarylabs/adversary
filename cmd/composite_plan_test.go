@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"testing"
 
@@ -115,7 +116,7 @@ func TestRoutedComposedRunJobsFiltersAndBatchesWithoutDroppingRegions(t *testing
 		},
 	}
 	refs := []string{"review/code", "lang/go", "lang/typescript"}
-	jobs, stats := routedComposedRunJobs("review/code", refs, plan, 300, true)
+	jobs, stats := routedComposedRunJobs("review/code", refs, plan, 300, 0, true)
 	if len(jobs) != 6 { // root full + code(2) + go(2) + TypeScript(1)
 		t.Fatalf("jobs = %d, want 6: %#v", len(jobs), jobs)
 	}
@@ -149,7 +150,7 @@ func TestRoutedComposedRunJobsCanKeepRootToFullChange(t *testing.T) {
 		},
 	}
 
-	jobs, stats := routedComposedRunJobs("review/code", []string{"review/code", "lang/go"}, plan, 300, false)
+	jobs, stats := routedComposedRunJobs("review/code", []string{"review/code", "lang/go"}, plan, 300, 0, false)
 	if len(jobs) != 2 {
 		t.Fatalf("jobs = %d, want root full-change plus one specialist: %#v", len(jobs), jobs)
 	}
@@ -158,6 +159,21 @@ func TestRoutedComposedRunJobsCanKeepRootToFullChange(t *testing.T) {
 	}
 	if stats.CandidateAssignments != 1 || stats.RoutedAssignments != 1 {
 		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestBatchCompositeReviewGroupsCapsIndependentGroups(t *testing.T) {
+	groups := make([]compositeReviewGroup, 7)
+	for index := range groups {
+		region := detection.ReviewRegion{Path: fmt.Sprintf("file-%d.go", index), StartLine: 1, EndLine: 10}
+		groups[index] = compositeReviewGroup{
+			ID:         fmt.Sprintf("group-%03d", index+1),
+			Assignment: detection.ReviewAssignment{ID: fmt.Sprintf("group-%03d", index+1), Regions: []detection.ReviewRegion{region}},
+		}
+	}
+	batches := batchCompositeReviewGroups(groups, 600, 3)
+	if len(batches) != 3 || batchGroupCount(batches[0]) != 3 || batchGroupCount(batches[1]) != 3 || batchGroupCount(batches[2]) != 1 {
+		t.Fatalf("unexpected batches: %#v", batches)
 	}
 }
 
