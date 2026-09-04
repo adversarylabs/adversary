@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const v2SchemaSQL = `
@@ -718,7 +719,7 @@ func (record *v2FileRecord) lineColumn(offset int) (line, column int) {
 	if index < 0 {
 		index = 0
 	}
-	return index + 1, offset - record.lineStarts[index] + 1
+	return index + 1, utf8.RuneCount(record.body[record.lineStarts[index]:offset]) + 1
 }
 
 func bytesBeforeContainsExport(body []byte, start, end int) bool {

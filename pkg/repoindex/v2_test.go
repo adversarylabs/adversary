@@ -169,6 +169,12 @@ func TestV2LineColumnLookup(t *testing.T) {
 			t.Fatalf("offset %d: got %d:%d, want %d:%d", test.offset, line, column, test.line, test.column)
 		}
 	}
+	unicodeBody := []byte("const π = value")
+	unicodeRecord := v2FileRecord{body: unicodeBody, lineStarts: lineStartOffsets(unicodeBody)}
+	line, column := unicodeRecord.lineColumn(len("const π"))
+	if line != 1 || column != 8 {
+		t.Fatalf("unicode position: got %d:%d, want 1:8", line, column)
+	}
 }
 
 func TestV2ParseFailureIsRecordedWithoutPoisoningGraph(t *testing.T) {
