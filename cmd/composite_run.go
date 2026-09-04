@@ -82,7 +82,7 @@ func runComposedAdversaries(
 				fmt.Fprintf(progressOut, "Review plan: %d changed-hunk groups · %d exhaustive review jobs · concurrency %d\n", len(plan.Groups), len(jobs), opts.composeConcurrency)
 			} else {
 				var stats composedJobPlanStats
-				jobs, stats = routedComposedRunJobs(root, refs, plan, opts.composeBatchLines, opts.composeBatchGroups, !opts.composeRootFullOnly, opts.composeBroadFullOnly)
+				jobs, stats = routedComposedRunJobs(root, refs, plan, opts.composeBatchLines, opts.composeBatchGroups, !opts.composeRootFullOnly, opts.composeBroadFullOnly, opts.composeFullReviewers)
 				fmt.Fprintf(progressOut, "Review plan: %d changed-hunk groups · %d routed batches · %d review jobs · %d irrelevant assignments skipped · concurrency %d\n", len(plan.Groups), stats.Batches, len(jobs), stats.SkippedAssignments, opts.composeConcurrency)
 			}
 		}
@@ -228,7 +228,7 @@ func exhaustiveComposedRunJobs(root string, refs []string, plan compositeReviewP
 // manifest first selects the changed groups it can actually review, then those
 // groups are packed into bounded batches without dropping any assigned region.
 // The composition root retains a full-change integration pass.
-func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan, maxChangedLines, maxGroups int, includeRootBatches, broadFullOnly bool) ([]composedRunJob, composedJobPlanStats) {
+func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan, maxChangedLines, maxGroups int, includeRootBatches, broadFullOnly bool, fullReviewers []string) ([]composedRunJob, composedJobPlanStats) {
 	jobs := []composedRunJob{{ref: root, scope: "full-change", context: plan.FullContext}}
 	candidateReviewers := len(refs)
 	if !includeRootBatches {
@@ -245,7 +245,7 @@ func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan,
 			continue
 		}
 		manifest, hasManifest := plan.Manifests[ref]
-		if broadFullOnly && ref != root && hasManifest && !hasSelectiveCompositeScope(manifest) {
+		if ref != root && ((broadFullOnly && hasManifest && !hasSelectiveCompositeScope(manifest)) || containsCompositeReviewer(fullReviewers, ref)) {
 			regions, lines := 0, 0
 			for _, group := range plan.Groups {
 				regions += len(group.Assignment.Regions)
@@ -283,6 +283,16 @@ func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan,
 		}
 	}
 	return jobs, stats
+}
+
+func containsCompositeReviewer(reviewers []string, ref string) bool {
+	ref = strings.TrimSpace(ref)
+	for _, reviewer := range reviewers {
+		if strings.TrimSpace(reviewer) == ref {
+			return true
+		}
+	}
+	return false
 }
 
 func hasSelectiveCompositeScope(m internaladversary.Manifest) bool {
