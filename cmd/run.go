@@ -829,7 +829,7 @@ func firstInterestingErrorLine(stderr string) string {
 			continue
 		}
 		// Prefer the actual Node error line over stack frames.
-		if strings.Contains(line, "Error [") || strings.HasPrefix(line, "Error:") || strings.Contains(line, "ERR_") {
+		if strings.Contains(line, "Error [") || strings.Contains(line, "Error:") || strings.Contains(line, "ERR_") {
 			return line
 		}
 	}
