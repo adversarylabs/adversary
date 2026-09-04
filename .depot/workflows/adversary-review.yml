@@ -27,9 +27,9 @@ jobs:
           path: /mnt/adversary
 
       - name: Run adversaries
-        uses: adversarylabs/actions/run@bba2c42901c78149c38642a0b7bfa957e3feb0b7 # v1.4.0
+        uses: adversarylabs/actions/run@252098208fdbf919e3530d99d3f51314d3db0bd9 # v1.4.1
         with:
-          cli-version: 2026.9.4-beta.2
+          cli-version: 2026.9.4-beta.3
           adversaries: auto
           path: .
           data-dir: /mnt/adversary
