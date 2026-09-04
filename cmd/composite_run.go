@@ -28,6 +28,9 @@ type composedRunJob struct {
 	scope      string
 	context    *detection.Context
 	assignment *detection.ReviewAssignment
+	groups     int
+	regions    int
+	lines      int
 }
 
 type composedRunResult struct {
@@ -39,6 +42,16 @@ type composedRunResult struct {
 	duration time.Duration
 	started  time.Time
 	ended    time.Time
+	groups   int
+	regions  int
+	lines    int
+}
+
+type composedJobPlanStats struct {
+	CandidateAssignments int
+	RoutedAssignments    int
+	SkippedAssignments   int
+	Batches              int
 }
 
 // runComposedAdversaries executes a composition root and its children in
@@ -55,15 +68,23 @@ func runComposedAdversaries(
 	resultOut, progressOut io.Writer,
 ) error {
 	started := time.Now()
+	var usagePhases []adversarylabs.RunUsagePhase
 	jobs := make([]composedRunJob, 0, len(refs))
 	if planner, ok := app.Dependencies().Runtime.(compositeReviewPlanner); ok {
-		plan, err := planner.planCompositeReview(ctx, opts, progressOut)
+		plan, err := planner.planCompositeReview(ctx, opts, refs, progressOut)
 		if err != nil {
 			return fmt.Errorf("plan composed review: %w", err)
 		}
+		usagePhases = append(usagePhases, plan.Phases...)
 		if plan.FullContext != nil && len(plan.Groups) > 0 {
-			jobs = exhaustiveComposedRunJobs(root, refs, plan)
-			fmt.Fprintf(progressOut, "Review plan: %d changed-hunk groups · %d exhaustive review jobs · concurrency %d\n", len(plan.Groups), len(jobs), opts.composeConcurrency)
+			if opts.composeExhaustive {
+				jobs = exhaustiveComposedRunJobs(root, refs, plan)
+				fmt.Fprintf(progressOut, "Review plan: %d changed-hunk groups · %d exhaustive review jobs · concurrency %d\n", len(plan.Groups), len(jobs), opts.composeConcurrency)
+			} else {
+				var stats composedJobPlanStats
+				jobs, stats = routedComposedRunJobs(root, refs, plan, opts.composeBatchLines)
+				fmt.Fprintf(progressOut, "Review plan: %d changed-hunk groups · %d routed batches · %d review jobs · %d irrelevant assignments skipped · concurrency %d\n", len(plan.Groups), stats.Batches, len(jobs), stats.SkippedAssignments, opts.composeConcurrency)
+			}
 		}
 	}
 	if len(jobs) == 0 {
@@ -71,6 +92,7 @@ func runComposedAdversaries(
 			jobs = append(jobs, composedRunJob{ref: ref, scope: "full-change"})
 		}
 	}
+	reviewStarted := time.Now()
 	results := make([]composedRunResult, len(jobs))
 	limit := min(opts.composeConcurrency, len(jobs))
 	sem := make(chan struct{}, limit)
@@ -103,7 +125,7 @@ func runComposedAdversaries(
 			executionRef := canonicalCatalogReference(job.ref)
 			err := runOneAdversary(ctx, app, &local, executionRef, apiURL, profile, &stdout, &stderr)
 			runEnded := time.Now()
-			result := composedRunResult{ref: job.ref, scope: job.scope, err: err, stderr: stderr.String(), duration: runEnded.Sub(runStarted), started: runStarted, ended: runEnded}
+			result := composedRunResult{ref: job.ref, scope: job.scope, err: err, stderr: stderr.String(), duration: runEnded.Sub(runStarted), started: runStarted, ended: runEnded, groups: job.groups, regions: job.regions, lines: job.lines}
 			if len(local.envelopes) > 0 {
 				envelope := local.envelopes[len(local.envelopes)-1].Envelope
 				result.envelope = &envelope
@@ -112,6 +134,7 @@ func runComposedAdversaries(
 		}()
 	}
 	wg.Wait()
+	usagePhases = append(usagePhases, runUsagePhase("execute-reviews", reviewStarted, time.Now()))
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -124,6 +147,9 @@ func runComposedAdversaries(
 		usageResult.Scope = result.scope
 		usageResult.StartedAtUnixNano = strconv.FormatInt(result.started.UnixNano(), 10)
 		usageResult.EndedAtUnixNano = strconv.FormatInt(result.ended.UnixNano(), 10)
+		usageResult.GroupCount = result.groups
+		usageResult.RegionCount = result.regions
+		usageResult.ChangedLineCount = result.lines
 		usage = append(usage, usageResult)
 		if result.envelope != nil {
 			findingsBeforeDedupe += len(result.envelope.Result.Findings)
@@ -148,10 +174,12 @@ func runComposedAdversaries(
 		fmt.Fprintf(progressOut, "[%d/%d] %-52s %s\n", i+1, len(results), label, status)
 	}
 
+	aggregateStarted := time.Now()
 	aggregate, err := aggregateComposedReview(root, results)
 	if err != nil {
 		return err
 	}
+	usagePhases = append(usagePhases, runUsagePhase("aggregate-results", aggregateStarted, time.Now()))
 	opts.envelopes = append(opts.envelopes, githubreview.NamedEnvelope{Adversary: root, Envelope: aggregate})
 	if opts.format == "json" {
 		encoder := json.NewEncoder(resultOut)
@@ -167,11 +195,12 @@ func runComposedAdversaries(
 		Adversaries:       refs,
 		DurationMS:        time.Since(started).Milliseconds(),
 		Results:           usage,
+		Phases:            usagePhases,
 		Tags:              opts.telemetryTags,
 		TelemetryFile:     opts.telemetryFile,
 		TelemetryDisabled: opts.noTelemetry,
 	})
-	fmt.Fprintf(progressOut, "\nRan %d exhaustive review jobs across %d reviewers · findings: %d → %d after deduplication\n", len(jobs), len(refs), findingsBeforeDedupe, len(aggregate.Result.Findings))
+	fmt.Fprintf(progressOut, "\nRan %d review jobs across %d reviewers · findings: %d → %d after deduplication\n", len(jobs), len(refs), findingsBeforeDedupe, len(aggregate.Result.Findings))
 	if strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
 	}
@@ -189,10 +218,154 @@ func exhaustiveComposedRunJobs(root string, refs []string, plan compositeReviewP
 	for i := range plan.Groups {
 		group := &plan.Groups[i]
 		for _, ref := range refs {
-			jobs = append(jobs, composedRunJob{ref: ref, scope: group.ID, context: &group.Context, assignment: &group.Assignment})
+			jobs = append(jobs, composedRunJob{ref: ref, scope: group.ID, context: &group.Context, assignment: &group.Assignment, groups: 1, regions: len(group.Assignment.Regions), lines: reviewRegionLineCount(group.Assignment.Regions)})
 		}
 	}
 	return jobs
+}
+
+// routedComposedRunJobs avoids the group × reviewer Cartesian product. Each
+// manifest first selects the changed groups it can actually review, then those
+// groups are packed into bounded batches without dropping any assigned region.
+// The composition root retains a full-change integration pass.
+func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan, maxChangedLines int) ([]composedRunJob, composedJobPlanStats) {
+	jobs := []composedRunJob{{ref: root, scope: "full-change", context: plan.FullContext}}
+	stats := composedJobPlanStats{CandidateAssignments: len(refs) * len(plan.Groups)}
+	for _, ref := range refs {
+		routed := make([]compositeReviewGroup, 0, len(plan.Groups))
+		manifest, hasManifest := plan.Manifests[ref]
+		for _, group := range plan.Groups {
+			scoped, applicable := group, true
+			if hasManifest {
+				scoped, applicable = routeCompositeReviewGroup(manifest, group)
+			}
+			if !applicable {
+				stats.SkippedAssignments++
+				continue
+			}
+			routed = append(routed, scoped)
+			stats.RoutedAssignments++
+		}
+		batches := batchCompositeReviewGroups(routed, maxChangedLines)
+		stats.Batches += len(batches)
+		for i := range batches {
+			batch := batches[i]
+			groupCount := batchGroupCount(batch)
+			batch.ID = fmt.Sprintf("batch-%03d", i+1)
+			batch.Assignment.ID = batch.ID
+			jobs = append(jobs, composedRunJob{
+				ref: ref, scope: batch.ID, context: &batch.Context, assignment: &batch.Assignment,
+				groups: groupCount, regions: len(batch.Assignment.Regions), lines: reviewRegionLineCount(batch.Assignment.Regions),
+			})
+		}
+	}
+	return jobs, stats
+}
+
+func routeCompositeReviewGroup(m internaladversary.Manifest, group compositeReviewGroup) (compositeReviewGroup, bool) {
+	// A purely programmatic detector may use evidence beyond path patterns. Keep
+	// it conservative until the detector can be evaluated once during planning.
+	if strings.TrimSpace(m.Detection.Entrypoint) != "" && len(m.Detection.Files) == 0 && len(m.Triggers.FilesChanged) == 0 {
+		return group, true
+	}
+	scopedContext, declared := internaladversary.ScopeReviewContext(m, group.Context)
+	if !declared {
+		return group, true
+	}
+	if len(scopedContext.ChangedFiles) == 0 {
+		return compositeReviewGroup{}, false
+	}
+	paths := make(map[string]struct{}, len(scopedContext.ChangedFiles))
+	for _, changed := range scopedContext.ChangedFiles {
+		paths[changed.Path] = struct{}{}
+	}
+	regions := make([]detection.ReviewRegion, 0, len(group.Assignment.Regions))
+	for _, region := range group.Assignment.Regions {
+		if _, ok := paths[region.Path]; ok {
+			regions = append(regions, region)
+		}
+	}
+	if len(regions) == 0 {
+		return compositeReviewGroup{}, false
+	}
+	group.Context = scopedContext
+	group.Assignment.Regions = regions
+	return group, true
+}
+
+func batchCompositeReviewGroups(groups []compositeReviewGroup, maxChangedLines int) []compositeReviewGroup {
+	if len(groups) == 0 {
+		return nil
+	}
+	if maxChangedLines < 1 {
+		maxChangedLines = 1
+	}
+	var batches []compositeReviewGroup
+	var current []compositeReviewGroup
+	currentLines := 0
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		batches = append(batches, mergeCompositeReviewGroups(current))
+		current = nil
+		currentLines = 0
+	}
+	for _, group := range groups {
+		lines := reviewRegionLineCount(group.Assignment.Regions)
+		if len(current) > 0 && currentLines+lines > maxChangedLines {
+			flush()
+		}
+		current = append(current, group)
+		currentLines += lines
+	}
+	flush()
+	return batches
+}
+
+func mergeCompositeReviewGroups(groups []compositeReviewGroup) compositeReviewGroup {
+	merged := compositeReviewGroup{}
+	if len(groups) == 0 {
+		return merged
+	}
+	merged.Context = groups[0].Context
+	merged.Context.ChangedFiles = nil
+	seenFiles := map[string]struct{}{}
+	for _, group := range groups {
+		for _, changed := range group.Context.ChangedFiles {
+			if _, ok := seenFiles[changed.Path]; ok {
+				continue
+			}
+			seenFiles[changed.Path] = struct{}{}
+			merged.Context.ChangedFiles = append(merged.Context.ChangedFiles, changed)
+		}
+		merged.Assignment.Regions = append(merged.Assignment.Regions, group.Assignment.Regions...)
+	}
+	// Preserve the number of source graph groups without widening the public
+	// ReviewAssignment contract.
+	merged.ID = fmt.Sprintf("groups:%d", len(groups))
+	return merged
+}
+
+func batchGroupCount(group compositeReviewGroup) int {
+	if strings.HasPrefix(group.ID, "groups:") {
+		if count, err := strconv.Atoi(strings.TrimPrefix(group.ID, "groups:")); err == nil && count > 0 {
+			return count
+		}
+	}
+	return 1
+}
+
+func reviewRegionLineCount(regions []detection.ReviewRegion) int {
+	total := 0
+	for _, region := range regions {
+		lines := region.EndLine - region.StartLine + 1
+		if lines < 1 {
+			lines = 1
+		}
+		total += lines
+	}
+	return total
 }
 
 type findingSource struct {

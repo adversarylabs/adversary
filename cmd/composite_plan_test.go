@@ -7,6 +7,7 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/manifest"
 )
 
 type plannerGit struct {
@@ -72,7 +73,7 @@ func TestProcessRuntimePlansEveryResolvedGroup(t *testing.T) {
 	}
 	reviewContext := &detection.Context{SchemaVersion: detection.SchemaVersion, RepositoryRoot: t.TempDir(), Mode: detection.ModeBranchComparison, BaseRef: "main", HeadRef: "HEAD", MergeBase: "abc", ChangedFiles: changed}
 	git := &plannerGit{resolution: internaladversary.RunScopeResolution{ReviewContext: reviewContext}, regions: regions}
-	plan, err := (processRuntime{git: git}).planCompositeReview(context.Background(), &runOptions{path: reviewContext.RepositoryRoot, repoIndex: "off"}, io.Discard)
+	plan, err := (processRuntime{git: git}).planCompositeReview(context.Background(), &runOptions{path: reviewContext.RepositoryRoot, repoIndex: "off"}, nil, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +84,53 @@ func TestProcessRuntimePlansEveryResolvedGroup(t *testing.T) {
 		if group.ID == "" || len(group.Assignment.Regions) != 1 || len(group.Context.ChangedFiles) != 1 {
 			t.Fatalf("group[%d] = %#v", i, group)
 		}
+	}
+}
+
+func TestRoutedComposedRunJobsFiltersAndBatchesWithoutDroppingRegions(t *testing.T) {
+	full := &detection.Context{SchemaVersion: detection.SchemaVersion, ChangedFiles: []detection.ChangedFile{
+		{Path: "a.go", Status: detection.StatusModified},
+		{Path: "b.ts", Status: detection.StatusModified},
+		{Path: "c.go", Status: detection.StatusModified},
+	}}
+	group := func(id, path string, start, end int) compositeReviewGroup {
+		region := detection.ReviewRegion{Path: path, StartLine: start, EndLine: end}
+		return compositeReviewGroup{
+			ID:         id,
+			Context:    internaladversary.ReviewContextForFiles(*full, []string{path}),
+			Assignment: detection.ReviewAssignment{ID: id, Regions: []detection.ReviewRegion{region}},
+		}
+	}
+	plan := compositeReviewPlan{
+		FullContext: full,
+		Groups: []compositeReviewGroup{
+			group("group-001", "a.go", 1, 200),
+			group("group-002", "b.ts", 1, 100),
+			group("group-003", "c.go", 1, 250),
+		},
+		Manifests: map[string]manifest.Manifest{
+			"review/code":     {Detection: manifest.Detection{Files: []string{"**/*"}}},
+			"lang/go":         {Detection: manifest.Detection{Files: []string{"*.go", "**/*.go"}}},
+			"lang/typescript": {Detection: manifest.Detection{Files: []string{"*.ts", "**/*.ts"}}},
+		},
+	}
+	refs := []string{"review/code", "lang/go", "lang/typescript"}
+	jobs, stats := routedComposedRunJobs("review/code", refs, plan, 300)
+	if len(jobs) != 6 { // root full + code(2) + go(2) + TypeScript(1)
+		t.Fatalf("jobs = %d, want 6: %#v", len(jobs), jobs)
+	}
+	if stats.SkippedAssignments != 3 || stats.RoutedAssignments != 6 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	covered := map[string]int{}
+	for _, job := range jobs[1:] {
+		covered[job.ref] += job.regions
+		if job.scope == "" || job.lines < 1 || job.groups < 1 {
+			t.Fatalf("invalid routed job: %#v", job)
+		}
+	}
+	if covered["review/code"] != 3 || covered["lang/go"] != 2 || covered["lang/typescript"] != 1 {
+		t.Fatalf("covered regions = %#v", covered)
 	}
 }
 

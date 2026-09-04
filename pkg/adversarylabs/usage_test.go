@@ -39,12 +39,16 @@ func TestRecordUsagePostsAggregateOutcomes(t *testing.T) {
 			Status:    "findings",
 			HighCount: 2,
 		}},
+		Phases: []RunUsagePhase{{Name: "execute-reviews", Status: "completed", StartedAtUnixNano: "1", EndedAtUnixNano: "2"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if payload["duration_ms"] != float64(1234) {
 		t.Fatalf("payload = %#v", payload)
+	}
+	if phases, ok := payload["phases"].([]any); !ok || len(phases) != 1 {
+		t.Fatalf("phases = %#v", payload["phases"])
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {

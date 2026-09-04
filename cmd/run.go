@@ -57,6 +57,8 @@ type runOptions struct {
 	buildTimeout             time.Duration
 	repoIndex                string
 	composeConcurrency       int
+	composeBatchLines        int
+	composeExhaustive        bool
 	tagValues                []string
 	telemetryTags            map[string]string
 	telemetryFile            string
@@ -204,6 +206,9 @@ review base/head and optional posting context. Posting still requires
 			if opts.composeConcurrency < 1 {
 				return fmt.Errorf("--compose-concurrency must be at least 1")
 			}
+			if opts.composeBatchLines < 1 {
+				return fmt.Errorf("--compose-batch-lines must be at least 1")
+			}
 			opts.telemetryTags, err = telemetry.ParseTags(opts.tagValues)
 			if err != nil {
 				return err
@@ -288,11 +293,14 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
 	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "graph", "local repository index: auto, off, force, graph, or graph-force")
 	cmd.Flags().IntVar(&opts.composeConcurrency, "compose-concurrency", 5, "maximum composed reviewers to run concurrently")
+	cmd.Flags().IntVar(&opts.composeBatchLines, "compose-batch-lines", 600, "approximate changed-line budget for each routed specialist batch")
+	cmd.Flags().BoolVar(&opts.composeExhaustive, "compose-exhaustive", false, "run every composed reviewer against every review group")
 	cmd.Flags().StringArrayVar(&opts.tagValues, "tag", nil, "attach a telemetry tag as key=value (repeatable; use benchmark=true for benchmark runs)")
 	cmd.Flags().StringVar(&opts.telemetryFile, "telemetry-file", "", "append OpenTelemetry JSON traces to this file")
 	cmd.Flags().BoolVar(&opts.noTelemetry, "no-telemetry", false, "disable all run telemetry for this command")
 	cmd.Flags().BoolVar(&opts.noCompose, "no-compose", false, "do not expand adversary.yaml uses composition; run only the named refs")
 	_ = cmd.Flags().MarkHidden("no-compose")
+	_ = cmd.Flags().MarkHidden("compose-exhaustive")
 
 	cmd.Flags().BoolVar(&opts.githubReview, "github-review", false, "build a GitHub PR comment plan and post (unless --github-dry-run)")
 	cmd.Flags().BoolVar(&opts.githubDryRun, "github-dry-run", false, "with --github-review: plan/place only; never mutate GitHub")

@@ -6,11 +6,15 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/repoindex"
 )
 
@@ -23,23 +27,30 @@ type compositeReviewGroup struct {
 type compositeReviewPlan struct {
 	FullContext *detection.Context
 	Groups      []compositeReviewGroup
+	Manifests   map[string]manifest.Manifest
+	Phases      []adversarylabs.RunUsagePhase
 }
 
 type compositeReviewPlanner interface {
-	planCompositeReview(context.Context, *runOptions, io.Writer) (compositeReviewPlan, error)
+	planCompositeReview(context.Context, *runOptions, []string, io.Writer) (compositeReviewPlan, error)
 }
 
-func (p processRuntime) planCompositeReview(ctx context.Context, opts *runOptions, stderr io.Writer) (compositeReviewPlan, error) {
+func (p processRuntime) planCompositeReview(ctx context.Context, opts *runOptions, refs []string, stderr io.Writer) (compositeReviewPlan, error) {
+	plan := compositeReviewPlan{Manifests: make(map[string]manifest.Manifest, len(refs))}
+	phaseStarted := time.Now()
 	resolvedOpts, _, err := p.resolveRunScope(ctx, application.AdversaryRunOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles, ReviewContext: opts.reviewContext,
 	})
 	if err != nil {
 		return compositeReviewPlan{}, err
 	}
+	plan.Phases = append(plan.Phases, runUsagePhase("resolve-scope", phaseStarted, time.Now()))
 	if resolvedOpts.AllFiles || resolvedOpts.ReviewContext == nil || len(resolvedOpts.ReviewContext.ChangedFiles) == 0 {
-		return compositeReviewPlan{}, nil
+		return plan, nil
 	}
 	full := *resolvedOpts.ReviewContext
+	plan.FullContext = &full
+	phaseStarted = time.Now()
 	regions := fallbackReviewRegions(full)
 	if resolver, ok := p.git.(internaladversary.ChangeRegionResolver); ok {
 		resolved, resolveErr := resolver.ChangedRegions(ctx, opts.path, full)
@@ -49,7 +60,9 @@ func (p processRuntime) planCompositeReview(ctx context.Context, opts *runOption
 			regions = resolved
 		}
 	}
+	plan.Phases = append(plan.Phases, runUsagePhase("resolve-regions", phaseStarted, time.Now()))
 
+	phaseStarted = time.Now()
 	groups := groupReviewRegions(regions, nil)
 	mode, modeErr := repoindex.ParseMode(opts.repoIndex)
 	if modeErr == nil && (mode == repoindex.ModeGraph || mode == repoindex.ModeGraphForce) {
@@ -74,8 +87,8 @@ func (p processRuntime) planCompositeReview(ctx context.Context, opts *runOption
 			}
 		}
 	}
+	plan.Phases = append(plan.Phases, runUsagePhase("build-review-graph", phaseStarted, time.Now()))
 
-	plan := compositeReviewPlan{FullContext: &full}
 	for i, grouped := range groups {
 		id := fmt.Sprintf("group-%03d", i+1)
 		paths := uniqueRegionPaths(grouped)
@@ -85,7 +98,31 @@ func (p processRuntime) planCompositeReview(ctx context.Context, opts *runOption
 			Assignment: detection.ReviewAssignment{ID: id, Regions: grouped},
 		})
 	}
+	phaseStarted = time.Now()
+	files := p.files
+	if files == nil {
+		files = internaladversary.OSRuntimeFiles{}
+	}
+	for _, ref := range refs {
+		resolved, resolveErr := internaladversary.ResolveReferenceWithRuntime(canonicalCatalogReference(ref), p.resolver, files)
+		if resolveErr != nil || resolved.Manifest == nil {
+			if resolveErr != nil {
+				fmt.Fprintf(stderr, "Warning: %s manifest could not be loaded for composition routing; retaining exhaustive coverage: %v\n", ref, resolveErr)
+			}
+			continue
+		}
+		plan.Manifests[ref] = *resolved.Manifest
+	}
+	plan.Phases = append(plan.Phases, runUsagePhase("resolve-reviewers", phaseStarted, time.Now()))
 	return plan, nil
+}
+
+func runUsagePhase(name string, started, ended time.Time) adversarylabs.RunUsagePhase {
+	return adversarylabs.RunUsagePhase{
+		Name: name, Status: "completed",
+		StartedAtUnixNano: strconv.FormatInt(started.UnixNano(), 10),
+		EndedAtUnixNano:   strconv.FormatInt(ended.UnixNano(), 10),
+	}
 }
 
 func fallbackReviewRegions(review detection.Context) []detection.ReviewRegion {
