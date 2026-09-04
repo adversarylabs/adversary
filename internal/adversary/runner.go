@@ -50,7 +50,13 @@ type RunOptions struct {
 	OnEnvelope func(review.RunEnvelope)
 }
 
-const maxRunOutputBytes int64 = 16 << 20
+const (
+	maxRunOutputBytes int64 = 16 << 20
+	// Protocol files contain repository context, never provider credentials. They
+	// live below an os.MkdirTemp directory (0700), while this mode lets an isolated
+	// runtime UID read the input and write the output mounted into its sandbox.
+	runtimeProtocolFileMode fs.FileMode = 0o644
+)
 
 type FindingsError struct{ Count int }
 
@@ -393,13 +399,25 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	input := NewInput(baseRef, headRef, changedFiles, opts.AllFiles)
 	if executionReviewContext != nil {
 		input = NewInputFromReviewContext(*executionReviewContext, opts.AllFiles)
+		if opts.ReviewAssignment != nil && len(opts.ReviewAssignment.Regions) > 0 {
+			input = input.WithChangedRanges(opts.ReviewAssignment.Regions)
+		} else if regionResolver, ok := git.(ChangeRegionResolver); ok && opts.ReviewContext != nil {
+			regions, regionErr := regionResolver.ChangedRegions(ctx, repoPath, *opts.ReviewContext)
+			if regionErr != nil {
+				if opts.Verbose {
+					fmt.Fprintf(stderr, "warning: changed-line resolution failed; runtime input will contain file-level scope only: %v\n", regionErr)
+				}
+			} else {
+				input = input.WithChangedRanges(regions)
+			}
+		}
 	}
 	inputData, err := MarshalInput(input)
 	if err != nil {
 		return err
 	}
 	inputPath := filepath.Join(runDir, "input.json")
-	if err := files.WriteFile(inputPath, inputData, 0644); err != nil {
+	if err := files.WriteFile(inputPath, inputData, runtimeProtocolFileMode); err != nil {
 		return err
 	}
 	var reviewContextPath string
@@ -409,14 +427,14 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			return fmt.Errorf("marshal resolved review context: %w", err)
 		}
 		reviewContextPath = filepath.Join(runDir, "change-context.json")
-		if err := files.WriteFile(reviewContextPath, contextData, 0644); err != nil {
+		if err := files.WriteFile(reviewContextPath, contextData, runtimeProtocolFileMode); err != nil {
 			return err
 		}
 		config.Env["ADVERSARY_CHANGE_CONTEXT"] = reviewContextPath
 	}
 
 	outputPath := filepath.Join(runDir, "output.json")
-	if err := files.WriteFile(outputPath, nil, 0644); err != nil {
+	if err := files.WriteFile(outputPath, nil, runtimeProtocolFileMode); err != nil {
 		return err
 	}
 	if resolved.LocalDir {
@@ -485,6 +503,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			cancelRun()
 			return fmt.Errorf("start model broker: %w", brokerErr)
 		}
+		// Start returns a closeable model-broker session, not a tracing span.
 		defer modelSession.Close()
 		config.Env["ADVERSARY_MODEL_ENDPOINT"] = modelSession.Endpoint
 		config.Env["ADVERSARY_MODEL_TOKEN"] = modelSession.Token
