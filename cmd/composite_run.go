@@ -99,15 +99,17 @@ func runComposedAdversaries(
 	var wg sync.WaitGroup
 	for i, job := range jobs {
 		i, job := i, job
+		// Acquire capacity before starting the goroutine. Letting every goroutine
+		// race for the semaphore discards the planner's priority order.
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			results[i] = composedRunResult{ref: job.ref, scope: job.scope, err: ctx.Err()}
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				results[i] = composedRunResult{ref: job.ref, scope: job.scope, err: ctx.Err()}
-				return
-			}
 			defer func() { <-sem }()
 
 			local := *opts
