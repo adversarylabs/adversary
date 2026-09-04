@@ -115,7 +115,7 @@ func TestRoutedComposedRunJobsFiltersAndBatchesWithoutDroppingRegions(t *testing
 		},
 	}
 	refs := []string{"review/code", "lang/go", "lang/typescript"}
-	jobs, stats := routedComposedRunJobs("review/code", refs, plan, 300)
+	jobs, stats := routedComposedRunJobs("review/code", refs, plan, 300, true)
 	if len(jobs) != 6 { // root full + code(2) + go(2) + TypeScript(1)
 		t.Fatalf("jobs = %d, want 6: %#v", len(jobs), jobs)
 	}
@@ -131,6 +131,33 @@ func TestRoutedComposedRunJobsFiltersAndBatchesWithoutDroppingRegions(t *testing
 	}
 	if covered["review/code"] != 3 || covered["lang/go"] != 2 || covered["lang/typescript"] != 1 {
 		t.Fatalf("covered regions = %#v", covered)
+	}
+}
+
+func TestRoutedComposedRunJobsCanKeepRootToFullChange(t *testing.T) {
+	full := &detection.Context{SchemaVersion: detection.SchemaVersion, ChangedFiles: []detection.ChangedFile{{Path: "a.go", Status: detection.StatusModified}}}
+	region := detection.ReviewRegion{Path: "a.go", StartLine: 1, EndLine: 20}
+	plan := compositeReviewPlan{
+		FullContext: full,
+		Groups: []compositeReviewGroup{{
+			ID: "group-001", Context: *full,
+			Assignment: detection.ReviewAssignment{ID: "group-001", Regions: []detection.ReviewRegion{region}},
+		}},
+		Manifests: map[string]manifest.Manifest{
+			"review/code": {Detection: manifest.Detection{Files: []string{"**/*"}}},
+			"lang/go":     {Detection: manifest.Detection{Files: []string{"**/*.go"}}},
+		},
+	}
+
+	jobs, stats := routedComposedRunJobs("review/code", []string{"review/code", "lang/go"}, plan, 300, false)
+	if len(jobs) != 2 {
+		t.Fatalf("jobs = %d, want root full-change plus one specialist: %#v", len(jobs), jobs)
+	}
+	if jobs[0].ref != "review/code" || jobs[0].scope != "full-change" || jobs[1].ref != "lang/go" {
+		t.Fatalf("unexpected jobs: %#v", jobs)
+	}
+	if stats.CandidateAssignments != 1 || stats.RoutedAssignments != 1 {
+		t.Fatalf("stats = %#v", stats)
 	}
 }
 

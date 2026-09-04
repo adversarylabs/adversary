@@ -82,7 +82,7 @@ func runComposedAdversaries(
 				fmt.Fprintf(progressOut, "Review plan: %d changed-hunk groups · %d exhaustive review jobs · concurrency %d\n", len(plan.Groups), len(jobs), opts.composeConcurrency)
 			} else {
 				var stats composedJobPlanStats
-				jobs, stats = routedComposedRunJobs(root, refs, plan, opts.composeBatchLines)
+				jobs, stats = routedComposedRunJobs(root, refs, plan, opts.composeBatchLines, !opts.composeRootFullOnly)
 				fmt.Fprintf(progressOut, "Review plan: %d changed-hunk groups · %d routed batches · %d review jobs · %d irrelevant assignments skipped · concurrency %d\n", len(plan.Groups), stats.Batches, len(jobs), stats.SkippedAssignments, opts.composeConcurrency)
 			}
 		}
@@ -228,10 +228,22 @@ func exhaustiveComposedRunJobs(root string, refs []string, plan compositeReviewP
 // manifest first selects the changed groups it can actually review, then those
 // groups are packed into bounded batches without dropping any assigned region.
 // The composition root retains a full-change integration pass.
-func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan, maxChangedLines int) ([]composedRunJob, composedJobPlanStats) {
+func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan, maxChangedLines int, includeRootBatches bool) ([]composedRunJob, composedJobPlanStats) {
 	jobs := []composedRunJob{{ref: root, scope: "full-change", context: plan.FullContext}}
-	stats := composedJobPlanStats{CandidateAssignments: len(refs) * len(plan.Groups)}
+	candidateReviewers := len(refs)
+	if !includeRootBatches {
+		for _, ref := range refs {
+			if ref == root {
+				candidateReviewers--
+				break
+			}
+		}
+	}
+	stats := composedJobPlanStats{CandidateAssignments: candidateReviewers * len(plan.Groups)}
 	for _, ref := range refs {
+		if !includeRootBatches && ref == root {
+			continue
+		}
 		routed := make([]compositeReviewGroup, 0, len(plan.Groups))
 		manifest, hasManifest := plan.Manifests[ref]
 		for _, group := range plan.Groups {
