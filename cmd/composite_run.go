@@ -45,6 +45,7 @@ type composedRunResult struct {
 	groups   int
 	regions  int
 	lines    int
+	attempts int
 }
 
 type composedJobPlanStats struct {
@@ -113,7 +114,6 @@ func runComposedAdversaries(
 			local := *opts
 			local.format = "json"
 			local.outputFile = ""
-			local.envelopes = nil
 			local.reviewContext = job.context
 			local.reviewAssignment = job.assignment
 			var stdout, stderr strings.Builder
@@ -123,9 +123,20 @@ func runComposedAdversaries(
 			// Apply the same catalog-boundary normalization to composed children that
 			// runAdversaries applies to top-level CLI arguments.
 			executionRef := canonicalCatalogReference(job.ref)
-			err := runOneAdversary(ctx, app, &local, executionRef, apiURL, profile, &stdout, &stderr)
+			var err error
+			attempts := 0
+			for {
+				attempts++
+				local.envelopes = nil
+				stdout.Reset()
+				stderr.Reset()
+				err = runOneAdversary(ctx, app, &local, executionRef, apiURL, profile, &stdout, &stderr)
+				if !retryableComposedRunFailure(ctx, err, stderr.String()) || attempts > opts.composeRetries {
+					break
+				}
+			}
 			runEnded := time.Now()
-			result := composedRunResult{ref: job.ref, scope: job.scope, err: err, stderr: stderr.String(), duration: runEnded.Sub(runStarted), started: runStarted, ended: runEnded, groups: job.groups, regions: job.regions, lines: job.lines}
+			result := composedRunResult{ref: job.ref, scope: job.scope, err: err, stderr: stderr.String(), duration: runEnded.Sub(runStarted), started: runStarted, ended: runEnded, groups: job.groups, regions: job.regions, lines: job.lines, attempts: attempts}
 			if len(local.envelopes) > 0 {
 				envelope := local.envelopes[len(local.envelopes)-1].Envelope
 				result.envelope = &envelope
@@ -165,6 +176,9 @@ func runComposedAdversaries(
 			if hardErr == nil {
 				hardErr = fmt.Errorf("adversary %q (%s) failed: %w", result.ref, result.scope, result.err)
 			}
+		}
+		if result.attempts > 1 {
+			status += fmt.Sprintf(" (%d attempts)", result.attempts)
 		}
 		writeProgressDiagnostics(progressOut, result.stderr)
 		label := result.ref
@@ -211,6 +225,47 @@ func runComposedAdversaries(
 		return &internaladversary.FindingsError{Count: len(aggregate.Result.Findings)}
 	}
 	return nil
+}
+
+func retryableComposedRunFailure(ctx context.Context, err error, stderr string) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	var findings *internaladversary.FindingsError
+	if errors.As(err, &findings) {
+		return false
+	}
+	text := strings.ToLower(err.Error() + "\n" + stderr)
+	for _, marker := range []string{
+		"model_timeout",
+		"model review timed out",
+		"rate limit",
+		"too many requests",
+		"http 429",
+		"http 500",
+		"http 502",
+		"http 503",
+		"http 504",
+		"temporarily unavailable",
+		"service unavailable",
+		"bad gateway",
+		"gateway timeout",
+		"internal server error",
+		"connection reset",
+		"connection refused",
+		"broken pipe",
+		"unexpected eof",
+		"server disconnected",
+		"tls handshake timeout",
+		"i/o timeout",
+		"context deadline exceeded",
+		"structured output failed schema validation",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func exhaustiveComposedRunJobs(root string, refs []string, plan compositeReviewPlan) []composedRunJob {
