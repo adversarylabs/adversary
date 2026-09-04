@@ -142,10 +142,10 @@ generated_template_tests() {
   log "generate TypeScript template with the actual CLI"
   go build -trimpath -o "$binary" .
   HOME="$tmp/home" "$binary" init "$project"
-  log "generated TypeScript npm ci with audit, build, tests, and local pack"
+  log "generated TypeScript npm ci (including default audit), build, tests, and local pack"
   (
     cd "$project"
-    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm ci --audit
+    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm ci
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm run build
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm test
     HOME="$tmp/home" "$binary" pack . --name adversarylabs/generated-template
