@@ -31,6 +31,19 @@
               "type": "array",
               "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
               "uniqueItems": true
+            },
+            "changed_ranges": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "startLine", "endLine"],
+                "properties": {
+                  "path": { "type": "string", "minLength": 1, "pattern": "\\S" },
+                  "startLine": { "type": "integer", "minimum": 1 },
+                  "endLine": { "type": "integer", "minimum": 1 }
+                }
+              }
             }
           }
         }

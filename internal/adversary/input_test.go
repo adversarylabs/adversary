@@ -86,3 +86,28 @@ func TestMarshalInputDiffAllFiles(t *testing.T) {
 		t.Fatalf("ChangedFiles = %#v", got.Change.ChangedFiles)
 	}
 }
+
+func TestWithChangedRanges(t *testing.T) {
+	input := NewInputFromReviewContext(detection.Context{
+		Mode:         detection.ModeBranchComparison,
+		BaseRef:      "main",
+		HeadRef:      "HEAD",
+		ChangedFiles: []detection.ChangedFile{{Path: "src/app.ts", Status: detection.StatusModified}},
+	}, false).WithChangedRanges([]detection.ReviewRegion{{Path: "src/app.ts", StartLine: 12, EndLine: 18}})
+
+	data, err := MarshalInput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Input
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Change == nil || len(got.Change.ChangedRanges) != 1 {
+		t.Fatalf("ChangedRanges = %#v", got.Change)
+	}
+	want := detection.ReviewRegion{Path: "src/app.ts", StartLine: 12, EndLine: 18}
+	if got.Change.ChangedRanges[0] != want {
+		t.Fatalf("ChangedRanges[0] = %#v, want %#v", got.Change.ChangedRanges[0], want)
+	}
+}

@@ -393,6 +393,18 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	input := NewInput(baseRef, headRef, changedFiles, opts.AllFiles)
 	if executionReviewContext != nil {
 		input = NewInputFromReviewContext(*executionReviewContext, opts.AllFiles)
+		if opts.ReviewAssignment != nil && len(opts.ReviewAssignment.Regions) > 0 {
+			input = input.WithChangedRanges(opts.ReviewAssignment.Regions)
+		} else if regionResolver, ok := git.(ChangeRegionResolver); ok && opts.ReviewContext != nil {
+			regions, regionErr := regionResolver.ChangedRegions(ctx, repoPath, *opts.ReviewContext)
+			if regionErr != nil {
+				if opts.Verbose {
+					fmt.Fprintf(stderr, "warning: changed-line resolution failed; runtime input will contain file-level scope only: %v\n", regionErr)
+				}
+			} else {
+				input = input.WithChangedRanges(regions)
+			}
+		}
 	}
 	inputData, err := MarshalInput(input)
 	if err != nil {

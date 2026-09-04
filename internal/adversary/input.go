@@ -24,11 +24,12 @@ type InputSource struct {
 }
 
 type InputChange struct {
-	Type         string   `json:"type"`
-	BaseRef      string   `json:"base_ref"`
-	HeadRef      string   `json:"head_ref"`
-	ScanMode     string   `json:"scan_mode"`
-	ChangedFiles []string `json:"changed_files"`
+	Type          string                   `json:"type"`
+	BaseRef       string                   `json:"base_ref"`
+	HeadRef       string                   `json:"head_ref"`
+	ScanMode      string                   `json:"scan_mode"`
+	ChangedFiles  []string                 `json:"changed_files"`
+	ChangedRanges []detection.ReviewRegion `json:"changed_ranges,omitempty"`
 }
 
 func NewInput(baseRef, headRef string, changedFiles []string, allFiles bool) Input {
@@ -68,6 +69,17 @@ func NewInputFromReviewContext(context detection.Context, allFiles bool) Input {
 		changedFiles = append(changedFiles, changed.Path)
 	}
 	return NewInput(baseRef, headRef, changedFiles, allFiles)
+}
+
+// WithChangedRanges adds the authoritative head-side line ranges computed by
+// the runner. Adversaries can use these ranges to distinguish defects caused by
+// the current patch from pre-existing repository state without invoking Git.
+func (input Input) WithChangedRanges(regions []detection.ReviewRegion) Input {
+	if input.Change == nil || len(regions) == 0 {
+		return input
+	}
+	input.Change.ChangedRanges = append([]detection.ReviewRegion(nil), regions...)
+	return input
 }
 
 func MarshalInput(input Input) ([]byte, error) {
