@@ -102,11 +102,14 @@ Unknown publishers require a sandbox backend or `--allow-unsafe-host-execution`;
 override is not isolation. Manifest permissions are advisory by default;
 `permissions.enforcement: required` and `--no-network` fail before launch when
 the selected executor cannot enforce them.
-The child can access the repository, credentials, network, processes, and any
-other resources available to your account. Restrictions the host runner cannot
-enforce fail closed. OCI digests provide integrity and identity, not publisher
-authenticity. Registry credentials and trusted CA/proxy configuration are part
-of the user's environment trust boundary. See [artifact limits](docs/artifact-trust-and-limits.md)
+The child can access the repository, filesystem, network, processes, and other
+resources available to your account. Its process environment contains only
+basic runtime variables, CLI-owned values, and keys explicitly named by
+`permissions.environment.allow`; other ambient credentials are omitted.
+Restrictions the host runner cannot enforce fail closed. OCI digests provide
+integrity and identity, not publisher authenticity. Registry credentials and
+trusted CA/proxy configuration are part of the user's environment trust
+boundary. See [artifact limits](docs/artifact-trust-and-limits.md)
 and [network policy](docs/network-oci-policy.md).
 
 ## Configuration and precedence

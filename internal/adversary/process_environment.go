@@ -60,6 +60,34 @@ func (e ProcessEnvironment) EntriesWithout(overrides map[string]string, denied [
 		delete(values, normalized)
 		delete(keys, normalized)
 	}
+	return sortedEnvironmentEntries(values, keys)
+}
+
+// EntriesAllowed builds a least-privilege child environment. Runtime-owned
+// overrides are always included; parent values are inherited only when their
+// keys are explicitly allowed.
+func (e ProcessEnvironment) EntriesAllowed(overrides map[string]string, allowed, denied []string) []string {
+	values := make(map[string]string, len(allowed)+len(overrides))
+	keys := make(map[string]string, len(allowed)+len(overrides))
+	for _, key := range allowed {
+		normalized := e.normalize(key)
+		if value, ok := e.values[normalized]; ok {
+			values[normalized], keys[normalized] = value, e.keys[normalized]
+		}
+	}
+	for key, value := range overrides {
+		normalized := e.normalize(key)
+		values[normalized], keys[normalized] = value, key
+	}
+	for _, key := range denied {
+		normalized := e.normalize(key)
+		delete(values, normalized)
+		delete(keys, normalized)
+	}
+	return sortedEnvironmentEntries(values, keys)
+}
+
+func sortedEnvironmentEntries(values, keys map[string]string) []string {
 	normalized := make([]string, 0, len(values))
 	for key := range values {
 		normalized = append(normalized, key)

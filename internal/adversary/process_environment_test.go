@@ -40,6 +40,25 @@ func TestProcessEnvironmentCanDenyParentCredentialsAfterOverrides(t *testing.T) 
 	}
 }
 
+func TestProcessEnvironmentAllowlistExcludesAmbientCredentials(t *testing.T) {
+	env := NewProcessEnvironment([]string{
+		"PATH=/bin",
+		"HOME=/home/test",
+		"AWS_SECRET_ACCESS_KEY=aws-secret",
+		"GITHUB_TOKEN=github-secret",
+		"EXPLICIT_VALUE=allowed",
+	}, false)
+	got := env.EntriesAllowed(
+		map[string]string{"ADVERSARY_REPO": "/repo"},
+		[]string{"PATH", "HOME", "EXPLICIT_VALUE"},
+		nil,
+	)
+	want := []string{"ADVERSARY_REPO=/repo", "EXPLICIT_VALUE=allowed", "HOME=/home/test", "PATH=/bin"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("entries = %#v, want %#v", got, want)
+	}
+}
+
 func TestProcessEnvironmentRejectsUnsafePATHEntriesBeforeSelection(t *testing.T) {
 	absolute := t.TempDir()
 	for _, path := range []string{
