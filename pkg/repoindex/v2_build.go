@@ -116,7 +116,7 @@ func EnsureV2(absRepo string, mode Mode, stderr io.Writer) (*V2Handle, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(root, V2SchemaVersion, RepoKey(absRepo))
+	dir := filepath.Join(root, V2SchemaVersion, FingerprintKey(fingerprint))
 	unlock := lockEnsure("v2:" + dir)
 	defer unlock()
 	if err := recoverV2Publication(dir); err != nil {
