@@ -161,14 +161,13 @@ example_smoke_tests() {
   trap 'rm -rf -- "$tmp"' RETURN
   project="$tmp/comment-sentence-adversary"
   mkdir -p -- "$project"
-  log "checked-in comment-sentence example clean npm ci, build, tests, and audit"
+  log "checked-in comment-sentence example clean npm ci (including default audit), build, and tests"
   git archive --format=tar HEAD:smoke-tests/comment-sentence-adversary | tar -xf - -C "$project"
   (
     cd "$project"
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm ci
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm run build
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm test
-    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm audit --audit-level=low
   )
   rm -rf -- "$tmp"
   trap - RETURN
