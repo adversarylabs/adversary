@@ -33,6 +33,16 @@ func TestRetryableComposedRunFailure(t *testing.T) {
 	}
 }
 
+func TestCompactRunFailurePrefersNamedErrorOverNodeWarning(t *testing.T) {
+	stderr := `(node:1297) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+ModelReviewError: Model provider returned an invalid response`
+
+	got := compactRunFailure(errors.New("host execution failed (child exit 1): exit status 1"), stderr)
+	if got != "ModelReviewError: Model provider returned an invalid response" {
+		t.Fatalf("compact failure = %q", got)
+	}
+}
+
 func TestAggregateComposedReviewDeduplicatesAndRetainsSources(t *testing.T) {
 	line := 12
 	root := review.RunEnvelope{ProtocolVersion: 1, Result: review.ReviewResult{
