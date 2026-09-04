@@ -148,8 +148,8 @@ generated_template_tests() {
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm ci
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm run build
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm test
-    HOME="$tmp/home" "$binary" pack . --name adversarylabs/generated-template
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm audit --audit-level=low
+    HOME="$tmp/home" "$binary" pack . --name adversarylabs/generated-template
   )
   rm -rf -- "$tmp"
   trap - RETURN
