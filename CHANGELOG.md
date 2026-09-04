@@ -23,6 +23,8 @@ existing one.
   supported through its structured Chat Completions API.
 - camelStream is supported directly with `--model-provider camel --model auto`,
   `CAMEL_API_KEY`, and Camel-specific endpoint and structured-output settings.
+- Camel model calls retry transient connection, rate-limit, and server failures
+  in place instead of forcing an entire composed review to restart.
 - Model-backed adversaries can request a CLI-owned, authenticated review broker
   with provider credentials kept out of the adversary process.
 - CLI audit remediation is being delivered as dependency-ordered pull requests.

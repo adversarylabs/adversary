@@ -258,8 +258,39 @@ func TestProviderFromConfigUsesCamelNamespace(t *testing.T) {
 	camel, ok := provider.(*CamelProvider)
 	if !ok || camel.Name() != "camel" || camel.Model() != "auto" || camel.APIKey != "qaml_live_test" ||
 		camel.BaseURL != "https://stream.camelai.com" || camel.ResponseFormat != "json_object" ||
-		camel.ReasoningEffort != "none" || camel.StructuredOutputRetries != 2 {
+		camel.ReasoningEffort != "none" || camel.StructuredOutputRetries != 2 || camel.RequestRetries != 2 {
 		t.Fatalf("provider = %#v", provider)
+	}
+}
+
+func TestProviderFromConfigUsesCamelRequestRetryOverride(t *testing.T) {
+	values := map[string]string{
+		CamelKeyEnv:            "qaml_live_test",
+		CamelRequestRetriesEnv: "5",
+	}
+	provider, err := ProviderFromConfig(Config{Provider: "camel", Model: "auto"}, func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retries := provider.(*CamelProvider).RequestRetries; retries != 5 {
+		t.Fatalf("request retries = %d, want 5", retries)
+	}
+}
+
+func TestProviderFromConfigRejectsInvalidCamelRequestRetries(t *testing.T) {
+	values := map[string]string{
+		CamelKeyEnv:            "qaml_live_test",
+		CamelRequestRetriesEnv: "6",
+	}
+	_, err := ProviderFromConfig(Config{Provider: "camel", Model: "auto"}, func(name string) (string, bool) {
+		value, ok := values[name]
+		return value, ok
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), CamelRequestRetriesEnv) {
+		t.Fatalf("invalid request retry error = %v", err)
 	}
 }
 
@@ -632,6 +663,39 @@ func TestFireworksProviderRetriesMissingStructuredOutputWithCorrection(t *testin
 	messages := lastPayload["messages"].([]any)
 	if len(messages) != 3 || !strings.Contains(messages[2].(map[string]any)["content"].(string), "only one JSON value") {
 		t.Fatalf("retry messages = %#v", messages)
+	}
+}
+
+func TestCamelProviderRetriesTransientHTTPFailureInPlace(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		if requests < 3 {
+			response.Header().Set("Retry-After", "0")
+			http.Error(response, "temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"finish_reason": "stop",
+				"message":       map[string]any{"content": `{"decision":"approve"}`},
+			}},
+		})
+	}))
+	defer server.Close()
+	provider := &CamelProvider{
+		APIKey:         "secret",
+		ModelID:        "auto",
+		BaseURL:        server.URL,
+		Client:         server.Client(),
+		RequestRetries: 2,
+	}
+	result, err := provider.Review(context.Background(), validRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 3 || string(result.Output) != `{"decision":"approve"}` {
+		t.Fatalf("requests=%d output=%s", requests, result.Output)
 	}
 }
 

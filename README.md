@@ -181,6 +181,10 @@ leak through process listings and shell history.
 endpoints for compatible gateways and testing. Model-backed execution currently
 uses the host executor because sandbox and container loopback routing is not yet
 available.
+Camel retries transient connection, rate-limit, and server failures twice within
+the affected model call so a composed review does not restart from the beginning.
+Set `ADVERSARY_CAMEL_REQUEST_RETRIES` to a value from `0` through `5` to override
+that default.
 `--no-network` applies to the adversary child; provider network access remains
 isolated in the CLI-owned broker.
 

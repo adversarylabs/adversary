@@ -24,6 +24,7 @@ const (
 	CamelReasoningEffortEnv       = "ADVERSARY_CAMEL_REASONING_EFFORT"
 	CamelResponseFormatEnv        = "ADVERSARY_CAMEL_RESPONSE_FORMAT"
 	CamelStructuredRetriesEnv     = "ADVERSARY_CAMEL_STRUCTURED_RETRIES"
+	CamelRequestRetriesEnv        = "ADVERSARY_CAMEL_REQUEST_RETRIES"
 	ModelContentDiagnosticsEnv    = "ADVERSARY_MODEL_CONTENT_DIAGNOSTICS"
 	DisableKeepAlivesEnv          = "ADVERSARY_MODEL_DISABLE_KEEP_ALIVES"
 )
@@ -138,6 +139,10 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		if err != nil {
 			return nil, err
 		}
+		requestRetries, err := boundedIntegerFromEnvironmentWithDefault(lookup, CamelRequestRetriesEnv, 2, 0, 5)
+		if err != nil {
+			return nil, err
+		}
 		responseFormat, err := responseFormatFromEnvironment(lookup, CamelResponseFormatEnv, "json_object")
 		if err != nil {
 			return nil, err
@@ -150,6 +155,7 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 			ReasoningEffort:           reasoningEffort,
 			ResponseFormat:            responseFormat,
 			StructuredOutputRetries:   structuredRetries,
+			RequestRetries:            requestRetries,
 			IncludeContentDiagnostics: envEnabled(lookup, ModelContentDiagnosticsEnv),
 		}, nil
 	default:
@@ -174,9 +180,13 @@ func responseFormatFromEnvironment(lookup LookupEnv, name, defaultFormat string)
 }
 
 func boundedIntegerFromEnvironment(lookup LookupEnv, name string, minimum, maximum int) (int, error) {
+	return boundedIntegerFromEnvironmentWithDefault(lookup, name, minimum, minimum, maximum)
+}
+
+func boundedIntegerFromEnvironmentWithDefault(lookup LookupEnv, name string, defaultValue, minimum, maximum int) (int, error) {
 	value := normalizedEnv(lookup, name)
 	if value == "" {
-		return minimum, nil
+		return defaultValue, nil
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < minimum || parsed > maximum {
