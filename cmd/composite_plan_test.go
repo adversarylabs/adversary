@@ -188,7 +188,9 @@ func TestRoutedComposedRunJobsCanKeepBroadChildrenToFullChange(t *testing.T) {
 		},
 	}
 
-	jobs, stats := routedComposedRunJobs("review/code", []string{"review/code", "review/conventions", "lang/go"}, plan, 300, 0, false, true, nil)
+	// Put the broad reviewer after the selective reviewer in declaration order;
+	// the scheduler should still start the full-change work first.
+	jobs, stats := routedComposedRunJobs("review/code", []string{"review/code", "lang/go", "review/conventions"}, plan, 300, 0, false, true, nil)
 	if len(jobs) != 3 {
 		t.Fatalf("jobs = %d, want root full-change, one broad full-change, and one scoped batch: %#v", len(jobs), jobs)
 	}

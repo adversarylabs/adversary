@@ -282,6 +282,14 @@ func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan,
 			})
 		}
 	}
+	// Full-change reviewers are typically the longest-running jobs because they
+	// inspect repository-wide context. Start them before scoped batches so they
+	// define the critical path instead of waiting behind short specialist work.
+	// Stable ordering preserves the composition's declared order within each
+	// class and does not change any reviewer's input.
+	sort.SliceStable(jobs[1:], func(i, j int) bool {
+		return jobs[i+1].scope == "full-change" && jobs[j+1].scope != "full-change"
+	})
 	return jobs, stats
 }
 
