@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type FireworksProvider struct {
@@ -16,6 +18,7 @@ type FireworksProvider struct {
 	ReasoningEffort           string
 	ResponseFormat            string
 	StructuredOutputRetries   int
+	RequestRetries            int
 	IncludeContentDiagnostics bool
 }
 
@@ -29,6 +32,7 @@ type CamelProvider struct {
 	ReasoningEffort           string
 	ResponseFormat            string
 	StructuredOutputRetries   int
+	RequestRetries            int
 	IncludeContentDiagnostics bool
 }
 
@@ -52,17 +56,17 @@ func (p *FireworksProvider) Name() string  { return "fireworks" }
 func (p *FireworksProvider) Model() string { return p.ModelID }
 
 func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result, error) {
-	return reviewChatCompletions(ctx, p.Name(), p.APIKey, p.ModelID, p.BaseURL, p.Client, p.ReasoningEffort, p.ResponseFormat, p.StructuredOutputRetries, p.IncludeContentDiagnostics, request)
+	return reviewChatCompletions(ctx, p.Name(), p.APIKey, p.ModelID, p.BaseURL, p.Client, p.ReasoningEffort, p.ResponseFormat, p.StructuredOutputRetries, p.RequestRetries, p.IncludeContentDiagnostics, request)
 }
 
 func (p *CamelProvider) Name() string  { return "camel" }
 func (p *CamelProvider) Model() string { return p.ModelID }
 
 func (p *CamelProvider) Review(ctx context.Context, request Request) (Result, error) {
-	return reviewChatCompletions(ctx, p.Name(), p.APIKey, p.ModelID, p.BaseURL, p.Client, p.ReasoningEffort, p.ResponseFormat, p.StructuredOutputRetries, p.IncludeContentDiagnostics, request)
+	return reviewChatCompletions(ctx, p.Name(), p.APIKey, p.ModelID, p.BaseURL, p.Client, p.ReasoningEffort, p.ResponseFormat, p.StructuredOutputRetries, p.RequestRetries, p.IncludeContentDiagnostics, request)
 }
 
-func reviewChatCompletions(ctx context.Context, providerName, apiKey, modelID, baseURL string, client *http.Client, reasoningEffort, responseFormat string, structuredOutputRetries int, includeContentDiagnostics bool, request Request) (Result, error) {
+func reviewChatCompletions(ctx context.Context, providerName, apiKey, modelID, baseURL string, client *http.Client, reasoningEffort, responseFormat string, structuredOutputRetries, requestRetries int, includeContentDiagnostics bool, request Request) (Result, error) {
 	var schema any
 	if err := json.Unmarshal(request.Schema, &schema); err != nil {
 		return Result{}, fmt.Errorf("decode model schema: %w", err)
@@ -89,9 +93,22 @@ func reviewChatCompletions(ctx context.Context, providerName, apiKey, modelID, b
 			"messages":         attemptMessages,
 			"response_format":  chatCompletionsResponseFormat(responseFormat, schema),
 		}
-		data, status, err := postJSON(ctx, client, baseURL+"/v1/chat/completions", map[string]string{
-			"authorization": "Bearer " + apiKey,
-		}, payload)
+		var data []byte
+		var status int
+		var responseHeaders http.Header
+		var err error
+		for requestAttempt := 0; ; requestAttempt++ {
+			data, status, responseHeaders, err = postJSONWithHeaders(ctx, client, baseURL+"/v1/chat/completions", map[string]string{
+				"authorization": "Bearer " + apiKey,
+			}, payload)
+			retryable := err != nil || status == http.StatusTooManyRequests || status >= 500
+			if !retryable || requestAttempt >= requestRetries || ctx.Err() != nil {
+				break
+			}
+			if err := waitForProviderRetry(ctx, providerRetryDelay(requestAttempt, responseHeaders)); err != nil {
+				return Result{}, err
+			}
+		}
 		if err != nil {
 			return Result{}, err
 		}
@@ -125,6 +142,37 @@ func reviewChatCompletions(ctx context.Context, providerName, apiKey, modelID, b
 	return Result{}, &ProviderError{
 		Code:    code,
 		Message: message,
+	}
+}
+
+func providerRetryDelay(attempt int, headers http.Header) time.Duration {
+	if headers != nil {
+		if seconds, err := strconv.Atoi(strings.TrimSpace(headers.Get("Retry-After"))); err == nil && seconds >= 0 {
+			delay := time.Duration(seconds) * time.Second
+			if delay > 30*time.Second {
+				return 30 * time.Second
+			}
+			return delay
+		}
+	}
+	delay := 250 * time.Millisecond * time.Duration(1<<min(attempt, 6))
+	if delay > 10*time.Second {
+		return 10 * time.Second
+	}
+	return delay
+}
+
+func waitForProviderRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
