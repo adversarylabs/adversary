@@ -154,6 +154,7 @@ func runComposedAdversaries(
 	var hardErr error
 	findingsBeforeDedupe := 0
 	for i, result := range results {
+		opts.recordGitHubRunFailure(result.ref, result.scope, result.err, result.stderr)
 		usageResult := runUsageResult(result.ref, result.err, result.duration, result.envelope)
 		usageResult.Scope = result.scope
 		usageResult.StartedAtUnixNano = strconv.FormatInt(result.started.UnixNano(), 10)
@@ -191,6 +192,9 @@ func runComposedAdversaries(
 	aggregateStarted := time.Now()
 	aggregate, err := aggregateComposedReview(root, results)
 	if err != nil {
+		if hardErr != nil {
+			return hardErr
+		}
 		return err
 	}
 	usagePhases = append(usagePhases, runUsagePhase("aggregate-results", aggregateStarted, time.Now()))

@@ -32,7 +32,7 @@ adversary run https://github.com/owner/repo/pull/123 --github-review --github-su
 | `--github-pr N` | PR number (or use PR URL / Actions env) |
 | `--github-repo owner/name` | Repository (or use PR URL / `GITHUB_REPOSITORY`) |
 | `--github-submit` | Submit review as `COMMENT` (default leaves **pending**) |
-| `--github-include-summary=false` | Omit the persistent aggregate assessment/opinion while retaining finding comments |
+| `--github-include-summary=false` | Omit the persistent aggregate assessment/opinion while retaining finding comments and execution-failure notices |
 | `--github-min-severity` | `info`\|`low`\|`medium`\|`high`\|`critical` (default: all) |
 | `--github-api-url` | GraphQL endpoint override |
 | `--github-rest-url` | REST base override |
@@ -89,9 +89,23 @@ There is no nearest-line guessing.
 Hard posting failures (auth/network/mutation) map to exit class **4**, even when
 findings exist (class 1). Soft placement skips do not change the exit class.
 
+## Incomplete reviews
+
+When review jobs fail, the CLI still posts usable findings, but adds a
+**Partial Adversary review** notice naming failed reviewers, their scopes, and
+bounded failure diagnostics. This notice also appears when no job returned
+findings, and is not disabled by `--github-include-summary=false`. Known provider
+and GitHub credentials are redacted; full diagnostics remain in the CI logs.
+
+The notice is host-generated and is never rewritten by the model. Findings keep
+normal inline placement and off-diff fallback. A findings-only exit does not
+produce a failure notice. Posting a partial review does not turn an execution
+failure into success; all-failed compositions retain the underlying error class.
+
 ## Content policy
 
 - Visible **findings** only (never observations, positives, or suppressed details)
+- Execution failures add an explicit partial-run notice, separate from findings
 - Empty plan → no GitHub mutation
 - The aggregate summary synthesizes actual findings only; clean adversaries never add review-body noise
 - Max 50 inline comments; overflow goes to the review body

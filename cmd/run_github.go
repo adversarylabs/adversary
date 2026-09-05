@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"html"
 	"io"
 	"strings"
 
+	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/githubreview"
@@ -185,6 +188,24 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		})
 		githubreview.EnhanceSummary(ctx, &plan, githubreview.EnhanceOptions{Provider: provider})
 	}
+	// Execution status is host-authored, not model-rewritten or suppressed by
+	// --github-include-summary=false. Findings still use normal inline placement.
+	if len(opts.githubRunFailures) > 0 {
+		const maxFailures = 20
+		failures := opts.githubRunFailures
+		if len(failures) > maxFailures {
+			failures = failures[:maxFailures]
+		}
+		notice := "### Partial Adversary review\n\nThis review did not complete because one or more review jobs failed. Any findings are partial; an absence of findings does not mean the change passed review.\n\nFailed review jobs:\n\n" + strings.Join(failures, "\n")
+		if remaining := len(opts.githubRunFailures) - len(failures); remaining > 0 {
+			notice += fmt.Sprintf("\n- %d additional failed jobs.", remaining)
+		}
+		notice += "\n\nSee the CI logs for full diagnostics. Fix the execution failure and rerun the review."
+		if strings.TrimSpace(plan.ReviewBody) != "" {
+			notice += "\n\n---\n\n" + plan.ReviewBody
+		}
+		plan.ReviewBody = notice
+	}
 	logVoiceSource(progress, voiceInfo)
 
 	token := githubapi.TokenFromEnv()
@@ -254,6 +275,38 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		},
 	})
 	return err
+}
+
+// recordGitHubRunFailure captures failures independently of review envelopes:
+// failed jobs may never emit one, and findings exits are successful reviews.
+func (o *runOptions) recordGitHubRunFailure(ref, scope string, err error, stderr string) {
+	var findings *internaladversary.FindingsError
+	if !o.githubReview || err == nil || errors.As(err, &findings) || errors.Is(err, context.Canceled) {
+		return
+	}
+	message := firstInterestingErrorLine(stderr)
+	if message == "" {
+		message = err.Error()
+	}
+	label := ref
+	if scope != "" {
+		label += " [" + scope + "]"
+	}
+	// Child errors can contain request diagnostics. Redact known credentials
+	// before truncation so even a key straddling the limit cannot leak to a PR.
+	for _, key := range []string{
+		modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv,
+		modelreview.FireworksKeyEnv, modelreview.CamelKeyEnv,
+		"ADVERSARY_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "ADVERSARY_TOKEN",
+	} {
+		if secret, ok := githubapi.LookupEnv(key); ok && secret != "" {
+			message = strings.ReplaceAll(message, secret, "[redacted]")
+			label = strings.ReplaceAll(label, secret, "[redacted]")
+		}
+	}
+	label = html.EscapeString(truncateRunes(strings.Join(strings.Fields(label), " "), 160))
+	message = html.EscapeString(truncateRunes(strings.Join(strings.Fields(message), " "), 500))
+	o.githubRunFailures = append(o.githubRunFailures, "- <code>"+label+"</code>: <code>"+message+"</code>")
 }
 
 func logVoiceSource(progress io.Writer, voiceInfo githubreview.VoiceInfo) {
