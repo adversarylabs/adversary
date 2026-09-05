@@ -17,7 +17,7 @@ type ComposeMetadata struct {
 	Directory string
 	Error     error
 }
-type ComposeMetadataFunc func(context.Context, []string) map[string]ComposeMetadata
+type ComposeMetadataFunc func(context.Context, []string) (map[string]ComposeMetadata, error)
 
 type ComposeSelection struct {
 	MetadataAvailable bool   `json:"-"`
@@ -38,6 +38,9 @@ type ComposePlan struct {
 // packages. A filtered intermediate composite does not hide relevant children.
 func PlanCompose(ctx context.Context, roots []string, load ComposeMetadataFunc, scope *detection.Context) (ComposePlan, error) {
 	plan := ComposePlan{Complete: true, Refs: []string{}, Selections: []ComposeSelection{}}
+	if load == nil {
+		return plan, fmt.Errorf("compose: metadata loader is required")
+	}
 	type node struct {
 		ref   string
 		depth int
@@ -65,7 +68,10 @@ func PlanCompose(ctx context.Context, roots []string, load ComposeMetadataFunc, 
 				pending = append(pending, n)
 			}
 		}
-		metadata := load(ctx, refs)
+		metadata, err := load(ctx, refs)
+		if err != nil {
+			return plan, fmt.Errorf("load composition metadata: %w", err)
+		}
 		for _, n := range pending {
 			m, exists := metadata[n.ref]
 			if !exists {
@@ -97,22 +103,19 @@ func PlanCompose(ctx context.Context, roots []string, load ComposeMetadataFunc, 
 			if m.Error == nil {
 				identity = m.Manifest.Name + "@" + m.Manifest.Version
 			}
+			// Retain every explicit root's voice directory, even when aliases
+			// collapse to one executable package. The first explicit root wins.
+			if selection.Root && m.Directory != "" {
+				plan.VoiceRoots = append(plan.VoiceRoots, m.Directory)
+			}
 			if previous, ok := identities[identity]; ok {
-				if selection.Root && !plan.Selections[previous].Selected {
-					plan.Selections[previous].Selected = true
-					plan.Selections[previous].Reason = selection.Reason
-					plan.Refs = append(plan.Refs, resolved)
+				if selection.Root && !plan.Selections[previous].Root {
+					plan.Selections[previous] = selection
 				}
 				continue
 			}
 			identities[identity] = len(plan.Selections)
 			plan.Selections = append(plan.Selections, selection)
-			if selection.Selected {
-				plan.Refs = append(plan.Refs, resolved)
-			}
-			if selection.Root && m.Directory != "" {
-				plan.VoiceRoots = append(plan.VoiceRoots, m.Directory)
-			}
 			if m.Error != nil {
 				continue
 			}
@@ -129,6 +132,11 @@ func PlanCompose(ctx context.Context, roots []string, load ComposeMetadataFunc, 
 				}
 				queue = append(queue, node{ref, n.depth + 1})
 			}
+		}
+	}
+	for _, selection := range plan.Selections {
+		if selection.Selected {
+			plan.Refs = append(plan.Refs, selection.ResolvedReference)
 		}
 	}
 	return plan, nil

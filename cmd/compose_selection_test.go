@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -37,6 +38,7 @@ func (r *selectionTestRegistry) MetadataBatch(_ context.Context, refs []oci.Refe
 }
 
 type selectionTestFactory struct {
+	err      error
 	registry *selectionTestRegistry
 	inner    application.RegistryFactory
 }
@@ -46,7 +48,7 @@ func (f selectionTestFactory) BindingIdentity() string {
 }
 
 func (f selectionTestFactory) New(string, string) (application.OCIRegistry, error) {
-	return f.registry, nil
+	return f.registry, f.err
 }
 
 type selectionTestRuntime struct{ application.Runtime }
@@ -87,3 +89,24 @@ func TestComposePlanColdCacheSelectsWithoutPullingOrRunning(t *testing.T) {
 		t.Fatal("preview pulled packages")
 	}
 }
+
+func TestComposePlanPreservesRegistryFactoryFailure(t *testing.T) {
+	var out, progress bytes.Buffer
+	deps := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &progress).Dependencies()
+	want := &selectionFactoryError{}
+	deps.Registries = selectionTestFactory{inner: deps.Registries, err: want}
+	deps.Runtime = selectionTestRuntime{deps.Runtime}
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = selectComposeRefs(context.Background(), app, &runOptions{composePlan: true}, []string{"registry.test/review/code:1.0.0"}, "", "", &out, &progress)
+	var typed *selectionFactoryError
+	if !errors.Is(err, want) || !errors.As(err, &typed) {
+		t.Fatalf("lost typed registry error: %v", err)
+	}
+}
+
+type selectionFactoryError struct{}
+
+func (*selectionFactoryError) Error() string { return "registry authentication unavailable" }

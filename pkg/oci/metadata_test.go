@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,5 +53,41 @@ func TestMetadataBatchFallsBackForOlderRegistry(t *testing.T) {
 	got := registry.MetadataBatch(context.Background(), []Reference{ref})[ref.Locator()]
 	if got.Error != "" || got.Manifest != string(want) {
 		t.Fatalf("got %+v want %q", got, want)
+	}
+}
+
+func TestMetadataBatchPrivateFallbackUsesScopedBearerAuth(t *testing.T) {
+	registry, ref, want, _ := fallbackRegistry(t, http.StatusNotFound, ReferrersResponse{}, "", false)
+	registry.Credentials = staticCredentialStore{registry: ref.Registry, creds: Credentials{Username: "user", Password: "secret"}}
+	tokenRequests := 0
+	registry.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		respond := func(status int, body string, headers http.Header) (*http.Response, error) {
+			return &http.Response{StatusCode: status, Header: headers, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+		}
+		if req.URL.Path == "/v2/metadata" {
+			if req.Header.Get("Authorization") != "" {
+				t.Error("batch leaked repository credentials")
+			}
+			return respond(http.StatusOK, `{"items":[]}`, http.Header{})
+		}
+		if req.URL.Path == "/token" {
+			tokenRequests++
+			if req.URL.Query().Get("scope") != "repository:"+ref.Repository+":pull" {
+				t.Errorf("wrong token scope: %s", req.URL)
+			}
+			user, password, ok := req.BasicAuth()
+			if !ok || user != "user" || password != "secret" {
+				t.Error("trusted token endpoint missing credentials")
+			}
+			return respond(http.StatusOK, `{"token":"scoped-token"}`, http.Header{})
+		}
+		if req.Header.Get("Authorization") != "Bearer scoped-token" {
+			return respond(http.StatusUnauthorized, "", http.Header{"Www-Authenticate": {fmt.Sprintf(`Bearer realm="http://%s/token",service="%s"`, ref.Registry, ref.Registry)}})
+		}
+		return http.DefaultTransport.RoundTrip(req)
+	})}
+	got := registry.MetadataBatch(context.Background(), []Reference{ref})[ref.Locator()]
+	if got.Error != "" || got.Manifest != string(want) || tokenRequests == 0 {
+		t.Fatalf("private fallback failed: %+v tokens=%d", got, tokenRequests)
 	}
 }

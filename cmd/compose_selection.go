@@ -72,7 +72,7 @@ func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptio
 	if profile == "" {
 		profile = "default"
 	}
-	load := func(ctx context.Context, refs []string) map[string]application.ComposeMetadata {
+	load := func(ctx context.Context, refs []string) (map[string]application.ComposeMetadata, error) {
 		out := map[string]application.ComposeMetadata{}
 		remote := []oci.Reference{}
 		originals := map[string][]string{}
@@ -94,7 +94,7 @@ func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptio
 			originals[parsed.Locator()] = append(originals[parsed.Locator()], raw)
 		}
 		if len(remote) == 0 {
-			return out
+			return out, nil
 		}
 		fetched := map[string]oci.Metadata{}
 		groups := map[string][]oci.Reference{}
@@ -104,7 +104,7 @@ func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptio
 		for host, group := range groups {
 			registry, err := app.Dependencies().Registries.New(apiURL, profile)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("create registry client for %s: %w", host, err)
 			}
 			if host == "localhost" || hasLocalhostPort(host) {
 				registry.SetPlainHTTP(true)
@@ -140,7 +140,7 @@ func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptio
 				out[alias] = result
 			}
 		}
-		return out
+		return out, nil
 	}
 	plan, err := application.PlanCompose(ctx, refs, load, scope)
 	if err != nil {
