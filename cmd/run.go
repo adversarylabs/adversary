@@ -25,6 +25,8 @@ import (
 )
 
 type runOptions struct {
+	composeSelections        []application.ComposeSelection
+	composePlan              bool
 	path                     string
 	base                     string
 	head                     string
@@ -225,6 +227,9 @@ review base/head and optional posting context. Posting still requires
 			if err != nil {
 				return err
 			}
+			if opts.composePlan && wantsAutomaticSelection(cmd, opts) {
+				return fmt.Errorf("--compose-plan cannot be combined with automatic inventory selection flags")
+			}
 			opts.format = format
 			if opts.json {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
@@ -262,6 +267,9 @@ review base/head and optional posting context. Posting still requires
 				}
 				runErr = runAdversaries(cmd.Context(), app, opts, args, apiURL, profile, resultOut, progressOut)
 			}
+			if opts.composePlan {
+				return runErr
+			}
 			// Retain usable findings after execution failures, but make incomplete
 			// coverage explicit even when the optional assessment is disabled.
 			if len(opts.githubRunFailures) == 0 {
@@ -296,6 +304,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().BoolVar(&opts.allFiles, "all-files", false, "scan the entire target instead of inferring a change")
 	cmd.Flags().BoolVar(&opts.all, "all", false, "with no adversary refs: run every available adversary without detection filtering")
 	cmd.Flags().BoolVar(&opts.noPull, "no-pull", false, "with no adversary refs: do not pull remote adversaries; use only the local store")
+	cmd.Flags().BoolVar(&opts.composePlan, "compose-plan", false, "preview composition selection without downloading packages or running reviewers")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "with no adversary refs: resolve and print selections without running")
 	cmd.Flags().BoolVar(&opts.explain, "explain", false, "with no adversary refs: show selected and skipped adversaries with reasons")
 	cmd.Flags().StringVar(&opts.minimumConfidence, "min-confidence", "medium", "with no adversary refs: minimum confidence to run (low, medium, or high)")
@@ -620,10 +629,34 @@ func runAdversaries(
 	// never launch a shell into a multi-member product by accident. Name a leaf
 	// explicitly (or use --no-compose) when you want shell into one specialist.
 	noCompose := opts.noCompose || opts.shell
+	if opts.composePlan && noCompose {
+		return fmt.Errorf("--compose-plan requires composition (incompatible with --shell and --no-compose)")
+	}
 	if opts.shell && !opts.noCompose && progressOut != nil {
 		fmt.Fprintln(progressOut, "Note: --shell skips adversary.yaml uses expansion (single package only).")
 	}
-	expanded, voiceRoots, err := expandComposeRefs(ctx, app, refs, valueOf(apiURL), valueOf(profile), noCompose, true, progressOut)
+	var expanded, voiceRoots []string
+	var err error
+	if !noCompose && app != nil {
+		var plan application.ComposePlan
+		plan, err = selectComposeRefs(ctx, app, opts, refs, valueOf(apiURL), valueOf(profile), resultOut, progressOut)
+		expanded, voiceRoots = plan.Refs, plan.VoiceRoots
+		opts.composeSelections = plan.Selections
+		for _, selection := range plan.Selections {
+			if selection.Root {
+				for i, ref := range entryRefs {
+					if ref == selection.Reference {
+						entryRefs[i] = selection.ResolvedReference
+					}
+				}
+			}
+		}
+		if opts.composePlan {
+			return err
+		}
+	} else {
+		expanded, voiceRoots, err = expandComposeRefs(ctx, app, refs, valueOf(apiURL), valueOf(profile), noCompose, true, progressOut)
+	}
 	if err != nil {
 		return err
 	}
@@ -635,7 +668,7 @@ func runAdversaries(
 	if opts.shell && len(refs) > 1 {
 		return fmt.Errorf("--shell requires exactly one adversary reference")
 	}
-	if !noCompose && len(entryRefs) == 1 && len(refs) > 1 {
+	if !noCompose && len(entryRefs) == 1 && (len(refs) > 1 || len(opts.composeSelections) > 1) {
 		return runComposedAdversaries(ctx, app, opts, entryRefs[0], refs, valueOf(apiURL), valueOf(profile), resultOut, progressOut)
 	}
 

@@ -197,6 +197,13 @@ func runComposedAdversaries(
 		}
 		return err
 	}
+	if len(opts.composeSelections) > 0 {
+		metadata, marshalErr := json.Marshal(opts.composeSelections)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		aggregate.Result.Observations = append(aggregate.Result.Observations, review.Note{Key: "composition.selection", Summary: "Adversary selection before package downloads.", Metadata: metadata})
+	}
 	usagePhases = append(usagePhases, runUsagePhase("aggregate-results", aggregateStarted, time.Now()))
 	opts.envelopes = append(opts.envelopes, githubreview.NamedEnvelope{Adversary: root, Envelope: aggregate})
 	if opts.format == "json" {
