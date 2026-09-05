@@ -27,15 +27,14 @@ jobs:
           path: /mnt/adversary
 
       - name: Run adversaries
-        uses: adversarylabs/actions/run@252098208fdbf919e3530d99d3f51314d3db0bd9 # v1.4.1
+        uses: adversarylabs/actions/run@88f40e3774b0b7b4667700c5b9e1bbef6c6e5519 # v1.4.4
         with:
-          cli-version: 2026.9.4-beta.3
           adversaries: auto
           path: .
           data-dir: /mnt/adversary
           include-summary: false
-          model-provider: fireworks
-          model: ${{ vars.ADVERSARY_MODEL }}
-          model-api-key: ${{ secrets.FIREWORKS_API_KEY }}
+          model-provider: camel
+          model: auto
+          model-api-key: ${{ secrets.CAMEL_API_KEY }}
           auth-mode: oidc
           registry-namespace: adversarylabs
