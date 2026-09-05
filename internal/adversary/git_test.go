@@ -309,6 +309,38 @@ func TestResolveRunScopeUsesPullRequestContextBeforeDirtyWorktree(t *testing.T) 
 	}
 }
 
+func TestRuntimeInputCanReadBaseInDetachedPullRequestCheckout(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "header.ts"), "const nav = ['catalog', 'benchmarks'];\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "base")
+	base := strings.TrimSpace(runGitOutput(t, repo, "rev-parse", "HEAD"))
+	runGit(t, repo, "update-ref", "refs/remotes/origin/main", base)
+	runGit(t, repo, "checkout", "--detach")
+	runGit(t, repo, "branch", "-D", "main")
+	writeFile(t, filepath.Join(repo, "header.ts"), "const nav = ['catalog'];\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "remove navigation item")
+
+	resolved, err := systemGitDiffer(t).ResolveChanges(context.Background(), ChangeRequest{
+		RepoPath: repo, Mode: detection.ModePullRequest, BaseRef: "main", HeadRef: "HEAD",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := NewInputFromReviewContext(resolved, false)
+	if input.Change == nil {
+		t.Fatal("missing runtime change")
+	}
+	previous := runGitOutput(t, repo, "show", input.Change.BaseRef+":header.ts")
+	if previous != "const nav = ['catalog', 'benchmarks'];\n" {
+		t.Fatalf("previous content = %q", previous)
+	}
+	if resolved.BaseRef != "main" {
+		t.Fatalf("diagnostic base ref changed to %q", resolved.BaseRef)
+	}
+}
+
 func TestResolveRunScopeUsesConfiguredNonOriginPullRequestBase(t *testing.T) {
 	repo := newGitRepository(t)
 	writeFile(t, filepath.Join(repo, "old-base.txt"), "old base\n")
