@@ -82,6 +82,7 @@ type runOptions struct {
 	githubMinSeverity    string
 	githubAPIURL         string
 	githubRESTURL        string
+	githubRunFailures    []string
 
 	// Filled by peel/resolve.
 	prURL           *githubapi.PRRef
@@ -261,7 +262,11 @@ review base/head and optional posting context. Posting still requires
 				}
 				runErr = runAdversaries(cmd.Context(), app, opts, args, apiURL, profile, resultOut, progressOut)
 			}
-			// Still project/post when only findings error.
+			// Retain usable findings after execution failures, but make incomplete
+			// coverage explicit even when the optional assessment is disabled.
+			if len(opts.githubRunFailures) == 0 {
+				opts.recordGitHubRunFailure("review run", "", runErr, "")
+			}
 			postErr := maybeGitHubReview(cmd.Context(), opts, opts.envelopes, progressOut)
 			if postErr != nil {
 				// Policy A: post failure wins over findings (exit 4).
@@ -432,6 +437,11 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	usageStarted := time.Now()
 	runStarted := make(map[string]time.Time)
 	var usageResults []adversarylabs.RunUsageAdversaryResult
+	var childDiagnostics bytes.Buffer
+	autoStderr := progressOut
+	if opts.githubReview {
+		autoStderr = io.MultiWriter(progressOut, &childDiagnostics)
+	}
 	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
 		ModelProvider: opts.modelProvider, Model: opts.model,
@@ -441,16 +451,18 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 		AllowUnsafeHostExecution: opts.allowUnsafeHostExecution, IncludeSuppressed: opts.includeSuppressed,
 		RunTimeout: opts.runTimeout, DetectionTimeout: opts.detectionTimeout,
 		RepoIndexMode: opts.repoIndex,
-		Stdout:        resultOut, Stderr: progressOut,
+		Stdout:        resultOut, Stderr: autoStderr,
 		ReportSelections: func(result application.AdversaryAutoResult) error {
 			return renderRunSelections(selectionOut, result, opts.explain)
 		},
 		ReportRunStart: func(name string, index, total int) error {
+			childDiagnostics.Reset()
 			runStarted[name] = time.Now()
 			_, err := fmt.Fprintf(progressOut, "[%d/%d] %s\n", index, total, name)
 			return err
 		},
 		ReportRunFinish: func(name string, index, total int, runErr error) error {
+			opts.recordGitHubRunFailure(name, "", runErr, childDiagnostics.String())
 			// Record after the runner returns so we never count selections that
 			// never entered Run (e.g. ReportRunStart failure).
 			if strings.TrimSpace(name) != "" {
@@ -665,11 +677,15 @@ func runAdversaries(
 		runStderr := progressOut
 		if showProgress {
 			runStderr = &childErr
+		} else if opts.githubReview {
+			// Preserve live diagnostics while retaining the failure cause for the PR.
+			runStderr = io.MultiWriter(progressOut, &childErr)
 		}
 
 		envelopeStart := len(opts.envelopes)
 		runStarted := time.Now()
 		err := runOneAdversary(ctx, app, opts, ref, valueOf(apiURL), valueOf(profile), runStdout, runStderr)
+		opts.recordGitHubRunFailure(ref, "", err, childErr.String())
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
@@ -725,6 +741,7 @@ func runAdversaries(
 		}
 		if multi && jsonMode {
 			if nonJSONStdout {
+				opts.recordGitHubRunFailure(ref, "", fmt.Errorf("adversary wrote non-JSON stdout"), "")
 				// Non-JSON stdout is a hard failure even when the runtime returned
 				// nil or FindingsError (Greptile: item.error alone left exit success).
 				item.Error = joinMultiRunError(item.Error, "adversary wrote non-JSON stdout")
