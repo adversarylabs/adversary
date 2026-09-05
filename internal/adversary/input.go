@@ -63,6 +63,12 @@ func NewInputFromReviewContext(context detection.Context, allFiles bool) Input {
 	baseRef, headRef := context.BaseRef, context.HeadRef
 	if context.Mode == detection.ModeDirtyWorktree {
 		baseRef, headRef = WorktreeInputBaseRef, WorktreeInputHeadRef
+	} else if context.MergeBase != "" {
+		// The resolved context retains the caller's base ref for diagnostics,
+		// but detached CI checkouts commonly have only origin/<branch>. Give
+		// adversaries the authoritative merge-base commit that the runner
+		// already used to calculate the change so they can load prior content.
+		baseRef = context.MergeBase
 	}
 	changedFiles := make([]string, 0, len(context.ChangedFiles))
 	for _, changed := range context.ChangedFiles {

@@ -42,6 +42,24 @@ func TestNewInputFromDirtyReviewContextPreservesChangedFiles(t *testing.T) {
 	}
 }
 
+func TestNewInputFromReviewContextUsesResolvedMergeBase(t *testing.T) {
+	input := NewInputFromReviewContext(detection.Context{
+		Mode:      detection.ModePullRequest,
+		BaseRef:   "main",
+		HeadRef:   "deadbeef",
+		MergeBase: "cafebabe",
+		ChangedFiles: []detection.ChangedFile{
+			{Path: "src/app.ts", Status: detection.StatusModified},
+		},
+	}, false)
+	if input.Change == nil {
+		t.Fatal("Change is nil")
+	}
+	if input.Change.BaseRef != "cafebabe" || input.Change.HeadRef != "deadbeef" {
+		t.Fatalf("resolved refs = %q...%q", input.Change.BaseRef, input.Change.HeadRef)
+	}
+}
+
 func TestMarshalInputDiff(t *testing.T) {
 	data, err := MarshalInput(NewInput("main", "HEAD", []string{".github/workflows/test.yml"}, false))
 	if err != nil {
