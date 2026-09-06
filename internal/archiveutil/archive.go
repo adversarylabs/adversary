@@ -38,7 +38,7 @@ func Seal(root *os.Root) error {
 			dirs = append(dirs, path)
 			return nil
 		}
-		return root.Chmod(path, info.Mode().Perm()&0111|0444)
+		return root.Chmod(path, sealedFileMode(info.Mode()))
 	})
 	if err != nil {
 		return err
@@ -214,8 +214,14 @@ func ExtractGzipTar(src io.Reader, root *os.Root, limits Limits) error {
 			if err := root.MkdirAll(filepath.ToSlash(filepath.Dir(rel)), 0755); err != nil {
 				return err
 			}
-			f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, os.FileMode(h.Mode)&0111|0444)
+			f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, sealedFileMode(os.FileMode(h.Mode)))
 			if err != nil {
+				return err
+			}
+			// OpenFile permissions are filtered by the process umask. Restore the
+			// canonical read-only artifact mode on this newly created file.
+			if err := f.Chmod(sealedFileMode(os.FileMode(h.Mode))); err != nil {
+				f.Close()
 				return err
 			}
 			n, copyErr := io.CopyBuffer(f, io.LimitReader(tr, h.Size), make([]byte, 32<<10))
@@ -240,4 +246,13 @@ func ExtractGzipTar(src io.Reader, root *os.Root, limits Limits) error {
 		return err
 	}
 	return nil
+}
+
+// sealedFileMode matches the immutable publication validator: files are
+// readable by all and either executable by all or executable by none.
+func sealedFileMode(mode os.FileMode) os.FileMode {
+	if mode.Perm()&0111 != 0 {
+		return 0555
+	}
+	return 0444
 }

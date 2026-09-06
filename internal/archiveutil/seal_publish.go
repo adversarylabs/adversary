@@ -20,7 +20,7 @@ func PreparePublish(root *os.Root) error {
 		if e.IsDir() {
 			return root.Chmod(path, 0555)
 		}
-		return root.Chmod(path, info.Mode().Perm()&0111|0444)
+		return root.Chmod(path, sealedFileMode(info.Mode()))
 	})
 }
 func ValidatePrepared(root *os.Root) error {
