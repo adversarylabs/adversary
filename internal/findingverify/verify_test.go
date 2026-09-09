@@ -22,8 +22,11 @@ func (f fakeProvider) Review(ctx context.Context, r modelreview.Request) (modelr
 }
 
 type modelInput struct {
-	Candidate Candidate `json:"candidate"`
-	Previous  *Decision `json:"previous"`
+	Candidate       Candidate       `json:"candidate"`
+	Previous        *Decision       `json:"previous"`
+	SourceRanges    []sourceRange   `json:"sourceRanges"`
+	InvalidOutput   json.RawMessage `json:"invalidOutput"`
+	ValidationError string          `json:"validationError"`
 }
 
 func inputOf(t *testing.T, r modelreview.Request) modelInput {
@@ -207,6 +210,101 @@ func TestMalformedProviderJSONAndLowConfidence(t *testing.T) {
 		t.Fatal(r)
 	}
 }
+func TestStructuralCorrectionPreservesRetrievalBudgetAndReplay(t *testing.T) {
+	snapshot := fixture("one", "peer")
+	extra := source("callee.go", "func apply(ids []ID) {}\n")
+	var reads atomic.Int32
+	reader := func(ctx context.Context, r ReadRequest) Source {
+		if !validRequest(r) {
+			t.Fatal("invalid request reached reader")
+		}
+		reads.Add(1)
+		return extra
+	}
+	p := fakeProvider{review: func(ctx context.Context, r modelreview.Request) (modelreview.Result, error) {
+		in := inputOf(t, r)
+		d := decision(in.Candidate, "keep")
+		if in.Candidate.ID == "peer" {
+			return resultOf(d), nil
+		}
+		if len(in.SourceRanges) == 0 || in.SourceRanges[0].EndLine != 1 {
+			t.Fatal("missing exact citation ranges")
+		}
+		if in.Previous == nil {
+			d.Status = "unresolved"
+			d.Evidence = []Citation{}
+			d.Requests = []ReadRequest{{Path: "callee.go", Side: "head", StartLine: 1, EndLine: 201}}
+			if in.ValidationError != "" {
+				if !json.Valid(in.InvalidOutput) {
+					t.Fatal("original invalid output missing")
+				}
+				d.Requests[0].EndLine = 200
+			}
+		} else {
+			d.Evidence = []Citation{{SourceID: extra.ID, Line: 2}}
+			if in.ValidationError != "" {
+				d.Evidence[0].Line = 1
+			}
+		}
+		return resultOf(d), nil
+	}}
+	r, err := Run(context.Background(), snapshot, p, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads.Load() != 1 || len(r.Calls) != 5 || r.Decisions[0].Status != "keep" || r.Decisions[1].Status != "keep" {
+		t.Fatalf("%+v", r)
+	}
+	for i, want := range []struct{ round, attempt int }{{1, 1}, {1, 2}, {2, 1}, {2, 2}, {1, 1}} {
+		if r.Calls[i].Round != want.round || r.Calls[i].Attempt != want.attempt {
+			t.Fatal(r.Calls)
+		}
+	}
+	if r.Calls[0].Error == "" || r.Calls[2].Error == "" {
+		t.Fatal("invalid decisions were erased")
+	}
+	replayed, err := Run(context.Background(), r.Snapshot, p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range r.Calls {
+		if r.Calls[i].InputDigest != replayed.Calls[i].InputDigest {
+			t.Fatal("replay inputs differ")
+		}
+	}
+}
+
+func TestStructuralCorrectionsBoundedAndNeverReadInvalidPaths(t *testing.T) {
+	var requests atomic.Int32
+	p := fakeProvider{review: func(ctx context.Context, r modelreview.Request) (modelreview.Result, error) {
+		requests.Add(1)
+		d := decision(inputOf(t, r).Candidate, "unresolved")
+		d.Requests = []ReadRequest{{Path: "../secret", Side: "head", StartLine: 1, EndLine: 2}}
+		return resultOf(d), nil
+	}}
+	r, err := Run(context.Background(), fixture("one"), p, func(context.Context, ReadRequest) Source { t.Fatal("unsafe read"); return Source{} })
+	if err != nil || requests.Load() != 3 || len(r.Calls) != 3 || r.Decisions[0].Status != "unresolved" {
+		t.Fatal(r, err)
+	}
+	for _, call := range r.Calls {
+		if call.Error == "" || len(call.Output) == 0 {
+			t.Fatal("missing failure evidence")
+		}
+	}
+}
+
+func TestValidUnresolvedDecisionIsNotQualityRerolled(t *testing.T) {
+	var calls atomic.Int32
+	p := fakeProvider{review: func(ctx context.Context, r modelreview.Request) (modelreview.Result, error) {
+		calls.Add(1)
+		return resultOf(decision(inputOf(t, r).Candidate, "unresolved")), nil
+	}}
+	r, err := Run(context.Background(), fixture("one"), p, nil)
+	if err != nil || calls.Load() != 1 || r.Decisions[0].Status != "unresolved" {
+		t.Fatal(r, err)
+	}
+}
+
 func TestMissingProviderCancellationAndSnapshotIntegrity(t *testing.T) {
 	r, err := Run(context.Background(), fixture("one"), nil, nil)
 	if err != nil || r.Decisions[0].Status != "unresolved" {
