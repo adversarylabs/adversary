@@ -664,7 +664,15 @@ func sameFindingAssertion(a, b review.Finding) bool {
 	return left != "" && left == right &&
 		normalize(a.WhyItMatters) == normalize(b.WhyItMatters) &&
 		normalize(a.Impact) == normalize(b.Impact) &&
-		normalize(a.Recommendation) == normalize(b.Recommendation)
+		normalize(a.Recommendation) == normalize(b.Recommendation) &&
+		sameFindingRemediation(a.Remediation, b.Remediation)
+}
+
+func sameFindingRemediation(a, b *review.Remediation) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func samePrimaryFile(a, b review.Finding) bool {

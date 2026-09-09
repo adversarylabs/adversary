@@ -152,3 +152,30 @@ func TestDeduplicationRequiresSameAssertion(t *testing.T) {
 		})
 	}
 }
+
+func TestDeduplicationPreservesStructuredRemediation(t *testing.T) {
+	line := 12
+	for _, tc := range []struct {
+		name string
+		a, b *review.Remediation
+		want int
+	}{
+		{"both absent", nil, nil, 0},
+		{"absent versus empty", nil, &review.Remediation{}, -1},
+		{"empty versus absent", &review.Remediation{}, nil, -1},
+		{"equal separate values", &review.Remediation{Estimate: "one hour", Complexity: "small"}, &review.Remediation{Estimate: "one hour", Complexity: "small"}, 0},
+		{"different estimate", &review.Remediation{Estimate: "one hour"}, &review.Remediation{Estimate: "two hours"}, -1},
+		{"different complexity", &review.Remediation{Complexity: "small"}, &review.Remediation{Complexity: "large"}, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range []string{"", "shared"} {
+				a := review.Finding{Title: "A concrete defect", Summary: "The same assertion", GroupKey: key, Evidence: []review.Evidence{{File: "main.go", Line: &line}}, Remediation: tc.a}
+				b := a
+				b.Remediation = tc.b
+				if got := duplicateFindingIndex([]review.Finding{a}, b); got != tc.want {
+					t.Fatalf("key %q: got %d want %d", key, got, tc.want)
+				}
+			}
+		})
+	}
+}
