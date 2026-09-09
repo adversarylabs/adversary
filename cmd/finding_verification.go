@@ -86,9 +86,8 @@ func verifyComposedResults(ctx context.Context, opts *runOptions, runs []compose
 	if ctx.Err() != nil {
 		return filtered, &report, ctx.Err()
 	}
-	if unresolved > 0 {
-		return filtered, &report, fmt.Errorf("finding verification incomplete: %d unresolved candidates", unresolved)
-	}
+	// Uncertainty is a per-finding outcome, not a failed review. Only verified
+	// findings reach the merger; withheld candidates remain in the report.
 	return filtered, &report, nil
 }
 func verificationCounts(r findingverify.Report) (keep, reject, unresolved int) {
@@ -133,11 +132,13 @@ func applyVerificationSummary(env *review.RunEnvelope, r findingverify.Report, i
 	}
 	env.Result.Assessment = &review.Assessment{Risk: risk, Summary: summary}
 	env.Result.Opinion = &review.Opinion{Summary: summary}
-	if !incomplete {
+	if !incomplete && unresolved == 0 {
 		ship := len(env.Result.Findings) == 0
 		env.Result.Opinion.Ship = &ship
-	} else {
+	} else if incomplete {
 		env.Result.Opinion.Summary = "Review incomplete. " + summary
+	} else {
+		env.Result.Opinion.Summary = "Unresolved findings withheld; no clean-review opinion. " + summary
 	}
 }
 func newVerifyFindingsCommand(app *application.App) *cobra.Command {
@@ -169,11 +170,9 @@ func newVerifyFindingsCommand(app *application.App) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		_, _, pending := verificationCounts(report)
-		if pending > 0 {
-			return fmt.Errorf("verification incomplete: %d unresolved candidates", pending)
-		}
-		return nil
+		// A completed replay may contain unresolved decisions. Its report is the
+		// outcome; uncertainty must not turn it into an execution failure.
+		return cmd.Context().Err()
 	}}
 	command.Flags().StringVar(&providerName, "model-provider", "", "verification model provider")
 	command.Flags().StringVar(&model, "model", "", "verification model")

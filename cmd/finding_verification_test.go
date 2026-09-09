@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,11 +12,82 @@ import (
 	"strings"
 	"testing"
 
+	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
+	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/findingverify"
 	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
+
+type verificationFixtureRuntime struct {
+	processRuntime
+	collector *findingverify.Collector
+}
+
+type verificationExecutionRuntime struct{ *multiRecordingRuntime }
+
+func (r verificationExecutionRuntime) Run(ctx context.Context, opts application.AdversaryRunOptions) error {
+	var envelope review.RunEnvelope
+	if err := json.Unmarshal([]byte(r.stdoutBodies[opts.AdversaryRef]), &envelope); err != nil {
+		return err
+	}
+	if opts.OnEnvelope != nil {
+		opts.OnEnvelope(envelope)
+	}
+	return r.multiRecordingRuntime.Run(ctx, opts)
+}
+
+func (r verificationFixtureRuntime) prepareFindingVerification(context.Context, *detection.Context) (*findingverify.Collector, error) {
+	return r.collector, nil
+}
+
+func TestComposedUnresolvedReviewReturnsUsableProtocolAndNormalExitCode(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ids         []string
+		count, exit int
+	}{
+		{"mixed", []string{"valid", "uncertain"}, 1, 1},
+		{"only-unresolved", []string{"uncertain"}, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, progress bytes.Buffer
+			base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &progress)
+			deps := base.Dependencies()
+			spy := &multiRecordingRuntime{inner: deps.Runtime, stdoutBodies: map[string]string{}, errs: map[string]error{}}
+			for _, run := range verificationRuns(tc.ids...) {
+				raw, err := json.Marshal(run.envelope)
+				if err != nil {
+					t.Fatal(err)
+				}
+				spy.stdoutBodies[run.ref] = string(raw)
+				spy.errs[run.ref] = &internaladversary.FindingsError{Count: 1}
+			}
+			deps.Runtime = verificationExecutionRuntime{spy}
+			app, err := application.New(deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := &runOptions{noTelemetry: true, composeConcurrency: 1, format: "json", verifyFindings: true, verificationProvider: verificationProvider{}, verificationRuntime: verificationFixtureRuntime{collector: verificationCollector(t)}}
+			err = runComposedAdversaries(context.Background(), app, opts, tc.ids[0], tc.ids, "", "", &out, &progress)
+			if ExitCode(err) != tc.exit {
+				t.Fatalf("exit %d, want %d: %v\n%s", ExitCode(err), tc.exit, err, progress.String())
+			}
+			env, err := review.DecodeRunEnvelope(out.Bytes())
+			if err != nil {
+				t.Fatalf("invalid output: %v\n%s", err, out.String())
+			}
+			if len(env.Result.Findings) != tc.count || env.Result.Opinion.Ship != nil {
+				t.Fatalf("lost findings or claimed clean: %+v", env.Result)
+			}
+			if !strings.Contains(out.String(), `"unresolved"`) {
+				t.Fatal("lost unresolved diagnostics")
+			}
+		})
+	}
+}
 
 type verificationProvider struct{}
 
@@ -35,6 +107,9 @@ func (verificationProvider) Review(ctx context.Context, r modelreview.Request) (
 	status := "keep"
 	if c.Finding.ID == "false" {
 		status = "reject"
+	}
+	if c.Finding.ID == "uncertain" {
+		status = "unresolved"
 	}
 	evidence := []findingverify.Citation{}
 	for _, s := range c.Sources {
@@ -118,16 +193,16 @@ func TestSharedVerificationPrecedesDeduplication(t *testing.T) {
 		t.Fatal(env.Result.Opinion)
 	}
 }
-func TestIncompleteVerificationPreservesVerifiedPeersWithoutCleanOpinion(t *testing.T) {
-	filtered, report, err := verifyComposedResults(context.Background(), &runOptions{verificationProvider: verificationProvider{}}, verificationRuns("valid", "broken"), verificationCollector(t), nil, io.Discard)
-	if err == nil {
-		t.Fatal("incomplete verification succeeded")
+func TestUnresolvedVerificationPreservesVerifiedPeersWithoutExecutionError(t *testing.T) {
+	filtered, report, err := verifyComposedResults(context.Background(), &runOptions{verificationProvider: verificationProvider{}}, verificationRuns("valid", "false", "uncertain", "broken"), verificationCollector(t), nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
 	}
 	env, aggregateErr := aggregateComposedReview("root", filtered)
 	if aggregateErr != nil {
 		t.Fatal(aggregateErr)
 	}
-	applyVerificationSummary(&env, *report, true)
+	applyVerificationSummary(&env, *report, false)
 	if len(env.Result.Findings) != 1 || env.Result.Findings[0].ID != "valid" || env.Result.Opinion.Ship != nil {
 		t.Fatal(env.Result)
 	}
@@ -138,8 +213,41 @@ func TestIncompleteVerificationPreservesVerifiedPeersWithoutCleanOpinion(t *test
 }
 func TestUnavailableContextDoesNotPublishUnverifiedFindings(t *testing.T) {
 	filtered, report, err := verifyComposedResults(context.Background(), &runOptions{verificationProvider: verificationProvider{}}, verificationRuns("valid"), nil, errors.New("no context"), io.Discard)
-	if err == nil || len(filtered[0].envelope.Result.Findings) != 0 || report.Decisions[0].Status != "unresolved" {
+	if err != nil || len(filtered[0].envelope.Result.Findings) != 0 || report.Decisions[0].Status != "unresolved" {
 		t.Fatal(filtered, report, err)
+	}
+}
+
+func TestAllUnresolvedIsEmptyReviewNotCleanOpinionOrExecutionFailure(t *testing.T) {
+	for _, id := range []string{"uncertain", "broken"} {
+		t.Run(id, func(t *testing.T) {
+			filtered, report, err := verifyComposedResults(context.Background(), &runOptions{verificationProvider: verificationProvider{}}, verificationRuns(id), verificationCollector(t), nil, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			env, err := aggregateComposedReview("root", filtered)
+			if err != nil {
+				t.Fatal(err)
+			}
+			applyVerificationSummary(&env, *report, false)
+			if len(env.Result.Findings) != 0 || env.Result.Opinion.Ship != nil || !strings.Contains(env.Result.Opinion.Summary, "Unresolved findings withheld") {
+				t.Fatal(env.Result)
+			}
+			if len(report.Decisions) != 1 || report.Decisions[0].Status != "unresolved" {
+				t.Fatal(report)
+			}
+		})
+	}
+}
+
+func TestVerificationCancellationAndArtifactFailureRemainErrors(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := verifyComposedResults(cancelled, &runOptions{verificationProvider: verificationProvider{}}, verificationRuns("uncertain"), nil, errors.New("no context"), io.Discard); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation lost: %v", err)
+	}
+	if _, _, err := verifyComposedResults(context.Background(), &runOptions{verificationProvider: verificationProvider{}, verificationRuntime: processRuntime{}, verificationOutput: filepath.Join(t.TempDir(), "missing", "report.json")}, verificationRuns("uncertain"), verificationCollector(t), nil, io.Discard); err == nil {
+		t.Fatal("artifact write failure hidden")
 	}
 }
 func TestVerificationArtifactDoesNotFollowDestinationSymlink(t *testing.T) {
