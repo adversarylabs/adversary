@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/githubreview"
+	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/internal/telemetry"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/detection"
@@ -25,6 +27,10 @@ import (
 )
 
 type runOptions struct {
+	verificationRuntime      findingVerificationRuntime
+	verifyFindings           bool
+	verificationOutput       string
+	verificationProvider     modelreview.Provider
 	composeSelections        []application.ComposeSelection
 	composePlan              bool
 	path                     string
@@ -100,6 +106,7 @@ type runOptions struct {
 
 func newRunCommand(app *application.App, apiURL, profile *string) *cobra.Command {
 	opts := &runOptions{}
+	opts.verificationRuntime, _ = app.Dependencies().Runtime.(findingVerificationRuntime)
 
 	cmd := &cobra.Command{
 		Use:   "run [adversary-ref...] | run <github-pr-url> [adversary-ref...]",
@@ -140,6 +147,18 @@ review base/head and optional posting context. Posting still requires
 			format, err := commandFormat(cmd, opts.format, opts.json)
 			if err != nil {
 				return err
+			}
+			if opts.verificationOutput != "" {
+				if !opts.verifyFindings || opts.noCompose || opts.shell || wantsAutomaticSelection(cmd, opts) {
+					return fmt.Errorf("--verification-output requires verified composition")
+				}
+				if opts.outputFile != "" {
+					verificationPath, _ := filepath.Abs(opts.verificationOutput)
+					resultPath, _ := filepath.Abs(opts.outputFile)
+					if verificationPath == resultPath {
+						return fmt.Errorf("verification and review outputs require separate files")
+					}
+				}
 			}
 			if opts.debug && cmd.Flags().Changed("verbose") {
 				return fmt.Errorf("--debug and --verbose cannot be combined")
@@ -328,6 +347,8 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().StringArrayVar(&opts.tagValues, "tag", nil, "attach a telemetry tag as key=value (repeatable; use benchmark=true for benchmark runs)")
 	cmd.Flags().StringVar(&opts.telemetryFile, "telemetry-file", "", "append OpenTelemetry JSON traces to this file")
 	cmd.Flags().BoolVar(&opts.noTelemetry, "no-telemetry", false, "disable all run telemetry for this command")
+	cmd.Flags().BoolVar(&opts.verifyFindings, "verify-findings", true, "verify composed findings against source before deduplication")
+	cmd.Flags().StringVar(&opts.verificationOutput, "verification-output", "", "save private verification inputs and decisions for replay")
 	cmd.Flags().BoolVar(&opts.noCompose, "no-compose", false, "do not expand adversary.yaml uses composition; run only the named refs")
 	_ = cmd.Flags().MarkHidden("no-compose")
 	_ = cmd.Flags().MarkHidden("compose-exhaustive")
@@ -670,6 +691,10 @@ func runAdversaries(
 	}
 	if !noCompose && len(entryRefs) == 1 && (len(refs) > 1 || len(opts.composeSelections) > 1) {
 		return runComposedAdversaries(ctx, app, opts, entryRefs[0], refs, valueOf(apiURL), valueOf(profile), resultOut, progressOut)
+	}
+
+	if opts.verificationOutput != "" {
+		return fmt.Errorf("--verification-output requires a composition with multiple reviewers")
 	}
 
 	multi := len(refs) > 1

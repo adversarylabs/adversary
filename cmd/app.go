@@ -23,6 +23,7 @@ import (
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/dependencies"
+	"github.com/adversarylabs/adversary/internal/findingverify"
 	"github.com/adversarylabs/adversary/internal/initproject"
 	"github.com/adversarylabs/adversary/internal/modelreview"
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
@@ -831,4 +832,17 @@ func openBrowser(ctx context.Context, url string, environment internaladversary.
 		return fmt.Errorf("open browser: %w", err)
 	}
 	return nil
+}
+
+func (p processRuntime) prepareFindingVerification(ctx context.Context, change *detection.Context) (*findingverify.Collector, error) {
+	return findingverify.NewCollector(ctx, change)
+}
+func (p processRuntime) findingVerificationProvider(config modelreview.Config) (modelreview.Provider, error) {
+	return modelreview.ProviderFromConfig(config, p.environment.Lookup, modelreview.HTTPClientFromEnvironment(p.environment.Lookup))
+}
+func (p processRuntime) readFindingVerification(name string) (findingverify.Report, error) {
+	return findingverify.ReadReport(name)
+}
+func (p processRuntime) writeFindingVerification(name string, report findingverify.Report) error {
+	return findingverify.WriteReport(name, report)
 }
