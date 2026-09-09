@@ -644,14 +644,35 @@ func mergeFinding(dst *review.Finding, src review.Finding, source findingSource)
 
 func duplicateFindingIndex(existing []review.Finding, candidate review.Finding) int {
 	for i := range existing {
-		if candidate.GroupKey != "" && existing[i].GroupKey == candidate.GroupKey && samePrimaryFile(existing[i], candidate) {
+		if candidate.GroupKey != "" && existing[i].GroupKey == candidate.GroupKey && samePrimaryFile(existing[i], candidate) && sameFindingAssertion(existing[i], candidate) {
 			return i
 		}
-		if sameFindingLocation(existing[i], candidate) && titleSimilarity(existing[i].Title, candidate.Title) >= 0.6 {
+		if sameFindingLocation(existing[i], candidate) && titleSimilarity(existing[i].Title, candidate.Title) >= 0.6 && sameFindingAssertion(existing[i], candidate) {
 			return i
 		}
 	}
 	return -1
+}
+
+// Nearby anchors, similar titles and package-local group keys identify possible
+// duplicates, not equivalent defects. Without a semantic proof, retain both
+// unless the actual assertion and remediation agree. Do not normalize operators
+// or identifier case: those can change the meaning of a code-review claim.
+func sameFindingAssertion(a, b review.Finding) bool {
+	normalize := func(value string) string { return strings.Join(strings.Fields(value), " ") }
+	left, right := normalize(a.Summary), normalize(b.Summary)
+	return left != "" && left == right &&
+		normalize(a.WhyItMatters) == normalize(b.WhyItMatters) &&
+		normalize(a.Impact) == normalize(b.Impact) &&
+		normalize(a.Recommendation) == normalize(b.Recommendation) &&
+		sameFindingRemediation(a.Remediation, b.Remediation)
+}
+
+func sameFindingRemediation(a, b *review.Remediation) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func samePrimaryFile(a, b review.Finding) bool {

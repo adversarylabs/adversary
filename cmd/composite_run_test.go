@@ -54,7 +54,7 @@ func TestAggregateComposedReviewDeduplicatesAndRetainsSources(t *testing.T) {
 	specialist := review.RunEnvelope{ProtocolVersion: 1, Result: review.ReviewResult{
 		Adversary: review.ReviewAdversary{Name: "go/concurrency"}, Target: root.Result.Target,
 		Positives: []review.Note{}, Observations: []review.Note{}, Suppressed: review.Suppressed{},
-		Findings: []review.Finding{{ID: "map-race", Title: "Unsynchronized shared map access", Category: "correctness", Severity: "critical", Confidence: "high", Summary: "race", Evidence: []review.Evidence{{File: "main.go", Line: &line}}}},
+		Findings: []review.Finding{{ID: "map-race", Title: "Unsynchronized shared map access", Category: "correctness", Severity: "critical", Confidence: "high", Summary: "map is shared", Evidence: []review.Evidence{{File: "main.go", Line: &line}}}},
 	}}
 
 	got, err := aggregateComposedReview("review/code", []composedRunResult{{ref: "review/code", envelope: &root}, {ref: "go/concurrency", envelope: &specialist}})
@@ -120,5 +120,62 @@ func TestAggregateComposedReviewKeepsEmptyFindingsProtocolValid(t *testing.T) {
 	}
 	if _, err := review.DecodeRunEnvelope(encoded); err != nil {
 		t.Fatalf("clean aggregate is not a valid review envelope: %v", err)
+	}
+}
+
+func TestDeduplicationRequiresSameAssertion(t *testing.T) {
+	line := 12
+	base := review.Finding{Title: "Authorization permits unauthorized resource access", Summary: "A mixed batch bypasses authorization.", Recommendation: "Authorize every resource.", Evidence: []review.Evidence{{File: "access.go", Line: &line}}}
+	for _, tc := range []struct {
+		name   string
+		change func(*review.Finding)
+		want   int
+	}{
+		{"identical assertion", func(f *review.Finding) {}, 0},
+		{"formatting only", func(f *review.Finding) { f.Summary = "A mixed batch  bypasses authorization.\n" }, 0},
+		{"different root same title", func(f *review.Finding) { f.Summary = "A stale permission cache permits revoked access." }, -1},
+		{"different remediation", func(f *review.Finding) { f.Recommendation = "Invalidate revoked permissions." }, -1},
+		{"different impact", func(f *review.Finding) { f.Impact = "Unauthorized writes persist." }, -1},
+		{"different consequence", func(f *review.Finding) { f.WhyItMatters = "Writes cross the tenant boundary." }, -1},
+		{"missing assertion", func(f *review.Finding) { f.Summary = "" }, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := base
+			tc.change(&candidate)
+			for _, group := range []string{"", "authorization"} {
+				original := base
+				original.GroupKey, candidate.GroupKey = group, group
+				if got := duplicateFindingIndex([]review.Finding{original}, candidate); got != tc.want {
+					t.Fatalf("group %q: got %d want %d", group, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestDeduplicationPreservesStructuredRemediation(t *testing.T) {
+	line := 12
+	for _, tc := range []struct {
+		name string
+		a, b *review.Remediation
+		want int
+	}{
+		{"both absent", nil, nil, 0},
+		{"absent versus empty", nil, &review.Remediation{}, -1},
+		{"empty versus absent", &review.Remediation{}, nil, -1},
+		{"equal separate values", &review.Remediation{Estimate: "one hour", Complexity: "small"}, &review.Remediation{Estimate: "one hour", Complexity: "small"}, 0},
+		{"different estimate", &review.Remediation{Estimate: "one hour"}, &review.Remediation{Estimate: "two hours"}, -1},
+		{"different complexity", &review.Remediation{Complexity: "small"}, &review.Remediation{Complexity: "large"}, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range []string{"", "shared"} {
+				a := review.Finding{Title: "A concrete defect", Summary: "The same assertion", GroupKey: key, Evidence: []review.Evidence{{File: "main.go", Line: &line}}, Remediation: tc.a}
+				b := a
+				b.Remediation = tc.b
+				if got := duplicateFindingIndex([]review.Finding{a}, b); got != tc.want {
+					t.Fatalf("key %q: got %d want %d", key, got, tc.want)
+				}
+			}
+		})
 	}
 }
