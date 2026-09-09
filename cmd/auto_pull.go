@@ -11,6 +11,7 @@ import (
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/progress"
 	"golang.org/x/term"
 )
 
@@ -96,7 +97,8 @@ func ensureAccessibleAdversaries(
 	n := len(order)
 	fmt.Fprintf(stderr, "Ensuring %d accessible adversaries\n", n)
 
-	useCR := ensureWriterIsTTY(stderr)
+	detail := progress.Detail(stderr)
+	useCR := !progress.InCI() && ensureWriterIsTTY(stderr)
 	ready, installed, failed := 0, 0, 0
 	for i, key := range order {
 		item := best[key]
@@ -104,7 +106,7 @@ func ensureAccessibleAdversaries(
 			return err
 		}
 		label := displayAdversaryName(item.name, item.ref)
-		writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "checking…", false)
+		writeEnsureStatus(detail, useCR, i+1, n, label, item.version, "checking…", false)
 
 		result, pullErr := pullAdversary(ctx, item.ref, apiURL, profile, app, io.Discard)
 		if pullErr != nil {
@@ -120,12 +122,12 @@ func ensureAccessibleAdversaries(
 		}
 		if result.AlreadyPresent {
 			ready++
-			writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "up to date", true)
+			writeEnsureStatus(detail, useCR, i+1, n, label, item.version, "up to date", true)
 			continue
 		}
 		installed++
 		ready++
-		writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "installed", true)
+		writeEnsureStatus(detail, useCR, i+1, n, label, item.version, "installed", true)
 	}
 
 	fmt.Fprintf(stderr, "%d ready", ready)

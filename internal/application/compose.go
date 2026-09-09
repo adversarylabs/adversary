@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	cliprogress "github.com/adversarylabs/adversary/internal/progress"
 	"github.com/adversarylabs/adversary/pkg/compose"
 	"github.com/adversarylabs/adversary/pkg/manifest"
 )
@@ -32,11 +33,14 @@ func ExpandCompose(
 	if noCompose || len(refs) == 0 {
 		return refs, nil, nil
 	}
+	if cliprogress.InCI() && progress != nil {
+		fmt.Fprintln(progress, "Compose: preparing adversaries…")
+	}
 	loader := &composeLoader{
 		ctx:      ctx,
 		resolver: resolver,
 		pull:     pull,
-		stderr:   progress,
+		stderr:   cliprogress.Detail(progress),
 		pulled:   map[string]bool{},
 	}
 	result, err := compose.Expand(refs, loader, compose.Options{})
@@ -46,7 +50,7 @@ func ExpandCompose(
 	if result.Expanded && progress != nil {
 		fmt.Fprintf(progress, "Compose: expanded %d → %d adversaries\n", len(refs), len(result.Refs))
 		for _, r := range result.Refs {
-			fmt.Fprintf(progress, "  · %s\n", r)
+			fmt.Fprintf(cliprogress.Detail(progress), "  · %s\n", r)
 		}
 	}
 	return result.Refs, result.VoiceRoots, nil

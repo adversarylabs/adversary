@@ -8,6 +8,7 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	cliprogress "github.com/adversarylabs/adversary/internal/progress"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/manifest"
 	"github.com/adversarylabs/adversary/pkg/oci"
@@ -58,6 +59,9 @@ type metadataRegistry interface {
 }
 
 func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptions, refs []string, apiURL, profile string, resultOut, progress io.Writer) (application.ComposePlan, error) {
+	if !opts.composePlan && cliprogress.InCI() {
+		fmt.Fprintln(progress, "Compose: selecting and preparing adversaries…")
+	}
 	var scope *detection.Context
 	if provider, ok := app.Dependencies().Runtime.(composeContextProvider); ok {
 		var err error
@@ -131,7 +135,7 @@ func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptio
 			// Old publications may have no separate manifest. Preserve their graph
 			// through the existing pull path; previews remain download-free.
 			if result.Error != nil && !opts.composePlan {
-				fmt.Fprintf(progress, "Compose: metadata unavailable for %s; loading legacy package\n", terminalSafeText(raw))
+				fmt.Fprintf(cliprogress.Detail(progress), "Compose: metadata unavailable for %s; loading legacy package\n", terminalSafeText(raw))
 				if _, err := pullAdversary(ctx, canonicalCatalogReference(raw), apiURL, profile, app, progress); err == nil {
 					result = application.LocalComposeMetadata(ctx, app.Dependencies().Resolver, canonicalCatalogReference(raw))
 				}
@@ -152,7 +156,7 @@ func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptio
 			if selection.Selected {
 				state = "Selected"
 			}
-			fmt.Fprintf(progress, "%-8s %s — %s\n", state, terminalSafeText(selection.Reference), selection.Reason)
+			fmt.Fprintf(cliprogress.Detail(progress), "%-8s %s — %s\n", state, terminalSafeText(selection.Reference), selection.Reason)
 		}
 	}
 	if opts.composePlan {
@@ -168,6 +172,9 @@ func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptio
 			}
 		}
 		return plan, err
+	}
+	if cliprogress.InCI() {
+		fmt.Fprintf(progress, "Compose: selected %d of %d adversaries; preparing packages…\n", len(plan.Refs), len(plan.Selections))
 	}
 	// All selection decisions are visible before the first selected payload pull.
 	for _, selection := range plan.Selections {

@@ -138,3 +138,13 @@ The suppression presentation and `validate` schema branch are additive
 contract closures. Reverting their closure commit restores the previous human
 rendering and published-schema coverage without changing protocol decoding,
 visible-finding exit behavior, or manifest validation itself.
+
+### CI progress
+
+When `CI` is nonempty (except `false`, case-insensitively, or `0`), package
+preparation prints step descriptions and summary counts. Per-package compose
+pulls, expanded/selected package lists, manifest/layer downloads, successful
+signature checks, and successful automatic-install rows are suppressed. Warnings,
+failed-install rows, review results, and execution progress remain visible.
+Unset or empty `CI`, `CI=false`, and `CI=0` preserve local output. Explicit
+`--compose-plan` output remains detailed in CI.

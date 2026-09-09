@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/progress"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/namespacesig"
@@ -173,8 +174,8 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
 		registry.SetPlainHTTP(true)
 	}
-	fmt.Fprintln(stderr, "Pulling manifest...")
-	fmt.Fprintln(stderr)
+	fmt.Fprintln(progress.Detail(stderr), "Pulling manifest...")
+	fmt.Fprintln(progress.Detail(stderr))
 	digest, err := registry.Resolve(ctx, ref)
 	if err != nil {
 		return pullResult{}, err
@@ -207,7 +208,7 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 		return pullResult{}, resolveErr
 	}
 
-	fmt.Fprintln(stderr, "Downloading layers...")
+	fmt.Fprintln(progress.Detail(stderr), "Downloading layers...")
 	artifact, err := registry.PullSources(ctx, pinned)
 	if err != nil {
 		return pullResult{}, err
@@ -281,7 +282,7 @@ func fetchAndStoreOfficialSignature(ctx context.Context, app *application.App, r
 		return err
 	}
 	if stderr != nil {
-		fmt.Fprintln(stderr, "Official signature verified and stored.")
+		fmt.Fprintln(progress.Detail(stderr), "Official signature verified and stored.")
 	}
 	return nil
 }
@@ -329,7 +330,7 @@ func fetchAndStoreNamespaceSignature(ctx context.Context, app *application.App, 
 		return err
 	}
 	if stderr != nil {
-		fmt.Fprintln(stderr, "Team namespace signature verified and stored.")
+		fmt.Fprintln(progress.Detail(stderr), "Team namespace signature verified and stored.")
 	}
 	return nil
 }
