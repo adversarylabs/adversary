@@ -322,6 +322,8 @@ func (c Client) NamespaceTrustRoot(ctx context.Context, token string) (namespace
 // repository identity, file paths, model inputs, and flags other than explicit
 // bounded telemetry tags must never be added.
 type RunUsageReport struct {
+	Action            string                    `json:"action,omitempty"`
+	Outcome           string                    `json:"outcome,omitempty"`
 	Adversaries       []string                  `json:"adversaries"`
 	DurationMS        int64                     `json:"duration_ms,omitempty"`
 	Results           []RunUsageAdversaryResult `json:"results,omitempty"`
@@ -388,7 +390,13 @@ func (c Client) RecordUsage(ctx context.Context, token, eventType, cliVersion st
 		"tags":        report.Tags,
 		"spans":       report.Spans,
 	}
-	return c.postJSON(ctx, "/v1/cli/usage", payload, token, nil)
+	path := "/v1/cli/usage"
+	if report.Action != "" {
+		path = "/v1/cli/runs"
+		payload["action"] = report.Action
+		payload["outcome"] = report.Outcome
+	}
+	return c.postJSON(ctx, path, payload, token, nil)
 }
 
 // PullTelemetry retrieves a sanitized run trace as OTLP/HTTP JSON.

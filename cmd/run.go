@@ -444,6 +444,14 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	// callbacks fail before every selected adversary executes.
 	var ran []string
 	usageStarted := time.Now()
+	finalUsage := adversarylabs.RunUsageReport{Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}
+	var selectedForUsage []string
+	var finishUsage func(adversarylabs.RunUsageReport)
+	defer func() {
+		if finishUsage != nil {
+			finishUsage(finalUsage)
+		}
+	}()
 	runStarted := make(map[string]time.Time)
 	var usageResults []adversarylabs.RunUsageAdversaryResult
 	var childDiagnostics bytes.Buffer
@@ -462,9 +470,23 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 		RepoIndexMode: opts.repoIndex,
 		Stdout:        resultOut, Stderr: autoStderr,
 		ReportSelections: func(result application.AdversaryAutoResult) error {
+			selectedForUsage = nil
+			for _, selection := range result.Selections {
+				if selection.Selected {
+					selectedForUsage = append(selectedForUsage, selection.Candidate.Name)
+				}
+			}
 			return renderRunSelections(selectionOut, result, opts.explain)
 		},
 		ReportRunStart: func(name string, index, total int) error {
+			if finishUsage == nil && !opts.dryRun {
+				initial := finalUsage
+				initial.Adversaries = selectedForUsage
+				if len(initial.Adversaries) == 0 {
+					initial.Adversaries = []string{name}
+				}
+				finishUsage = beginRunUsage(cmd.Context(), app, valueOf(apiURL), valueOf(profile), initial)
+			}
 			childDiagnostics.Reset()
 			runStarted[name] = time.Now()
 			_, err := fmt.Fprintf(progressOut, "[%d/%d] %s\n", index, total, name)
@@ -508,14 +530,21 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	})
 	// Sanitized usage: CLI version + adversaries that actually ran.
 	if !opts.dryRun && len(ran) > 0 {
-		reportRunUsage(cmd.Context(), app, valueOf(apiURL), valueOf(profile), adversarylabs.RunUsageReport{
+		finalUsage = adversarylabs.RunUsageReport{
+			Outcome:           "completed",
 			Adversaries:       ran,
 			DurationMS:        time.Since(usageStarted).Milliseconds(),
 			Results:           usageResults,
 			Tags:              opts.telemetryTags,
 			TelemetryFile:     opts.telemetryFile,
 			TelemetryDisabled: opts.noTelemetry,
-		})
+		}
+	}
+	if err != nil {
+		var findings *internaladversary.FindingsError
+		if !errors.As(err, &findings) {
+			finalUsage.Outcome = "failed"
+		}
 	}
 	if err == nil && strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
@@ -683,6 +712,9 @@ func runAdversaries(
 	var hardErr error
 	hardRef := ""
 	usageStarted := time.Now()
+	finalUsage := adversarylabs.RunUsageReport{Adversaries: refs, Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}
+	finishUsage := beginRunUsage(ctx, app, valueOf(apiURL), valueOf(profile), finalUsage)
+	defer func() { finishUsage(finalUsage) }()
 	var usageResults []adversarylabs.RunUsageAdversaryResult
 
 	for i, ref := range refs {
@@ -792,14 +824,15 @@ func runAdversaries(
 			return err
 		}
 	}
-	reportRunUsage(ctx, app, valueOf(apiURL), valueOf(profile), adversarylabs.RunUsageReport{
+	finalUsage = adversarylabs.RunUsageReport{
+		Outcome:           "completed",
 		Adversaries:       refs,
 		DurationMS:        time.Since(usageStarted).Milliseconds(),
 		Results:           usageResults,
 		Tags:              opts.telemetryTags,
 		TelemetryFile:     opts.telemetryFile,
 		TelemetryDisabled: opts.noTelemetry,
-	})
+	}
 	if multi || toFile {
 		fmt.Fprintf(progressOut, "\nRan %d adversaries", len(refs))
 		if findingsTotal > 0 {

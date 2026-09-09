@@ -63,7 +63,9 @@ func BuildTrace(report adversarylabs.RunUsageReport, started, ended time.Time) a
 	if ended.Before(started) {
 		ended = started
 	}
-	report.TraceID = randomHex(16)
+	if report.TraceID == "" {
+		report.TraceID = randomHex(16)
+	}
 	rootID := randomHex(8)
 	report.Spans = append(report.Spans, adversarylabs.RunUsageSpan{
 		TraceID: report.TraceID, SpanID: rootID, Name: "adversary run", Kind: 1,
@@ -163,6 +165,9 @@ func runStatus(results []adversarylabs.RunUsageAdversaryResult) string {
 	}
 	return status
 }
+
+// NewTraceID allocates the identity shared by start, heartbeat, and final trace.
+func NewTraceID() string { return randomHex(16) }
 
 func randomHex(bytes int) string {
 	b := make([]byte, bytes)

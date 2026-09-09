@@ -69,6 +69,9 @@ func runComposedAdversaries(
 	resultOut, progressOut io.Writer,
 ) error {
 	started := time.Now()
+	finalUsage := adversarylabs.RunUsageReport{Adversaries: refs, Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}
+	finishUsage := beginRunUsage(ctx, app, apiURL, profile, finalUsage)
+	defer func() { finishUsage(finalUsage) }()
 	var usagePhases []adversarylabs.RunUsagePhase
 	jobs := make([]composedRunJob, 0, len(refs))
 	if planner, ok := app.Dependencies().Runtime.(compositeReviewPlanner); ok {
@@ -216,7 +219,8 @@ func runComposedAdversaries(
 		return fmt.Errorf("write composed review: %w", err)
 	}
 
-	reportRunUsage(ctx, app, apiURL, profile, adversarylabs.RunUsageReport{
+	finalUsage = adversarylabs.RunUsageReport{
+		Outcome:           "completed",
 		Adversaries:       refs,
 		DurationMS:        time.Since(started).Milliseconds(),
 		Results:           usage,
@@ -224,7 +228,7 @@ func runComposedAdversaries(
 		Tags:              opts.telemetryTags,
 		TelemetryFile:     opts.telemetryFile,
 		TelemetryDisabled: opts.noTelemetry,
-	})
+	}
 	fmt.Fprintf(progressOut, "\nRan %d review jobs across %d reviewers · findings: %d → %d after deduplication\n", len(jobs), len(refs), findingsBeforeDedupe, len(aggregate.Result.Findings))
 	if strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
