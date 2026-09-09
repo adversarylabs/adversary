@@ -354,6 +354,16 @@ func (a *App) StartBackground(task func()) {
 	}()
 }
 
+// StartFinalization gives a final report a bounded opportunity to finish even
+// when the command was canceled. Lifecycle detachment belongs to the App.
+func (a *App) StartFinalization(ctx context.Context, timeout time.Duration, task func(context.Context)) {
+	a.StartBackground(func() {
+		finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		defer cancel()
+		task(finalCtx)
+	})
+}
+
 // WaitBackground waits for registered work or until ctx expires. Callers use a
 // bounded context because background work must never hold the CLI open forever.
 func (a *App) WaitBackground(ctx context.Context) {

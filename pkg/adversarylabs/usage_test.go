@@ -82,3 +82,22 @@ func TestPullTelemetryReturnsOTLPJSON(t *testing.T) {
 		t.Fatalf("raw = %s", raw)
 	}
 }
+
+func TestRecordUsageLifecycleUsesDedicatedEndpoint(t *testing.T) {
+	client := Client{BaseURL: "https://api.test", HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/v1/cli/runs" {
+			t.Fatalf("path = %q", req.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["action"] != "finish" || payload["outcome"] != "canceled" || payload["trace_id"] != "0123456789abcdef0123456789abcdef" {
+			t.Fatalf("payload: %#v", payload)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+	})}}
+	if err := client.RecordUsage(context.Background(), "token", "run", "dev", RunUsageReport{Action: "finish", Outcome: "canceled", TraceID: "0123456789abcdef0123456789abcdef", Adversaries: []string{"local"}}); err != nil {
+		t.Fatal(err)
+	}
+}

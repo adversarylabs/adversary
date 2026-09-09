@@ -70,6 +70,9 @@ func runComposedAdversaries(
 	resultOut, progressOut io.Writer,
 ) error {
 	started := time.Now()
+	finalUsage := adversarylabs.RunUsageReport{Adversaries: refs, Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}
+	finishUsage := beginRunUsage(ctx, app, apiURL, profile, finalUsage)
+	defer func() { finishUsage(finalUsage) }()
 	var usagePhases []adversarylabs.RunUsagePhase
 	jobs := make([]composedRunJob, 0, len(refs))
 	var fullContext *detection.Context
@@ -245,7 +248,8 @@ func runComposedAdversaries(
 		return fmt.Errorf("write composed review: %w", err)
 	}
 
-	reportRunUsage(ctx, app, apiURL, profile, adversarylabs.RunUsageReport{
+	finalUsage = adversarylabs.RunUsageReport{
+		Outcome:           "completed",
 		Adversaries:       refs,
 		DurationMS:        time.Since(started).Milliseconds(),
 		Results:           usage,
@@ -253,7 +257,7 @@ func runComposedAdversaries(
 		Tags:              opts.telemetryTags,
 		TelemetryFile:     opts.telemetryFile,
 		TelemetryDisabled: opts.noTelemetry,
-	})
+	}
 	stages := "deduplication"
 	if opts.verifyFindings {
 		stages = "verification and deduplication"
