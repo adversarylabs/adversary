@@ -168,6 +168,8 @@ func runComposedAdversaries(
 
 	var usage []adversarylabs.RunUsageAdversaryResult
 	var hardErr error
+	completedReviews := 0
+	failedReviews := 0
 	findingsBeforeDedupe := 0
 	for i, result := range results {
 		opts.recordGitHubRunFailure(result.ref, result.scope, result.err, result.stderr)
@@ -189,10 +191,19 @@ func runComposedAdversaries(
 		case errors.As(result.err, &findings):
 			status = fmt.Sprintf("%d findings", findings.Count)
 		default:
+			failedReviews++
 			status = "failed: " + compactRunFailure(result.err, result.stderr)
 			if hardErr == nil {
 				hardErr = fmt.Errorf("adversary %q (%s) failed: %w", result.ref, result.scope, result.err)
 			}
+		}
+		if result.envelope != nil && (result.err == nil || findings != nil) && !reviewWasSkipped(result.envelope.Result) {
+			completedReviews++
+		}
+		// A failed process can emit a partial envelope. It is not a completed
+		// review and must not contribute findings or a clean opinion.
+		if result.err != nil && findings == nil {
+			results[i].envelope = nil
 		}
 		if result.attempts > 1 {
 			status += fmt.Sprintf(" (%d attempts)", result.attempts)
@@ -206,12 +217,14 @@ func runComposedAdversaries(
 	}
 
 	var verification *findingverify.Report
+	var verificationErr error
 	if opts.verifyFindings {
 		var verifyErr error
 		verificationStarted := time.Now()
 		results, verification, verifyErr = verifyComposedResults(ctx, opts, results, collector, contextErr, progressOut)
 		usagePhases = append(usagePhases, runUsagePhase("verify-findings", verificationStarted, time.Now()))
 		if verifyErr != nil {
+			verificationErr = verifyErr
 			opts.recordGitHubRunFailure(root, "finding-verification", verifyErr, "")
 			if hardErr == nil {
 				hardErr = verifyErr
@@ -228,6 +241,16 @@ func runComposedAdversaries(
 	}
 	if verification != nil {
 		applyVerificationSummary(&aggregate, *verification, hardErr != nil)
+	}
+	if failedReviews > 0 || hasIncompleteEvidence(aggregate.Result) {
+		summary := fmt.Sprintf("Partial review: %d review jobs failed; unsupported candidates, if any, were withheld. Completed reviewers' findings are retained. No clean-review opinion.", failedReviews)
+		aggregate.Result.Opinion = &review.Opinion{Summary: summary}
+		if aggregate.Result.Assessment != nil {
+			assessment := *aggregate.Result.Assessment
+			assessment.Summary = summary
+			aggregate.Result.Assessment = &assessment
+		}
+		aggregate.Result.Observations = append(aggregate.Result.Observations, review.Note{Key: "composition.incomplete", Summary: summary})
 	}
 	if len(opts.composeSelections) > 0 {
 		metadata, marshalErr := json.Marshal(opts.composeSelections)
@@ -266,7 +289,10 @@ func runComposedAdversaries(
 	if strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
 	}
-	if hardErr != nil {
+	if verificationErr != nil {
+		return verificationErr
+	}
+	if hardErr != nil && completedReviews == 0 {
 		return hardErr
 	}
 	if len(aggregate.Result.Findings) > 0 {
@@ -544,7 +570,15 @@ func aggregateComposedReview(root string, runs []composedRunResult) (review.RunE
 	if aggregate.ProtocolVersion == 0 {
 		return review.RunEnvelope{}, fmt.Errorf("composition produced no review result")
 	}
-	aggregate.Result.Observations = append(aggregate.Result.Observations, review.Note{
+	// Own the notes slice and collect incomplete-evidence warnings from every
+	// reviewer below, including the selected base envelope, exactly once.
+	notes := make([]review.Note, 0, len(aggregate.Result.Observations))
+	for _, note := range aggregate.Result.Observations {
+		if note.Key != "review.evidence-incomplete" {
+			notes = append(notes, note)
+		}
+	}
+	aggregate.Result.Observations = append(notes, review.Note{
 		Key:      "composition.reviewers",
 		Summary:  fmt.Sprintf("Composition routed this change across %d reviewers.", len(runs)),
 		Metadata: compositionReviewerMetadata(runs),
@@ -571,6 +605,12 @@ func aggregateComposedReview(root string, runs []composedRunResult) (review.RunE
 		for _, finding := range run.envelope.Result.Findings {
 			merged = mergeComposedFinding(merged, finding, run.ref, run.scope)
 		}
+		for _, note := range run.envelope.Result.Observations {
+			if note.Key == "review.evidence-incomplete" {
+				note.Summary = run.ref + ": " + note.Summary
+				aggregate.Result.Observations = append(aggregate.Result.Observations, note)
+			}
+		}
 		for _, finding := range run.envelope.Result.SuppressedFindings {
 			suppressed = mergeComposedFinding(suppressed, finding, run.ref, run.scope)
 		}
@@ -590,6 +630,15 @@ func aggregateComposedReview(root string, runs []composedRunResult) (review.RunE
 		aggregate.Result.Suppressed.Findings = len(suppressed)
 	}
 	return aggregate, nil
+}
+
+func hasIncompleteEvidence(result review.ReviewResult) bool {
+	for _, note := range result.Observations {
+		if note.Key == "review.evidence-incomplete" {
+			return true
+		}
+	}
+	return false
 }
 
 func compositionReviewerMetadata(runs []composedRunResult) json.RawMessage {
