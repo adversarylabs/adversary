@@ -17,6 +17,7 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/findingverify"
 	"github.com/adversarylabs/adversary/internal/githubreview"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/detection"
@@ -74,12 +75,14 @@ func runComposedAdversaries(
 	defer func() { finishUsage(finalUsage) }()
 	var usagePhases []adversarylabs.RunUsagePhase
 	jobs := make([]composedRunJob, 0, len(refs))
+	var fullContext *detection.Context
 	if planner, ok := app.Dependencies().Runtime.(compositeReviewPlanner); ok {
 		plan, err := planner.planCompositeReview(ctx, opts, refs, progressOut)
 		if err != nil {
 			return fmt.Errorf("plan composed review: %w", err)
 		}
 		usagePhases = append(usagePhases, plan.Phases...)
+		fullContext = plan.FullContext
 		if plan.FullContext != nil && len(plan.Groups) > 0 {
 			if opts.composeExhaustive {
 				jobs = exhaustiveComposedRunJobs(root, refs, plan)
@@ -94,6 +97,16 @@ func runComposedAdversaries(
 	if len(jobs) == 0 {
 		for _, ref := range refs {
 			jobs = append(jobs, composedRunJob{ref: ref, scope: "full-change"})
+		}
+	}
+	// Freeze changed worktree source before any reviewer runs.
+	var collector *findingverify.Collector
+	var contextErr error
+	if opts.verifyFindings {
+		if opts.verificationRuntime != nil {
+			collector, contextErr = opts.verificationRuntime.prepareFindingVerification(ctx, fullContext)
+		} else {
+			contextErr = fmt.Errorf("runtime cannot capture verification context")
 		}
 	}
 	reviewStarted := time.Now()
@@ -192,6 +205,19 @@ func runComposedAdversaries(
 		fmt.Fprintf(progressOut, "[%d/%d] %-52s %s\n", i+1, len(results), label, status)
 	}
 
+	var verification *findingverify.Report
+	if opts.verifyFindings {
+		var verifyErr error
+		verificationStarted := time.Now()
+		results, verification, verifyErr = verifyComposedResults(ctx, opts, results, collector, contextErr, progressOut)
+		usagePhases = append(usagePhases, runUsagePhase("verify-findings", verificationStarted, time.Now()))
+		if verifyErr != nil {
+			opts.recordGitHubRunFailure(root, "finding-verification", verifyErr, "")
+			if hardErr == nil {
+				hardErr = verifyErr
+			}
+		}
+	}
 	aggregateStarted := time.Now()
 	aggregate, err := aggregateComposedReview(root, results)
 	if err != nil {
@@ -199,6 +225,9 @@ func runComposedAdversaries(
 			return hardErr
 		}
 		return err
+	}
+	if verification != nil {
+		applyVerificationSummary(&aggregate, *verification, hardErr != nil)
 	}
 	if len(opts.composeSelections) > 0 {
 		metadata, marshalErr := json.Marshal(opts.composeSelections)
@@ -229,7 +258,11 @@ func runComposedAdversaries(
 		TelemetryFile:     opts.telemetryFile,
 		TelemetryDisabled: opts.noTelemetry,
 	}
-	fmt.Fprintf(progressOut, "\nRan %d review jobs across %d reviewers · findings: %d → %d after deduplication\n", len(jobs), len(refs), findingsBeforeDedupe, len(aggregate.Result.Findings))
+	stages := "deduplication"
+	if opts.verifyFindings {
+		stages = "verification and deduplication"
+	}
+	fmt.Fprintf(progressOut, "\nRan %d review jobs across %d reviewers · findings: %d → %d after %s\n", len(jobs), len(refs), findingsBeforeDedupe, len(aggregate.Result.Findings), stages)
 	if strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
 	}

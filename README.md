@@ -56,6 +56,8 @@ See [automatic selection](docs/automatic-detection.md) for change resolution,
 manifest detection declarations, selection policy, and CI behavior.
 See [composition](docs/composition.md) for `adversary.yaml` `uses` (language packs
 and persona entrypoints that expand to specialist adversaries).
+See [finding verification](docs/finding-verification.md) for source-based checks
+before deduplication and replaying the filter on saved candidates.
 See [comment voice](docs/voice.md) for `agent/voice.md`, example banks, and GitHub
 rewrite with `--github-review`.
 
