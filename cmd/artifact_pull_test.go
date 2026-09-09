@@ -11,6 +11,8 @@ import (
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
 
@@ -157,4 +159,66 @@ func TestReportPullDoesNotWaitForMetricRequest(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("background work was not drained after the metric request finished")
 	}
+}
+
+func TestPullCIProgressPreservesWarnings(t *testing.T) {
+	for _, ci := range []string{"", "true"} {
+		t.Run("CI="+ci, func(t *testing.T) {
+			t.Setenv("CI", ci)
+			t.Setenv("DO_NOT_TRACK", "1")
+			repo := repository.Repository{Root: t.TempDir()}
+			project := t.TempDir()
+			writeProject(t, project)
+			artifact, err := pack.Create(t.Context(), pack.Options{Dir: project})
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err := repo.ImportPacked(artifact, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out, diagnostics bytes.Buffer
+			deps := lifecycleTestApp(t, repo, &out, &diagnostics).Dependencies()
+			deps.Registries = progressTestRegistryFactory{RegistryFactory: deps.Registries, digest: record.Digest}
+			app, err := application.New(deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := pullAdversary(t.Context(), "registry.test/reviewer:1.0.0", "", "default", app, &diagnostics)
+			if err != nil || !result.AlreadyPresent {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			text := diagnostics.String()
+			if strings.Contains(text, "Pulling manifest") != (ci == "") {
+				t.Fatalf("unexpected progress: %s", text)
+			}
+			if !strings.Contains(text, "Warning: trusted signature not stored") {
+				t.Fatalf("lost warning: %s", text)
+			}
+		})
+	}
+}
+
+type progressTestRegistryFactory struct {
+	application.RegistryFactory
+	digest string
+}
+
+func (f progressTestRegistryFactory) BindingIdentity() string {
+	return f.RegistryFactory.(application.BindingIdentity).BindingIdentity()
+}
+func (f progressTestRegistryFactory) New(string, string) (application.OCIRegistry, error) {
+	return progressTestRegistry{digest: f.digest}, nil
+}
+
+type progressTestRegistry struct {
+	application.OCIRegistry
+	digest string
+}
+
+func (r progressTestRegistry) Resolve(context.Context, oci.Reference) (string, error) {
+	return r.digest, nil
+}
+func (r progressTestRegistry) GetOfficialSignatureReferrer(context.Context, oci.Reference, string) ([]byte, error) {
+	return nil, errors.New("signature unavailable")
 }

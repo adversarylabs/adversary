@@ -1,7 +1,9 @@
 package application
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,4 +56,53 @@ func TestExpandComposeNoCompose(t *testing.T) {
 	if err != nil || len(got) != 2 || roots != nil {
 		t.Fatalf("%v %#v %#v", err, got, roots)
 	}
+}
+
+// Exercise actual pull callbacks and expansion so concise output cannot skip work.
+func TestExpandComposeCIProgress(t *testing.T) {
+	for _, ci := range []string{"", "true"} {
+		t.Run("CI="+ci, func(t *testing.T) {
+			t.Setenv("CI", ci)
+			root := t.TempDir()
+			meta, leaf := filepath.Join(root, "meta"), filepath.Join(root, "leaf")
+			writeComposePkg(t, meta, "meta", "uses:\n  - path: ../leaf\n")
+			writeComposePkg(t, leaf, "leaf", "")
+			resolver := &progressComposeResolver{path: meta}
+			pulls := 0
+			var output bytes.Buffer
+			refs, _, err := ExpandCompose(t.Context(), resolver, func(context.Context, string) error {
+				pulls++
+				resolver.ready = true
+				return nil
+			}, []string{"registry.test/meta"}, false, &output)
+			if err != nil || len(refs) != 2 || pulls != 1 {
+				t.Fatalf("refs=%v pulls=%d err=%v", refs, pulls, err)
+			}
+			out := output.String()
+			if !strings.Contains(out, "Compose: expanded 1 → 2 adversaries") {
+				t.Fatalf("missing summary: %s", out)
+			}
+			for _, detail := range []string{"Compose: pulling", "  · "} {
+				if strings.Contains(out, detail) != (ci == "") {
+					t.Fatalf("unexpected detail %q: %s", detail, out)
+				}
+			}
+			if ci != "" && !strings.HasPrefix(out, "Compose: preparing adversaries") {
+				t.Fatalf("missing step: %s", out)
+			}
+		})
+	}
+}
+
+type progressComposeResolver struct {
+	Resolver
+	path  string
+	ready bool
+}
+
+func (r *progressComposeResolver) Resolve(context.Context, string) (Resolution, error) {
+	if !r.ready {
+		return Resolution{}, fmt.Errorf("not installed")
+	}
+	return Resolution{Path: r.path}, nil
 }

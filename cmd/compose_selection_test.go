@@ -57,6 +57,7 @@ func (r selectionTestRuntime) composeSelectionContext(context.Context, *runOptio
 	return &detection.Context{RepositoryFiles: []string{"main.go"}}, nil
 }
 func TestComposePlanColdCacheSelectsWithoutPullingOrRunning(t *testing.T) {
+	t.Setenv("CI", "true")
 	var out, progress bytes.Buffer
 	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &progress)
 	deps := base.Dependencies()
