@@ -310,6 +310,11 @@ func retryableComposedRunFailure(ctx context.Context, err error, stderr string) 
 		return false
 	}
 	text := strings.ToLower(err.Error() + "\n" + stderr)
+	// The broker has already waited/retried this exact capacity-rejected
+	// request. Replaying the entire specialist would redo successful rounds.
+	if strings.Contains(text, "camel capacity retry budget exhausted") {
+		return false
+	}
 	for _, marker := range []string{
 		"model_timeout",
 		"model review timed out",

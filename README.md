@@ -186,10 +186,26 @@ leak through process listings and shell history.
 endpoints for compatible gateways and testing. Model-backed execution currently
 uses the host executor because sandbox and container loopback routing is not yet
 available.
-Camel retries transient connection, rate-limit, and server failures twice within
-the affected model call so a composed review does not restart from the beginning.
-Set `ADVERSARY_CAMEL_REQUEST_RETRIES` to a value from `0` through `5` to override
-that default.
+Camel retries transient connection, rate-limit, and server failures up to eight
+times within the affected model call. Backoff grows from 2s to 60s plus jitter;
+`Retry-After` seconds and HTTP dates are honored without shortening the requested
+wait. The original request deadline and cancellation still bound all waits.
+Set `ADVERSARY_CAMEL_REQUEST_RETRIES` from `0` through `20` to override the default.
+Capacity retry exhaustion does not restart the entire specialist.
+
+`ADVERSARY_CAMEL_MAX_CONCURRENCY` limits actual simultaneous Camel HTTP requests
+(default `5`, range `1`–`256`), independently of `--compose-concurrency`. All
+specialist brokers and the verifier in the **same CLI process**, using the same
+endpoint and credential, share this budget and a cooldown. Congestion halves the
+effective limit (minimum one); ten successful responses after the cooldown restore
+one slot, never beyond the configured cap. Conflicting limits for the same
+credential within a process use the smaller limit.
+
+This is not an account-wide distributed lock. Multiple CLI processes, CI jobs,
+or machines sharing a key must divide the account budget externally. The benchmark
+fleet reserves slots in Postgres and sets each CLI cap to its reservation; new
+review jobs must wait for outstanding judge leases. For a 20-stream fleet with
+five slots per review, at most four reviews can run when no judges hold slots.
 `--no-network` applies to the adversary child; provider network access remains
 isolated in the CLI-owned broker.
 

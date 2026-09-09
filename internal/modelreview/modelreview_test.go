@@ -258,7 +258,7 @@ func TestProviderFromConfigUsesCamelNamespace(t *testing.T) {
 	camel, ok := provider.(*CamelProvider)
 	if !ok || camel.Name() != "camel" || camel.Model() != "auto" || camel.APIKey != "qaml_live_test" ||
 		camel.BaseURL != "https://stream.camelai.com" || camel.ResponseFormat != "json_object" ||
-		camel.ReasoningEffort != "none" || camel.StructuredOutputRetries != 2 || camel.RequestRetries != 2 {
+		camel.ReasoningEffort != "none" || camel.StructuredOutputRetries != 2 || camel.RequestRetries != 8 || camel.MaxConcurrency != 5 {
 		t.Fatalf("provider = %#v", provider)
 	}
 }
@@ -283,7 +283,7 @@ func TestProviderFromConfigUsesCamelRequestRetryOverride(t *testing.T) {
 func TestProviderFromConfigRejectsInvalidCamelRequestRetries(t *testing.T) {
 	values := map[string]string{
 		CamelKeyEnv:            "qaml_live_test",
-		CamelRequestRetriesEnv: "6",
+		CamelRequestRetriesEnv: "21",
 	}
 	_, err := ProviderFromConfig(Config{Provider: "camel", Model: "auto"}, func(name string) (string, bool) {
 		value, ok := values[name]

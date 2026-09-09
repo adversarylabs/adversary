@@ -11,6 +11,9 @@ import (
 )
 
 func TestRetryableComposedRunFailure(t *testing.T) {
+	if retryableComposedRunFailure(context.Background(), errors.New("host execution failed"), "Camel capacity retry budget exhausted: camel model request failed (HTTP 429): Cost pacing queue is full; retry later") {
+		t.Fatal("capacity exhaustion must not replay the whole specialist")
+	}
 	if !retryableComposedRunFailure(context.Background(), errors.New("host execution failed"), "model_timeout") {
 		t.Fatal("model timeout should be retried")
 	}

@@ -25,6 +25,7 @@ const (
 	CamelResponseFormatEnv        = "ADVERSARY_CAMEL_RESPONSE_FORMAT"
 	CamelStructuredRetriesEnv     = "ADVERSARY_CAMEL_STRUCTURED_RETRIES"
 	CamelRequestRetriesEnv        = "ADVERSARY_CAMEL_REQUEST_RETRIES"
+	CamelMaxConcurrencyEnv        = "ADVERSARY_CAMEL_MAX_CONCURRENCY"
 	ModelContentDiagnosticsEnv    = "ADVERSARY_MODEL_CONTENT_DIAGNOSTICS"
 	DisableKeepAlivesEnv          = "ADVERSARY_MODEL_DISABLE_KEEP_ALIVES"
 )
@@ -139,7 +140,11 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		if err != nil {
 			return nil, err
 		}
-		requestRetries, err := boundedIntegerFromEnvironmentWithDefault(lookup, CamelRequestRetriesEnv, 2, 0, 5)
+		requestRetries, err := boundedIntegerFromEnvironmentWithDefault(lookup, CamelRequestRetriesEnv, 8, 0, 20)
+		if err != nil {
+			return nil, err
+		}
+		maxConcurrency, err := boundedIntegerFromEnvironmentWithDefault(lookup, CamelMaxConcurrencyEnv, defaultCamelConcurrency, 1, 256)
 		if err != nil {
 			return nil, err
 		}
@@ -156,6 +161,7 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 			ResponseFormat:            responseFormat,
 			StructuredOutputRetries:   structuredRetries,
 			RequestRetries:            requestRetries,
+			MaxConcurrency:            maxConcurrency,
 			IncludeContentDiagnostics: envEnabled(lookup, ModelContentDiagnosticsEnv),
 		}, nil
 	default:

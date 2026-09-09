@@ -152,6 +152,8 @@ func (s *Session) reviewHandler(parent context.Context, provider Provider, repos
 		timeout := time.Duration(modelRequest.Budget.TimeoutMS) * time.Millisecond
 		reviewContext, cancel := context.WithTimeout(parent, timeout)
 		defer cancel()
+		stopCancel := context.AfterFunc(request.Context(), cancel)
+		defer stopCancel()
 		result, err := provider.Review(reviewContext, modelRequest)
 		if err != nil {
 			var providerErr *ProviderError

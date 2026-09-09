@@ -34,6 +34,7 @@ type CamelProvider struct {
 	StructuredOutputRetries   int
 	RequestRetries            int
 	IncludeContentDiagnostics bool
+	MaxConcurrency            int
 }
 
 type chatCompletionsResponse struct {
@@ -56,17 +57,18 @@ func (p *FireworksProvider) Name() string  { return "fireworks" }
 func (p *FireworksProvider) Model() string { return p.ModelID }
 
 func (p *FireworksProvider) Review(ctx context.Context, request Request) (Result, error) {
-	return reviewChatCompletions(ctx, p.Name(), p.APIKey, p.ModelID, p.BaseURL, p.Client, p.ReasoningEffort, p.ResponseFormat, p.StructuredOutputRetries, p.RequestRetries, p.IncludeContentDiagnostics, request)
+	return reviewChatCompletions(ctx, p.Name(), p.APIKey, p.ModelID, p.BaseURL, p.Client, p.ReasoningEffort, p.ResponseFormat, p.StructuredOutputRetries, p.RequestRetries, p.IncludeContentDiagnostics, request, nil)
 }
 
 func (p *CamelProvider) Name() string  { return "camel" }
 func (p *CamelProvider) Model() string { return p.ModelID }
 
 func (p *CamelProvider) Review(ctx context.Context, request Request) (Result, error) {
-	return reviewChatCompletions(ctx, p.Name(), p.APIKey, p.ModelID, p.BaseURL, p.Client, p.ReasoningEffort, p.ResponseFormat, p.StructuredOutputRetries, p.RequestRetries, p.IncludeContentDiagnostics, request)
+	gate := sharedCamelGate(p.BaseURL, p.APIKey, p.MaxConcurrency)
+	return reviewChatCompletions(ctx, p.Name(), p.APIKey, p.ModelID, p.BaseURL, p.Client, p.ReasoningEffort, p.ResponseFormat, p.StructuredOutputRetries, p.RequestRetries, p.IncludeContentDiagnostics, request, gate)
 }
 
-func reviewChatCompletions(ctx context.Context, providerName, apiKey, modelID, baseURL string, client *http.Client, reasoningEffort, responseFormat string, structuredOutputRetries, requestRetries int, includeContentDiagnostics bool, request Request) (Result, error) {
+func reviewChatCompletions(ctx context.Context, providerName, apiKey, modelID, baseURL string, client *http.Client, reasoningEffort, responseFormat string, structuredOutputRetries, requestRetries int, includeContentDiagnostics bool, request Request, gate *camelGate) (Result, error) {
 	var schema any
 	if err := json.Unmarshal(request.Schema, &schema); err != nil {
 		return Result{}, fmt.Errorf("decode model schema: %w", err)
@@ -98,14 +100,32 @@ func reviewChatCompletions(ctx context.Context, providerName, apiKey, modelID, b
 		var responseHeaders http.Header
 		var err error
 		for requestAttempt := 0; ; requestAttempt++ {
+			if gate != nil {
+				if err := gate.acquire(ctx); err != nil {
+					return Result{}, err
+				}
+			}
 			data, status, responseHeaders, err = postJSONWithHeaders(ctx, client, baseURL+"/v1/chat/completions", map[string]string{
 				"authorization": "Bearer " + apiKey,
 			}, payload)
 			retryable := err != nil || status == http.StatusTooManyRequests || status >= 500
+			delay := providerRetryDelay(requestAttempt, responseHeaders)
+			if gate != nil {
+				delay = camelRetryDelay(requestAttempt, responseHeaders, time.Now())
+				// Publish the cooldown before releasing capacity, including on the
+				// final retry. Other specialists must not immediately replace a
+				// rejected request with another burst.
+				if retryable && ctx.Err() == nil {
+					gate.cooldown(delay)
+				} else if status >= 200 && status < 300 {
+					gate.success()
+				}
+				gate.release()
+			}
 			if !retryable || requestAttempt >= requestRetries || ctx.Err() != nil {
 				break
 			}
-			if err := waitForProviderRetry(ctx, providerRetryDelay(requestAttempt, responseHeaders)); err != nil {
+			if err := waitForProviderRetry(ctx, delay); err != nil {
 				return Result{}, err
 			}
 		}
@@ -113,7 +133,11 @@ func reviewChatCompletions(ctx context.Context, providerName, apiKey, modelID, b
 			return Result{}, err
 		}
 		if status < 200 || status >= 300 {
-			return Result{}, providerHTTPError(providerName, status, data)
+			failure := providerHTTPError(providerName, status, data)
+			if typed, ok := failure.(*ProviderError); ok && typed.Code == "camel_busy" {
+				typed.Message = "Camel capacity retry budget exhausted: " + typed.Message
+			}
+			return Result{}, failure
 		}
 		var response chatCompletionsResponse
 		if err := json.Unmarshal(data, &response); err != nil {

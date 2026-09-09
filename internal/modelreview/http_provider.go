@@ -60,9 +60,14 @@ func providerHTTPError(provider string, status int, data []byte) error {
 	if message == "" {
 		message = "model provider request failed"
 	}
+	code := provider + "_http_error"
+	if provider == "camel" && (status == http.StatusTooManyRequests ||
+		(status >= 500 && strings.Contains(strings.ToLower(message), "cost pacing queue is full"))) {
+		code = "camel_busy"
+	}
 	return &ProviderError{
-		Code:       provider + "_http_error",
-		Message:    fmt.Sprintf("%s model request failed: %s", provider, message),
+		Code:       code,
+		Message:    fmt.Sprintf("%s model request failed (HTTP %d): %s", provider, status, message),
 		Retryable:  status == http.StatusTooManyRequests || status >= 500,
 		StatusCode: status,
 	}
