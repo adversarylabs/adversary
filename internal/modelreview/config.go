@@ -12,6 +12,8 @@ const (
 	ModelEnv                      = "ADVERSARY_MODEL"
 	OpenAIKeyEnv                  = "OPENAI_API_KEY"
 	OpenAIBaseURLEnv              = "ADVERSARY_OPENAI_BASE_URL"
+	OpenAIReasoningEffortEnv      = "ADVERSARY_OPENAI_REASONING_EFFORT"
+	OpenAIMaxOutputTokensEnv      = "ADVERSARY_OPENAI_MAX_OUTPUT_TOKENS"
 	AnthropicKeyEnv               = "ANTHROPIC_API_KEY"
 	AnthropicBaseURLEnv           = "ADVERSARY_ANTHROPIC_BASE_URL"
 	FireworksKeyEnv               = "FIREWORKS_API_KEY"
@@ -86,11 +88,21 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		if openAIKey == "" {
 			return nil, fmt.Errorf("%s is required for model provider openai", OpenAIKeyEnv)
 		}
+		effort, err := openAIReasoningEffortFromEnvironment(lookup)
+		if err != nil {
+			return nil, err
+		}
+		maxTokens, err := boundedIntegerFromEnvironmentWithDefault(lookup, OpenAIMaxOutputTokensEnv, 0, 1, MaxOutputTokens)
+		if err != nil {
+			return nil, err
+		}
 		return &OpenAIProvider{
-			APIKey:  openAIKey,
-			ModelID: model,
-			BaseURL: valueOrDefault(normalizedEnv(lookup, OpenAIBaseURLEnv), "https://api.openai.com"),
-			Client:  client,
+			ReasoningEffort: effort,
+			MaxOutputTokens: maxTokens,
+			APIKey:          openAIKey,
+			ModelID:         model,
+			BaseURL:         valueOrDefault(normalizedEnv(lookup, OpenAIBaseURLEnv), "https://api.openai.com"),
+			Client:          client,
 		}, nil
 	case "anthropic":
 		if anthropicKey == "" {
@@ -251,4 +263,14 @@ func envEnabled(lookup LookupEnv, name string) bool {
 	}
 	value := normalizedEnv(lookup, name)
 	return strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
+}
+
+func openAIReasoningEffortFromEnvironment(lookup LookupEnv) (string, error) {
+	effort := strings.ToLower(normalizedEnv(lookup, OpenAIReasoningEffortEnv))
+	switch effort {
+	case "", "none", "low", "medium", "high", "xhigh", "max":
+		return effort, nil
+	default:
+		return "", fmt.Errorf("unsupported %s %q (supported: none, low, medium, high, xhigh, max)", OpenAIReasoningEffortEnv, effort)
+	}
 }
