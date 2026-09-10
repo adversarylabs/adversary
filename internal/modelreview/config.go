@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	CodexReasoningEffortEnv       = "ADVERSARY_CODEX_REASONING_EFFORT"
 	ProviderEnv                   = "ADVERSARY_MODEL_PROVIDER"
 	ModelEnv                      = "ADVERSARY_MODEL"
 	OpenAIKeyEnv                  = "OPENAI_API_KEY"
@@ -61,6 +62,23 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 	if provider == "" {
 		provider = normalizedEnv(lookup, ProviderEnv)
 	}
+	model := strings.TrimSpace(config.Model)
+	if model == "" {
+		model = normalizedEnv(lookup, ModelEnv)
+	}
+	if model == "" {
+		return nil, fmt.Errorf("%s is required for model-backed adversaries", ModelEnv)
+	}
+	if strings.HasPrefix(model, "codex/") {
+		if provider != "" && !strings.EqualFold(provider, "codex") {
+			return nil, fmt.Errorf("codex/ model prefix conflicts with provider %q", provider)
+		}
+		provider = "codex"
+		model = strings.TrimSpace(strings.TrimPrefix(model, "codex/"))
+		if model == "" {
+			return nil, fmt.Errorf("codex/ requires a model ID")
+		}
+	}
 	openAIKey := normalizedEnv(lookup, OpenAIKeyEnv)
 	anthropicKey := normalizedEnv(lookup, AnthropicKeyEnv)
 	fireworksKey := normalizedEnv(lookup, FireworksKeyEnv)
@@ -76,14 +94,18 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 			return nil, fmt.Errorf("%s is required when multiple model provider keys are configured", ProviderEnv)
 		}
 	}
-	model := strings.TrimSpace(config.Model)
-	if model == "" {
-		model = normalizedEnv(lookup, ModelEnv)
-	}
-	if model == "" {
-		return nil, fmt.Errorf("%s is required for model-backed adversaries", ModelEnv)
-	}
 	switch strings.ToLower(provider) {
+	case "codex":
+		effort := normalizedEnv(lookup, CodexReasoningEffortEnv)
+		if effort == "" {
+			effort = "high"
+		}
+		switch effort {
+		case "low", "medium", "high", "xhigh", "max":
+		default:
+			return nil, fmt.Errorf("unsupported ADVERSARY_CODEX_REASONING_EFFORT %q", effort)
+		}
+		return &CodexProvider{ModelID: model, ReasoningEffort: effort}, nil
 	case "openai":
 		if openAIKey == "" {
 			return nil, fmt.Errorf("%s is required for model provider openai", OpenAIKeyEnv)
@@ -177,7 +199,7 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 			IncludeContentDiagnostics: envEnabled(lookup, ModelContentDiagnosticsEnv),
 		}, nil
 	default:
-		return nil, fmt.Errorf("unsupported %s %q (supported: openai, anthropic, fireworks, camel)", ProviderEnv, provider)
+		return nil, fmt.Errorf("unsupported %s %q (supported: openai, anthropic, fireworks, camel, codex)", ProviderEnv, provider)
 	}
 }
 

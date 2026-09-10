@@ -172,6 +172,45 @@ Other models retain their existing defaults. Incomplete Responses are reported
 as errors, including the effective budget when the output limit is exhausted;
 they are not automatically retried at a higher cost.
 
+Codex can use an installed `codex` executable and your existing ChatGPT
+subscription login, without an API key:
+
+```sh
+codex login
+adversary run review/code --model codex/gpt-5.6-luna
+# Equivalent explicit provider:
+adversary run review/code --model-provider codex --model gpt-5.6-luna
+```
+
+The `codex/` prefix selects Codex before API-key inference. An explicitly
+configured different provider conflicts with this prefix. The model ID must be
+available to your Codex account. `ADVERSARY_CODEX_REASONING_EFFORT` defaults to
+`high`; supported selections are `low`, `medium`, `high`, `xhigh`, and `max`,
+subject to model support.
+
+Use a recent Codex CLI supporting `exec --ignore-user-config`, `--ephemeral`,
+and `--output-schema`. Each model request starts an isolated, ephemeral,
+read-only Codex session with shell, web search, multi-agent, and app tools
+disabled. User config is ignored to avoid custom providers and MCP servers;
+authentication remains in the existing `CODEX_HOME` (default `~/.codex`).
+The CLI requires `codex login status` to report ChatGPT authentication, strips
+API credentials from the subprocess environment, and never falls back to paid
+API access. Authentication and execution failures are not automatically retried
+by this provider. Final JSON is checked against the adversary's requested schema.
+
+Requests sharing a `CODEX_HOME` are serialized across adversary processes using
+an OS lock. Queue waiting counts against the request deadline. Other programs
+using Codex do not participate in that lock: use a dedicated authenticated home
+for a trusted private CI runner, and do not copy a login across concurrent
+machines. Subscription usage limits still apply. See OpenAI's
+[CI authentication guidance](https://learn.chatgpt.com/docs/auth/ci-cd-auth).
+
+Codex does not expose a hard output-token cap through `exec`; the requested
+output budget is advisory in the prompt. Timeouts and final response byte limits
+are enforced. On Windows, cancellation terminates the direct Codex child;
+on Unix it terminates its process group. Codex's agent harness differs from the
+API provider, so record `codex` as a separate provider in benchmark comparisons.
+
 Fireworks uses its full model identifier:
 
 ```sh
