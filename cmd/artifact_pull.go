@@ -105,7 +105,7 @@ func registerExactRef(resolver application.Resolver, ref, digest string) error {
 		if current.Digest == digest {
 			return nil
 		}
-		if updateErr := resolver.UpdateRef(ref, current.Digest, digest); updateErr != nil {
+		if updateErr := registerRefCAS(resolver, ref, current.Digest, digest); updateErr != nil {
 			return fmt.Errorf("retarget %s from %s to %s: %w", ref, current.Digest, digest, updateErr)
 		}
 		return nil
@@ -113,10 +113,24 @@ func registerExactRef(resolver application.Resolver, ref, digest string) error {
 	if !os.IsNotExist(err) {
 		return err
 	}
-	if createErr := resolver.UpdateRef(ref, "", digest); createErr != nil {
+	if createErr := registerRefCAS(resolver, ref, "", digest); createErr != nil {
 		return fmt.Errorf("create local reference %s -> %s: %w", ref, digest, createErr)
 	}
 	return nil
+}
+
+// Concurrent pulls of identical content may both observe a missing/old ref.
+// A lost CAS is success only when the winner installed exactly our digest.
+// Never overwrite a different concurrent target or suppress unrelated errors.
+func registerRefCAS(resolver application.Resolver, ref, oldDigest, digest string) error {
+	err := resolver.UpdateRef(ref, oldDigest, digest)
+	if errors.Is(err, repository.ErrCAS) {
+		current, readErr := resolver.ResolveRecord(ref)
+		if readErr == nil && current.Digest == digest {
+			return nil
+		}
+	}
+	return err
 }
 
 // registerVersionRef also pins registry/name:version when the pulled tag was
