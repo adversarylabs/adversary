@@ -155,6 +155,23 @@ adversary run adversarylabs/example \
   --model "your-model-id"
 ```
 
+Selecting OpenAI `gpt-5.6-luna` defaults to high reasoning. Because reasoning
+and the final answer share the output allowance, the CLI multiplies each
+adversary's requested token budget by four, with a 16,384-token minimum and
+65,536-token maximum. For example, a 1,500-token planning budget becomes 16,384,
+and an 8,000-token review budget becomes 32,000. These are ceilings, not target
+lengths; larger generations can increase cost and latency. Request deadlines
+remain unchanged.
+
+`ADVERSARY_OPENAI_REASONING_EFFORT` explicitly selects `none`, `low`, `medium`,
+`high`, `xhigh`, or `max` (subject to the selected model's support).
+`ADVERSARY_OPENAI_MAX_OUTPUT_TOKENS` sets an exact per-request output cap from
+1 through 65,536 and overrides automatic sizing. Setting reasoning to `none`
+also disables Luna's automatic headroom unless an explicit output cap is set.
+Other models retain their existing defaults. Incomplete Responses are reported
+as errors, including the effective budget when the output limit is exhausted;
+they are not automatically retried at a higher cost.
+
 Fireworks uses its full model identifier:
 
 ```sh
