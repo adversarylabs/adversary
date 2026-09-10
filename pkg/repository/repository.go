@@ -1057,31 +1057,17 @@ func (r Repository) replaceSource(kind string, source blobsource.Source) (retErr
 	cleanup = false
 	return nil
 }
+
+// Materialize resolves a verified immutable tree without retaining an execution
+// lease. Use the same shared-reader path as runtime leases so resolving another
+// consumer does not wait for an already-running review to finish.
 func (r Repository) Materialize(rec Record) (string, error) {
-	if err := r.init(); err != nil {
-		return "", err
-	}
-	lifecycleLock, err := publock.Acquire(r.Root, "repo-lifecycle")
+	lease, err := r.LeaseMaterialized(rec)
 	if err != nil {
 		return "", err
 	}
-	defer lifecycleLock.Close()
-	digestLock, err := publock.Acquire(r.Root, "repo-digest\x00"+rec.Digest)
-	if err != nil {
-		return "", err
-	}
-	defer digestLock.Close()
-	canonical, err := r.record(rec.Digest)
-	if err != nil {
-		return "", err
-	}
-	rec = canonical
-	lock, err := publock.Acquire(r.Root, "repo-materialize\x00"+rec.Digest)
-	if err != nil {
-		return "", err
-	}
-	defer lock.Close()
-	return r.materializeLocked(rec)
+	defer lease.Close()
+	return lease.Path, nil
 }
 
 type MaterializationLease struct {

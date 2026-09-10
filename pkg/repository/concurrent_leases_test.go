@@ -84,3 +84,29 @@ func TestGCWaitsForLastRuntimeLease(t *testing.T) {
 		t.Fatal("GC did not resume after last lease closed")
 	}
 }
+
+func TestResolveMaterializationDuringRuntimeLease(t *testing.T) {
+	r := Repository{Root: t.TempDir()}
+	t.Cleanup(func() { makeWritable(r.Root) })
+	rec, err := r.ImportPacked(artifact(t, "one"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := r.LeaseMaterialized(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	done := make(chan error, 1)
+	go func() { _, err := r.Materialize(rec); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		lease.Close()
+		<-done
+		t.Fatal("resolving an existing immutable artifact blocked behind an active review")
+	}
+}
