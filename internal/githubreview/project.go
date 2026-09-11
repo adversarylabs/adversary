@@ -2,6 +2,7 @@ package githubreview
 
 import (
 	"fmt"
+	"net/url"
 	"path"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 type ProjectOptions struct {
 	Repository  string // owner/name when known
 	PullRequest int
+	HeadSHA     string
 	MinSeverity string // empty = all
 	Voice       VoiceInfo
 	OmitSummary bool // keep inline/body findings but omit aggregate assessment/opinion
@@ -41,9 +43,11 @@ func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan
 
 	for _, ne := range envelopes {
 		res := ne.Envelope.Result
-		adv := strings.TrimSpace(ne.Adversary)
+		ref := strings.TrimSpace(ne.Adversary)
+		pkg := strings.TrimSpace(res.Adversary.Name)
+		adv := ref
 		if adv == "" {
-			adv = res.Adversary.Name
+			adv = pkg
 		}
 		for _, f := range res.Findings {
 			plan.Summary.FindingsSeen++
@@ -53,7 +57,7 @@ func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan
 				})
 				continue
 			}
-			pc := projectOne(adv, f)
+			pc := projectOne(adv, pkg, res.Adversary.Version, opts.HeadSHA, f)
 			plan.Comments = append(plan.Comments, pc)
 		}
 	}
@@ -110,7 +114,7 @@ func TemplateSummary(comments []PlannedComment) string {
 	return body.String()
 }
 
-func projectOne(adversary string, f review.Finding) PlannedComment {
+func projectOne(adversary, packageName, packageVersion, headSHA string, f review.Finding) PlannedComment {
 	pathStr, line, endLine := primaryAnchor(f.Evidence)
 	placement := "review_body"
 	reason := ""
@@ -134,9 +138,13 @@ func projectOne(adversary string, f review.Finding) PlannedComment {
 	}
 
 	body := TemplateBody(adversary, f, pathStr, line)
-	return PlannedComment{
+	comment := PlannedComment{
 		FindingID:       f.ID,
+		RuleID:          f.RuleID,
 		Adversary:       adversary,
+		Package:         packageName,
+		PackageVersion:  packageVersion,
+		HeadSHA:         strings.TrimSpace(headSHA),
 		Severity:        f.Severity,
 		Confidence:      f.Confidence,
 		Title:           f.Title,
@@ -146,6 +154,8 @@ func projectOne(adversary string, f review.Finding) PlannedComment {
 		Placement:       placement,
 		PlacementReason: reason,
 	}
+	comment.Body = EnsurePlannedMarker(body, comment)
+	return comment
 }
 
 func primaryAnchor(ev []review.Evidence) (file string, line, endLine *int) {
@@ -201,6 +211,33 @@ func Marker(adversary, findingID, pathStr string, line *int) string {
 	}
 	return fmt.Sprintf("<!-- adversary-review:v1 adversary=%s finding=%s loc=%s -->",
 		sanitizeMarker(adversary), sanitizeMarker(findingID), sanitizeMarker(loc))
+}
+
+// MarkerV2 adds immutable package and review provenance used to route human
+// replies back to the owning adversary. Values are query-escaped so the marker
+// remains one machine-readable HTML comment.
+func MarkerV2(comment PlannedComment) string {
+	loc := comment.Anchor.Path
+	if comment.Anchor.Line != nil {
+		loc = fmt.Sprintf("%s:%d", comment.Anchor.Path, *comment.Anchor.Line)
+	}
+	if loc == "" {
+		loc = "none"
+	}
+	fields := []string{
+		"adversary=" + markerEscape(comment.Adversary),
+		"package=" + markerEscape(comment.Package),
+		"version=" + markerEscape(comment.PackageVersion),
+		"finding=" + markerEscape(comment.FindingID),
+		"rule=" + markerEscape(comment.RuleID),
+		"head=" + markerEscape(comment.HeadSHA),
+		"loc=" + markerEscape(loc),
+	}
+	return "<!-- adversary-review:v2 " + strings.Join(fields, " ") + " -->"
+}
+
+func markerEscape(value string) string {
+	return url.QueryEscape(sanitizeMarker(value))
 }
 
 func sanitizeMarker(s string) string {

@@ -17,6 +17,9 @@ existing one.
 - Composed reviews now emit one conservatively deduplicated result and retain
   every contributing reviewer in finding metadata. `--no-compose` remains
   supported for controlled evaluation but is hidden from normal help.
+- GitHub reviews register posted inline findings with Adversary Labs, retrieve
+  repository-scoped maintainer feedback before later model-backed reviews, and
+  embed provenance-rich v2 markers for SaaS polling.
 - Packing preserves self-contained JavaScript bundles instead of appending the
   installed SDK dependency closure when no unresolved SDK import remains.
 - Model provider and model can be selected per run with flags, and Fireworks is

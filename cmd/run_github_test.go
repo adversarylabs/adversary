@@ -184,7 +184,7 @@ func TestMaybeGitHubReviewEnhancesWithFakeProviderWiring(t *testing.T) {
 	if plan.Comments[0].BodySource != "llm" || !strings.Contains(plan.Comments[0].Body, "LLM polished") {
 		t.Fatalf("%#v", plan.Comments[0])
 	}
-	if !strings.Contains(plan.Comments[0].Body, "adversary-review:v1") {
+	if !strings.Contains(plan.Comments[0].Body, "adversary-review:v2") {
 		t.Fatal("marker missing")
 	}
 	if fp.calls != 1 {

@@ -70,7 +70,7 @@ func EnhanceBodies(ctx context.Context, plan *CommentPlan, opts EnhanceOptions) 
 		if err != nil || strings.TrimSpace(body) == "" {
 			continue
 		}
-		c.Body = EnsureMarker(body, c.Adversary, c.FindingID, c.Anchor.Path, c.Anchor.Line)
+		c.Body = EnsurePlannedMarker(body, *c)
 		c.BodySource = "llm"
 		enhanced++
 	}

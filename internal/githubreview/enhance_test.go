@@ -107,7 +107,7 @@ func TestEnhanceBodiesUsesProviderAndSetsLLMSource(t *testing.T) {
 	if !strings.Contains(plan.Comments[0].Body, "Concise rewrite") {
 		t.Fatal(plan.Comments[0].Body)
 	}
-	if !strings.Contains(plan.Comments[0].Body, "adversary-review:v1") {
+	if !strings.Contains(plan.Comments[0].Body, "adversary-review:v2") {
 		t.Fatal("marker missing after enhance")
 	}
 }

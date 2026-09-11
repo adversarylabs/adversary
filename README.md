@@ -60,6 +60,8 @@ See [finding verification](docs/finding-verification.md) for source-based checks
 before deduplication and replaying the filter on saved candidates.
 See [comment voice](docs/voice.md) for `agent/voice.md`, example banks, and GitHub
 rewrite with `--github-review`.
+See [review feedback](docs/github-feedback.md) for the SaaS-owned learning loop
+that watches replies and steers later reviews.
 
 ## Automatic review scope
 
