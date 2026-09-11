@@ -72,8 +72,14 @@ func TestReviewMarkerKeySupportsFeedbackMarkerVersions(t *testing.T) {
 }
 
 func TestReviewMarkerKeyNormalizesMarkerValues(t *testing.T) {
-	key, ok := reviewMarkerKey("body <!-- adversary-review:v2 adversary=review/code\x01 finding=finding-1\x02 loc=a.go:2 -->")
-	if !ok || key != (reviewFindingKey{adversary: "review/code", finding: "finding-1"}) {
+	key, ok := reviewMarkerKey("body <!-- adversary-review:v2 adversary=review%2Fcode%01 finding=finding+with+spaces%02 loc=a.go%3A2 -->")
+	if !ok || key != (reviewFindingKey{adversary: "review/code", finding: "finding with spaces"}) {
+		t.Fatalf("key=%#v ok=%v", key, ok)
+	}
+}
+
+func TestReviewMarkerKeyRejectsMalformedEscapes(t *testing.T) {
+	if key, ok := reviewMarkerKey("body <!-- adversary-review:v2 adversary=review%2Fcode finding=bad%ZZ loc=a.go%3A2 -->"); ok {
 		t.Fatalf("key=%#v ok=%v", key, ok)
 	}
 }

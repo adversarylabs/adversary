@@ -3,13 +3,10 @@ package githubreview
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
 )
-
-var reviewMarkerPattern = regexp.MustCompile(`<!--\s+adversary-review:v[12]\s+([\s\S]*?)-->`)
 
 type reviewFindingKey struct {
 	adversary string
@@ -146,24 +143,12 @@ query($owner:String!,$name:String!,$number:Int!,$after:String){
 }
 
 func reviewMarkerKey(body string) (reviewFindingKey, bool) {
-	match := reviewMarkerPattern.FindStringSubmatch(body)
-	if len(match) != 2 {
+	marker, ok, err := ParseMarker(body)
+	if err != nil || !ok {
 		return reviewFindingKey{}, false
 	}
-	adversary := markerValue(match[1], "adversary")
-	finding := markerValue(match[1], "finding")
-	if adversary == "" || finding == "" {
-		return reviewFindingKey{}, false
-	}
-	return reviewFindingKey{adversary: sanitizeMarker(adversary), finding: sanitizeMarker(finding)}, true
-}
-
-func markerValue(marker, name string) string {
-	for _, field := range strings.Fields(marker) {
-		key, value, ok := strings.Cut(field, "=")
-		if ok && key == name {
-			return value
-		}
-	}
-	return ""
+	return reviewFindingKey{
+		adversary: sanitizeMarker(marker.Adversary),
+		finding:   sanitizeMarker(marker.FindingID),
+	}, true
 }
