@@ -69,6 +69,21 @@ func TestCommandGitDifferChangedFiles(t *testing.T) {
 	}
 }
 
+func TestCommandGitDifferSourceIdentity(t *testing.T) {
+	repo := newGitRepository(t)
+	writeFile(t, filepath.Join(repo, "source.txt"), "source\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "source identity")
+
+	got, err := systemGitDiffer(t).SourceIdentity(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Ref != "main" || len(got.SHA) != 40 {
+		t.Fatalf("source identity = %#v", got)
+	}
+}
+
 func TestGitDiffNameOnlyCommandConstruction(t *testing.T) {
 	got := gitDiffNameStatusArgs("main", "HEAD")
 	want := []string{"diff", "--no-ext-diff", "--ignore-submodules=none", "--name-status", "-z", "--find-renames", "--find-copies", "--find-copies-harder", "main", "HEAD", "--"}
