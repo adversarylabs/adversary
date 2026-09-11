@@ -155,7 +155,7 @@ func reviewMarkerKey(body string) (reviewFindingKey, bool) {
 	if adversary == "" || finding == "" {
 		return reviewFindingKey{}, false
 	}
-	return reviewFindingKey{adversary: adversary, finding: finding}, true
+	return reviewFindingKey{adversary: sanitizeMarker(adversary), finding: sanitizeMarker(finding)}, true
 }
 
 func markerValue(marker, name string) string {

@@ -70,3 +70,10 @@ func TestReviewMarkerKeySupportsFeedbackMarkerVersions(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewMarkerKeyNormalizesMarkerValues(t *testing.T) {
+	key, ok := reviewMarkerKey("body <!-- adversary-review:v2 adversary=review/code\x01 finding=finding-1\x02 loc=a.go:2 -->")
+	if !ok || key != (reviewFindingKey{adversary: "review/code", finding: "finding-1"}) {
+		t.Fatalf("key=%#v ok=%v", key, ok)
+	}
+}
