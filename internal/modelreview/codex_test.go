@@ -96,6 +96,19 @@ func TestCodexReview(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 }
+
+func TestCodexCreatesConfiguredHome(t *testing.T) {
+	p := codexTestProvider(t)
+	home := os.Getenv("CODEX_HOME") + "/not-yet-created"
+	t.Setenv("CODEX_HOME", home)
+	if _, err := p.Review(context.Background(), codexTestRequest()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(home)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("configured home was not created: %v", err)
+	}
+}
 func TestCodexRejectsAPIAuthAndInvalidOutput(t *testing.T) {
 	for _, mode := range []string{"api", "invalid", "bad-envelope", "failed"} {
 		t.Run(mode, func(t *testing.T) {

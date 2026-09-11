@@ -53,7 +53,10 @@ func (p *CodexProvider) Review(ctx context.Context, request Request) (Result, er
 	}
 	home, err := filepath.Abs(home)
 	if err != nil {
-		return Result{}, err
+		return Result{}, codexError("cannot resolve Codex home")
+	}
+	if err := os.MkdirAll(home, 0700); err != nil {
+		return Result{}, codexError("cannot create Codex home; ensure CODEX_HOME is writable")
 	}
 	// Lock the same home across all adversary processes; waiting consumes the
 	// request deadline. Codex itself remains responsible for refreshing auth.
@@ -62,6 +65,8 @@ func (p *CodexProvider) Review(ctx context.Context, request Request) (Result, er
 		return Result{}, codexError("cannot lock Codex home; run codex login first and ensure CODEX_HOME is writable")
 	}
 	defer lock.Close()
+	retry := time.NewTicker(100 * time.Millisecond)
+	defer retry.Stop()
 	for {
 		acquired, err := tryCodexLock(lock)
 		if err != nil {
@@ -73,13 +78,13 @@ func (p *CodexProvider) Review(ctx context.Context, request Request) (Result, er
 		select {
 		case <-ctx.Done():
 			return Result{}, ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		case <-retry.C:
 		}
 	}
 	defer unlockCodex(lock)
 	dir, err := os.MkdirTemp("", "adversary-codex-")
 	if err != nil {
-		return Result{}, err
+		return Result{}, codexError("cannot create temporary Codex workspace")
 	}
 	defer os.RemoveAll(dir)
 	env := codexEnvironment(os.Environ(), home)
