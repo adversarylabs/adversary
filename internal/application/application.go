@@ -148,6 +148,13 @@ type Runtime interface {
 	Inspect(context.Context, AdversaryRunOptions) error
 	Auto(context.Context, AdversaryAutoOptions) (AdversaryAutoResult, error)
 }
+type RunSourceIdentity struct {
+	Ref string
+	SHA string
+}
+type RunSourceIdentityProvider interface {
+	RunSourceIdentity(context.Context, string) (RunSourceIdentity, error)
+}
 type AdversaryRunOptions struct {
 	AdversaryRef, RepoPath, BaseRef, HeadRef, Builder, Format string
 	ModelProvider, Model                                      string

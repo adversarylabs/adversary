@@ -318,9 +318,9 @@ func (c Client) NamespaceTrustRoot(ctx context.Context, token string) (namespace
 	return out, nil
 }
 
-// RunUsageReport contains privacy-safe aggregate outcomes only. Finding text,
-// repository identity, file paths, model inputs, and flags other than explicit
-// bounded telemetry tags must never be added.
+// RunUsageReport contains privacy-safe aggregate outcomes plus bounded source
+// identity. Finding text, repository identity, file paths, model inputs, and
+// flags other than explicit bounded telemetry tags must never be added.
 type RunUsageReport struct {
 	Action            string                    `json:"action,omitempty"`
 	Outcome           string                    `json:"outcome,omitempty"`
@@ -331,6 +331,9 @@ type RunUsageReport struct {
 	TraceID           string                    `json:"trace_id,omitempty"`
 	Tags              map[string]string         `json:"tags,omitempty"`
 	Spans             []RunUsageSpan            `json:"spans,omitempty"`
+	GitRef            string                    `json:"git_ref,omitempty"`
+	GitSHA            string                    `json:"git_sha,omitempty"`
+	PullRequest       int                       `json:"pull_request,omitempty"`
 	TelemetryFile     string                    `json:"-"`
 	TelemetryDisabled bool                      `json:"-"`
 }
@@ -380,15 +383,18 @@ type RunUsageSpan struct {
 // source are derived by the server from the token, never this payload.
 func (c Client) RecordUsage(ctx context.Context, token, eventType, cliVersion string, report RunUsageReport) error {
 	payload := map[string]any{
-		"event_type":  strings.TrimSpace(eventType),
-		"cli_version": strings.TrimSpace(cliVersion),
-		"adversaries": report.Adversaries,
-		"duration_ms": report.DurationMS,
-		"results":     report.Results,
-		"phases":      report.Phases,
-		"trace_id":    report.TraceID,
-		"tags":        report.Tags,
-		"spans":       report.Spans,
+		"event_type":   strings.TrimSpace(eventType),
+		"cli_version":  strings.TrimSpace(cliVersion),
+		"adversaries":  report.Adversaries,
+		"duration_ms":  report.DurationMS,
+		"results":      report.Results,
+		"phases":       report.Phases,
+		"trace_id":     report.TraceID,
+		"tags":         report.Tags,
+		"spans":        report.Spans,
+		"git_ref":      report.GitRef,
+		"git_sha":      report.GitSHA,
+		"pull_request": report.PullRequest,
 	}
 	path := "/v1/cli/usage"
 	if report.Action != "" {

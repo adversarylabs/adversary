@@ -33,6 +33,15 @@ type GitDiffer interface {
 	ChangedFiles(ctx context.Context, repoPath, baseRef, headRef string) ([]string, error)
 }
 
+type GitSourceIdentity struct {
+	Ref string
+	SHA string
+}
+
+type GitSourceIdentityResolver interface {
+	SourceIdentity(context.Context, string) (GitSourceIdentity, error)
+}
+
 // CommandGitDiffer executes one canonical Git executable with an immutable
 // environment snapshot. Production composition resolves Git once; no command
 // here consults the ambient PATH or environment.
@@ -53,6 +62,24 @@ func (g CommandGitDiffer) ChangedFiles(ctx context.Context, repoPath, baseRef, h
 		files = append(files, change.Path)
 	}
 	return files, nil
+}
+
+func (g CommandGitDiffer) SourceIdentity(ctx context.Context, repoPath string) (GitSourceIdentity, error) {
+	if err := g.validate(); err != nil {
+		return GitSourceIdentity{}, err
+	}
+	if err := g.verifyRepository(ctx, repoPath); err != nil {
+		return GitSourceIdentity{}, err
+	}
+	sha, err := g.resolveCommit(ctx, repoPath, "HEAD")
+	if err != nil {
+		return GitSourceIdentity{}, err
+	}
+	identity := GitSourceIdentity{SHA: sha}
+	if out, _, refErr := g.run(ctx, repoPath, "symbolic-ref", "--quiet", "--short", "HEAD"); refErr == nil {
+		identity.Ref = strings.TrimSpace(string(out))
+	}
+	return identity, nil
 }
 
 // Changes compares the merge-base of baseRef and headRef with headRef

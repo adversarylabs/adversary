@@ -31,6 +31,38 @@ func sanitizeCLIVersion(value string) string {
 	return v
 }
 
+var fullGitSHA = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
+
+// withRunSourceContext records only the bounded source-control identity needed
+// to group dashboard activity. It never uploads a repository URL or local path.
+func withRunSourceContext(ctx context.Context, app *application.App, report adversarylabs.RunUsageReport, opts *runOptions) adversarylabs.RunUsageReport {
+	if opts == nil || report.TelemetryDisabled || telemetry.Disabled() {
+		return report
+	}
+	report.PullRequest = opts.githubPR
+	if fullGitSHA.MatchString(strings.TrimSpace(opts.resolvedHeadSHA)) {
+		report.GitSHA = strings.ToLower(strings.TrimSpace(opts.resolvedHeadSHA))
+	}
+	path := strings.TrimSpace(opts.path)
+	if path == "" {
+		path = "."
+	}
+	if report.GitSHA == "" {
+		if source, ok := app.Dependencies().Runtime.(application.RunSourceIdentityProvider); ok {
+			identity, err := source.RunSourceIdentity(ctx, path)
+			sha := strings.TrimSpace(identity.SHA)
+			if fullGitSHA.MatchString(sha) {
+				report.GitSHA = strings.ToLower(sha)
+			}
+			ref := strings.TrimSpace(identity.Ref)
+			if err == nil && ref != "" && len(ref) <= 256 && !strings.ContainsAny(ref, "\r\n") {
+				report.GitRef = ref
+			}
+		}
+	}
+	return report
+}
+
 const telemetryTimeout = 2 * time.Second
 
 // reportPull records a repository pull counter best-effort.

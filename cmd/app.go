@@ -184,6 +184,14 @@ type processRuntime struct {
 }
 
 func (p processRuntime) BindingIdentity() string { return p.resolver.Repository.RootPath() }
+func (p processRuntime) RunSourceIdentity(ctx context.Context, repoPath string) (application.RunSourceIdentity, error) {
+	resolver, ok := p.git.(internaladversary.GitSourceIdentityResolver)
+	if !ok {
+		return application.RunSourceIdentity{}, fmt.Errorf("runtime Git dependency does not support source identity")
+	}
+	identity, err := resolver.SourceIdentity(ctx, repoPath)
+	return application.RunSourceIdentity{Ref: identity.Ref, SHA: identity.SHA}, err
+}
 func (p processRuntime) Run(ctx context.Context, opts application.AdversaryRunOptions) error {
 	opts, resolved, err := p.resolveRunScope(ctx, opts)
 	if err != nil {

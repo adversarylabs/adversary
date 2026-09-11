@@ -465,7 +465,7 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	// callbacks fail before every selected adversary executes.
 	var ran []string
 	usageStarted := time.Now()
-	finalUsage := adversarylabs.RunUsageReport{Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}
+	finalUsage := withRunSourceContext(cmd.Context(), app, adversarylabs.RunUsageReport{Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}, opts)
 	var selectedForUsage []string
 	var finishUsage func(adversarylabs.RunUsageReport)
 	defer func() {
@@ -737,7 +737,7 @@ func runAdversaries(
 	var hardErr error
 	hardRef := ""
 	usageStarted := time.Now()
-	finalUsage := adversarylabs.RunUsageReport{Adversaries: refs, Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}
+	finalUsage := withRunSourceContext(ctx, app, adversarylabs.RunUsageReport{Adversaries: refs, Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}, opts)
 	finishUsage := beginRunUsage(ctx, app, valueOf(apiURL), valueOf(profile), finalUsage)
 	defer func() { finishUsage(finalUsage) }()
 	var usageResults []adversarylabs.RunUsageAdversaryResult

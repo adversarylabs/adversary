@@ -1,15 +1,43 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
+	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/telemetry"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/repository"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
+
+type sourceIdentityRuntime struct{ application.Runtime }
+
+func (sourceIdentityRuntime) RunSourceIdentity(context.Context, string) (application.RunSourceIdentity, error) {
+	return application.RunSourceIdentity{Ref: "feature/run-targets", SHA: strings.Repeat("a", 40)}, nil
+}
+
+func TestWithRunSourceContextReportsPRBranchAndCommit(t *testing.T) {
+	var out, errOut bytes.Buffer
+	app := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut)
+	deps := app.Dependencies()
+	deps.Runtime = sourceIdentityRuntime{Runtime: deps.Runtime}
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := withRunSourceContext(context.Background(), app, adversarylabs.RunUsageReport{}, &runOptions{
+		path: t.TempDir(), githubPR: 213,
+	})
+	if got.PullRequest != 213 || got.GitRef != "feature/run-targets" || !fullGitSHA.MatchString(got.GitSHA) {
+		t.Fatalf("source context = %#v", got)
+	}
+}
 
 func TestSanitizeAdversarySelectionDelegates(t *testing.T) {
 	got := telemetry.SanitizeAdversarySelection([]string{

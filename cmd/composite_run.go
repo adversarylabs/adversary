@@ -70,7 +70,7 @@ func runComposedAdversaries(
 	resultOut, progressOut io.Writer,
 ) error {
 	started := time.Now()
-	finalUsage := adversarylabs.RunUsageReport{Adversaries: refs, Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}
+	finalUsage := withRunSourceContext(ctx, app, adversarylabs.RunUsageReport{Adversaries: refs, Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}, opts)
 	finishUsage := beginRunUsage(ctx, app, apiURL, profile, finalUsage)
 	defer func() { finishUsage(finalUsage) }()
 	var usagePhases []adversarylabs.RunUsagePhase
