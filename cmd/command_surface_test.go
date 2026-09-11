@@ -381,6 +381,33 @@ func TestRunCommandForwardsPathAndPartialRefsForAutomaticCompletion(t *testing.T
 	}
 }
 
+func TestRunCommandAcceptsCodexProvider(t *testing.T) {
+	var out, errOut bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut)
+	deps := base.Dependencies()
+	spy := &recordingRunRuntime{inner: deps.Runtime}
+	deps.Runtime = spy
+	app, err := application.New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewRootCommandWithApp(app)
+	cmd.SetArgs([]string{
+		"run", "example",
+		"--path", "/repo",
+		"--base", "main",
+		"--model-provider", "Codex",
+		"--model", " codex/gpt-5.6-luna ",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if spy.opts.RepoPath != "/repo" || spy.opts.BaseRef != "main" || spy.opts.HeadRef != "" || spy.opts.AllFiles ||
+		spy.opts.ModelProvider != "codex" || spy.opts.Model != "codex/gpt-5.6-luna" {
+		t.Fatalf("options = %#v", spy.opts)
+	}
+}
+
 func TestInvalidPackBuilderHasNoProgressOrResolverWork(t *testing.T) {
 	var out, errOut bytes.Buffer
 	app := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &out, &errOut)
