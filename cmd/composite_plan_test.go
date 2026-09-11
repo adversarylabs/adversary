@@ -157,6 +157,9 @@ func TestRoutedComposedRunJobsCanKeepRootToFullChange(t *testing.T) {
 	if jobs[0].ref != "review/code" || jobs[0].scope != "full-change" || jobs[1].ref != "lang/go" {
 		t.Fatalf("unexpected jobs: %#v", jobs)
 	}
+	if len(jobs[0].verificationRegions) != 1 || jobs[0].verificationRegions[0] != region {
+		t.Fatalf("root verification regions = %#v", jobs[0].verificationRegions)
+	}
 	if stats.CandidateAssignments != 1 || stats.RoutedAssignments != 1 {
 		t.Fatalf("stats = %#v", stats)
 	}
@@ -194,6 +197,9 @@ func TestRoutedComposedRunJobsCanKeepBroadChildrenToFullChange(t *testing.T) {
 	}
 	if jobs[1].ref != "review/conventions" || jobs[1].scope != "full-change" || jobs[1].groups != 2 || jobs[1].regions != 2 || jobs[1].lines != 40 {
 		t.Fatalf("unexpected broad job: %#v", jobs[1])
+	}
+	if len(jobs[0].verificationRegions) != 2 || len(jobs[1].verificationRegions) != 2 {
+		t.Fatalf("full-change verification regions were dropped: root=%#v broad=%#v", jobs[0].verificationRegions, jobs[1].verificationRegions)
 	}
 	if jobs[2].ref != "lang/go" || jobs[2].scope != "batch-001" {
 		t.Fatalf("unexpected scoped job: %#v", jobs[2])
