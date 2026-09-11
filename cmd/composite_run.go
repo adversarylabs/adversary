@@ -753,9 +753,6 @@ func duplicateFindingIndex(existing []review.Finding, candidate review.Finding) 
 		if sameFindingLocation(existing[i], candidate) && titleSimilarity(existing[i].Title, candidate.Title) >= 0.6 && sameFindingAssertion(existing[i], candidate) {
 			return i
 		}
-		if existing[i].ID != "" && candidate.ID != "" && tokenSetSimilarity(existing[i].ID, candidate.ID) >= 0.5 && shareEvidenceFile(existing[i], candidate) && titleSimilarity(existing[i].Title, candidate.Title) >= 0.6 && findingSummarySimilarity(existing[i], candidate) >= 0.6 {
-			return i
-		}
 		if shareEvidenceFile(existing[i], candidate) && titleSimilarity(existing[i].Title, candidate.Title) >= 0.7 && findingSummarySimilarity(existing[i], candidate) >= 0.6 && sameFindingDetails(existing[i], candidate) {
 			return i
 		}

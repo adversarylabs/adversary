@@ -196,7 +196,7 @@ func TestDeduplicationMatchesParaphrasesAfterChangedLineReanchor(t *testing.T) {
 	}
 }
 
-func TestDeduplicationUsesCorroboratingGeneratedIDsAcrossDifferentRecommendations(t *testing.T) {
+func TestDeduplicationDoesNotMergeGeneratedIDsAcrossDifferentRecommendations(t *testing.T) {
 	line22, line149 := 22, 149
 	a := review.Finding{
 		ID: "conventions.inferred-1-github-review-marker-normalization", Title: "Normalize parsed marker values before matching addressed findings", Summary: "Raw parsed marker values cannot match the sanitized identifiers used for current findings.", Recommendation: "Apply sanitizeMarker while parsing the persisted marker.", Evidence: []review.Evidence{{File: "resolve.go", Line: &line22}},
@@ -204,7 +204,7 @@ func TestDeduplicationUsesCorroboratingGeneratedIDsAcrossDifferentRecommendation
 	b := review.Finding{
 		ID: "conventions.inferred-7-resolve-marker-normalization", Title: "Normalize marker values before matching addressed findings", Summary: "Parsed marker values remain raw and cannot match sanitized identifiers for current findings.", Recommendation: "Normalize both key fields and add a regression test.", Evidence: []review.Evidence{{File: "resolve.go", Line: &line149}},
 	}
-	if got := duplicateFindingIndex([]review.Finding{a}, b); got != 0 {
+	if got := duplicateFindingIndex([]review.Finding{a}, b); got != -1 {
 		t.Fatalf("generated-ID duplicate index = %d", got)
 	}
 }
