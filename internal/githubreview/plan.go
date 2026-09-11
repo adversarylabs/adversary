@@ -4,17 +4,18 @@ import "github.com/adversarylabs/adversary/pkg/review"
 
 // CommentPlan is a derived, comment-ready projection of review findings.
 type CommentPlan struct {
-	SchemaVersion int              `json:"schemaVersion"`
-	Source        string           `json:"source"`
-	Repository    string           `json:"repository,omitempty"`
-	PullRequest   int              `json:"pullRequest,omitempty"`
-	HeadSHA       string           `json:"headSha,omitempty"`
-	MinSeverity   string           `json:"minSeverity,omitempty"`
-	Voice         VoiceInfo        `json:"voice"`
-	Comments      []PlannedComment `json:"comments"`
-	Skipped       []SkippedFinding `json:"skipped,omitempty"`
-	ReviewBody    string           `json:"reviewBody,omitempty"`
-	Summary       PlanSummary      `json:"summary"`
+	SchemaVersion       int              `json:"schemaVersion"`
+	Source              string           `json:"source"`
+	Repository          string           `json:"repository,omitempty"`
+	PullRequest         int              `json:"pullRequest,omitempty"`
+	HeadSHA             string           `json:"headSha,omitempty"`
+	MinSeverity         string           `json:"minSeverity,omitempty"`
+	ReviewedAdversaries []string         `json:"reviewedAdversaries,omitempty"`
+	Voice               VoiceInfo        `json:"voice"`
+	Comments            []PlannedComment `json:"comments"`
+	Skipped             []SkippedFinding `json:"skipped,omitempty"`
+	ReviewBody          string           `json:"reviewBody,omitempty"`
+	Summary             PlanSummary      `json:"summary"`
 }
 
 // VoiceInfo records which prompt was used for LLM rewrite attempts.

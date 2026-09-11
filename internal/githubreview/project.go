@@ -49,6 +49,9 @@ func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan
 		if adv == "" {
 			adv = pkg
 		}
+		if !containsString(plan.ReviewedAdversaries, adv) {
+			plan.ReviewedAdversaries = append(plan.ReviewedAdversaries, adv)
+		}
 		for _, f := range res.Findings {
 			plan.Summary.FindingsSeen++
 			if minRank >= 0 && SeverityRank(f.Severity) < minRank {
@@ -78,6 +81,15 @@ func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan
 		}
 	}
 	return plan
+}
+
+func containsString(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 // TemplateSummary is the deterministic fallback when no model provider is

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/adversarylabs/adversary/internal/modelreview"
+	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
 
@@ -208,6 +209,30 @@ func TestMalformedProviderJSONAndLowConfidence(t *testing.T) {
 	}
 	if r.Decisions[0].Status != "unresolved" {
 		t.Fatal(r)
+	}
+}
+
+func TestKeptFindingRequiresChangedLineCitation(t *testing.T) {
+	changed := source("changed.go", "first\nsecond\nthird\n")
+	unchanged := source("context.go", "supporting context\n")
+	candidate := Candidate{
+		ID: "one", Reviewer: "reviewer", Finding: review.Finding{ID: "finding", Summary: "claim"},
+		ChangedRegions: []detection.ReviewRegion{{Path: "changed.go", StartLine: 2, EndLine: 2}},
+		Sources:        []Source{changed, unchanged},
+	}
+	offDiff := Decision{CandidateID: "one", Status: "keep", Confidence: "high", Reason: "The context supports the claim.", Evidence: []Citation{{SourceID: unchanged.ID, Line: 1}}, Requests: []ReadRequest{}}
+	if err := validateDecision(offDiff, candidate); err == nil {
+		t.Fatal("off-diff keep accepted")
+	}
+	onDiff := offDiff
+	onDiff.Evidence = append(onDiff.Evidence, Citation{SourceID: changed.ID, Line: 2})
+	if err := validateDecision(onDiff, candidate); err != nil {
+		t.Fatalf("changed-line keep rejected: %v", err)
+	}
+	reject := offDiff
+	reject.Status = "reject"
+	if err := validateDecision(reject, candidate); err != nil {
+		t.Fatalf("off-diff rejection should remain valid: %v", err)
 	}
 }
 func TestStructuralCorrectionPreservesRetrievalBudgetAndReplay(t *testing.T) {

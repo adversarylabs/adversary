@@ -182,3 +182,29 @@ func TestDeduplicationPreservesStructuredRemediation(t *testing.T) {
 		})
 	}
 }
+
+func TestDeduplicationMatchesParaphrasesAfterChangedLineReanchor(t *testing.T) {
+	line12, line80 := 12, 80
+	a := review.Finding{
+		Title: "Normalize parsed marker values before matching findings", Summary: "Parsed marker values are raw and cannot match sanitized current finding keys.", Recommendation: "Sanitize parsed marker values before constructing the key.", Evidence: []review.Evidence{{File: "resolve.go", Line: &line12}},
+	}
+	b := review.Finding{
+		Title: "Normalize marker values before matching parsed findings", Summary: "Raw parsed marker values cannot match sanitized current finding keys.", Recommendation: "Sanitize parsed marker values before constructing the key.", Evidence: []review.Evidence{{File: "resolve.go", Line: &line80}},
+	}
+	if got := duplicateFindingIndex([]review.Finding{a}, b); got != 0 {
+		t.Fatalf("paraphrased duplicate index = %d", got)
+	}
+}
+
+func TestDeduplicationDoesNotMergeGeneratedIDsAcrossDifferentRecommendations(t *testing.T) {
+	line22, line149 := 22, 149
+	a := review.Finding{
+		ID: "conventions.inferred-1-github-review-marker-normalization", Title: "Normalize parsed marker values before matching addressed findings", Summary: "Raw parsed marker values cannot match the sanitized identifiers used for current findings.", Recommendation: "Apply sanitizeMarker while parsing the persisted marker.", Evidence: []review.Evidence{{File: "resolve.go", Line: &line22}},
+	}
+	b := review.Finding{
+		ID: "conventions.inferred-7-resolve-marker-normalization", Title: "Normalize marker values before matching addressed findings", Summary: "Parsed marker values remain raw and cannot match sanitized identifiers for current findings.", Recommendation: "Normalize both key fields and add a regression test.", Evidence: []review.Evidence{{File: "resolve.go", Line: &line149}},
+	}
+	if got := duplicateFindingIndex([]review.Finding{a}, b); got != -1 {
+		t.Fatalf("generated-ID duplicate index = %d", got)
+	}
+}

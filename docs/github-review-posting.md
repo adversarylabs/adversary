@@ -32,6 +32,7 @@ adversary run https://github.com/owner/repo/pull/123 --github-review --github-su
 | `--github-pr N` | PR number (or use PR URL / Actions env) |
 | `--github-repo owner/name` | Repository (or use PR URL / `GITHUB_REPOSITORY`) |
 | `--github-submit` | Submit review as `COMMENT` (default leaves **pending**) |
+| `--github-resolve-addressed` | Resolve prior Adversary threads whose findings disappear after a complete successful rerun (default `true`) |
 | `--github-include-summary=false` | Omit the persistent aggregate assessment/opinion while retaining finding comments and execution-failure notices |
 | `--github-min-severity` | `info`\|`low`\|`medium`\|`high`\|`critical` (default: all) |
 | `--github-api-url` | GraphQL endpoint override |

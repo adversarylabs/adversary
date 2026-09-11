@@ -34,7 +34,8 @@ func verifyComposedResults(ctx context.Context, opts *runOptions, runs []compose
 			continue
 		}
 		for j, f := range run.envelope.Result.Findings {
-			c := findingverify.Candidate{ID: fmt.Sprintf("run-%d-finding-%d", i, j), Reviewer: run.ref, Scope: run.scope, WholeRepository: opts.allFiles, Finding: f, Sources: []findingverify.Source{}}
+			changedRegions := append([]detection.ReviewRegion(nil), run.changedRegions...)
+			c := findingverify.Candidate{ID: fmt.Sprintf("run-%d-finding-%d", i, j), Reviewer: run.ref, Scope: run.scope, WholeRepository: opts.allFiles, ChangedRegions: changedRegions, Finding: f, Sources: []findingverify.Source{}}
 			if contextErr != nil {
 				c.ContextError = "Pinned review context unavailable."
 			} else if collector != nil {
@@ -67,6 +68,7 @@ func verifyComposedResults(ctx context.Context, opts *runOptions, runs []compose
 		envelope.Result.Findings = []review.Finding{}
 		for _, f := range run.envelope.Result.Findings {
 			if report.Decisions[decision].Status == "keep" {
+				f = reanchorFindingToChangedCitation(f, report.Snapshot.Candidates[decision], report.Decisions[decision])
 				envelope.Result.Findings = append(envelope.Result.Findings, f)
 			}
 			decision++
@@ -90,6 +92,43 @@ func verifyComposedResults(ctx context.Context, opts *runOptions, runs []compose
 	// findings reach the merger; withheld candidates remain in the report.
 	return filtered, &report, nil
 }
+
+func reanchorFindingToChangedCitation(f review.Finding, candidate findingverify.Candidate, decision findingverify.Decision) review.Finding {
+	for _, citation := range decision.Evidence {
+		for _, source := range append(append([]findingverify.Source(nil), candidate.Sources...), candidate.RetrievedSources...) {
+			if source.ID != citation.SourceID || source.Side != "head" || source.Unavailable != "" {
+				continue
+			}
+			for _, region := range candidate.ChangedRegions {
+				if source.Path != region.Path || citation.Line < region.StartLine || citation.Line > region.EndLine {
+					continue
+				}
+				for i, evidence := range f.Evidence {
+					if evidence.File != source.Path || evidence.Line == nil {
+						continue
+					}
+					end := *evidence.Line
+					if evidence.EndLine != nil {
+						end = *evidence.EndLine
+					}
+					if citation.Line < *evidence.Line || citation.Line > end {
+						continue
+					}
+					if i > 0 {
+						f.Evidence = append([]review.Evidence{evidence}, append(f.Evidence[:i], f.Evidence[i+1:]...)...)
+					}
+					return f
+				}
+				line := citation.Line
+				anchor := review.Evidence{File: source.Path, Line: &line, Message: "Causal changed line verified by Adversary."}
+				f.Evidence = append([]review.Evidence{anchor}, f.Evidence...)
+				return f
+			}
+		}
+	}
+	return f
+}
+
 func verificationCounts(r findingverify.Report) (keep, reject, unresolved int) {
 	for _, d := range r.Decisions {
 		switch d.Status {

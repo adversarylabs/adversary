@@ -277,11 +277,12 @@ func maybeGitHubReview(ctx context.Context, app *application.App, opts *runOptio
 	}
 
 	result, err := githubreview.Post(ctx, plan, githubreview.PostOptions{
-		Client: client,
-		Owner:  owner,
-		Repo:   repo,
-		Number: opts.githubPR,
-		Submit: opts.githubSubmit,
+		Client:           client,
+		Owner:            owner,
+		Repo:             repo,
+		Number:           opts.githubPR,
+		Submit:           opts.githubSubmit,
+		ResolveAddressed: opts.githubResolveAddressed && len(opts.githubRunFailures) == 0,
 		Progress: func(s string) {
 			fmt.Fprintln(progress, s)
 		},

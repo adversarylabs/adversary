@@ -25,28 +25,30 @@ import (
 )
 
 type composedRunJob struct {
-	ref        string
-	scope      string
-	context    *detection.Context
-	assignment *detection.ReviewAssignment
-	groups     int
-	regions    int
-	lines      int
+	ref                 string
+	scope               string
+	context             *detection.Context
+	assignment          *detection.ReviewAssignment
+	verificationRegions []detection.ReviewRegion
+	groups              int
+	regions             int
+	lines               int
 }
 
 type composedRunResult struct {
-	ref      string
-	scope    string
-	envelope *review.RunEnvelope
-	err      error
-	stderr   string
-	duration time.Duration
-	started  time.Time
-	ended    time.Time
-	groups   int
-	regions  int
-	lines    int
-	attempts int
+	ref            string
+	scope          string
+	changedRegions []detection.ReviewRegion
+	envelope       *review.RunEnvelope
+	err            error
+	stderr         string
+	duration       time.Duration
+	started        time.Time
+	ended          time.Time
+	groups         int
+	regions        int
+	lines          int
+	attempts       int
 }
 
 type composedJobPlanStats struct {
@@ -122,7 +124,7 @@ func runComposedAdversaries(
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				results[i] = composedRunResult{ref: job.ref, scope: job.scope, err: ctx.Err()}
+				results[i] = composedRunResult{ref: job.ref, scope: job.scope, changedRegions: job.verificationRegions, err: ctx.Err()}
 				return
 			}
 			defer func() { <-sem }()
@@ -152,7 +154,7 @@ func runComposedAdversaries(
 				}
 			}
 			runEnded := time.Now()
-			result := composedRunResult{ref: job.ref, scope: job.scope, err: err, stderr: stderr.String(), duration: runEnded.Sub(runStarted), started: runStarted, ended: runEnded, groups: job.groups, regions: job.regions, lines: job.lines, attempts: attempts}
+			result := composedRunResult{ref: job.ref, scope: job.scope, changedRegions: job.verificationRegions, err: err, stderr: stderr.String(), duration: runEnded.Sub(runStarted), started: runStarted, ended: runEnded, groups: job.groups, regions: job.regions, lines: job.lines, attempts: attempts}
 			if len(local.envelopes) > 0 {
 				envelope := local.envelopes[len(local.envelopes)-1].Envelope
 				result.envelope = &envelope
@@ -348,11 +350,12 @@ func retryableComposedRunFailure(ctx context.Context, err error, stderr string) 
 }
 
 func exhaustiveComposedRunJobs(root string, refs []string, plan compositeReviewPlan) []composedRunJob {
-	jobs := []composedRunJob{{ref: root, scope: "full-change", context: plan.FullContext}}
+	allRegions := allCompositeReviewRegions(plan.Groups)
+	jobs := []composedRunJob{{ref: root, scope: "full-change", context: plan.FullContext, verificationRegions: allRegions}}
 	for i := range plan.Groups {
 		group := &plan.Groups[i]
 		for _, ref := range refs {
-			jobs = append(jobs, composedRunJob{ref: ref, scope: group.ID, context: &group.Context, assignment: &group.Assignment, groups: 1, regions: len(group.Assignment.Regions), lines: reviewRegionLineCount(group.Assignment.Regions)})
+			jobs = append(jobs, composedRunJob{ref: ref, scope: group.ID, context: &group.Context, assignment: &group.Assignment, verificationRegions: group.Assignment.Regions, groups: 1, regions: len(group.Assignment.Regions), lines: reviewRegionLineCount(group.Assignment.Regions)})
 		}
 	}
 	return jobs
@@ -363,7 +366,8 @@ func exhaustiveComposedRunJobs(root string, refs []string, plan compositeReviewP
 // groups are packed into bounded batches without dropping any assigned region.
 // The composition root retains a full-change integration pass.
 func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan, maxChangedLines, maxGroups int, includeRootBatches, broadFullOnly bool, fullReviewers []string) ([]composedRunJob, composedJobPlanStats) {
-	jobs := []composedRunJob{{ref: root, scope: "full-change", context: plan.FullContext}}
+	allRegions := allCompositeReviewRegions(plan.Groups)
+	jobs := []composedRunJob{{ref: root, scope: "full-change", context: plan.FullContext, verificationRegions: allRegions}}
 	candidateReviewers := len(refs)
 	if !includeRootBatches {
 		for _, ref := range refs {
@@ -385,7 +389,7 @@ func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan,
 				regions += len(group.Assignment.Regions)
 				lines += reviewRegionLineCount(group.Assignment.Regions)
 			}
-			jobs = append(jobs, composedRunJob{ref: ref, scope: "full-change", context: plan.FullContext, groups: len(plan.Groups), regions: regions, lines: lines})
+			jobs = append(jobs, composedRunJob{ref: ref, scope: "full-change", context: plan.FullContext, verificationRegions: allRegions, groups: len(plan.Groups), regions: regions, lines: lines})
 			stats.RoutedAssignments += len(plan.Groups)
 			stats.Batches++
 			continue
@@ -411,12 +415,20 @@ func routedComposedRunJobs(root string, refs []string, plan compositeReviewPlan,
 			batch.ID = fmt.Sprintf("batch-%03d", i+1)
 			batch.Assignment.ID = batch.ID
 			jobs = append(jobs, composedRunJob{
-				ref: ref, scope: batch.ID, context: &batch.Context, assignment: &batch.Assignment,
+				ref: ref, scope: batch.ID, context: &batch.Context, assignment: &batch.Assignment, verificationRegions: batch.Assignment.Regions,
 				groups: groupCount, regions: len(batch.Assignment.Regions), lines: reviewRegionLineCount(batch.Assignment.Regions),
 			})
 		}
 	}
 	return jobs, stats
+}
+
+func allCompositeReviewRegions(groups []compositeReviewGroup) []detection.ReviewRegion {
+	var regions []detection.ReviewRegion
+	for _, group := range groups {
+		regions = append(regions, group.Assignment.Regions...)
+	}
+	return regions
 }
 
 func containsCompositeReviewer(reviewers []string, ref string) bool {
@@ -741,6 +753,9 @@ func duplicateFindingIndex(existing []review.Finding, candidate review.Finding) 
 		if sameFindingLocation(existing[i], candidate) && titleSimilarity(existing[i].Title, candidate.Title) >= 0.6 && sameFindingAssertion(existing[i], candidate) {
 			return i
 		}
+		if shareEvidenceFile(existing[i], candidate) && titleSimilarity(existing[i].Title, candidate.Title) >= 0.7 && findingSummarySimilarity(existing[i], candidate) >= 0.6 && sameFindingDetails(existing[i], candidate) {
+			return i
+		}
 	}
 	return -1
 }
@@ -770,6 +785,35 @@ func samePrimaryFile(a, b review.Finding) bool {
 	return len(a.Evidence) > 0 && len(b.Evidence) > 0 && a.Evidence[0].File != "" && a.Evidence[0].File == b.Evidence[0].File
 }
 
+func shareEvidenceFile(a, b review.Finding) bool {
+	for _, left := range a.Evidence {
+		if left.File == "" {
+			continue
+		}
+		for _, right := range b.Evidence {
+			if left.File == right.File {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func findingSummarySimilarity(a, b review.Finding) float64 {
+	if strings.TrimSpace(a.Summary) == "" || strings.TrimSpace(b.Summary) == "" {
+		return 0
+	}
+	return tokenSetSimilarity(a.Summary, b.Summary)
+}
+
+func sameFindingDetails(a, b review.Finding) bool {
+	normalize := func(value string) string { return strings.Join(strings.Fields(value), " ") }
+	return normalize(a.WhyItMatters) == normalize(b.WhyItMatters) &&
+		normalize(a.Impact) == normalize(b.Impact) &&
+		normalize(a.Recommendation) == normalize(b.Recommendation) &&
+		sameFindingRemediation(a.Remediation, b.Remediation)
+}
+
 func sameFindingLocation(a, b review.Finding) bool {
 	if !samePrimaryFile(a, b) {
 		return false
@@ -782,6 +826,10 @@ func sameFindingLocation(a, b review.Finding) bool {
 }
 
 func titleSimilarity(a, b string) float64 {
+	return tokenSetSimilarity(a, b)
+}
+
+func tokenSetSimilarity(a, b string) float64 {
 	aTokens, bTokens := wordSet(a), wordSet(b)
 	if len(aTokens) == 0 || len(bTokens) == 0 {
 		return 0

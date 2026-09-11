@@ -250,6 +250,26 @@ func TestVerificationCancellationAndArtifactFailureRemainErrors(t *testing.T) {
 		t.Fatal("artifact write failure hidden")
 	}
 }
+
+func TestReanchorFindingToVerifiedChangedCitation(t *testing.T) {
+	offDiff := 90
+	finding := review.Finding{ID: "finding", Evidence: []review.Evidence{{File: "context.go", Line: &offDiff}}}
+	candidate := findingverify.Candidate{
+		ChangedRegions: []detection.ReviewRegion{{Path: "changed.go", StartLine: 12, EndLine: 14}},
+		Sources:        []findingverify.Source{{ID: "changed-source", Path: "changed.go", Side: "head", StartLine: 10, Content: "a\nb\nc\nd\ne\n"}},
+	}
+	decision := findingverify.Decision{Evidence: []findingverify.Citation{{SourceID: "changed-source", Line: 13}}}
+	got := reanchorFindingToChangedCitation(finding, candidate, decision)
+	if len(got.Evidence) != 2 || got.Evidence[0].File != "changed.go" || got.Evidence[0].Line == nil || *got.Evidence[0].Line != 13 {
+		t.Fatalf("evidence = %#v", got.Evidence)
+	}
+	alreadyAnchored := review.Finding{ID: "finding", Evidence: []review.Evidence{{File: "changed.go", Line: got.Evidence[0].Line}}}
+	got = reanchorFindingToChangedCitation(alreadyAnchored, candidate, decision)
+	if len(got.Evidence) != 1 {
+		t.Fatalf("existing changed anchor duplicated: %#v", got.Evidence)
+	}
+}
+
 func TestVerificationArtifactDoesNotFollowDestinationSymlink(t *testing.T) {
 	dir := t.TempDir()
 	victim := filepath.Join(dir, "source")
