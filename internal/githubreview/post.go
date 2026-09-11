@@ -15,13 +15,14 @@ const maxInlineComments = 50
 
 // PostOptions controls live GitHub review creation.
 type PostOptions struct {
-	Client   *githubapi.Client
-	Owner    string
-	Repo     string
-	Number   int
-	Submit   bool // submit as COMMENT after create
-	DryRun   bool
-	Progress func(string) // optional stderr messages
+	Client           *githubapi.Client
+	Owner            string
+	Repo             string
+	Number           int
+	Submit           bool // submit as COMMENT after create
+	DryRun           bool
+	ResolveAddressed bool
+	Progress         func(string) // optional stderr messages
 }
 
 // PostResult is returned after a successful create/submit.
@@ -32,6 +33,7 @@ type PostResult struct {
 	Posted         int
 	BodyOnly       int
 	PostedComments []PlannedComment
+	Resolved       int
 }
 
 // Post creates a pending PR review (optionally submits as COMMENT).
@@ -45,7 +47,8 @@ func Post(ctx context.Context, plan CommentPlan, opts PostOptions) (*PostResult,
 	if opts.Owner == "" || opts.Repo == "" || opts.Number <= 0 {
 		return nil, &application.Error{Operation: "github-review", Kind: "usage", Err: fmt.Errorf("owner, repo, and pr number required")}
 	}
-	if len(plan.Comments) == 0 && strings.TrimSpace(plan.ReviewBody) == "" {
+	nothingToPost := len(plan.Comments) == 0 && strings.TrimSpace(plan.ReviewBody) == ""
+	if nothingToPost && !opts.ResolveAddressed {
 		if opts.Progress != nil {
 			opts.Progress("GitHub review: nothing to post")
 		}
@@ -75,6 +78,16 @@ query($owner:String!,$name:String!,$number:Int!){
 	headOID := q.Repository.PullRequest.HeadRefOid
 	if prID == "" || headOID == "" {
 		return nil, &application.Error{Operation: "github-review", Kind: "network", Err: fmt.Errorf("pull request not found")}
+	}
+	if nothingToPost {
+		resolved, err := resolveAddressedThreads(ctx, plan, opts)
+		if err != nil {
+			return nil, err
+		}
+		if opts.Progress != nil {
+			opts.Progress(fmt.Sprintf("GitHub review: nothing to post; resolved %d addressed comment(s)", resolved))
+		}
+		return &PostResult{Resolved: resolved}, nil
 	}
 
 	// Fetch patches and place.
@@ -222,6 +235,16 @@ mutation($input:SubmitPullRequestReviewInput!){
 
 	if opts.Progress != nil && res.ReviewURL != "" {
 		opts.Progress("GitHub review: " + res.ReviewURL + " (" + res.State + ")")
+	}
+	if opts.ResolveAddressed {
+		resolved, err := resolveAddressedThreads(ctx, plan, opts)
+		if err != nil {
+			return res, err
+		}
+		res.Resolved = resolved
+		if opts.Progress != nil && resolved > 0 {
+			opts.Progress(fmt.Sprintf("GitHub review: resolved %d addressed comment(s)", resolved))
+		}
 	}
 	return res, nil
 }

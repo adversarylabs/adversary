@@ -28,6 +28,9 @@ func TestProjectFindingsOnlyAndMinSeverity(t *testing.T) {
 		},
 	}
 	plan := ProjectFindings([]NamedEnvelope{{Adversary: "library/go/cli", Envelope: env}}, ProjectOptions{MinSeverity: "medium", HeadSHA: "abc123"})
+	if len(plan.ReviewedAdversaries) != 1 || plan.ReviewedAdversaries[0] != "library/go/cli" {
+		t.Fatalf("reviewed adversaries %#v", plan.ReviewedAdversaries)
+	}
 	if plan.Summary.FindingsSeen != 2 {
 		t.Fatalf("seen %d", plan.Summary.FindingsSeen)
 	}
@@ -96,6 +99,9 @@ func TestProjectFindingsDoesNotSummarizeCleanAdversaries(t *testing.T) {
 		Opinion:    &review.Opinion{Summary: "I would merge this as-is."},
 	}}
 	plan := ProjectFindings([]NamedEnvelope{{Adversary: "clean", Envelope: env}}, ProjectOptions{})
+	if len(plan.ReviewedAdversaries) != 1 || plan.ReviewedAdversaries[0] != "clean" {
+		t.Fatalf("reviewed adversaries %#v", plan.ReviewedAdversaries)
+	}
 	if len(plan.Comments) != 0 || plan.ReviewBody != "" {
 		t.Fatalf("clean result created review content: %#v", plan)
 	}
