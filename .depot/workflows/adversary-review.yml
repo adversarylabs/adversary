@@ -23,13 +23,17 @@ jobs:
       - name: Mount adversary cache
         uses: depot/cache-mount@c4ccf77f90f7fa7df6a002813c0b13f6a5943063 # v1
         with:
-          name: adversary-${{ github.event.repository.id }}-${{ github.event.pull_request.number }}-v1
+          # Packages are content-addressed and publication is lock-protected, so
+          # every PR can safely reuse the repository's warm artifact cache.
+          name: adversary-${{ github.event.repository.id }}-review-v2
           path: /mnt/adversary
 
       - name: Run adversaries
-        uses: adversarylabs/actions/run@88f40e3774b0b7b4667700c5b9e1bbef6c6e5519 # v1.4.4
+        uses: adversarylabs/actions/run@cd370f6a3aeef47d9796a3c06bcd7e997aa8f6b4 # v1.4.6
         with:
           adversaries: auto
+          # Includes selection-before-download and live lifecycle heartbeats.
+          cli-version: 2026.9.10-beta.1
           path: .
           data-dir: /mnt/adversary
           include-summary: false
