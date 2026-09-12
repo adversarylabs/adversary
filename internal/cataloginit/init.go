@@ -16,15 +16,77 @@ type Result struct {
 	Location string
 }
 
-var files = map[string]string{
-	"adversarylabs.yaml": `apiVersion: adversarylabs.dev/v1alpha1
-kind: AdversaryCatalog
-metadata:
-  name: private-adversaries
-spec:
-  adversaries: []
-`,
-	"README.md": `# Private adversary catalog
+type starterAdversary struct {
+	Slug      string
+	Title     string
+	Summary   string
+	ReviewFor []string
+}
+
+var starterAdversaries = []starterAdversary{
+	{
+		Slug:    "data-integrity",
+		Title:   "Data integrity",
+		Summary: "Protect application invariants and durable state across writes.",
+		ReviewFor: []string{
+			"Broken invariants across related writes, transactions, and database constraints.",
+			"Partial updates, stale derived values, incorrect counters, and lost state transitions.",
+			"Ordering, uniqueness, and consistency assumptions that the implementation does not enforce.",
+		},
+	},
+	{
+		Slug:    "migrations-and-backfills",
+		Title:   "Migrations and backfills",
+		Summary: "Keep schema and data changes safe during real deployments.",
+		ReviewFor: []string{
+			"Changes that are unsafe while old and new application versions run together.",
+			"Backfills that are not bounded, resumable, idempotent, or verifiable.",
+			"Locking, rollout, rollback, and large-table risks introduced by migrations.",
+		},
+	},
+	{
+		Slug:    "tenant-and-access-boundaries",
+		Title:   "Tenant and access boundaries",
+		Summary: "Keep authorization and customer data boundaries explicit.",
+		ReviewFor: []string{
+			"Tenant scope derived from untrusted input instead of authenticated identity.",
+			"Reads or mutations that occur before authorization is established.",
+			"Cross-tenant data exposure, object-existence leaks, and unintended privilege changes.",
+		},
+	},
+	{
+		Slug:    "reliability-and-concurrency",
+		Title:   "Reliability and concurrency",
+		Summary: "Make retry, concurrency, and failure behavior deliberate.",
+		ReviewFor: []string{
+			"Retries without idempotency, deduplication, or bounded retry policy.",
+			"Races, lost updates, duplicate delivery, and unsafe concurrent writers.",
+			"Timeout, cancellation, cleanup, and partial-failure paths that leave inconsistent state.",
+		},
+	},
+	{
+		Slug:    "compatibility",
+		Title:   "Compatibility",
+		Summary: "Preserve contracts while clients and stored data evolve.",
+		ReviewFor: []string{
+			"Breaking API, event, configuration, CLI output, or persisted-data changes.",
+			"Old and new readers or writers that cannot safely coexist during rollout.",
+			"Default changes and removals without a migration, deprecation, or rollback path.",
+		},
+	},
+	{
+		Slug:    "operability",
+		Title:   "Operability",
+		Summary: "Make production failures visible, diagnosable, and recoverable.",
+		ReviewFor: []string{
+			"Errors that discard actionable context or report success before work is durable.",
+			"Missing metrics, logs, or traces at important asynchronous and failure boundaries.",
+			"Health and recovery paths that cannot distinguish degraded, blocked, and failed work.",
+		},
+	},
+}
+
+const readmeHeader = `# Private adversary catalog
 
 This repository is the source of truth for your organization's private
 AdversaryLabs adversaries. AdversaryLabs proposes learned changes through pull
@@ -38,11 +100,51 @@ workflows.
 - **evaluations/** contains regression examples used to validate proposals.
 - **exceptions/** contains explicitly scoped exceptions to learned rules.
 
+## Starter adversaries
+
+The initializer includes a small set of editable seeds for concerns shared by
+most production systems. They are starting policies, not claims about your
+architecture. Keep the relevant ones, remove the others, and let accepted
+review examples make them specific to your team:
+
+`
+
+const readmeFooter = `
+Each starter brief requires evidence in the changed code. It should not produce
+generic best-practice comments without a concrete failure path or violated
+contract.
+
 Connect this private repository from the Private library in AdversaryLabs.
-`,
-	"adversaries/.gitkeep": "",
-	"evaluations/.gitkeep": "",
-	"exceptions/.gitkeep":  "",
+`
+
+func catalogFiles() map[string]string {
+	manifest := strings.Builder{}
+	manifest.WriteString("apiVersion: adversarylabs.dev/v1alpha1\nkind: AdversaryCatalog\nmetadata:\n  name: private-adversaries\nspec:\n  adversaries:\n")
+	readme := strings.Builder{}
+	readme.WriteString(readmeHeader)
+	files := map[string]string{
+		"evaluations/.gitkeep": "",
+		"exceptions/.gitkeep":  "",
+	}
+	for _, adversary := range starterAdversaries {
+		fmt.Fprintf(&manifest, "    - id: %s\n      path: adversaries/%s\n      summary: %s\n", adversary.Slug, adversary.Slug, adversary.Summary)
+		fmt.Fprintf(&readme, "- [%s](adversaries/%s/README.md) — %s\n", adversary.Title, adversary.Slug, adversary.Summary)
+		files[filepath.ToSlash(filepath.Join("adversaries", adversary.Slug, "README.md"))] = renderStarterAdversary(adversary)
+	}
+	readme.WriteString(readmeFooter)
+	files["adversarylabs.yaml"] = manifest.String()
+	files["README.md"] = readme.String()
+	return files
+}
+
+func renderStarterAdversary(adversary starterAdversary) string {
+	brief := strings.Builder{}
+	fmt.Fprintf(&brief, "# %s\n\n> Starter adversary — edit this policy as your team accepts and rejects review findings.\n\n## Purpose\n\n%s\n\n## Review for\n\n", adversary.Title, adversary.Summary)
+	for _, check := range adversary.ReviewFor {
+		fmt.Fprintf(&brief, "- %s\n", check)
+	}
+	brief.WriteString("\n## Evidence standard\n\nReport only when the changed code contains a concrete failure path or violates an identifiable contract. Do not report generic best practices, speculative architecture, or concerns already enforced by the code.\n\n## Learning notes\n\nAdversaryLabs can add accepted examples, rejected examples, and tested implementation changes here through reviewed pull requests.\n")
+	return brief.String()
 }
 
 func Create(opts Options) (Result, error) {
@@ -64,7 +166,7 @@ func Create(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("create catalog staging directory: %w", err)
 	}
 	defer os.RemoveAll(staging)
-	for name, content := range files {
+	for name, content := range catalogFiles() {
 		target := filepath.Join(staging, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return Result{}, err
@@ -89,7 +191,7 @@ func Create(opts Options) (Result, error) {
 func RenderSuccess(w io.Writer, result Result, platform string) {
 	fmt.Fprintln(w, "Creating private adversary catalog...")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "✓ Generated catalog")
+	fmt.Fprintf(w, "✓ Generated catalog with %d starter adversaries\n", len(starterAdversaries))
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Location")
 	fmt.Fprintln(w)
