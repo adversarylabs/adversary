@@ -632,6 +632,22 @@ func TestBuildCasesRetainsIndependentInScopeReviewsNewestFirst(t *testing.T) {
 	}
 }
 
+func TestApplyScopePreservesUnassignedRouterDecision(t *testing.T) {
+	body := "How about tcp6? For completeness you can also add unix."
+	labels := []cases.ExpectedConcern{{ID: "candidate", Summary: body}}
+	comments := []cases.Comment{{
+		ID: 42, Kind: "review-comment", Author: "reviewer", Body: body, Path: "pkg/redact/redact.go",
+	}}
+	router := &scope.Router{Candidates: []scope.Candidate{{
+		ID: "engineering-conventions", AdversaryName: "engineering-conventions",
+		Mission: "Repository-specific conventions.", Languages: []string{"any"},
+	}}}
+	applyScope(labels, comments, nil, router)
+	if labels[0].Approved || labels[0].Scope != string(scope.Unclear) || labels[0].OwnerAdversary != "" {
+		t.Fatalf("label=%+v, want unapproved unassigned candidate", labels[0])
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

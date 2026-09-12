@@ -138,7 +138,11 @@ func runParallelHunt(
 		progress("Discovery window: %d/%d repos starting at catalog index %d; next run continues from index %d",
 			windowCount, totalCatalogRepos, windowStart, (windowStart+windowCount)%totalCatalogRepos)
 	}
-	progress("max-turns=%d, target in-scope PRs=%d, concurrency=%d", maxTurns, targetPRs, concurrency)
+	targetLabel := "in-scope PRs"
+	if opts.CollectOnly {
+		targetLabel = "catalog candidates"
+	}
+	progress("max-turns=%d, target %s=%d, concurrency=%d", maxTurns, targetLabel, targetPRs, concurrency)
 
 	var mu sync.Mutex
 	stores := map[string]*state.DiscoveryStore{}
@@ -172,8 +176,8 @@ func runParallelHunt(
 				}
 				res := collectOnePR(ctx, opts, dataRoot, job, scopeClf, commentRouter, progress)
 				if ctx.Err() != nil {
-					// Still persist any in-scope gold from a finished collect.
-					if res.inScopeN > 0 && len(res.kept) > 0 {
+					// Still persist any usable catalog evidence from a finished collect.
+					if (res.inScopeN > 0 || (res.retainUnassigned && res.unassignedN > 0)) && len(res.kept) > 0 {
 						mu.Lock()
 						accepted := applyCollectResult(&out, res, job.pinned, targetPRs)
 						if accepted && onKeep != nil {
@@ -188,14 +192,22 @@ func runParallelHunt(
 				if accepted && onKeep != nil {
 					out.resultsAdded += onKeep(res.kept)
 				}
+				if out.interrupted == nil {
+					if collect.IsRateLimit(res.err) {
+						out.interrupted = res.err
+					} else if res.blocked != nil && res.blocked.Classification == "rate-limit" {
+						out.interrupted = &collect.RateLimitError{Message: res.blocked.SanitizedError}
+					}
+				}
 				mu.Unlock()
 			}
 		}()
 	}
 
-	// Feeder: discover one bounded, durable catalog window, then enqueue jobs.
-	// The default repo mode spends one GitHub list request per repository. The
-	// github_events mode replaces that wave with one public ClickHouse query, but
+	// Feeder: discover successive waves within one bounded, durable repository
+	// window, then enqueue jobs until the result/turn limits or exhaustion. The
+	// default repo mode spends one GitHub list request per repository per wave. The
+	// github_events mode replaces each wave with one public ClickHouse query, but
 	// selected candidates are still hydrated by the canonical GitHub collector.
 	// A per-target cursor lets later runs resume at the next window while a shared
 	// seed staggers different targets' first run. Collect workers already run up
@@ -391,8 +403,8 @@ feedLoop:
 
 		if enqueuedThisWave == 0 {
 			progress("No new PR candidates in this catalog window — stopping hunt")
+			break
 		}
-		break
 	}
 
 	close(jobs)
@@ -419,10 +431,10 @@ feedLoop:
 		}
 	}
 	if out.interrupted != nil {
-		progress("Hunt interrupted: turns=%d, in-scope PRs kept=%d", out.turnsUsed, out.prsWithInScope)
+		progress("Hunt interrupted: turns=%d, %s kept=%d", out.turnsUsed, targetLabel, out.prsWithInScope)
 		return out
 	}
-	progress("Hunt finished: turns=%d, in-scope PRs kept=%d (concurrency=%d)", out.turnsUsed, out.prsWithInScope, concurrency)
+	progress("Hunt finished: turns=%d, %s kept=%d (concurrency=%d)", out.turnsUsed, targetLabel, out.prsWithInScope, concurrency)
 	return out
 }
 
@@ -444,19 +456,21 @@ func catalogRepoWindow(catalog []repos.Repo, start, count int) []repos.Repo {
 }
 
 type collectResult struct {
-	kept      []*cases.Case
-	inScopeN  int
-	outScopeN int
-	blocked   *dataroot.BlockedResult
-	execClass dataroot.ExecutionClass
-	err       error
-	owner     string
-	name      string
-	ref       collect.PRRef
-	store     *state.DiscoveryStore
-	pinned    bool
-	turn      int
-	noCases   bool
+	kept             []*cases.Case
+	inScopeN         int
+	outScopeN        int
+	unassignedN      int
+	retainUnassigned bool
+	blocked          *dataroot.BlockedResult
+	execClass        dataroot.ExecutionClass
+	err              error
+	owner            string
+	name             string
+	ref              collect.PRRef
+	store            *state.DiscoveryStore
+	pinned           bool
+	turn             int
+	noCases          bool
 }
 
 func collectOnePR(
@@ -523,6 +537,7 @@ func collectOnePR(
 	var kept []*cases.Case
 	inScopeN := 0
 	outScopeN := 0
+	unassignedN := 0
 	for _, c := range cres.CaseCandidates {
 		if c.Exclusion != nil && c.ReviewEvent.ReviewedSHA == "" {
 			continue
@@ -530,6 +545,7 @@ func collectOnePR(
 		kept = append(kept, c)
 		inScopeN += len(cases.ApprovedLabels(c.Labels.ExpectedConcerns))
 		outScopeN += len(cases.OutOfScopeLabels(c.Labels.ExpectedConcerns))
+		unassignedN += len(cases.UnclearLabels(c.Labels.ExpectedConcerns))
 	}
 	if len(kept) == 0 {
 		job.store.Record(job.ref.Number, job.ref.Title, job.ref.URL, state.OutcomeNoCases, "no reconstructable review rounds")
@@ -542,6 +558,8 @@ func collectOnePR(
 	res.kept = kept
 	res.inScopeN = inScopeN
 	res.outScopeN = outScopeN
+	res.unassignedN = unassignedN
+	res.retainUnassigned = opts.CollectOnly
 	res.execClass = cres.ExecutionClass
 
 	outcome := state.OutcomeNoInScope
@@ -550,6 +568,10 @@ func collectOnePR(
 		outcome = state.OutcomeGraded
 		note = fmt.Sprintf("%d in-scope concern(s) — keep", inScopeN)
 		progress("  ✓ keep: %d in-scope, %d out-of-scope human comment(s)", inScopeN, outScopeN)
+	} else if opts.CollectOnly && unassignedN > 0 {
+		outcome = state.OutcomeCandidate
+		note = fmt.Sprintf("%d unassigned human concern(s) — keep for review", unassignedN)
+		progress("  ? keep: %d unassigned human comment(s), %d out-of-scope", unassignedN, outScopeN)
 	} else {
 		progress("  · no in-scope comments (%d out-of-scope) — keep hunting", outScopeN)
 	}
@@ -606,8 +628,8 @@ func restrictGoldToTrainingTarget(c *cases.Case, target string) {
 // checked here, not only by the feeder: buffered and in-flight jobs can finish
 // after the feeder has admitted the target number of PRs.
 //
-// The return value reports whether an in-scope PR was admitted and should be
-// persisted to results.db.
+// The return value reports whether a PR with an assigned concern, or an
+// unassigned catalog candidate, was admitted and should be persisted.
 func applyCollectResult(out *huntOutcome, res collectResult, pinned bool, targetPRs int) bool {
 	if res.blocked != nil && out.blocked == nil {
 		out.blocked = res.blocked
@@ -618,7 +640,7 @@ func applyCollectResult(out *huntOutcome, res collectResult, pinned bool, target
 	if res.err != nil || res.noCases || len(res.kept) == 0 {
 		return false
 	}
-	if res.inScopeN > 0 {
+	if res.inScopeN > 0 || (res.retainUnassigned && res.unassignedN > 0) {
 		if targetPRs > 0 && out.prsWithInScope >= targetPRs {
 			return false
 		}

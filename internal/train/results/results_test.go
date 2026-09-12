@@ -441,6 +441,54 @@ func TestResetDiscovery(t *testing.T) {
 	}
 }
 
+func TestResetDiscoveryTargetPreservesOtherTrainingState(t *testing.T) {
+	root := t.TempDir()
+	catalog, err := trainstate.LoadDiscoveryForTarget(root, "private-catalog", "o", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.Record(1, "catalog", "url", trainstate.OutcomeCandidate, "candidate")
+	if err := catalog.Save(); err != nil {
+		t.Fatal(err)
+	}
+	packageTrain, err := trainstate.LoadDiscoveryForTarget(root, "go-security", "o", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageTrain.Record(2, "package", "url", trainstate.OutcomeGraded, "graded")
+	if err := packageTrain.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := trainstate.TakeCatalogWindow(root, "private-catalog", 10, 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := trainstate.TakeCatalogWindow(root, "go-security", 10, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := ResetDiscoveryTarget(root, "private-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed=%d want 1", removed)
+	}
+	kept, err := trainstate.LoadDiscoveryForTarget(root, "go-security", "o", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !kept.Seen(2) {
+		t.Fatal("catalog reset erased executable-adversary discovery state")
+	}
+	start, _, err := trainstate.TakeCatalogWindow(root, "go-security", 10, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start != 6 {
+		t.Fatalf("other cursor start=%d want 6", start)
+	}
+}
+
 func TestProgressiveKeptThenGraded(t *testing.T) {
 	state := t.TempDir()
 	c := &cases.Case{
@@ -526,6 +574,34 @@ func TestHumanGoldPreservesFullSummaryForTriage(t *testing.T) {
 	}
 	if rows[0].Summary != summary {
 		t.Fatalf("summary was truncated: got %d bytes want %d", len(rows[0].Summary), len(summary))
+	}
+}
+
+func TestWriteCatalogCaseRetainsUnassignedHumanConcern(t *testing.T) {
+	state := t.TempDir()
+	c := &cases.Case{
+		ID:          "unassigned-case",
+		Repository:  cases.Repository{Owner: "acme", Name: "api", URL: "https://github.com/acme/api"},
+		PullRequest: cases.PullRequest{Number: 42, Title: "Extend redaction"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID:          "comment-1",
+			Summary:     "How about tcp6? For completeness you can also add unix.",
+			Scope:       "unclear",
+			ScopeReason: "no adversary confidently claimed this plausible human comment",
+		}}},
+	}
+	if n, err := WriteKeptCase(state, "run-1", c); err != nil || n != 0 {
+		t.Fatalf("ordinary package training retained unassigned concern: n=%d err=%v", n, err)
+	}
+	if n, err := WriteCatalogCase(state, "run-1", c); err != nil || n != 1 {
+		t.Fatalf("catalog training did not retain unassigned concern: n=%d err=%v", n, err)
+	}
+	rows, err := List(state, "unassigned", StatusNew)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	if !strings.Contains(rows[0].DraftBody, "Routing:") {
+		t.Fatalf("unassigned row omitted routing context: %s", rows[0].DraftBody)
 	}
 }
 

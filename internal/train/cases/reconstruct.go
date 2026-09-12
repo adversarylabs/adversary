@@ -177,11 +177,22 @@ func ApprovedLabels(labels []ExpectedConcern) []ExpectedConcern {
 	return out
 }
 
-// OutOfScopeLabels returns concerns we deliberately do not grade as misses.
+// OutOfScopeLabels returns concerns we deliberately rejected as training evidence.
 func OutOfScopeLabels(labels []ExpectedConcern) []ExpectedConcern {
 	var out []ExpectedConcern
 	for _, l := range labels {
-		if l.Scope == "out_of_scope" || l.Scope == "unclear" {
+		if l.Scope == "out_of_scope" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// UnclearLabels returns plausible human concerns that still need owner review.
+func UnclearLabels(labels []ExpectedConcern) []ExpectedConcern {
+	var out []ExpectedConcern
+	for _, l := range labels {
+		if l.Scope == "unclear" {
 			out = append(out, l)
 		}
 	}

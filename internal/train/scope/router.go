@@ -178,8 +178,8 @@ func (r *Router) RouteCommentWithEvidence(body, path, author string, threadConte
 			}
 		}
 		return Route{
-			Decision: OutOfScope,
-			Reason:   "no adversary claimed this comment (or only out-of-scope)",
+			Decision: Unclear,
+			Reason:   "no adversary confidently claimed this plausible human comment",
 			Method:   "heuristic",
 			Rejected: rejected,
 		}

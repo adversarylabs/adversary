@@ -76,6 +76,27 @@ func TakeCatalogWindow(dataRoot, target string, total, limit int) (start, count 
 	return start, count, nil
 }
 
+// ResetCatalogTarget forgets only one target's repository-window position.
+// Other training workflows keep their independent discovery schedule.
+func ResetCatalogTarget(dataRoot, target string) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		target = "workspace"
+	}
+	lock, err := publock.Acquire(dataRoot, "adversary-train-catalog-cursor")
+	if err != nil {
+		return fmt.Errorf("lock catalog cursor state: %w", err)
+	}
+	defer lock.Close()
+
+	cursor, err := loadCatalogCursorUnlocked(dataRoot)
+	if err != nil {
+		return err
+	}
+	delete(cursor.NextByTarget, target)
+	return cursor.saveUnlocked()
+}
+
 func loadCatalogCursorUnlocked(dataRoot string) (*CatalogCursorState, error) {
 	path := CatalogCursorPath(dataRoot)
 	state := &CatalogCursorState{SchemaVersion: 2, NextByTarget: map[string]int{}, path: path}

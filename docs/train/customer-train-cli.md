@@ -1,8 +1,8 @@
-# Customer `adversary train` CLI — product sketch
+# Historical customer training CLI sketch
 
-**Status:** largely implemented in the CLI. Prefer the user guide
-**[docs/train.md](../train.md)** for home-built packages (init → run → results apply).
-This file remains a longer product sketch and design rationale.
+> The public workflow is now `adversary catalog train`. The top-level
+> `adversary train` command described below has been removed; this document is
+> retained only as historical design context.
 
 **CLI name:** **`train`** (not `factory`).  
 **Goal:** Customers improve **their own** adversaries using **their own** PR review history.

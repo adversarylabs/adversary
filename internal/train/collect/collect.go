@@ -210,7 +210,7 @@ func blockedFromErr(dep, op string, err error) *dataroot.BlockedResult {
 	next := "check GitHub token and repository access (ADVERSARY_GITHUB_TOKEN / GITHUB_TOKEN / GH_TOKEN)"
 	if IsRateLimit(err) {
 		class = "rate-limit"
-		next = "wait for GitHub rate limit reset, lower run.concurrency (e.g. 1–2), then train run again; partial results stay in results.db"
+		next = "wait for GitHub rate limit reset, lower run.concurrency (e.g. 1–2), then rerun the training command; partial results stay in results.db"
 	} else if strings.Contains(msg, "401") || strings.Contains(msg, "403") || strings.Contains(msg, "auth") {
 		class = "auth"
 	} else if strings.Contains(msg, "404") {
@@ -669,7 +669,10 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 				labels[i].Approved = true
 				labels[i].Confidence = "medium"
 			} else {
-				labels[i].Scope = string(scope.OutOfScope)
+				labels[i].Scope = string(route.Decision)
+				if labels[i].Scope == "" || route.Decision == scope.InScope {
+					labels[i].Scope = string(scope.OutOfScope)
+				}
 				labels[i].Approved = false
 				if labels[i].ScopeReason == "" {
 					labels[i].ScopeReason = "no adversary claimed this comment"

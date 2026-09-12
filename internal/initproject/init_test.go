@@ -297,7 +297,7 @@ func TestCreateScaffoldsAgentVoice(t *testing.T) {
 		"### Design / technical judgment",
 		"### Defects / correctness",
 		"### Nits / style",
-		"adversary train results apply",
+		"Catalog training may ask implementers",
 		"## Output",
 	} {
 		if !strings.Contains(text, want) {
