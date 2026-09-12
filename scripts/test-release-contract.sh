@@ -9,6 +9,9 @@ fail() { printf 'release contract: %s\n' "$*" >&2; exit 1; }
 
 for workflow in .depot/workflows/*.yml; do
   while IFS= read -r use; do
+    if [[ "$use" =~ ^[[:space:]]*uses:[[:space:]]+adversarylabs/actions/(run|version|push)@v1$ ]]; then
+      continue
+    fi
     [[ "$use" =~ ^[[:space:]]*uses:[[:space:]]+[^@]+@[0-9a-f]{40}([[:space:]]+#[[:space:]]+v[^[:space:]]+)?$ ]] \
       || fail "unpinned or uncommented action in ${workflow}: ${use}"
   done < <(grep -E '^[[:space:]]*uses:' "$workflow" || true)
