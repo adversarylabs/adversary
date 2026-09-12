@@ -2,6 +2,7 @@ package reviewui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,7 @@ import (
 func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	state := t.TempDir()
 	saveCandidate(t, state)
-	handler := NewHandler(state, []string{"operability"}, "secret", nil)
+	handler := NewHandler(state, []string{"operability"}, "secret", nil, nil)
 
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -27,6 +28,11 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/?token=secret", nil))
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
+	}
+	for _, want := range []string{"＋ Up", "＋ Down", "New adversary", "AI assist", "View GitHub evidence"} {
+		if !strings.Contains(page.Body.String(), want) {
+			t.Fatalf("review page omitted %q", want)
+		}
 	}
 	if got := page.Header().Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'none'") {
 		t.Fatalf("CSP=%q", got)
@@ -44,10 +50,13 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 	state := t.TempDir()
 	saveCandidate(t, state)
-	handler := NewHandler(state, []string{"operability", "compatibility"}, "secret", nil)
+	handler := NewHandler(state, []string{"operability", "compatibility"}, "secret", func(_ context.Context, request AssistRequest) (AssistResult, error) {
+		return AssistResult{Adversary: "compatibility", ProposedRule: "Preserve the generated API contract.", Rationale: request.Evidence}, nil
+	}, nil)
 
 	body, _ := json.Marshal(map[string]string{
-		"adversary": "compatibility", "proposed_rule": "Preserve the private wire contract.",
+		"adversary": "release-contracts", "proposed_rule": "Preserve the private wire contract.",
+		"adversary_mission": "Catch drift in private release contracts.",
 	})
 	edit := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPatch, "/api/candidates/candidate-1", bytes.NewReader(body))
@@ -57,11 +66,19 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 	if edit.Code != http.StatusOK {
 		t.Fatalf("edit status=%d body=%q", edit.Code, edit.Body.String())
 	}
+
+	assist := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/candidates/candidate-1/assist", nil)
+	req.Header.Set(tokenHeader, "secret")
+	handler.ServeHTTP(assist, req)
+	if assist.Code != http.StatusOK || !strings.Contains(assist.Body.String(), "generated API contract") {
+		t.Fatalf("assist status=%d body=%q", assist.Code, assist.Body.String())
+	}
 	row, err := results.Get(state, "candidate-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Package != "compatibility" || row.ProposedRule != "Preserve the private wire contract." {
+	if row.Package != "release-contracts" || row.ProposedRule != "Preserve the private wire contract." || row.AdversaryMission != "Catch drift in private release contracts." {
 		t.Fatalf("edited row=%+v", row)
 	}
 

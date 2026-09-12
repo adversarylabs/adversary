@@ -64,6 +64,9 @@ type Options struct {
 	// waves continue within that window until an exit condition is reached.
 	// Stops early when MaxPRs usable cases are collected.
 	MaxTurns int
+	// AllHistory processes every merged PR back to AuthorSince and ignores the
+	// normal target and turn limits. It is supported by repository discovery.
+	AllHistory bool
 	// Concurrency is how many PR collects may run in parallel (gh API). Default 4.
 	// Local package `adversary run` stays serialized via a per-path lock.
 	Concurrency int
@@ -209,6 +212,12 @@ func Run(opts Options) (*Result, error) {
 		maxTurns := opts.MaxTurns
 		if maxTurns <= 0 {
 			maxTurns = 15
+		}
+		if opts.AllHistory {
+			// Date-bounded exhaustive mode uses source exhaustion as its stop
+			// condition rather than candidate or attempt counts.
+			unlimited := int(^uint(0) >> 1)
+			targetPRs, maxTurns = unlimited, unlimited
 		}
 
 		// Build the set of repos to hunt across (config sources first).

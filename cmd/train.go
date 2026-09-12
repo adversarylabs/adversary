@@ -74,6 +74,8 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 		noIssues         bool
 		maxPRs           int
 		maxTurns         int
+		allHistory       bool
+		since            string
 		concurrency      int
 		resetDiscovery   bool
 		fixture          bool
@@ -133,6 +135,12 @@ Use --no-issues for a local-only run.`,
 				cfg.Sources.Repos = append([]string{}, sourceRepos...)
 				cfg.Sources.Org = ""
 				cfg.Sources.Discovery = "repos"
+			}
+			if strings.TrimSpace(since) != "" {
+				cfg.Sources.Since = strings.TrimSpace(since)
+			}
+			if allHistory {
+				cfg.Run.AllHistory = true
 			}
 			if !fixture {
 				if err := cfg.Validate(); err != nil {
@@ -336,6 +344,7 @@ Use --no-issues for a local-only run.`,
 				AuthorSince:         cfg.Sources.Since,
 				MaxPRs:              cfg.Run.MaxPRs,
 				MaxTurns:            cfg.Run.MaxTurns,
+				AllHistory:          cfg.Run.AllHistory,
 				Concurrency:         cfg.Run.Concurrency,
 				ResetDiscovery:      resetDiscovery,
 				PR:                  pr,
@@ -371,6 +380,9 @@ Use --no-issues for a local-only run.`,
 			} else {
 				fmt.Fprintln(stderr, "  mode:   live history")
 				fmt.Fprintf(stderr, "  discovery: %s\n", discoveryMode)
+				if cfg.Run.AllHistory {
+					fmt.Fprintf(stderr, "  history: all merged PRs since %s (no candidate limit; rate-limit backoff enabled)\n", cfg.Sources.Since)
+				}
 				if discoveryMode == "author_reviews" {
 					fmt.Fprintf(stderr, "  authors: %v roles: %v orgs: %v\n",
 						cfg.Sources.AuthorsOnly, cfg.Sources.AuthorRoles, authorOrgs)
@@ -473,6 +485,8 @@ Use --no-issues for a local-only run.`,
 	cmd.Flags().BoolVar(&noIssues, "no-issues", false, "keep results local instead of creating GitHub issues")
 	cmd.Flags().IntVar(&maxPRs, "max-prs", 0, "override run.max_prs")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns (maximum PR attempts)")
+	cmd.Flags().BoolVar(&allHistory, "all-history", false, "process every merged PR back to sources.since; ignore PR and turn limits")
+	cmd.Flags().StringVar(&since, "since", "", "override sources.since (YYYY-MM-DD)")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 0, "override run.concurrency (parallel PR collect; default 2)")
 	cmd.Flags().BoolVar(&resetDiscovery, "reset-discovery", false, "forget seen PRs and restart catalog discovery before hunting")
 	cmd.Flags().BoolVar(&fixture, "fixture", false, "hermetic fixture run (for tests/gates; ignores empty sources)")

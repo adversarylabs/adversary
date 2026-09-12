@@ -80,6 +80,21 @@ adversary catalog train inspect <id>
 adversary catalog train accept <id>
 ```
 
+For an exhaustive, resumable repository scan, set a date boundary and remove
+the normal candidate limits:
+
+```yaml
+sources:
+  discovery: repos
+  since: "2025-09-12"
+run:
+  all_history: true
+```
+
+The equivalent one-off flags are `--since 2025-09-12 --all-history`. Historical
+scans detect GitHub primary and secondary rate limits, wait for the advertised
+reset (or a conservative fallback), and continue unless interrupted.
+
 Bare `inspect` opens a localhost review queue with every candidate in a left
 nav. Inline comments appear with their file, diff hunk, PR author, and reviewer
 identity. Reviewers can edit the proposed rule, route it to an existing or new

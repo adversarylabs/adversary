@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -41,6 +42,7 @@ It sends bounded review evidence to the model provider you configure for triage.
 Review results later with "adversary catalog train review".`
 	command.Example = `  adversary catalog train --model codex/gpt-5.6-luna
   adversary catalog train --source-repo acme/api --source-repo acme/web
+  adversary catalog train --since 2025-09-12 --all-history
   adversary catalog train --model-provider cloudflare --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
   adversary catalog train --author alice --exclude-author dependabot[bot]
   adversary catalog train --max-prs 25
@@ -69,6 +71,7 @@ Review results later with "adversary catalog train review".`
 func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 	var path string
 	var all bool
+	var modelProvider, model string
 	command := &cobra.Command{
 		Use:   "inspect [id]",
 		Short: "Review candidates in a local browser or inspect one in the terminal",
@@ -110,8 +113,13 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 				if !ok {
 					return fmt.Errorf("local browser review is unavailable in this runtime; use catalog train inspect --all")
 				}
+				var assist func(context.Context, application.CatalogAssistRequest) (application.CatalogAssistResult, error)
+				if modelRuntime, ok := app.Dependencies().Runtime.(application.ModelReviewRuntime); ok {
+					assist = catalogReviewAssist(modelRuntime, modelProvider, model)
+				}
 				return reviewer.ReviewCatalog(cmd.Context(), application.CatalogReviewOptions{
 					StateRoot: state, Adversaries: adversaryIDs, Output: cmd.OutOrStdout(),
+					Assist: assist,
 				})
 			}
 			row, err := results.Get(state, args[0])
@@ -124,6 +132,8 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 	}
 	command.Flags().StringVar(&path, "path", "", "catalog workspace with adversary.train.yaml")
 	command.Flags().BoolVar(&all, "all", false, "walk interactively through every new candidate in the terminal")
+	command.Flags().StringVar(&modelProvider, "model-provider", "", "AI assist model provider (or ADVERSARY_MODEL_PROVIDER)")
+	command.Flags().StringVar(&model, "model", "", "AI assist model (or ADVERSARY_MODEL)")
 	return command
 }
 

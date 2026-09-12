@@ -171,6 +171,23 @@ type CatalogReviewOptions struct {
 	StateRoot   string
 	Adversaries []string
 	Output      io.Writer
+	Assist      func(context.Context, CatalogAssistRequest) (CatalogAssistResult, error)
+}
+
+type CatalogAssistRequest struct {
+	Evidence         string   `json:"evidence"`
+	File             string   `json:"file,omitempty"`
+	DiffHunk         string   `json:"diff_hunk,omitempty"`
+	CurrentAdversary string   `json:"current_adversary,omitempty"`
+	CurrentRule      string   `json:"current_rule,omitempty"`
+	Adversaries      []string `json:"adversaries"`
+}
+
+type CatalogAssistResult struct {
+	Adversary        string `json:"adversary,omitempty"`
+	ProposedRule     string `json:"proposed_rule,omitempty"`
+	AdversaryMission string `json:"adversary_mission,omitempty"`
+	Rationale        string `json:"rationale,omitempty"`
 }
 
 type ModelReviewConfig struct {

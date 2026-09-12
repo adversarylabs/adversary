@@ -61,6 +61,21 @@ An active `gh auth login` session is used automatically. Explicit credentials
 may instead be supplied with `ADVERSARY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or
 `GH_TOKEN`.
 
+For every merged PR in a date-bounded repository window, configure:
+
+```yaml
+sources:
+  discovery: repos
+  since: "2025-09-12"
+run:
+  all_history: true
+```
+
+This ignores `max_prs` and `max_turns`, paginates until the date boundary, and
+keeps normal per-PR discovery checkpoints. GitHub rate limits pause the scan
+until the advertised reset; secondary limits without a reset use a conservative
+backoff. Ctrl-C remains immediate, and rerunning resumes from the seen-PR state.
+
 ## Review candidates
 
 ```sh
@@ -77,6 +92,9 @@ and opens the browser review queue. Its left nav includes new, accepted, and
 dismissed candidates. The detail view shows PR and comment authors and supports
 the source file and diff hunk with the reviewer comment attached. It supports
 editing the proposed rule, assigning an existing or new private adversary,
+expanding context above or below the comment, and asking the configured model
+to draft a missing rule. New-adversary proposals use a dedicated modal and
+remain local until later catalog publication. The workspace also supports
 accepting, dismissing, and reopening decisions. No third-party assets are loaded.
 
 `inspect --all` walks the new-candidate queue in the terminal. Accept and dismiss

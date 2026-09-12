@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // PRRef is a discovered pull request candidate.
@@ -24,6 +25,90 @@ type DiscoverOpts struct {
 	Skip map[int]bool
 	// ListLimit is how many merged PRs to pull from GitHub before filtering.
 	ListLimit int
+}
+
+type HistoricalDiscoverOpts struct {
+	Context     context.Context
+	Since       time.Time
+	Skip        map[int]bool
+	OnRateLimit func(time.Time)
+}
+
+// DiscoverHistoricalPRs paginates merged PRs until the repository's updated
+// timeline is older than Since. A PR cannot be merged after its last update, so
+// that boundary safely includes every merge in the requested window.
+func DiscoverHistoricalPRs(owner, repo string, opts HistoricalDiscoverOpts) ([]PRRef, error) {
+	if opts.Since.IsZero() {
+		return nil, fmt.Errorf("historical discovery requires a since date")
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if opts.Skip == nil {
+		opts.Skip = map[int]bool{}
+	}
+	client, err := clientFor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []PRRef
+	for page := 1; ; page++ {
+		path := fmt.Sprintf("/repos/%s/%s/pulls?state=closed&per_page=100&page=%d&sort=updated&direction=desc", owner, repo, page)
+		var raw []byte
+		for {
+			raw, _, err = client.RESTGet(ctx, path)
+			if !IsRateLimit(err) {
+				break
+			}
+			if opts.OnRateLimit != nil {
+				opts.OnRateLimit(RateLimitReset(err))
+			}
+			if waitErr := WaitForRateLimit(ctx, err); waitErr != nil {
+				return nil, waitErr
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		var prs []struct {
+			Number    int    `json:"number"`
+			Title     string `json:"title"`
+			HTMLURL   string `json:"html_url"`
+			MergedAt  string `json:"merged_at"`
+			UpdatedAt string `json:"updated_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		}
+		if err := json.Unmarshal(raw, &prs); err != nil {
+			return nil, err
+		}
+		if len(prs) == 0 {
+			break
+		}
+		reachedBoundary := false
+		for _, p := range prs {
+			updated, parseErr := time.Parse(time.RFC3339, p.UpdatedAt)
+			if parseErr == nil && updated.Before(opts.Since) {
+				reachedBoundary = true
+				continue
+			}
+			merged, parseErr := time.Parse(time.RFC3339, p.MergedAt)
+			if p.MergedAt == "" || parseErr != nil || merged.Before(opts.Since) || opts.Skip[p.Number] {
+				continue
+			}
+			login := strings.ToLower(p.User.Login)
+			if strings.Contains(login, "dependabot") || strings.Contains(login, "renovate") || strings.Contains(login, "bot") {
+				continue
+			}
+			candidates = append(candidates, PRRef{Number: p.Number, Title: p.Title, URL: p.HTMLURL})
+		}
+		if reachedBoundary || len(prs) < 100 {
+			break
+		}
+	}
+	return candidates, nil
 }
 
 // DiscoverPRs finds recently merged PRs that look like they have human review activity.

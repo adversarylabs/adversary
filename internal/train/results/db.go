@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS results (
 	diff_hunk     TEXT NOT NULL DEFAULT '',
   proposed_rule TEXT NOT NULL DEFAULT '',
   triage_reason TEXT NOT NULL DEFAULT '',
+	adversary_mission TEXT NOT NULL DEFAULT '',
   case_id       TEXT NOT NULL DEFAULT '',
   concern_id    TEXT NOT NULL DEFAULT '',
   draft_body    TEXT NOT NULL DEFAULT '',
@@ -89,11 +90,12 @@ CREATE INDEX IF NOT EXISTS idx_results_run ON results(run_id);
 	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN diff_hunk TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN proposed_rule TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN triage_reason TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN adversary_mission TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
 const resultCols = `id, run_id, package, kind, status, summary, title, pr_url, pr_title,
-	pr_author, comment_author, comment_url, file, line, diff_hunk, proposed_rule, triage_reason, case_id, concern_id, draft_body,
+	pr_author, comment_author, comment_url, file, line, diff_hunk, proposed_rule, triage_reason, adversary_mission, case_id, concern_id, draft_body,
 	created_at, applied_at, applied_path, branch, issue_url`
 
 func scanResult(row interface {
@@ -103,7 +105,7 @@ func scanResult(row interface {
 	var created, applied string
 	err := row.Scan(
 		&r.ID, &r.RunID, &r.Package, &r.Kind, &r.Status, &r.Summary, &r.Title,
-		&r.PRURL, &r.PRTitle, &r.PRAuthor, &r.CommentAuthor, &r.CommentURL, &r.File, &r.Line, &r.DiffHunk, &r.ProposedRule, &r.TriageReason,
+		&r.PRURL, &r.PRTitle, &r.PRAuthor, &r.CommentAuthor, &r.CommentURL, &r.File, &r.Line, &r.DiffHunk, &r.ProposedRule, &r.TriageReason, &r.AdversaryMission,
 		&r.CaseID, &r.ConcernID, &r.DraftBody,
 		&created, &applied, &r.AppliedPath, &r.Branch, &r.IssueURL,
 	)
@@ -162,9 +164,9 @@ func upsertResult(db *sql.DB, r Result) error {
 	_, err := db.Exec(`
 INSERT INTO results (
   id, run_id, package, kind, status, summary, title, pr_url, pr_title,
-  pr_author, comment_author, comment_url, file, line, diff_hunk, proposed_rule, triage_reason, case_id, concern_id, draft_body,
+  pr_author, comment_author, comment_url, file, line, diff_hunk, proposed_rule, triage_reason, adversary_mission, case_id, concern_id, draft_body,
   created_at, applied_at, applied_path, branch, issue_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   run_id=excluded.run_id,
   package=excluded.package,
@@ -182,6 +184,7 @@ ON CONFLICT(id) DO UPDATE SET
 	diff_hunk=excluded.diff_hunk,
   proposed_rule=excluded.proposed_rule,
   triage_reason=excluded.triage_reason,
+	adversary_mission=excluded.adversary_mission,
   case_id=excluded.case_id,
   concern_id=excluded.concern_id,
   draft_body=excluded.draft_body,
@@ -192,7 +195,7 @@ ON CONFLICT(id) DO UPDATE SET
   issue_url=excluded.issue_url
 `,
 		r.ID, r.RunID, r.Package, r.Kind, r.Status, r.Summary, r.Title,
-		r.PRURL, r.PRTitle, r.PRAuthor, r.CommentAuthor, r.CommentURL, r.File, r.Line, r.DiffHunk, r.ProposedRule, r.TriageReason,
+		r.PRURL, r.PRTitle, r.PRAuthor, r.CommentAuthor, r.CommentURL, r.File, r.Line, r.DiffHunk, r.ProposedRule, r.TriageReason, r.AdversaryMission,
 		r.CaseID, r.ConcernID, r.DraftBody,
 		formatTime(r.CreatedAt), formatTime(r.AppliedAt), r.AppliedPath, r.Branch, r.IssueURL,
 	)

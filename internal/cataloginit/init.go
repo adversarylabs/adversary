@@ -140,14 +140,17 @@ official:
 
 sources:
   host: github.com
+  # discovery: repos
   # Add one or more repositories whose human review history should be learned.
   repos: []
+  # since: "2025-09-12"
   # authors_only: [staff-eng-alice]
   # authors_ignore: [automation-account]
 
 run:
   max_prs: 50
   max_turns: 200
+  # all_history: true # requires sources.since; ignores max_prs/max_turns
   concurrency: 4
 
 # Catalog training is local-only. Publishing accepted changes is a separate,

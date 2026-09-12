@@ -48,31 +48,32 @@ const (
 
 // Result is one actionable row in the train inbox.
 type Result struct {
-	ID            string    `json:"id"`
-	RunID         string    `json:"run_id"`
-	Package       string    `json:"package"`
-	Kind          string    `json:"kind"` // human | miss | false-positive | draft
-	Status        string    `json:"status"`
-	Summary       string    `json:"summary"`
-	Title         string    `json:"title,omitempty"`
-	PRURL         string    `json:"pr_url,omitempty"`
-	PRTitle       string    `json:"pr_title,omitempty"`
-	PRAuthor      string    `json:"pr_author,omitempty"`
-	CommentAuthor string    `json:"comment_author,omitempty"`
-	CommentURL    string    `json:"comment_url,omitempty"`
-	File          string    `json:"file,omitempty"`
-	Line          int       `json:"line,omitempty"`
-	DiffHunk      string    `json:"diff_hunk,omitempty"`
-	ProposedRule  string    `json:"proposed_rule,omitempty"`
-	TriageReason  string    `json:"triage_reason,omitempty"`
-	CaseID        string    `json:"case_id,omitempty"`
-	ConcernID     string    `json:"concern_id,omitempty"`
-	DraftBody     string    `json:"draft_body,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	AppliedAt     time.Time `json:"applied_at,omitempty"`
-	AppliedPath   string    `json:"applied_path,omitempty"`
-	Branch        string    `json:"branch,omitempty"`
-	IssueURL      string    `json:"issue_url,omitempty"`
+	ID               string    `json:"id"`
+	RunID            string    `json:"run_id"`
+	Package          string    `json:"package"`
+	Kind             string    `json:"kind"` // human | miss | false-positive | draft
+	Status           string    `json:"status"`
+	Summary          string    `json:"summary"`
+	Title            string    `json:"title,omitempty"`
+	PRURL            string    `json:"pr_url,omitempty"`
+	PRTitle          string    `json:"pr_title,omitempty"`
+	PRAuthor         string    `json:"pr_author,omitempty"`
+	CommentAuthor    string    `json:"comment_author,omitempty"`
+	CommentURL       string    `json:"comment_url,omitempty"`
+	File             string    `json:"file,omitempty"`
+	Line             int       `json:"line,omitempty"`
+	DiffHunk         string    `json:"diff_hunk,omitempty"`
+	ProposedRule     string    `json:"proposed_rule,omitempty"`
+	TriageReason     string    `json:"triage_reason,omitempty"`
+	AdversaryMission string    `json:"adversary_mission,omitempty"`
+	CaseID           string    `json:"case_id,omitempty"`
+	ConcernID        string    `json:"concern_id,omitempty"`
+	DraftBody        string    `json:"draft_body,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	AppliedAt        time.Time `json:"applied_at,omitempty"`
+	AppliedPath      string    `json:"applied_path,omitempty"`
+	Branch           string    `json:"branch,omitempty"`
+	IssueURL         string    `json:"issue_url,omitempty"`
 }
 
 // normalizeKind maps legacy stored values to current vocabulary.
@@ -732,6 +733,9 @@ func FormatCatalogInspect(r Result) string {
 	if r.ProposedRule != "" {
 		fmt.Fprintf(&b, "\nProposed rule:\n%s\n", r.ProposedRule)
 	}
+	if r.AdversaryMission != "" {
+		fmt.Fprintf(&b, "\nProposed adversary mission:\n%s\n", r.AdversaryMission)
+	}
 	if r.TriageReason != "" {
 		fmt.Fprintf(&b, "\nModel rationale:\n%s\n", r.TriageReason)
 	}
@@ -785,6 +789,24 @@ func UpdateCatalogProposedRule(stateRoot, id, rule string) error {
 	}
 	defer db.Close()
 	res, err := db.Exec(`UPDATE results SET proposed_rule = ? WHERE id = ?`, rule, strings.TrimSpace(id))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("result %q not found", id)
+	}
+	return nil
+}
+
+// UpdateCatalogAdversaryMission stores the proposed scope for a new private
+// adversary without creating tracked catalog files.
+func UpdateCatalogAdversaryMission(stateRoot, id, mission string) error {
+	db, err := openDB(stateRoot)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	res, err := db.Exec(`UPDATE results SET adversary_mission = ? WHERE id = ?`, strings.TrimSpace(mission), strings.TrimSpace(id))
 	if err != nil {
 		return err
 	}

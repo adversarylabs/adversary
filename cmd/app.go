@@ -194,9 +194,22 @@ type processRuntime struct {
 
 func (p processRuntime) BindingIdentity() string { return p.resolver.Repository.RootPath() }
 func (p processRuntime) ReviewCatalog(ctx context.Context, opts application.CatalogReviewOptions) error {
+	var assist func(context.Context, trainreviewui.AssistRequest) (trainreviewui.AssistResult, error)
+	if opts.Assist != nil {
+		assist = func(ctx context.Context, request trainreviewui.AssistRequest) (trainreviewui.AssistResult, error) {
+			result, err := opts.Assist(ctx, application.CatalogAssistRequest{
+				Evidence: request.Evidence, File: request.File, DiffHunk: request.DiffHunk,
+				CurrentAdversary: request.CurrentAdversary, CurrentRule: request.CurrentRule, Adversaries: request.Adversaries,
+			})
+			return trainreviewui.AssistResult{
+				Adversary: result.Adversary, ProposedRule: result.ProposedRule,
+				AdversaryMission: result.AdversaryMission, Rationale: result.Rationale,
+			}, err
+		}
+	}
 	return trainreviewui.Serve(ctx, trainreviewui.Options{
 		StateRoot: opts.StateRoot, Adversaries: opts.Adversaries, Output: opts.Output,
-		Entropy: rand.Reader, Listen: net.Listen,
+		Entropy: rand.Reader, Listen: net.Listen, Assist: assist,
 		OpenURL: func(ctx context.Context, u string) error {
 			return openBrowser(ctx, u, p.environment, p.resolveExecutable, internaladversary.ExecProcessOutputRunner{})
 		},
