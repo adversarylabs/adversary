@@ -62,6 +62,7 @@ Review results later with "adversary catalog train review".`
 	command.AddCommand(newCatalogTrainInspectCommand(app))
 	command.AddCommand(newCatalogTrainDecisionCommand("accept", results.Accept))
 	command.AddCommand(newCatalogTrainDecisionCommand("dismiss", results.Dismiss))
+	command.AddCommand(newTrainResetCommand(app))
 	return command
 }
 

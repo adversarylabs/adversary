@@ -702,9 +702,9 @@ func newTrainResetCommand(app *application.App) *cobra.Command {
 		Long: `By default clears discovery state (seen PRs and catalog position),
 so the next train run will re-examine the catalog repos.
 
-  adversary train reset           # discovery only
-  adversary train reset --results # clear results inbox only
-  adversary train reset --all     # discovery + results`,
+  adversary catalog train reset           # discovery only
+  adversary catalog train reset --results # clear results inbox only
+  adversary catalog train reset --all     # discovery + results`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			state, err := resolveStateDir(path)
 			if err != nil {

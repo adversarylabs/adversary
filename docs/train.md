@@ -94,6 +94,14 @@ Catalog discovery has its own seen-PR namespace, isolated from the internal
 executable-adversary training engine. Running one workflow therefore cannot
 consume the other workflow's discovery history.
 
+To rebuild the local inbox with newly collected presentation metadata while
+retaining the downloaded GitHub cache, run:
+
+```sh
+adversary catalog train reset --all
+adversary catalog train
+```
+
 Accepted results currently record a decision in the local inbox only. Editing
 an adversary and publishing the catalog through Git remains an explicit later
 step.
