@@ -98,17 +98,19 @@ reset (or a conservative fallback), and continue unless interrupted.
 Bare `inspect` opens a localhost review queue with every candidate in a left
 nav grouped by source repository. Inline comments appear with their file, diff
 hunk, PR author, and reviewer identity. Context controls load adjacent lines
-from the exact reviewed GitHub revision. Reviewers can edit the proposed rule, route it to an existing or new
-private adversary, accept or dismiss it, and reopen earlier decisions. Use
-`inspect --all` for the terminal wizard instead.
+from the exact reviewed GitHub revision. Reviewers can edit the proposed rule,
+route it to an existing or new private adversary, apply it to local catalog
+files immediately, approve it for a later batch, dismiss it, and reopen earlier
+decisions. Use `inspect --all` for the terminal wizard instead.
 
 Use repeatable `--author` and `--exclude-author` flags for one-off reviewer
 selection; the equivalent committed policy is `sources.authors_only` and
 `sources.authors_ignore`. Model configuration can also come from
-`ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Accepted results record a
-decision only. They do not modify tracked catalog files, upload private evidence
-to Adversary Labs, or open a pull request. The scan does send bounded comment,
-thread, review-summary, and diff evidence to the model provider you select.
+`ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Results approved for later
+record a decision only. Applying a result updates tracked local catalog files,
+but does not commit, push, upload private evidence to Adversary Labs, or open a
+pull request. The scan does send bounded comment, thread, review-summary, and
+diff evidence to the model provider you select.
 Interactive CLI commands display a one-line stderr reminder while registered
 catalogs still have unreviewed results; machine-readable and noninteractive
 commands remain quiet.

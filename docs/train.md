@@ -98,7 +98,11 @@ editing the proposed rule, assigning an existing or new private adversary,
 and asking the configured model
 to draft a missing rule. New-adversary proposals use a dedicated modal and
 remain local until later catalog publication. The workspace also supports
-accepting, dismissing, and reopening decisions. No third-party assets are loaded.
+accepting, dismissing, and reopening decisions. **Apply to catalog** writes the
+edited rule into the selected local adversary policy and leaves git untouched;
+**Approve for later** records the decision in SQLite for a later batch. Applying
+a proposed new adversary creates its local policy directory and manifest entry.
+No third-party assets are loaded.
 
 `inspect --all` walks the new-candidate queue in the terminal. Accept and dismiss
 decisions are saved immediately; skip leaves a candidate new, and quit leaves
@@ -123,9 +127,9 @@ adversary catalog train reset --all
 adversary catalog train
 ```
 
-Accepted results currently record a decision in the local inbox only. Editing
-an adversary and publishing the catalog through Git remains an explicit later
-step.
+Results approved for later record a decision in the local inbox only. Applying
+updates tracked catalog files but does not commit, push, or open a pull request;
+publishing through Git remains an explicit later step.
 
 For older product context, see the
 [historical customer-training sketch](train/customer-train-cli.md).

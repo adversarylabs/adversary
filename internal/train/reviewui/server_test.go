@@ -16,7 +16,7 @@ import (
 func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	state := t.TempDir()
 	saveCandidate(t, state)
-	handler := NewHandler(state, []string{"operability"}, "secret", nil, nil, nil)
+	handler := NewHandler(state, []string{"operability"}, "secret", nil, nil, nil, nil)
 
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -29,7 +29,7 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
 	}
-	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "New adversary", "AI assist", "View GitHub evidence"} {
+	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "New adversary", "AI assist", "Apply to catalog", "Approve for later", "View GitHub evidence"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted %q", want)
 		}
@@ -54,6 +54,14 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 		return AssistResult{Adversary: "compatibility", ProposedRule: "Preserve the generated API contract.", Rationale: request.Evidence}, nil
 	}, func(_ context.Context, request ContextRequest) (ContextResult, error) {
 		return ContextResult{Lines: []ContextLine{{Number: 37, Text: "before()"}}, HasMore: request.Offset == 0}, nil
+	}, func(_ context.Context, id string) error {
+		row, err := results.Get(state, id)
+		if err != nil {
+			return err
+		}
+		row.Status = results.StatusApplied
+		row.AppliedPath = "/catalog/adversaries/release-contracts/README.md"
+		return results.SaveResult(state, row)
 	}, nil)
 
 	body, _ := json.Marshal(map[string]string{
@@ -82,6 +90,16 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 	handler.ServeHTTP(contextResponse, req)
 	if contextResponse.Code != http.StatusOK || !strings.Contains(contextResponse.Body.String(), "before()") {
 		t.Fatalf("context status=%d body=%q", contextResponse.Code, contextResponse.Body.String())
+	}
+	apply := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/candidates/candidate-1/apply", nil)
+	req.Header.Set(tokenHeader, "secret")
+	handler.ServeHTTP(apply, req)
+	if apply.Code != http.StatusOK || !strings.Contains(apply.Body.String(), "release-contracts/README.md") {
+		t.Fatalf("apply status=%d body=%q", apply.Code, apply.Body.String())
+	}
+	if err := results.Reopen(state, "candidate-1"); err != nil {
+		t.Fatal(err)
 	}
 	row, err := results.Get(state, "candidate-1")
 	if err != nil {

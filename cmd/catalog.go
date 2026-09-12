@@ -13,6 +13,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	trainadversaries "github.com/adversarylabs/adversary/internal/train/adversaries"
+	"github.com/adversarylabs/adversary/internal/train/catalogapply"
 	traininbox "github.com/adversarylabs/adversary/internal/train/inbox"
 	"github.com/adversarylabs/adversary/internal/train/results"
 	"github.com/spf13/cobra"
@@ -117,9 +118,16 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 				if modelRuntime, ok := app.Dependencies().Runtime.(application.ModelReviewRuntime); ok {
 					assist = catalogReviewAssist(modelRuntime, modelProvider, model)
 				}
+				configPath, cfg, err := resolveTrainConfig(path)
+				if err != nil {
+					return err
+				}
 				return reviewer.ReviewCatalog(cmd.Context(), application.CatalogReviewOptions{
 					StateRoot: state, Adversaries: adversaryIDs, Output: cmd.OutOrStdout(),
 					Assist: assist,
+					Apply: func(ctx context.Context, id string) error {
+						return catalogapply.Apply(ctx, state, filepath.Dir(configPath), cfg, id)
+					},
 				})
 			}
 			row, err := results.Get(state, args[0])
