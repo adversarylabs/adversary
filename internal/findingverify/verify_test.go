@@ -88,6 +88,9 @@ func TestIndependentDecisionsPreservePeersAndOriginals(t *testing.T) {
 	if report.Calls[2].Error != "Verification provider request failed." {
 		t.Fatal(report.Calls[2])
 	}
+	if report.Decisions[2].Failure != FailureProviderRequest {
+		t.Fatal(report.Decisions[2])
+	}
 }
 func TestBoundedRetrievalAndOfflineReplayUseSameInputs(t *testing.T) {
 	snapshot := fixture("one")
@@ -179,7 +182,7 @@ func TestInvalidDecisionsAreNotSilentlyAccepted(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if r.Decisions[0].Status != "unresolved" {
+			if r.Decisions[0].Status != "unresolved" || r.Decisions[0].Failure != FailureInvalidDecision {
 				t.Fatal(r)
 			}
 		})

@@ -104,7 +104,7 @@ func verificationDecisionPublishes(candidate findingverify.Candidate, decision f
 	if decision.Status != "unresolved" || candidate.Finding.Confidence != "high" || candidate.ContextError != "" {
 		return false
 	}
-	if operationalVerificationFailure(decision.Reason) {
+	if decision.Failure != "" || operationalVerificationFailure(decision.Reason) {
 		return false
 	}
 	_, _, ok := fallbackCausalCitation(candidate, decision)
@@ -118,6 +118,8 @@ func operationalVerificationFailure(reason string) bool {
 		"Verification canceled.",
 		"Verification output exceeds ",
 		"Candidate context exceeds ",
+		"Invalid verification decision:",
+		"Verification remained incomplete.",
 	} {
 		if strings.HasPrefix(reason, prefix) {
 			return true

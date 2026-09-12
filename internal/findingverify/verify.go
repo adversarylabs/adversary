@@ -65,7 +65,20 @@ type Decision struct {
 	Reason      string        `json:"reason"`
 	Evidence    []Citation    `json:"evidence"`
 	Requests    []ReadRequest `json:"requests"`
+	Failure     string        `json:"failure,omitempty"`
 }
+
+const (
+	FailureContextUnavailable  = "context-unavailable"
+	FailureProviderUnavailable = "provider-unavailable"
+	FailureProviderRequest     = "provider-request"
+	FailureCanceled            = "canceled"
+	FailureInputBudget         = "input-budget"
+	FailureOutputBudget        = "output-budget"
+	FailureInvalidDecision     = "invalid-decision"
+	FailureIncomplete          = "incomplete"
+)
+
 type Call struct {
 	CandidateID string            `json:"candidateId"`
 	Round       int               `json:"round"`
@@ -160,16 +173,16 @@ func ValidateSnapshot(s Snapshot) error {
 	return nil
 }
 
-func unresolved(id, reason string) Decision {
-	return Decision{CandidateID: id, Status: "unresolved", Confidence: "low", Reason: reason, Evidence: []Citation{}, Requests: []ReadRequest{}}
+func unresolved(id, reason, failure string) Decision {
+	return Decision{CandidateID: id, Status: "unresolved", Confidence: "low", Reason: reason, Evidence: []Citation{}, Requests: []ReadRequest{}, Failure: failure}
 }
 func verify(ctx context.Context, c *Candidate, p modelreview.Provider, read Reader) (Decision, []Call) {
 	var calls []Call
 	if c.ContextError != "" {
-		return unresolved(c.ID, c.ContextError), calls
+		return unresolved(c.ID, c.ContextError, FailureContextUnavailable), calls
 	}
 	if p == nil {
-		return unresolved(c.ID, "Verification provider unavailable."), calls
+		return unresolved(c.ID, "Verification provider unavailable.", FailureProviderUnavailable), calls
 	}
 	working := *c
 	working.Sources = append([]Source(nil), c.Sources...)
@@ -179,7 +192,11 @@ func verify(ctx context.Context, c *Candidate, p modelreview.Provider, read Read
 		decision, stageCalls, err := requestDecision(ctx, working, previous, p, round)
 		calls = append(calls, stageCalls...)
 		if err != nil {
-			return unresolved(c.ID, err.Error()), calls
+			failure := FailureIncomplete
+			if typed, ok := err.(*verificationFailure); ok {
+				failure = typed.code
+			}
+			return unresolved(c.ID, err.Error(), failure), calls
 		}
 		if decision.Status != "unresolved" && decision.Confidence == "high" {
 			return decision, calls
@@ -211,7 +228,18 @@ func verify(ctx context.Context, c *Candidate, p modelreview.Provider, read Read
 		}
 		previous = &decision
 	}
-	return unresolved(c.ID, "Verification remained incomplete."), calls
+	return unresolved(c.ID, "Verification remained incomplete.", FailureIncomplete), calls
+}
+
+type verificationFailure struct {
+	code    string
+	message string
+}
+
+func (e *verificationFailure) Error() string { return e.message }
+
+func failed(code, message string) error {
+	return &verificationFailure{code: code, message: message}
 }
 
 type sourceRange struct {
@@ -236,7 +264,7 @@ func requestDecision(ctx context.Context, working Candidate, previous *Decision,
 	validationError := ""
 	for attempt := 1; attempt <= 3; attempt++ {
 		if ctx.Err() != nil {
-			return Decision{}, calls, fmt.Errorf("Verification canceled.")
+			return Decision{}, calls, failed(FailureCanceled, "Verification canceled.")
 		}
 		input, err := json.Marshal(struct {
 			Candidate       Candidate       `json:"candidate"`
@@ -246,7 +274,7 @@ func requestDecision(ctx context.Context, working Candidate, previous *Decision,
 			ValidationError string          `json:"validationError,omitempty"`
 		}{working, previous, ranges, invalidOutput, validationError})
 		if err != nil || len(input) > 768<<10 {
-			return Decision{}, calls, fmt.Errorf("Candidate context exceeds the verification input budget.")
+			return Decision{}, calls, failed(FailureInputBudget, "Candidate context exceeds the verification input budget.")
 		}
 		sum := sha256.Sum256(input)
 		call := Call{CandidateID: working.ID, Round: round, Attempt: attempt, InputDigest: hex.EncodeToString(sum[:])}
@@ -256,13 +284,13 @@ func requestDecision(ctx context.Context, working Candidate, previous *Decision,
 		if err != nil {
 			call.Error = "Verification provider request failed."
 			calls = append(calls, call)
-			return Decision{}, calls, fmt.Errorf("%s", call.Error)
+			return Decision{}, calls, failed(FailureProviderRequest, call.Error)
 		}
 		call.Usage = result.Usage
 		if len(result.Output) > 32<<10 {
 			call.Error = "Verification output exceeds 32 KiB."
 			calls = append(calls, call)
-			return Decision{}, calls, fmt.Errorf("%s", call.Error)
+			return Decision{}, calls, failed(FailureOutputBudget, call.Error)
 		}
 		// Do not retain arbitrary non-JSON provider output in a replay artifact.
 		if json.Valid(result.Output) {
@@ -286,7 +314,7 @@ func requestDecision(ctx context.Context, working Candidate, previous *Decision,
 		calls = append(calls, call)
 		return decision, calls, nil
 	}
-	return Decision{}, calls, fmt.Errorf("%s (structural correction attempts exhausted)", validationError)
+	return Decision{}, calls, failed(FailureInvalidDecision, fmt.Sprintf("%s (structural correction attempts exhausted)", validationError))
 }
 func validateDecision(d Decision, c Candidate) error {
 	if d.CandidateID != c.ID {
