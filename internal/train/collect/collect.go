@@ -111,7 +111,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 				SanitizedError: err.Error(),
 				StagesNotRun:   []string{"collect"},
 				RetrySafe:      true,
-				NextAction:     "set ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN",
+				NextAction:     "run gh auth login or set ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN",
 			}
 			return res, nil
 		}
