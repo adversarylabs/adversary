@@ -71,9 +71,7 @@ func verifyComposedResults(ctx context.Context, opts *runOptions, runs []compose
 			candidate := report.Snapshot.Candidates[decision]
 			verification := report.Decisions[decision]
 			if verificationDecisionPublishes(candidate, verification) {
-				if verification.Status == "keep" {
-					f = reanchorFindingToChangedCitation(f, candidate, verification)
-				}
+				f = reanchorFindingToChangedCitation(f, candidate, verification)
 				envelope.Result.Findings = append(envelope.Result.Findings, f)
 			}
 			decision++
@@ -106,57 +104,58 @@ func verificationDecisionPublishes(candidate findingverify.Candidate, decision f
 	if decision.Status != "unresolved" || candidate.Finding.Confidence != "high" || candidate.ContextError != "" {
 		return false
 	}
-	hasUsableSource := false
-	for _, source := range append(append([]findingverify.Source(nil), candidate.Sources...), candidate.RetrievedSources...) {
-		if source.Unavailable == "" && strings.TrimSpace(source.Content) != "" {
-			hasUsableSource = true
-			break
-		}
-	}
-	if !hasUsableSource {
-		return false
-	}
-	// An inconclusive model decision must cite supplied evidence. Structural
-	// correction exhaustion means the model attempted a decision against the
-	// supplied sources but failed the strict output contract. Requests for more
-	// context and bare operational failures are not evidence.
-	return len(decision.Evidence) > 0 || strings.HasPrefix(decision.Reason, "Invalid verification decision:")
+	_, _, ok := fallbackCausalCitation(candidate, decision)
+	return ok
 }
 
 func reanchorFindingToChangedCitation(f review.Finding, candidate findingverify.Candidate, decision findingverify.Decision) review.Finding {
+	source, citation, ok := fallbackCausalCitation(candidate, decision)
+	if !ok {
+		return f
+	}
+	for i, evidence := range f.Evidence {
+		if evidence.File != source.Path || evidence.Line == nil {
+			continue
+		}
+		end := *evidence.Line
+		if evidence.EndLine != nil {
+			end = *evidence.EndLine
+		}
+		if citation.Line < *evidence.Line || citation.Line > end {
+			continue
+		}
+		if i > 0 {
+			f.Evidence = append([]review.Evidence{evidence}, append(f.Evidence[:i], f.Evidence[i+1:]...)...)
+		}
+		return f
+	}
+	line := citation.Line
+	anchor := review.Evidence{File: source.Path, Line: &line, Message: "Causal changed line verified by Adversary."}
+	f.Evidence = append([]review.Evidence{anchor}, f.Evidence...)
+	return f
+}
+
+func fallbackCausalCitation(candidate findingverify.Candidate, decision findingverify.Decision) (findingverify.Source, findingverify.Citation, bool) {
 	for _, citation := range decision.Evidence {
 		for _, source := range append(append([]findingverify.Source(nil), candidate.Sources...), candidate.RetrievedSources...) {
-			if source.ID != citation.SourceID || source.Side != "head" || source.Unavailable != "" {
+			if source.ID != citation.SourceID || source.Side != "head" || source.Unavailable != "" || strings.TrimSpace(source.Content) == "" {
 				continue
 			}
+			lineCount := len(strings.Split(strings.TrimSuffix(source.Content, "\n"), "\n"))
+			if citation.Line < source.StartLine || citation.Line >= source.StartLine+lineCount {
+				continue
+			}
+			if candidate.WholeRepository {
+				return source, citation, true
+			}
 			for _, region := range candidate.ChangedRegions {
-				if source.Path != region.Path || citation.Line < region.StartLine || citation.Line > region.EndLine {
-					continue
+				if source.Path == region.Path && citation.Line >= region.StartLine && citation.Line <= region.EndLine {
+					return source, citation, true
 				}
-				for i, evidence := range f.Evidence {
-					if evidence.File != source.Path || evidence.Line == nil {
-						continue
-					}
-					end := *evidence.Line
-					if evidence.EndLine != nil {
-						end = *evidence.EndLine
-					}
-					if citation.Line < *evidence.Line || citation.Line > end {
-						continue
-					}
-					if i > 0 {
-						f.Evidence = append([]review.Evidence{evidence}, append(f.Evidence[:i], f.Evidence[i+1:]...)...)
-					}
-					return f
-				}
-				line := citation.Line
-				anchor := review.Evidence{File: source.Path, Line: &line, Message: "Causal changed line verified by Adversary."}
-				f.Evidence = append([]review.Evidence{anchor}, f.Evidence...)
-				return f
 			}
 		}
 	}
-	return f
+	return findingverify.Source{}, findingverify.Citation{}, false
 }
 
 func verificationDispositionCounts(r findingverify.Report) (keep, fallback, reject, unresolved int) {
