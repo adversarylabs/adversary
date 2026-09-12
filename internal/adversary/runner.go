@@ -27,6 +27,8 @@ type RunOptions struct {
 	BaseRef                  string
 	HeadRef                  string
 	Builder                  string
+	ModelProvider            string
+	Model                    string
 	Force                    bool
 	Format                   string
 	KeepTemp                 bool
@@ -109,7 +111,7 @@ type Runner struct {
 	Now                     func() time.Time
 	Files                   RuntimeFiles
 	BuildProject            func(context.Context, pack.BuildOptions) error
-	ModelBrokerFactory      func() (modelreview.Broker, error)
+	ModelBrokerFactory      func(modelreview.Config) (modelreview.Broker, error)
 	BuildStateDir           string
 	Shell                   func() ([]string, error)
 	Repository              *repository.Repository
@@ -476,7 +478,10 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			cancelRun()
 			return fmt.Errorf("model broker dependency is required by this adversary")
 		}
-		broker, brokerErr := r.ModelBrokerFactory()
+		broker, brokerErr := r.ModelBrokerFactory(modelreview.Config{
+			Provider: opts.ModelProvider,
+			Model:    opts.Model,
+		})
 		if brokerErr != nil {
 			cancelRun()
 			return fmt.Errorf("configure model broker: %w", brokerErr)

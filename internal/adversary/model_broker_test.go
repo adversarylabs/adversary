@@ -55,25 +55,32 @@ func TestRunnerProvidesModelBrokerWithoutExposingProviderKey(t *testing.T) {
 	writeFile(t, filepath.Join(project, "index.js"), "")
 	executor := &brokerCallingExecutor{}
 	provider := &fixtureRunnerProvider{}
+	var brokerConfig modelreview.Config
 	var stderr bytes.Buffer
 	err := (Runner{
 		Stdout:   &bytes.Buffer{},
 		Stderr:   &stderr,
 		Executor: executor,
-		ModelBrokerFactory: func() (modelreview.Broker, error) {
+		ModelBrokerFactory: func(config modelreview.Config) (modelreview.Broker, error) {
+			brokerConfig = config
 			return modelreview.Broker{Provider: provider}, nil
 		},
 	}).Run(context.Background(), RunOptions{
-		AdversaryRef: project,
-		RepoPath:     t.TempDir(),
-		Format:       "json",
-		Verbose:      true,
+		AdversaryRef:  project,
+		RepoPath:      t.TempDir(),
+		ModelProvider: "cloudflare",
+		Model:         "openai/gpt-5.5",
+		Format:        "json",
+		Verbose:       true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(provider.requests) != 1 {
 		t.Fatalf("provider calls = %d", len(provider.requests))
+	}
+	if brokerConfig.Provider != "cloudflare" || brokerConfig.Model != "openai/gpt-5.5" {
+		t.Fatalf("broker config = %#v", brokerConfig)
 	}
 	if executor.spec.Env["ADVERSARY_MODEL_ENDPOINT"] == "" || executor.spec.Env["ADVERSARY_MODEL_TOKEN"] == "" {
 		t.Fatalf("broker environment = %#v", executor.spec.Env)

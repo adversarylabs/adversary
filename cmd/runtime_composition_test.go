@@ -137,22 +137,28 @@ func TestProcessRuntimeRoutesDistinctStreamsAndSnapshot(t *testing.T) {
 	}
 }
 
-func TestProcessRuntimeModelFlagsOverrideEnvironment(t *testing.T) {
+func TestProcessRuntimeForwardsExplicitCloudflareModelOptionsToBroker(t *testing.T) {
 	environment := internaladversary.NewProcessEnvironment([]string{
 		"ADVERSARY_MODEL_PROVIDER=anthropic",
 		"ADVERSARY_MODEL=environment-model",
 		"ANTHROPIC_API_KEY=anthropic-secret",
-		"FIREWORKS_API_KEY=fireworks-secret",
+		"CLOUDFLARE_API_TOKEN=cloudflare-secret",
+		"CLOUDFLARE_ACCOUNT_ID=account-id",
 	}, false)
-	runner := (processRuntime{environment: environment}).runner(application.AdversaryRunOptions{
-		ModelProvider: "fireworks",
-		Model:         "accounts/fireworks/models/reviewer",
+	applicationOptions := application.AdversaryRunOptions{
+		ModelProvider: "cloudflare",
+		Model:         "openai/gpt-5.5",
+	}
+	internalOptions := toInternalRunOptions(applicationOptions)
+	runner := (processRuntime{environment: environment}).runner(applicationOptions)
+	broker, err := runner.ModelBrokerFactory(modelreview.Config{
+		Provider: internalOptions.ModelProvider,
+		Model:    internalOptions.Model,
 	})
-	broker, err := runner.ModelBrokerFactory()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if broker.Provider.Name() != "fireworks" || broker.Provider.Model() != "accounts/fireworks/models/reviewer" {
+	if broker.Provider.Name() != "cloudflare" || broker.Provider.Model() != "openai/gpt-5.5" {
 		t.Fatalf("provider = %s/%s", broker.Provider.Name(), broker.Provider.Model())
 	}
 }
@@ -166,7 +172,10 @@ func TestProcessRuntimeDisablesProviderKeepAlivesFromEnvironment(t *testing.T) {
 		ModelProvider: "fireworks",
 		Model:         "glm-5.2",
 	})
-	broker, err := runner.ModelBrokerFactory()
+	broker, err := runner.ModelBrokerFactory(modelreview.Config{
+		Provider: "fireworks",
+		Model:    "glm-5.2",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

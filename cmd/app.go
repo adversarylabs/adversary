@@ -302,6 +302,7 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 		MinimumConfidence: opts.MinimumConfidence,
 		Includes:          opts.Includes, Excludes: opts.Excludes,
 		All: opts.All, DryRun: opts.DryRun, Format: opts.Format,
+		ModelProvider: opts.ModelProvider, Model: opts.Model,
 		AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
 		RunTimeout:               opts.RunTimeout, DetectionTimeout: opts.DetectionTimeout,
 		IncludeSuppressed: opts.IncludeSuppressed,
@@ -371,11 +372,8 @@ func toApplicationAutoResult(result internaladversary.AutoResult) application.Ad
 }
 func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladversary.Runner {
 	shell := func() ([]string, error) { return internaladversary.PlatformShell(p.node.LookPath) }
-	modelBrokerFactory := func() (modelreview.Broker, error) {
-		provider, err := modelreview.ProviderFromConfig(modelreview.Config{
-			Provider: opts.ModelProvider,
-			Model:    opts.Model,
-		}, p.environment.Lookup, modelreview.HTTPClientFromEnvironment(p.environment.Lookup))
+	modelBrokerFactory := func(config modelreview.Config) (modelreview.Broker, error) {
+		provider, err := modelreview.ProviderFromConfig(config, p.environment.Lookup, modelreview.HTTPClientFromEnvironment(p.environment.Lookup))
 		if err != nil {
 			return modelreview.Broker{}, err
 		}
@@ -397,7 +395,7 @@ func toInternalRunOptions(opts application.AdversaryRunOptions) internaladversar
 	if opts.OnEnvelope != nil {
 		onEnvelope = func(env review.RunEnvelope) { opts.OnEnvelope(env) }
 	}
-	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout, ReviewContext: opts.ReviewContext, ReviewAssignment: opts.ReviewAssignment, RepoIndexMode: opts.RepoIndexMode, OnEnvelope: onEnvelope}
+	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, ModelProvider: opts.ModelProvider, Model: opts.Model, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout, ReviewContext: opts.ReviewContext, ReviewAssignment: opts.ReviewAssignment, RepoIndexMode: opts.RepoIndexMode, OnEnvelope: onEnvelope}
 }
 
 type processTTY struct{}
