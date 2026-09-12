@@ -84,6 +84,16 @@ var starterAdversaries = []starterAdversary{
 			"Health and recovery paths that cannot distinguish degraded, blocked, and failed work.",
 		},
 	},
+	{
+		Slug:    "engineering-conventions",
+		Title:   "Engineering conventions",
+		Summary: "Preserve the codebase-specific standards that make changes consistent and maintainable.",
+		ReviewFor: []string{
+			"Naming, layout, API, testing, logging, and error-handling patterns established by the team.",
+			"Local idioms or required abstractions that a change bypasses without a concrete reason.",
+			"Repeated reviewer guidance and documented standards, without inventing a rule from one isolated example.",
+		},
+	},
 }
 
 const readmeHeader = `# Private adversary catalog
