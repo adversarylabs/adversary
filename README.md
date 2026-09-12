@@ -96,8 +96,9 @@ scans detect GitHub primary and secondary rate limits, wait for the advertised
 reset (or a conservative fallback), and continue unless interrupted.
 
 Bare `inspect` opens a localhost review queue with every candidate in a left
-nav. Inline comments appear with their file, diff hunk, PR author, and reviewer
-identity. Reviewers can edit the proposed rule, route it to an existing or new
+nav grouped by source repository. Inline comments appear with their file, diff
+hunk, PR author, and reviewer identity. Context controls load adjacent lines
+from the exact reviewed GitHub revision. Reviewers can edit the proposed rule, route it to an existing or new
 private adversary, accept or dismiss it, and reopen earlier decisions. Use
 `inspect --all` for the terminal wizard instead.
 

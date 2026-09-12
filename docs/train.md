@@ -90,9 +90,12 @@ adversary catalog train dismiss <id>
 Bare `inspect` starts a token-authenticated server on a random localhost port
 and opens the browser review queue. Its left nav includes new, accepted, and
 dismissed candidates. The detail view shows PR and comment authors and supports
-the source file and diff hunk with the reviewer comment attached. It supports
+the source file and diff hunk with the reviewer comment attached. Findings are
+grouped by source repository in the navigation. Inline expansion controls load
+real adjacent lines from the exact GitHub revision referenced by the comment;
+an active `gh` login or token is required when those controls are used. It supports
 editing the proposed rule, assigning an existing or new private adversary,
-expanding context above or below the comment, and asking the configured model
+and asking the configured model
 to draft a missing rule. New-adversary proposals use a dedicated modal and
 remain local until later catalog publication. The workspace also supports
 accepting, dismissing, and reopening decisions. No third-party assets are loaded.

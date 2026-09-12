@@ -16,7 +16,7 @@ import (
 func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	state := t.TempDir()
 	saveCandidate(t, state)
-	handler := NewHandler(state, []string{"operability"}, "secret", nil, nil)
+	handler := NewHandler(state, []string{"operability"}, "secret", nil, nil, nil)
 
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -29,7 +29,7 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
 	}
-	for _, want := range []string{"＋ Up", "＋ Down", "New adversary", "AI assist", "View GitHub evidence"} {
+	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "New adversary", "AI assist", "View GitHub evidence"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted %q", want)
 		}
@@ -52,6 +52,8 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 	saveCandidate(t, state)
 	handler := NewHandler(state, []string{"operability", "compatibility"}, "secret", func(_ context.Context, request AssistRequest) (AssistResult, error) {
 		return AssistResult{Adversary: "compatibility", ProposedRule: "Preserve the generated API contract.", Rationale: request.Evidence}, nil
+	}, func(_ context.Context, request ContextRequest) (ContextResult, error) {
+		return ContextResult{Lines: []ContextLine{{Number: 37, Text: "before()"}}, HasMore: request.Offset == 0}, nil
 	}, nil)
 
 	body, _ := json.Marshal(map[string]string{
@@ -73,6 +75,13 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 	handler.ServeHTTP(assist, req)
 	if assist.Code != http.StatusOK || !strings.Contains(assist.Body.String(), "generated API contract") {
 		t.Fatalf("assist status=%d body=%q", assist.Code, assist.Body.String())
+	}
+	contextResponse := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/candidates/candidate-1/context?direction=up&offset=0", nil)
+	req.Header.Set(tokenHeader, "secret")
+	handler.ServeHTTP(contextResponse, req)
+	if contextResponse.Code != http.StatusOK || !strings.Contains(contextResponse.Body.String(), "before()") {
+		t.Fatalf("context status=%d body=%q", contextResponse.Code, contextResponse.Body.String())
 	}
 	row, err := results.Get(state, "candidate-1")
 	if err != nil {
