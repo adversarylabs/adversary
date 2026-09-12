@@ -104,8 +104,26 @@ func verificationDecisionPublishes(candidate findingverify.Candidate, decision f
 	if decision.Status != "unresolved" || candidate.Finding.Confidence != "high" || candidate.ContextError != "" {
 		return false
 	}
+	if operationalVerificationFailure(decision.Reason) {
+		return false
+	}
 	_, _, ok := fallbackCausalCitation(candidate, decision)
 	return ok
+}
+
+func operationalVerificationFailure(reason string) bool {
+	for _, prefix := range []string{
+		"Verification provider unavailable.",
+		"Verification provider request failed.",
+		"Verification canceled.",
+		"Verification output exceeds ",
+		"Candidate context exceeds ",
+	} {
+		if strings.HasPrefix(reason, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func reanchorFindingToChangedCitation(f review.Finding, candidate findingverify.Candidate, decision findingverify.Decision) review.Finding {
@@ -137,25 +155,50 @@ func reanchorFindingToChangedCitation(f review.Finding, candidate findingverify.
 
 func fallbackCausalCitation(candidate findingverify.Candidate, decision findingverify.Decision) (findingverify.Source, findingverify.Citation, bool) {
 	for _, citation := range decision.Evidence {
-		for _, source := range append(append([]findingverify.Source(nil), candidate.Sources...), candidate.RetrievedSources...) {
-			if source.ID != citation.SourceID || source.Side != "head" || source.Unavailable != "" || strings.TrimSpace(source.Content) == "" {
-				continue
-			}
-			lineCount := len(strings.Split(strings.TrimSuffix(source.Content, "\n"), "\n"))
-			if citation.Line < source.StartLine || citation.Line >= source.StartLine+lineCount {
-				continue
-			}
-			if candidate.WholeRepository {
-				return source, citation, true
-			}
-			for _, region := range candidate.ChangedRegions {
-				if source.Path == region.Path && citation.Line >= region.StartLine && citation.Line <= region.EndLine {
-					return source, citation, true
-				}
-			}
+		if source, ok := fallbackSourceAtLine(candidate, citation.SourceID, "", citation.Line); ok {
+			return source, citation, true
+		}
+	}
+	// A verifier can fail to produce a schema-valid citation even when the
+	// reviewer's original evidence already points into pinned changed source.
+	// Reuse only that source-backed location; free-form snippets and messages do
+	// not qualify on their own.
+	for _, evidence := range candidate.Finding.Evidence {
+		if evidence.Line == nil {
+			continue
+		}
+		if source, ok := fallbackSourceAtLine(candidate, "", evidence.File, *evidence.Line); ok {
+			return source, findingverify.Citation{SourceID: source.ID, Line: *evidence.Line}, true
 		}
 	}
 	return findingverify.Source{}, findingverify.Citation{}, false
+}
+
+func fallbackSourceAtLine(candidate findingverify.Candidate, sourceID, path string, line int) (findingverify.Source, bool) {
+	for _, source := range append(append([]findingverify.Source(nil), candidate.Sources...), candidate.RetrievedSources...) {
+		if sourceID != "" && source.ID != sourceID {
+			continue
+		}
+		if path != "" && source.Path != path {
+			continue
+		}
+		if source.Side != "head" || source.Unavailable != "" || strings.TrimSpace(source.Content) == "" {
+			continue
+		}
+		lineCount := len(strings.Split(strings.TrimSuffix(source.Content, "\n"), "\n"))
+		if line < source.StartLine || line >= source.StartLine+lineCount {
+			continue
+		}
+		if candidate.WholeRepository {
+			return source, true
+		}
+		for _, region := range candidate.ChangedRegions {
+			if source.Path == region.Path && line >= region.StartLine && line <= region.EndLine {
+				return source, true
+			}
+		}
+	}
+	return findingverify.Source{}, false
 }
 
 func verificationDispositionCounts(r findingverify.Report) (keep, fallback, reject, unresolved int) {
