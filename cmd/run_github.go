@@ -381,7 +381,7 @@ func (o *runOptions) recordGitHubRunFailure(ref, scope string, err error, stderr
 	// before truncation so even a key straddling the limit cannot leak to a PR.
 	for _, key := range []string{
 		modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv,
-		modelreview.FireworksKeyEnv, modelreview.CamelKeyEnv,
+		modelreview.FireworksKeyEnv, modelreview.CamelKeyEnv, modelreview.CloudflareKeyEnv,
 		"ADVERSARY_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "ADVERSARY_TOKEN",
 	} {
 		if secret, ok := githubapi.LookupEnv(key); ok && secret != "" {

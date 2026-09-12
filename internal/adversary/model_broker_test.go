@@ -55,19 +55,23 @@ func TestRunnerProvidesModelBrokerWithoutExposingProviderKey(t *testing.T) {
 	writeFile(t, filepath.Join(project, "index.js"), "")
 	executor := &brokerCallingExecutor{}
 	provider := &fixtureRunnerProvider{}
+	var brokerConfig modelreview.Config
 	var stderr bytes.Buffer
 	err := (Runner{
 		Stdout:   &bytes.Buffer{},
 		Stderr:   &stderr,
 		Executor: executor,
-		ModelBrokerFactory: func() (modelreview.Broker, error) {
+		ModelBrokerFactory: func(config modelreview.Config) (modelreview.Broker, error) {
+			brokerConfig = config
 			return modelreview.Broker{Provider: provider}, nil
 		},
 	}).Run(context.Background(), RunOptions{
-		AdversaryRef: project,
-		RepoPath:     t.TempDir(),
-		Format:       "json",
-		Verbose:      true,
+		AdversaryRef:  project,
+		RepoPath:      t.TempDir(),
+		ModelProvider: "cloudflare",
+		Model:         "openai/gpt-5.5",
+		Format:        "json",
+		Verbose:       true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -75,13 +79,16 @@ func TestRunnerProvidesModelBrokerWithoutExposingProviderKey(t *testing.T) {
 	if len(provider.requests) != 1 {
 		t.Fatalf("provider calls = %d", len(provider.requests))
 	}
+	if brokerConfig.Provider != "cloudflare" || brokerConfig.Model != "openai/gpt-5.5" {
+		t.Fatalf("broker config = %#v", brokerConfig)
+	}
 	if executor.spec.Env["ADVERSARY_MODEL_ENDPOINT"] == "" || executor.spec.Env["ADVERSARY_MODEL_TOKEN"] == "" {
 		t.Fatalf("broker environment = %#v", executor.spec.Env)
 	}
 	if strings.Contains(stderr.String(), executor.spec.Env["ADVERSARY_MODEL_TOKEN"]) || !strings.Contains(stderr.String(), "ADVERSARY_MODEL_TOKEN=<redacted>") {
 		t.Fatalf("verbose diagnostics leaked broker token:\n%s", stderr.String())
 	}
-	for _, key := range []string{modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv, modelreview.FireworksKeyEnv, modelreview.CamelKeyEnv} {
+	for _, key := range []string{modelreview.OpenAIKeyEnv, modelreview.CloudflareKeyEnv, modelreview.AnthropicKeyEnv, modelreview.FireworksKeyEnv, modelreview.CamelKeyEnv} {
 		if !slices.Contains(executor.spec.EnvironmentDeny, key) {
 			t.Fatalf("provider credential %s is not denied at the process boundary", key)
 		}
@@ -111,7 +118,7 @@ func TestRunnerFailsBeforeLaunchWhenModelBrokerIsUnavailable(t *testing.T) {
 
 func TestRuntimeSpecAlwaysDeniesCLIModelProviderCredentials(t *testing.T) {
 	spec := NewRunConfig(ResolvedAdversary{}, t.TempDir(), t.TempDir(), RunOptions{}).RuntimeSpec()
-	for _, key := range []string{modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv, modelreview.FireworksKeyEnv, modelreview.CamelKeyEnv} {
+	for _, key := range []string{modelreview.OpenAIKeyEnv, modelreview.CloudflareKeyEnv, modelreview.AnthropicKeyEnv, modelreview.FireworksKeyEnv, modelreview.CamelKeyEnv} {
 		if !slices.Contains(spec.EnvironmentDeny, key) {
 			t.Fatalf("provider credential %s is not denied without permissions.model", key)
 		}

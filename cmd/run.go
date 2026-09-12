@@ -201,9 +201,9 @@ review base/head and optional posting context. Posting still requires
 			opts.modelProvider = strings.ToLower(strings.TrimSpace(opts.modelProvider))
 			opts.model = strings.TrimSpace(opts.model)
 			switch opts.modelProvider {
-			case "", "openai", "anthropic", "fireworks", "camel", "camel-stream", "codex":
+			case "", "openai", "cloudflare", "anthropic", "fireworks", "camel", "camel-stream", "codex":
 			default:
-				return fmt.Errorf("--model-provider must be openai, anthropic, fireworks, camel, or codex")
+				return fmt.Errorf("--model-provider must be openai, cloudflare, anthropic, fireworks, camel, or codex")
 			}
 			if cmd.Flags().Changed("model-provider") && opts.modelProvider == "" {
 				return fmt.Errorf("--model-provider must not be empty")
@@ -310,7 +310,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().StringVar(&opts.base, "base", "", "git base ref (defaults to the detected default branch when --head is set)")
 	cmd.Flags().StringVar(&opts.head, "head", "", "git head ref (defaults to HEAD when --base is set)")
 	cmd.Flags().StringVar(&opts.builder, "builder", "local", "build mechanism for local adversaries: local or docker")
-	cmd.Flags().StringVar(&opts.modelProvider, "model-provider", "", "model provider: openai, anthropic, fireworks, camel, or codex (overrides ADVERSARY_MODEL_PROVIDER)")
+	cmd.Flags().StringVar(&opts.modelProvider, "model-provider", "", "model provider: openai, cloudflare, anthropic, fireworks, camel, or codex (overrides ADVERSARY_MODEL_PROVIDER)")
 	cmd.Flags().StringVar(&opts.model, "model", "", "provider model identifier (overrides ADVERSARY_MODEL)")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "run even when triggers.files_changed does not match")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")

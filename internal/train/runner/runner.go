@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/internal/train/bundle"
 	"github.com/adversarylabs/adversary/internal/train/dataroot"
 	"github.com/adversarylabs/adversary/internal/train/securefs"
@@ -254,7 +255,11 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 	outFile := filepath.Join(outDir, "engineering-review.raw.json")
 	provider := os.Getenv("ADVERSARY_MODEL_PROVIDER")
 	if provider == "" {
-		provider = defaultModelProvider()
+		var err error
+		provider, err = modelreview.InferProviderFromEnvironment(os.LookupEnv)
+		if err != nil {
+			return nil, fmt.Errorf("select engineering review model provider: %w", err)
+		}
 	}
 	model := os.Getenv("ADVERSARY_MODEL")
 	if model == "" {
@@ -357,25 +362,10 @@ func looksLikeJSON(raw []byte) bool {
 	return strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[")
 }
 
-func defaultModelProvider() string {
-	// Prefer provider whose key is present; openai is a common default.
-	if os.Getenv("OPENAI_API_KEY") != "" {
-		return "openai"
-	}
-	if os.Getenv("ANTHROPIC_API_KEY") != "" {
-		return "anthropic"
-	}
-	if os.Getenv("FIREWORKS_API_KEY") != "" {
-		return "fireworks"
-	}
-	if os.Getenv("CAMEL_API_KEY") != "" {
-		return "camel"
-	}
-	return "openai"
-}
-
 func defaultModel(provider string) string {
 	switch provider {
+	case "cloudflare":
+		return "openai/gpt-5-mini"
 	case "anthropic":
 		return "claude-sonnet-4-20250514"
 	case "fireworks":
@@ -408,7 +398,7 @@ func nextActionForAdversaryError(msg string) string {
 	}
 	switch {
 	case strings.Contains(l, "model_provider") || strings.Contains(l, "model provider"):
-		return "set ADVERSARY_MODEL_PROVIDER=openai (or anthropic/fireworks) and ensure the matching API key is set"
+		return "set ADVERSARY_MODEL_PROVIDER=openai (or cloudflare/anthropic/fireworks) and ensure the matching API key is set"
 	case strings.Contains(l, "api key"):
 		return "set the model provider API key (e.g. OPENAI_API_KEY) for engineering-review"
 	case strings.Contains(l, "not installed") || strings.Contains(l, "oci"):

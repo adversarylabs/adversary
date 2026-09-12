@@ -8,15 +8,22 @@ import (
 )
 
 type OpenAIProvider struct {
+	ProviderName    string
 	ReasoningEffort string
 	MaxOutputTokens int
 	APIKey          string
 	ModelID         string
 	BaseURL         string
+	Headers         map[string]string
 	Client          *http.Client
 }
 
-func (p *OpenAIProvider) Name() string  { return "openai" }
+func (p *OpenAIProvider) Name() string {
+	if p.ProviderName != "" {
+		return p.ProviderName
+	}
+	return "openai"
+}
 func (p *OpenAIProvider) Model() string { return p.ModelID }
 
 func (p *OpenAIProvider) Review(ctx context.Context, request Request) (Result, error) {
@@ -43,9 +50,13 @@ func (p *OpenAIProvider) Review(ctx context.Context, request Request) (Result, e
 	if effort != "" {
 		payload["reasoning"] = map[string]any{"effort": effort}
 	}
-	data, status, err := postJSON(ctx, p.Client, p.BaseURL+"/v1/responses", map[string]string{
+	headers := map[string]string{
 		"authorization": "Bearer " + p.APIKey,
-	}, payload)
+	}
+	for name, value := range p.Headers {
+		headers[name] = value
+	}
+	data, status, err := postJSON(ctx, p.Client, p.BaseURL+"/v1/responses", headers, payload)
 	if err != nil {
 		return Result{}, err
 	}
@@ -69,17 +80,21 @@ func (p *OpenAIProvider) Review(ctx context.Context, request Request) (Result, e
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
-		return Result{}, fmt.Errorf("decode openai response: %w", err)
+		return Result{}, fmt.Errorf("decode %s response: %w", p.Name(), err)
 	}
 	if response.Status == "incomplete" {
-		code := "openai_incomplete_output"
+		code := p.Name() + "_incomplete_output"
 		if response.IncompleteDetails.Reason == "max_output_tokens" {
-			code = "openai_output_token_limit"
+			code = p.Name() + "_output_token_limit"
 		}
-		return Result{}, &ProviderError{Code: code, Message: fmt.Sprintf("openai review incomplete: %s (max_output_tokens=%d, reasoning_effort=%q); reasoning and final output share this budget; configure %s or %s", response.IncompleteDetails.Reason, maxTokens, effort, OpenAIMaxOutputTokensEnv, OpenAIReasoningEffortEnv)}
+		message := fmt.Sprintf("%s review incomplete: %s (max_output_tokens=%d, reasoning_effort=%q)", p.Name(), response.IncompleteDetails.Reason, maxTokens, effort)
+		if p.Name() == "openai" {
+			message += fmt.Sprintf("; reasoning and final output share this budget; configure %s or %s", OpenAIMaxOutputTokensEnv, OpenAIReasoningEffortEnv)
+		}
+		return Result{}, &ProviderError{Code: code, Message: message}
 	}
 	if response.Status != "" && response.Status != "completed" {
-		return Result{}, &ProviderError{Code: "openai_incomplete_output", Message: fmt.Sprintf("openai review did not complete (status=%q)", response.Status)}
+		return Result{}, &ProviderError{Code: p.Name() + "_incomplete_output", Message: fmt.Sprintf("%s review did not complete (status=%q)", p.Name(), response.Status)}
 	}
 	for _, item := range response.Output {
 		for _, content := range item.Content {
@@ -91,7 +106,7 @@ func (p *OpenAIProvider) Review(ctx context.Context, request Request) (Result, e
 			}
 		}
 	}
-	return Result{}, &ProviderError{Code: "openai_missing_output", Message: "openai response did not contain structured output"}
+	return Result{}, &ProviderError{Code: p.Name() + "_missing_output", Message: p.Name() + " response did not contain structured output"}
 }
 
 // Luna uses the same output budget for reasoning and the structured answer.

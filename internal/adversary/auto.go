@@ -31,6 +31,8 @@ type AutoOptions struct {
 	RunTimeout               time.Duration
 	DetectionTimeout         time.Duration
 	Format                   string
+	ModelProvider            string
+	Model                    string
 	IncludeSuppressed        bool
 	RepoIndexMode            string
 	ReportSelections         func(AutoResult) error
@@ -168,6 +170,8 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 			RepoPath:                 repositoryRoot,
 			Force:                    true,
 			Format:                   opts.Format,
+			ModelProvider:            opts.ModelProvider,
+			Model:                    opts.Model,
 			IncludeSuppressed:        opts.IncludeSuppressed,
 			AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
 			RunTimeout:               opts.RunTimeout,

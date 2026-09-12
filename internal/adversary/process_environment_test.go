@@ -29,10 +29,11 @@ func TestProcessEnvironmentCanDenyParentCredentialsAfterOverrides(t *testing.T) 
 		"ANTHROPIC_API_KEY=other-secret",
 		"FIREWORKS_API_KEY=fireworks-secret",
 		"CAMEL_API_KEY=camel-secret",
+		"CLOUDFLARE_API_TOKEN=cloudflare-secret",
 	}, false)
 	got := env.EntriesWithout(
 		map[string]string{"OPENAI_API_KEY": "override-secret", "ADVERSARY_MODEL_TOKEN": "broker-token"},
-		[]string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "FIREWORKS_API_KEY", "CAMEL_API_KEY"},
+		[]string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "FIREWORKS_API_KEY", "CAMEL_API_KEY", "CLOUDFLARE_API_TOKEN"},
 	)
 	want := []string{"ADVERSARY_MODEL_TOKEN=broker-token", "PATH=/bin"}
 	if !reflect.DeepEqual(got, want) {
