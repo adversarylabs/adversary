@@ -111,3 +111,56 @@ state_dir: .adversary-train
 		t.Fatalf("status=%q", result.Status)
 	}
 }
+
+func TestCatalogTrainInspectAllWalksAndCheckpointsCandidates(t *testing.T) {
+	catalog := t.TempDir()
+	config := `version: 1
+adversaries:
+  root: ./adversaries
+sources:
+  repos: [acme/api]
+state_dir: .adversary-train
+`
+	if err := os.WriteFile(filepath.Join(catalog, "adversary.train.yaml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(catalog, ".adversary-train")
+	for i, id := range []string{"candidate-1", "candidate-2", "candidate-3"} {
+		if err := results.SaveResult(state, results.Result{
+			ID: id, Package: "operability", Kind: results.KindHuman, Status: results.StatusNew,
+			Summary: "Private operational convention " + id, CreatedAt: time.Unix(int64(i+1), 0),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr).Dependencies()
+	base.Stdin = strings.NewReader("a\nd\ns\n")
+	base.TTY = trainingNoticeTTY{}
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := NewRootCommandWithApp(app)
+	root.SetArgs([]string{"catalog", "train", "inspect", "--all", "--path", catalog})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Candidate 1 of 3", "[a]ccept", "accepted", "dismissed", "skipped", "Review complete: 1 accepted, 1 dismissed, 1 skipped"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("walk output=%q missing %q", stdout.String(), want)
+		}
+	}
+	counts := map[string]int{}
+	for _, id := range []string{"candidate-1", "candidate-2", "candidate-3"} {
+		row, err := results.Get(state, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts[row.Status]++
+	}
+	if counts[results.StatusAccepted] != 1 || counts[results.StatusDismissed] != 1 || counts[results.StatusNew] != 1 {
+		t.Fatalf("status counts=%v", counts)
+	}
+}

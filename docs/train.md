@@ -65,10 +65,15 @@ may instead be supplied with `ADVERSARY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or
 
 ```sh
 adversary catalog train review
+adversary catalog train inspect --all
 adversary catalog train inspect <id>
 adversary catalog train accept <id>
 adversary catalog train dismiss <id>
 ```
+
+`inspect --all` walks the new-candidate queue interactively. Accept and dismiss
+decisions are saved immediately; skip leaves a candidate new, and quit leaves
+the remaining queue untouched so review can resume later.
 
 Results live in a gitignored SQLite database under `.adversary-train` by
 default. Comments confidently owned by a starter adversary are assigned to it.

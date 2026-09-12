@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"path/filepath"
+	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
@@ -53,22 +56,42 @@ Review results later with "adversary catalog train review".`
 		flag.Usage = "catalog workspace with adversary.train.yaml"
 	}
 	command.AddCommand(newCatalogTrainReviewCommand())
-	command.AddCommand(newCatalogTrainInspectCommand())
+	command.AddCommand(newCatalogTrainInspectCommand(app))
 	command.AddCommand(newCatalogTrainDecisionCommand("accept", results.Accept))
 	command.AddCommand(newCatalogTrainDecisionCommand("dismiss", results.Dismiss))
 	return command
 }
 
-func newCatalogTrainInspectCommand() *cobra.Command {
+func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 	var path string
+	var all bool
 	command := &cobra.Command{
-		Use:   "inspect <id>",
-		Short: "Show the triage evidence for one catalog candidate",
-		Args:  cobra.ExactArgs(1),
+		Use:   "inspect <id> | inspect --all",
+		Short: "Inspect one candidate or walk the entire review queue",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if all {
+				if len(args) != 0 {
+					return fmt.Errorf("use either --all or one candidate id")
+				}
+				return nil
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			state, err := resolveStateDir(path)
 			if err != nil {
 				return err
+			}
+			if all {
+				deps := app.Dependencies()
+				if deps.TTY == nil || !deps.TTY.Interactive(cmd.InOrStdin()) {
+					return fmt.Errorf("catalog train inspect --all requires an interactive terminal")
+				}
+				rows, err := results.List(state, "", results.StatusNew)
+				if err != nil {
+					return err
+				}
+				return walkCatalogTrainCandidates(cmd, state, rows)
 			}
 			row, err := results.Get(state, args[0])
 			if err != nil {
@@ -79,7 +102,58 @@ func newCatalogTrainInspectCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&path, "path", "", "catalog workspace with adversary.train.yaml")
+	command.Flags().BoolVar(&all, "all", false, "walk interactively through every new candidate")
 	return command
+}
+
+func walkCatalogTrainCandidates(cmd *cobra.Command, state string, rows []results.Result) error {
+	out := cmd.OutOrStdout()
+	if len(rows) == 0 {
+		fmt.Fprintln(out, "No new catalog training candidates.")
+		return nil
+	}
+	reader := bufio.NewReader(cmd.InOrStdin())
+	accepted, dismissed, skipped := 0, 0, 0
+	for i, row := range rows {
+		fmt.Fprintf(out, "\nCandidate %d of %d\n%s\n", i+1, len(rows), strings.Repeat("=", 72))
+		fmt.Fprint(out, results.FormatCatalogInspect(row))
+		for {
+			fmt.Fprint(out, "\n[a]ccept  [d]ismiss  [s]kip  [q]uit > ")
+			choice, err := reader.ReadString('\n')
+			if err != nil && err != io.EOF {
+				return err
+			}
+			switch strings.ToLower(strings.TrimSpace(choice)) {
+			case "a", "accept":
+				if err := results.Accept(state, row.ID); err != nil {
+					return err
+				}
+				accepted++
+				fmt.Fprintln(out, "accepted")
+			case "d", "dismiss":
+				if err := results.Dismiss(state, row.ID); err != nil {
+					return err
+				}
+				dismissed++
+				fmt.Fprintln(out, "dismissed")
+			case "s", "skip":
+				skipped++
+				fmt.Fprintln(out, "skipped")
+			case "q", "quit":
+				fmt.Fprintf(out, "\nStopped: %d accepted, %d dismissed, %d skipped, %d remaining.\n", accepted, dismissed, skipped, len(rows)-i)
+				return nil
+			default:
+				if err == io.EOF {
+					return fmt.Errorf("interactive input ended before candidate %s was reviewed", row.ID)
+				}
+				fmt.Fprintln(out, "Choose accept, dismiss, skip, or quit.")
+				continue
+			}
+			break
+		}
+	}
+	fmt.Fprintf(out, "\nReview complete: %d accepted, %d dismissed, %d skipped.\n", accepted, dismissed, skipped)
+	return nil
 }
 
 func newCatalogTrainReviewCommand() *cobra.Command {
@@ -131,6 +205,7 @@ func newCatalogTrainReviewCommand() *cobra.Command {
 					pathFlag = fmt.Sprintf(" --path %q", reviewPath)
 				}
 				fmt.Fprintln(out, "Review without changing tracked catalog files:")
+				fmt.Fprintf(out, "  adversary catalog train inspect --all%s\n", pathFlag)
 				fmt.Fprintf(out, "  adversary catalog train inspect <id>%s\n", pathFlag)
 				fmt.Fprintf(out, "  adversary catalog train accept <id>%s\n", pathFlag)
 				fmt.Fprintf(out, "  adversary catalog train dismiss <id>%s\n", pathFlag)

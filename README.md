@@ -75,6 +75,7 @@ cd my-private-adversaries
 adversary catalog train --source-repo acme/api --source-repo acme/web \
   --model-provider cloudflare --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
 adversary catalog train review
+adversary catalog train inspect --all
 adversary catalog train inspect <id>
 adversary catalog train accept <id>
 ```
