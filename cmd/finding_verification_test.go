@@ -242,6 +242,9 @@ func TestOperationalUnresolvedIsWithheldWithoutCleanOpinion(t *testing.T) {
 func TestUnresolvedFallbackRequiresHighConfidenceAndSourceSignal(t *testing.T) {
 	usable := findingverify.Source{ID: "source", Path: "guard.go", Side: "head", StartLine: 1, Content: "guard\n"}
 	candidate := findingverify.Candidate{Finding: review.Finding{Confidence: "high"}, ChangedRegions: []detection.ReviewRegion{{Path: "guard.go", StartLine: 1, EndLine: 1}}, Sources: []findingverify.Source{usable}}
+	line := 1
+	candidateEvidence := candidate
+	candidateEvidence.Finding.Evidence = []review.Evidence{{File: "guard.go", Line: &line}}
 	for _, tc := range []struct {
 		name      string
 		candidate findingverify.Candidate
@@ -249,14 +252,19 @@ func TestUnresolvedFallbackRequiresHighConfidenceAndSourceSignal(t *testing.T) {
 		want      bool
 	}{
 		{"evidenced uncertainty", candidate, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, true},
+		{"source-backed candidate evidence", candidateEvidence, findingverify.Decision{Status: "unresolved", Confidence: "low", Reason: "Additional proof was inconclusive."}, true},
 		{"request without retrieved proof", candidate, findingverify.Decision{Status: "unresolved", Requests: []findingverify.ReadRequest{{Path: "guard.go", Side: "head", StartLine: 1, EndLine: 1}}}, false},
 		{"structural correction exhausted without evidence", candidate, findingverify.Decision{Status: "unresolved", Reason: "Invalid verification decision: citation failed (structural correction attempts exhausted)"}, false},
+		{"typed structural failure with candidate evidence", candidateEvidence, findingverify.Decision{Status: "unresolved", Reason: "schema correction failed", Failure: findingverify.FailureInvalidDecision}, false},
 		{"base-side evidence", findingverify.Candidate{Finding: review.Finding{Confidence: "high"}, ChangedRegions: candidate.ChangedRegions, Sources: []findingverify.Source{{ID: "source", Path: "guard.go", Side: "base", StartLine: 1, Content: "guard\n"}}}, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, false},
 		{"off-diff evidence", findingverify.Candidate{Finding: review.Finding{Confidence: "high"}, ChangedRegions: []detection.ReviewRegion{{Path: "guard.go", StartLine: 2, EndLine: 2}}, Sources: []findingverify.Source{usable}}, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, false},
 		{"unknown source evidence", candidate, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "unknown", Line: 1}}}, false},
 		{"out-of-range evidence", candidate, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 2}}}, false},
 		{"whole-repository head evidence", findingverify.Candidate{Finding: review.Finding{Confidence: "high"}, WholeRepository: true, Sources: []findingverify.Source{usable}}, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, true},
 		{"provider failure", candidate, findingverify.Decision{Status: "unresolved", Reason: "Verification provider request failed."}, false},
+		{"provider failure with candidate evidence", candidateEvidence, findingverify.Decision{Status: "unresolved", Reason: "Verification provider request failed."}, false},
+		{"candidate evidence without head source", findingverify.Candidate{Finding: candidateEvidence.Finding, ChangedRegions: candidate.ChangedRegions, Sources: []findingverify.Source{{ID: "source", Path: "guard.go", Side: "base", StartLine: 1, Content: "guard\n"}}}, findingverify.Decision{Status: "unresolved"}, false},
+		{"candidate evidence off diff", findingverify.Candidate{Finding: candidateEvidence.Finding, ChangedRegions: []detection.ReviewRegion{{Path: "guard.go", StartLine: 2, EndLine: 2}}, Sources: []findingverify.Source{usable}}, findingverify.Decision{Status: "unresolved"}, false},
 		{"missing sources", findingverify.Candidate{Finding: review.Finding{Confidence: "high"}}, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, false},
 		{"missing pinned context", findingverify.Candidate{Finding: review.Finding{Confidence: "high"}, Sources: []findingverify.Source{usable}, ContextError: "missing"}, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, false},
 		{"medium confidence", findingverify.Candidate{Finding: review.Finding{Confidence: "medium"}, Sources: []findingverify.Source{usable}}, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, false},
