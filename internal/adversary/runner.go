@@ -789,6 +789,7 @@ func (c RunConfig) RuntimeSpec() RuntimeSpec {
 		Env:            c.Env,
 		EnvironmentDeny: []string{
 			modelreview.OpenAIKeyEnv,
+			modelreview.CloudflareKeyEnv,
 			modelreview.AnthropicKeyEnv,
 			modelreview.FireworksKeyEnv,
 			modelreview.CamelKeyEnv,

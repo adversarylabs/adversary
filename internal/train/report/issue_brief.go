@@ -118,6 +118,8 @@ func NewModelIssueBriefWriterFromEnvironment(lookup modelreview.LookupEnv, clien
 		switch {
 		case envValue(lookup, modelreview.OpenAIKeyEnv) != "":
 			providerName = "openai"
+		case envValue(lookup, modelreview.CloudflareKeyEnv) != "" && envValue(lookup, modelreview.CloudflareAccountIDEnv) != "":
+			providerName = "cloudflare"
 		case envValue(lookup, modelreview.AnthropicKeyEnv) != "":
 			providerName = "anthropic"
 		case envValue(lookup, modelreview.FireworksKeyEnv) != "":
@@ -131,6 +133,8 @@ func NewModelIssueBriefWriterFromEnvironment(lookup modelreview.LookupEnv, clien
 	model := envValue(lookup, modelreview.ModelEnv)
 	if model == "" {
 		switch strings.ToLower(providerName) {
+		case "cloudflare":
+			model = "openai/gpt-5-mini"
 		case "anthropic":
 			model = "claude-sonnet-4-20250514"
 		case "fireworks":

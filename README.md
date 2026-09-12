@@ -162,7 +162,7 @@ and are not general CLI configuration.
 | registry | explicit OCI reference | `ADVERSARY_REGISTRY_HOST`, `ADVERSARY_REGISTRY_NAMESPACE` | Adversary Labs registry |
 | artifact data | — | `ADVERSARY_DATA_DIR` | OS data directory |
 | Node runtime | manifest requirement | `ADVERSARY_NODE_PATH`, then `PATH` | user runtime locations |
-| model provider | `--model-provider`, `--model` | `ADVERSARY_MODEL_PROVIDER`, `ADVERSARY_MODEL`, provider API key | inferred only when exactly one supported key is present |
+| model provider | `--model-provider`, `--model` | `ADVERSARY_MODEL_PROVIDER`, `ADVERSARY_MODEL`, provider API key | inferred only when exactly one supported provider credential set is present |
 | OCI diagnostics | `--verbose` | `ADVERSARY_OCI_DEBUG` (internal transport toggle) | disabled; secrets redacted |
 | review suppression | command behavior | `ADVERSARY_INCLUDE_SUPPRESSED` (injected into adversary) | suppressed details omitted |
 | adversary protocol paths | — | `ADVERSARY_INPUT`, `ADVERSARY_OUTPUT`, `ADVERSARY_REPO` (injected) | per-run temporary paths |
@@ -254,6 +254,20 @@ adversary run adversarylabs/example \
   --model "accounts/fireworks/models/your-model-id"
 ```
 
+Cloudflare AI Gateway uses Cloudflare's OpenAI-compatible Responses endpoint.
+Set the account ID and a token with Workers AI Read permission; model identifiers
+use Cloudflare's `author/model` format. A gateway ID is optional and enables the
+configured gateway's logging, caching, rate limits, and policies:
+
+```sh
+export CLOUDFLARE_API_TOKEN="..."
+export CLOUDFLARE_ACCOUNT_ID="..."
+export ADVERSARY_CLOUDFLARE_GATEWAY_ID="your-gateway"
+adversary run adversarylabs/example \
+  --model-provider cloudflare \
+  --model "openai/gpt-5.5"
+```
+
 camelStream is a first-class OpenAI-compatible provider and uses Camel's own
 credential namespace:
 
@@ -265,14 +279,17 @@ adversary run review/code \
 ```
 
 Flags override `ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Without a
-provider flag or environment value, the CLI infers `openai`, `anthropic`,
-`fireworks`, or `camel` only when exactly one of `OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, or `CAMEL_API_KEY` is configured. API
+provider flag or environment value, the CLI infers `openai`, `cloudflare`,
+`anthropic`, `fireworks`, or `camel` only when exactly one provider credential
+set is configured. Cloudflare requires both `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID`; the other providers use `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, or `CAMEL_API_KEY`. API
 tokens are intentionally not accepted as flags because command arguments can
 leak through process listings and shell history.
 
-`ADVERSARY_OPENAI_BASE_URL`, `ADVERSARY_ANTHROPIC_BASE_URL`, and
-`ADVERSARY_FIREWORKS_BASE_URL`, and `ADVERSARY_CAMEL_BASE_URL` override provider
+`ADVERSARY_OPENAI_BASE_URL`, `ADVERSARY_CLOUDFLARE_BASE_URL`,
+`ADVERSARY_ANTHROPIC_BASE_URL`, `ADVERSARY_FIREWORKS_BASE_URL`, and
+`ADVERSARY_CAMEL_BASE_URL` override provider
 endpoints for compatible gateways and testing. Model-backed execution currently
 uses the host executor because sandbox and container loopback routing is not yet
 available.

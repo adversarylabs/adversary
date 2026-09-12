@@ -362,6 +362,9 @@ func defaultModelProvider() string {
 	if os.Getenv("OPENAI_API_KEY") != "" {
 		return "openai"
 	}
+	if os.Getenv("CLOUDFLARE_API_TOKEN") != "" && os.Getenv("CLOUDFLARE_ACCOUNT_ID") != "" {
+		return "cloudflare"
+	}
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
 		return "anthropic"
 	}
@@ -376,6 +379,8 @@ func defaultModelProvider() string {
 
 func defaultModel(provider string) string {
 	switch provider {
+	case "cloudflare":
+		return "openai/gpt-5-mini"
 	case "anthropic":
 		return "claude-sonnet-4-20250514"
 	case "fireworks":
@@ -408,7 +413,7 @@ func nextActionForAdversaryError(msg string) string {
 	}
 	switch {
 	case strings.Contains(l, "model_provider") || strings.Contains(l, "model provider"):
-		return "set ADVERSARY_MODEL_PROVIDER=openai (or anthropic/fireworks) and ensure the matching API key is set"
+		return "set ADVERSARY_MODEL_PROVIDER=openai (or cloudflare/anthropic/fireworks) and ensure the matching API key is set"
 	case strings.Contains(l, "api key"):
 		return "set the model provider API key (e.g. OPENAI_API_KEY) for engineering-review"
 	case strings.Contains(l, "not installed") || strings.Contains(l, "oci"):
