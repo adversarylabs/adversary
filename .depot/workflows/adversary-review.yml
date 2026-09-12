@@ -29,11 +29,10 @@ jobs:
           path: /mnt/adversary
 
       - name: Run adversaries
-        uses: adversarylabs/actions/run@cd370f6a3aeef47d9796a3c06bcd7e997aa8f6b4 # v1.4.6
+        uses: adversarylabs/actions/run@v1
         with:
           adversaries: auto
           # Includes selection-before-download and live lifecycle heartbeats.
-          cli-version: 2026.9.10-beta.1
           path: .
           data-dir: /mnt/adversary
           include-summary: false
