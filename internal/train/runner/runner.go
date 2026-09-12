@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/internal/train/bundle"
 	"github.com/adversarylabs/adversary/internal/train/dataroot"
 	"github.com/adversarylabs/adversary/internal/train/securefs"
@@ -254,7 +255,11 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 	outFile := filepath.Join(outDir, "engineering-review.raw.json")
 	provider := os.Getenv("ADVERSARY_MODEL_PROVIDER")
 	if provider == "" {
-		provider = defaultModelProvider()
+		var err error
+		provider, err = modelreview.InferProviderFromEnvironment(os.LookupEnv)
+		if err != nil {
+			return nil, fmt.Errorf("select engineering review model provider: %w", err)
+		}
 	}
 	model := os.Getenv("ADVERSARY_MODEL")
 	if model == "" {
@@ -355,26 +360,6 @@ func resolveAdversaryCLI() (string, error) {
 func looksLikeJSON(raw []byte) bool {
 	s := strings.TrimSpace(string(raw))
 	return strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[")
-}
-
-func defaultModelProvider() string {
-	// Prefer provider whose key is present; openai is a common default.
-	if os.Getenv("OPENAI_API_KEY") != "" {
-		return "openai"
-	}
-	if os.Getenv("CLOUDFLARE_API_TOKEN") != "" && os.Getenv("CLOUDFLARE_ACCOUNT_ID") != "" {
-		return "cloudflare"
-	}
-	if os.Getenv("ANTHROPIC_API_KEY") != "" {
-		return "anthropic"
-	}
-	if os.Getenv("FIREWORKS_API_KEY") != "" {
-		return "fireworks"
-	}
-	if os.Getenv("CAMEL_API_KEY") != "" {
-		return "camel"
-	}
-	return "openai"
 }
 
 func defaultModel(provider string) string {

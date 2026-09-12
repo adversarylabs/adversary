@@ -27,6 +27,7 @@ func TestCloudflareProviderUsesResponsesAPIAndGateway(t *testing.T) {
 		ProviderEnv:            "cloudflare",
 		ModelEnv:               "openai/gpt-5.5",
 		CloudflareKeyEnv:       "cf-token",
+		CloudflareAccountIDEnv: "account-id",
 		CloudflareBaseURLEnv:   server.URL,
 		CloudflareGatewayIDEnv: "review-gateway",
 	}
@@ -74,8 +75,9 @@ func TestCloudflareProviderBuildsAccountEndpointAndRequiresCredentials(t *testin
 	}
 
 	for name, values := range map[string]map[string]string{
-		"token":   {ProviderEnv: "cloudflare", CloudflareAccountIDEnv: "account-id", ModelEnv: "openai/gpt-5.5"},
-		"account": {ProviderEnv: "cloudflare", CloudflareKeyEnv: "cf-token", ModelEnv: "openai/gpt-5.5"},
+		"token":                 {ProviderEnv: "cloudflare", CloudflareAccountIDEnv: "account-id", ModelEnv: "openai/gpt-5.5"},
+		"account":               {ProviderEnv: "cloudflare", CloudflareKeyEnv: "cf-token", ModelEnv: "openai/gpt-5.5"},
+		"account with base URL": {ProviderEnv: "cloudflare", CloudflareKeyEnv: "cf-token", CloudflareBaseURLEnv: "https://gateway.example", ModelEnv: "openai/gpt-5.5"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := ProviderFromEnvironment(lookup(values), nil)
@@ -83,5 +85,33 @@ func TestCloudflareProviderBuildsAccountEndpointAndRequiresCredentials(t *testin
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+}
+
+func TestCloudflareInferenceRejectsPartialAndAmbiguousCredentials(t *testing.T) {
+	lookup := func(values map[string]string) LookupEnv {
+		return func(key string) (string, bool) {
+			value, ok := values[key]
+			return value, ok
+		}
+	}
+	for name, values := range map[string]map[string]string{
+		"missing account": {CloudflareKeyEnv: "cf-token"},
+		"missing token":   {CloudflareAccountIDEnv: "account-id"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := InferProviderFromEnvironment(lookup(values))
+			if err == nil || !strings.Contains(err.Error(), "required for model provider cloudflare") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+	_, err := InferProviderFromEnvironment(lookup(map[string]string{
+		OpenAIKeyEnv:           "openai-key",
+		CloudflareKeyEnv:       "cf-token",
+		CloudflareAccountIDEnv: "account-id",
+	}))
+	if err == nil || !strings.Contains(err.Error(), ProviderEnv) {
+		t.Fatalf("ambiguous error = %v", err)
 	}
 }

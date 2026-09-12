@@ -90,14 +90,10 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 	fireworksKey := normalizedEnv(lookup, FireworksKeyEnv)
 	camelKey := normalizedEnv(lookup, CamelKeyEnv)
 	if provider == "" {
-		configured := configuredProviders(openAIKey, cloudflareKey, cloudflareAccountID, anthropicKey, fireworksKey, camelKey)
-		switch len(configured) {
-		case 0:
-			return nil, fmt.Errorf("model access requires %s, %s with %s, %s, %s, or %s", OpenAIKeyEnv, CloudflareKeyEnv, CloudflareAccountIDEnv, AnthropicKeyEnv, FireworksKeyEnv, CamelKeyEnv)
-		case 1:
-			provider = configured[0]
-		default:
-			return nil, fmt.Errorf("%s is required when multiple model provider keys are configured", ProviderEnv)
+		var err error
+		provider, err = InferProviderFromEnvironment(lookup)
+		if err != nil {
+			return nil, err
 		}
 	}
 	switch strings.ToLower(provider) {
@@ -136,11 +132,11 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		if cloudflareKey == "" {
 			return nil, fmt.Errorf("%s is required for model provider cloudflare", CloudflareKeyEnv)
 		}
+		if cloudflareAccountID == "" {
+			return nil, fmt.Errorf("%s is required for model provider cloudflare", CloudflareAccountIDEnv)
+		}
 		baseURL := normalizedEnv(lookup, CloudflareBaseURLEnv)
 		if baseURL == "" {
-			if cloudflareAccountID == "" {
-				return nil, fmt.Errorf("%s is required for model provider cloudflare", CloudflareAccountIDEnv)
-			}
 			baseURL = "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccountID + "/ai"
 		}
 		headers := map[string]string{}
@@ -232,6 +228,44 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 	}
 }
 
+// InferProviderFromEnvironment applies the same unambiguous credential-set
+// contract for every caller that needs a provider before choosing a default
+// model. Partial Cloudflare credentials are configuration errors, not absence.
+func InferProviderFromEnvironment(lookup LookupEnv) (string, error) {
+	if lookup == nil {
+		return "", fmt.Errorf("model environment lookup is required")
+	}
+	if provider := normalizedEnv(lookup, ProviderEnv); provider != "" {
+		return strings.ToLower(provider), nil
+	}
+	openAIKey := normalizedEnv(lookup, OpenAIKeyEnv)
+	cloudflareKey := normalizedEnv(lookup, CloudflareKeyEnv)
+	cloudflareAccountID := normalizedEnv(lookup, CloudflareAccountIDEnv)
+	if cloudflareKey != "" || cloudflareAccountID != "" {
+		if cloudflareKey == "" {
+			return "", fmt.Errorf("%s is required for model provider cloudflare", CloudflareKeyEnv)
+		}
+		if cloudflareAccountID == "" {
+			return "", fmt.Errorf("%s is required for model provider cloudflare", CloudflareAccountIDEnv)
+		}
+	}
+	configured := configuredProviders(
+		openAIKey,
+		cloudflareKey,
+		normalizedEnv(lookup, AnthropicKeyEnv),
+		normalizedEnv(lookup, FireworksKeyEnv),
+		normalizedEnv(lookup, CamelKeyEnv),
+	)
+	switch len(configured) {
+	case 0:
+		return "", fmt.Errorf("model access requires %s, %s with %s, %s, %s, or %s", OpenAIKeyEnv, CloudflareKeyEnv, CloudflareAccountIDEnv, AnthropicKeyEnv, FireworksKeyEnv, CamelKeyEnv)
+	case 1:
+		return configured[0], nil
+	default:
+		return "", fmt.Errorf("%s is required when multiple model provider keys are configured", ProviderEnv)
+	}
+}
+
 func fireworksResponseFormatFromEnvironment(lookup LookupEnv) (string, error) {
 	return responseFormatFromEnvironment(lookup, FireworksResponseFormatEnv, "json_schema")
 }
@@ -278,18 +312,14 @@ func reasoningEffortFromEnvironment(lookup LookupEnv, name string) (string, erro
 	}
 }
 
-func configuredProviders(openAIKey, cloudflareKey, cloudflareAccountID, anthropicKey, fireworksKey, camelKey string) []string {
-	cloudflareCredentials := ""
-	if cloudflareKey != "" && cloudflareAccountID != "" {
-		cloudflareCredentials = cloudflareKey
-	}
+func configuredProviders(openAIKey, cloudflareKey, anthropicKey, fireworksKey, camelKey string) []string {
 	var configured []string
 	for _, candidate := range []struct {
 		name string
 		key  string
 	}{
 		{name: "openai", key: openAIKey},
-		{name: "cloudflare", key: cloudflareCredentials},
+		{name: "cloudflare", key: cloudflareKey},
 		{name: "anthropic", key: anthropicKey},
 		{name: "fireworks", key: fireworksKey},
 		{name: "camel", key: camelKey},

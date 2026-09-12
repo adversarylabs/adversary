@@ -115,19 +115,10 @@ func NewModelIssueBriefWriterFromEnvironment(lookup modelreview.LookupEnv, clien
 	}
 	providerName := envValue(lookup, modelreview.ProviderEnv)
 	if providerName == "" {
-		switch {
-		case envValue(lookup, modelreview.OpenAIKeyEnv) != "":
-			providerName = "openai"
-		case envValue(lookup, modelreview.CloudflareKeyEnv) != "" && envValue(lookup, modelreview.CloudflareAccountIDEnv) != "":
-			providerName = "cloudflare"
-		case envValue(lookup, modelreview.AnthropicKeyEnv) != "":
-			providerName = "anthropic"
-		case envValue(lookup, modelreview.FireworksKeyEnv) != "":
-			providerName = "fireworks"
-		case envValue(lookup, modelreview.CamelKeyEnv) != "":
-			providerName = "camel"
-		default:
-			return nil, fmt.Errorf("no model credential available for train issue briefs")
+		var err error
+		providerName, err = modelreview.InferProviderFromEnvironment(lookup)
+		if err != nil {
+			return nil, fmt.Errorf("select train issue brief model provider: %w", err)
 		}
 	}
 	model := envValue(lookup, modelreview.ModelEnv)
