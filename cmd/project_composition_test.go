@@ -24,6 +24,10 @@ func (p *recordingProjects) Init(opts application.ProjectInitOptions) (applicati
 	p.initCalls++
 	return application.ProjectInitResult{Location: "/injected/" + opts.Destination, SDK: "Injected"}, nil
 }
+func (p *recordingProjects) InitCatalog(opts application.CatalogInitOptions) (application.CatalogInitResult, error) {
+	return application.CatalogInitResult{Location: opts.Destination}, nil
+}
+func (p *recordingProjects) RenderCatalogInit(io.Writer, application.CatalogInitResult) {}
 func (p *recordingProjects) RenderInit(w io.Writer, result application.ProjectInitResult, _ string) {
 	_, _ = io.WriteString(w, result.Location)
 }

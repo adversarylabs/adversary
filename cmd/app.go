@@ -22,6 +22,7 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/cataloginit"
 	"github.com/adversarylabs/adversary/internal/dependencies"
 	"github.com/adversarylabs/adversary/internal/findingverify"
 	"github.com/adversarylabs/adversary/internal/initproject"
@@ -61,6 +62,13 @@ func (processProjects) Init(opts application.ProjectInitOptions) (application.Pr
 }
 func (p processProjects) RenderInit(w io.Writer, result application.ProjectInitResult, destination string) {
 	initproject.RenderSuccess(w, initproject.Result{Location: result.Location, SDK: result.SDK}, destination, p.platform)
+}
+func (processProjects) InitCatalog(opts application.CatalogInitOptions) (application.CatalogInitResult, error) {
+	result, err := cataloginit.Create(cataloginit.Options{Destination: opts.Destination})
+	return application.CatalogInitResult{Location: result.Location}, err
+}
+func (p processProjects) RenderCatalogInit(w io.Writer, result application.CatalogInitResult) {
+	cataloginit.RenderSuccess(w, cataloginit.Result{Location: result.Location}, p.platform)
 }
 func (processProjects) Validate(ctx context.Context, value string, resolver application.Resolver) (application.ProjectValidation, error) {
 	path, err := filepath.Abs(value)

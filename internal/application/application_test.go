@@ -61,6 +61,10 @@ type fakeProjects struct{}
 func (fakeProjects) Init(ProjectInitOptions) (ProjectInitResult, error) {
 	return ProjectInitResult{}, nil
 }
+func (fakeProjects) InitCatalog(CatalogInitOptions) (CatalogInitResult, error) {
+	return CatalogInitResult{}, nil
+}
+func (fakeProjects) RenderCatalogInit(io.Writer, CatalogInitResult)  {}
 func (fakeProjects) RenderInit(io.Writer, ProjectInitResult, string) {}
 func (fakeProjects) Validate(context.Context, string, Resolver) (ProjectValidation, error) {
 	return ProjectValidation{}, nil
