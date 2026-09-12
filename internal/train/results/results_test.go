@@ -627,9 +627,9 @@ func TestFormatCatalogInspectUsesCatalogVocabulary(t *testing.T) {
 	out := FormatCatalogInspect(Result{
 		ID: "candidate1", Status: StatusNew, Package: "operability", Kind: KindHuman,
 		Summary: "Should we log these errors?", PRURL: "https://github.com/acme/api/pull/42",
-		DraftBody: "Routing evidence here.\n",
+		TriageReason: "Routing evidence here.",
 	})
-	for _, want := range []string{"Adversary: operability", "Evidence:  Should we log", "Triage context:", "/pull/42"} {
+	for _, want := range []string{"Adversary: operability", "Evidence:  Should we log", "Model rationale:", "/pull/42"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("catalog inspect omitted %q:\n%s", want, out)
 		}

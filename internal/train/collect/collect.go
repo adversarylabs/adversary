@@ -427,6 +427,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			},
 			PullRequest: cases.PullRequest{
 				Number:         pr,
+				Author:         prObj.User.Login,
 				BaseSHA:        prObj.Base.SHA,
 				InitialHeadSHA: sha,
 				FinalHeadSHA:   prObj.Head.SHA,
@@ -501,7 +502,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			SchemaVersion: 4,
 			ID:            cases.CaseID(repoSlug, pr, 1),
 			Repository:    cases.Repository{Owner: owner, Name: repo, URL: prObj.HTMLURL},
-			PullRequest:   cases.PullRequest{Number: pr, BaseSHA: prObj.Base.SHA, InitialHeadSHA: sha, FinalHeadSHA: prObj.Head.SHA, Title: prObj.Title},
+			PullRequest:   cases.PullRequest{Number: pr, Author: prObj.User.Login, BaseSHA: prObj.Base.SHA, InitialHeadSHA: sha, FinalHeadSHA: prObj.Head.SHA, Title: prObj.Title},
 			ReviewEvent:   cases.ReviewEvent{RoundIndex: 1, Kind: "inline-comment-cluster", ReviewedSHA: sha, ReviewedSHASource: source},
 			Comments:      allComments,
 			Labels:        cases.Labels{ExpectedConcerns: labels},
@@ -573,6 +574,7 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 		}
 		body = scope.NormalizeReviewComment(body)
 		labels[i].Summary = body
+		labels[i].CommentAuthor = author
 		if matched != nil {
 			ctx := commentContext[commentKey{kind: matched.Kind, id: matched.ID}]
 			labels[i].ThreadContext = append([]cases.ReviewThreadContext(nil), ctx.threadContext...)
@@ -657,9 +659,7 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 			)
 			labels[i].OwnerAdversary = route.OwnerID
 			labels[i].ScopeReason = route.Reason
-			if strings.TrimSpace(route.GeneralizedRule) != "" {
-				labels[i].ScopeReason += "\nProposed rule: " + strings.TrimSpace(route.GeneralizedRule)
-			}
+			labels[i].ProposedRule = strings.TrimSpace(route.GeneralizedRule)
 			labels[i].ScopeMethod = route.Method
 			// Broad generalists keep short comments (LGTM, "why?", etc.); specialists
 			// still require a minimal summary so empty stubs are not gold.

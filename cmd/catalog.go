@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
+	trainadversaries "github.com/adversarylabs/adversary/internal/train/adversaries"
 	traininbox "github.com/adversarylabs/adversary/internal/train/inbox"
 	"github.com/adversarylabs/adversary/internal/train/results"
 	"github.com/spf13/cobra"
@@ -66,8 +69,8 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 	var path string
 	var all bool
 	command := &cobra.Command{
-		Use:   "inspect <id> | inspect --all",
-		Short: "Inspect one candidate or walk the entire review queue",
+		Use:   "inspect [id]",
+		Short: "Review candidates in a local browser or inspect one in the terminal",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if all {
 				if len(args) != 0 {
@@ -75,7 +78,7 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 				}
 				return nil
 			}
-			return cobra.ExactArgs(1)(cmd, args)
+			return cobra.MaximumNArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			state, err := resolveStateDir(path)
@@ -91,7 +94,24 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return walkCatalogTrainCandidates(cmd, state, rows)
+				adversaryIDs, err := catalogAdversaryIDs(path)
+				if err != nil {
+					return err
+				}
+				return walkCatalogTrainCandidates(cmd, state, rows, adversaryIDs)
+			}
+			if len(args) == 0 {
+				adversaryIDs, err := catalogAdversaryIDs(path)
+				if err != nil {
+					return err
+				}
+				reviewer, ok := app.Dependencies().Runtime.(application.CatalogReviewRuntime)
+				if !ok {
+					return fmt.Errorf("local browser review is unavailable in this runtime; use catalog train inspect --all")
+				}
+				return reviewer.ReviewCatalog(cmd.Context(), application.CatalogReviewOptions{
+					StateRoot: state, Adversaries: adversaryIDs, Output: cmd.OutOrStdout(),
+				})
 			}
 			row, err := results.Get(state, args[0])
 			if err != nil {
@@ -102,11 +122,32 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&path, "path", "", "catalog workspace with adversary.train.yaml")
-	command.Flags().BoolVar(&all, "all", false, "walk interactively through every new candidate")
+	command.Flags().BoolVar(&all, "all", false, "walk interactively through every new candidate in the terminal")
 	return command
 }
 
-func walkCatalogTrainCandidates(cmd *cobra.Command, state string, rows []results.Result) error {
+func catalogAdversaryIDs(path string) ([]string, error) {
+	configPath, cfg, err := resolveTrainConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	root := cfg.Adversaries.Root
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(filepath.Dir(configPath), root)
+	}
+	packages, err := trainadversaries.DiscoverCatalogRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		ids = append(ids, pkg.ID)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+func walkCatalogTrainCandidates(cmd *cobra.Command, state string, rows []results.Result, adversaryIDs []string) error {
 	out := cmd.OutOrStdout()
 	if len(rows) == 0 {
 		fmt.Fprintln(out, "No new catalog training candidates.")
@@ -118,7 +159,7 @@ func walkCatalogTrainCandidates(cmd *cobra.Command, state string, rows []results
 		fmt.Fprintf(out, "\nCandidate %d of %d\n%s\n", i+1, len(rows), strings.Repeat("=", 72))
 		fmt.Fprint(out, results.FormatCatalogInspect(row))
 		for {
-			fmt.Fprint(out, "\n[a]ccept  [d]ismiss  [s]kip  [q]uit > ")
+			fmt.Fprint(out, "\n[a]ccept  [d]ismiss  [r]eassign  [e]dit rule  [s]kip  [q]uit > ")
 			choice, err := reader.ReadString('\n')
 			if err != nil && err != io.EOF {
 				return err
@@ -136,6 +177,38 @@ func walkCatalogTrainCandidates(cmd *cobra.Command, state string, rows []results
 				}
 				dismissed++
 				fmt.Fprintln(out, "dismissed")
+			case "r", "reassign":
+				owner, err := promptCatalogAdversary(out, reader, adversaryIDs)
+				if err != nil {
+					return err
+				}
+				if owner == "" {
+					fmt.Fprintln(out, "reassignment canceled")
+					continue
+				}
+				if err := results.ReassignCatalogCandidate(state, row.ID, owner); err != nil {
+					return err
+				}
+				row.Package = owner
+				fmt.Fprintf(out, "reassigned to %s\n", owner)
+				continue
+			case "e", "edit":
+				fmt.Fprintf(out, "Current rule: %s\nNew rule (single line; blank cancels) > ", row.ProposedRule)
+				rule, err := reader.ReadString('\n')
+				if err != nil && err != io.EOF {
+					return err
+				}
+				rule = strings.TrimSpace(rule)
+				if rule == "" {
+					fmt.Fprintln(out, "edit canceled")
+					continue
+				}
+				if err := results.UpdateCatalogProposedRule(state, row.ID, rule); err != nil {
+					return err
+				}
+				row.ProposedRule = rule
+				fmt.Fprintln(out, "rule updated")
+				continue
 			case "s", "skip":
 				skipped++
 				fmt.Fprintln(out, "skipped")
@@ -146,7 +219,7 @@ func walkCatalogTrainCandidates(cmd *cobra.Command, state string, rows []results
 				if err == io.EOF {
 					return fmt.Errorf("interactive input ended before candidate %s was reviewed", row.ID)
 				}
-				fmt.Fprintln(out, "Choose accept, dismiss, skip, or quit.")
+				fmt.Fprintln(out, "Choose accept, dismiss, reassign, edit, skip, or quit.")
 				continue
 			}
 			break
@@ -154,6 +227,36 @@ func walkCatalogTrainCandidates(cmd *cobra.Command, state string, rows []results
 	}
 	fmt.Fprintf(out, "\nReview complete: %d accepted, %d dismissed, %d skipped.\n", accepted, dismissed, skipped)
 	return nil
+}
+
+func promptCatalogAdversary(out io.Writer, reader *bufio.Reader, ids []string) (string, error) {
+	fmt.Fprintln(out, "Available adversaries:")
+	for i, id := range ids {
+		fmt.Fprintf(out, "  %d. %s\n", i+1, id)
+	}
+	fmt.Fprint(out, "Choose number or adversary id (blank cancels) > ")
+	choice, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	choice = strings.TrimSpace(choice)
+	if choice == "" {
+		return "", nil
+	}
+	if n, numberErr := strconv.Atoi(choice); numberErr == nil {
+		if n < 1 || n > len(ids) {
+			fmt.Fprintln(out, "Invalid adversary number.")
+			return "", nil
+		}
+		return ids[n-1], nil
+	}
+	for _, id := range ids {
+		if choice == id {
+			return id, nil
+		}
+	}
+	fmt.Fprintf(out, "Unknown adversary %q; reassignment canceled.\n", choice)
+	return "", nil
 }
 
 func newCatalogTrainReviewCommand() *cobra.Command {
@@ -204,7 +307,9 @@ func newCatalogTrainReviewCommand() *cobra.Command {
 				if reviewPath != "" {
 					pathFlag = fmt.Sprintf(" --path %q", reviewPath)
 				}
-				fmt.Fprintln(out, "Review without changing tracked catalog files:")
+				fmt.Fprintln(out, "Open the local browser review queue:")
+				fmt.Fprintf(out, "  adversary catalog train inspect%s\n", pathFlag)
+				fmt.Fprintln(out, "Terminal alternatives:")
 				fmt.Fprintf(out, "  adversary catalog train inspect --all%s\n", pathFlag)
 				fmt.Fprintf(out, "  adversary catalog train inspect <id>%s\n", pathFlag)
 				fmt.Fprintf(out, "  adversary catalog train accept <id>%s\n", pathFlag)

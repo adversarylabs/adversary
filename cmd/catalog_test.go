@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,16 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/results"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
+
+type catalogReviewRuntimeStub struct {
+	application.Runtime
+	options application.CatalogReviewOptions
+}
+
+func (s *catalogReviewRuntimeStub) ReviewCatalog(_ context.Context, options application.CatalogReviewOptions) error {
+	s.options = options
+	return nil
+}
 
 func TestCatalogInitUsesProjectPort(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -78,6 +89,13 @@ state_dir: .adversary-train
 	if err := os.WriteFile(filepath.Join(catalog, "adversary.train.yaml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	adversaryDir := filepath.Join(catalog, "adversaries", "operability")
+	if err := os.MkdirAll(adversaryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(adversaryDir, "README.md"), []byte("# Operability\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	state := filepath.Join(catalog, ".adversary-train")
 	if err := results.SaveResult(state, results.Result{
 		ID: "candidate-1", Package: "data-integrity", Kind: results.KindHuman,
@@ -124,6 +142,13 @@ state_dir: .adversary-train
 	if err := os.WriteFile(filepath.Join(catalog, "adversary.train.yaml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	adversaryDir := filepath.Join(catalog, "adversaries", "operability")
+	if err := os.MkdirAll(adversaryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(adversaryDir, "README.md"), []byte("# Operability\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	state := filepath.Join(catalog, ".adversary-train")
 	for i, id := range []string{"candidate-1", "candidate-2", "candidate-3"} {
 		if err := results.SaveResult(state, results.Result{
@@ -162,5 +187,37 @@ state_dir: .adversary-train
 	}
 	if counts[results.StatusAccepted] != 1 || counts[results.StatusDismissed] != 1 || counts[results.StatusNew] != 1 {
 		t.Fatalf("status counts=%v", counts)
+	}
+}
+
+func TestCatalogTrainInspectDefaultsToBrowserReviewRuntime(t *testing.T) {
+	catalog := t.TempDir()
+	config := "version: 1\nadversaries:\n  root: ./adversaries\nsources:\n  repos: [acme/api]\nstate_dir: .adversary-train\n"
+	if err := os.WriteFile(filepath.Join(catalog, "adversary.train.yaml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(catalog, "adversaries", "operability")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Operability\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr).Dependencies()
+	runtime := &catalogReviewRuntimeStub{Runtime: base.Runtime}
+	base.Runtime = runtime
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := NewRootCommandWithApp(app)
+	root.SetArgs([]string{"catalog", "train", "inspect", "--path", catalog})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.options.StateRoot != filepath.Join(catalog, ".adversary-train") || len(runtime.options.Adversaries) != 1 || runtime.options.Adversaries[0] != "operability" {
+		t.Fatalf("review options=%+v", runtime.options)
 	}
 }

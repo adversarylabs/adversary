@@ -28,6 +28,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/initproject"
 	"github.com/adversarylabs/adversary/internal/modelreview"
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
+	trainreviewui "github.com/adversarylabs/adversary/internal/train/reviewui"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/manifest"
@@ -192,6 +193,15 @@ type processRuntime struct {
 }
 
 func (p processRuntime) BindingIdentity() string { return p.resolver.Repository.RootPath() }
+func (p processRuntime) ReviewCatalog(ctx context.Context, opts application.CatalogReviewOptions) error {
+	return trainreviewui.Serve(ctx, trainreviewui.Options{
+		StateRoot: opts.StateRoot, Adversaries: opts.Adversaries, Output: opts.Output,
+		Entropy: rand.Reader, Listen: net.Listen,
+		OpenURL: func(ctx context.Context, u string) error {
+			return openBrowser(ctx, u, p.environment, p.resolveExecutable, internaladversary.ExecProcessOutputRunner{})
+		},
+	})
+}
 func (p processRuntime) RunSourceIdentity(ctx context.Context, repoPath string) (application.RunSourceIdentity, error) {
 	resolver, ok := p.git.(internaladversary.GitSourceIdentityResolver)
 	if !ok {

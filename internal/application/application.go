@@ -160,6 +160,19 @@ type ModelReviewRuntime interface {
 	ModelReviewProvider(ModelReviewConfig) (ModelReviewProvider, error)
 }
 
+// CatalogReviewRuntime is the optional local-browser review port implemented by
+// the process runtime. Keeping the listener and browser launch behind this port
+// leaves command handlers free of direct process and network effects.
+type CatalogReviewRuntime interface {
+	ReviewCatalog(context.Context, CatalogReviewOptions) error
+}
+
+type CatalogReviewOptions struct {
+	StateRoot   string
+	Adversaries []string
+	Output      io.Writer
+}
+
 type ModelReviewConfig struct {
 	Provider string
 	Model    string

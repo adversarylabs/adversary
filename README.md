@@ -75,10 +75,15 @@ cd my-private-adversaries
 adversary catalog train --source-repo acme/api --source-repo acme/web \
   --model-provider cloudflare --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
 adversary catalog train review
-adversary catalog train inspect --all
+adversary catalog train inspect
 adversary catalog train inspect <id>
 adversary catalog train accept <id>
 ```
+
+Bare `inspect` opens a localhost review queue with every candidate in a left
+nav. Reviewers can edit the proposed rule, route it to an existing or new
+private adversary, accept or dismiss it, and reopen earlier decisions. Use
+`inspect --all` for the terminal wizard instead.
 
 Use repeatable `--author` and `--exclude-author` flags for one-off reviewer
 selection; the equivalent committed policy is `sources.authors_only` and

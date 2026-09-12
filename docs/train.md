@@ -65,13 +65,20 @@ may instead be supplied with `ADVERSARY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or
 
 ```sh
 adversary catalog train review
+adversary catalog train inspect
 adversary catalog train inspect --all
 adversary catalog train inspect <id>
 adversary catalog train accept <id>
 adversary catalog train dismiss <id>
 ```
 
-`inspect --all` walks the new-candidate queue interactively. Accept and dismiss
+Bare `inspect` starts a token-authenticated server on a random localhost port
+and opens the browser review queue. Its left nav includes new, accepted, and
+dismissed candidates. The detail view shows PR and comment authors and supports
+editing the proposed rule, assigning an existing or new private adversary,
+accepting, dismissing, and reopening decisions. No third-party assets are loaded.
+
+`inspect --all` walks the new-candidate queue in the terminal. Accept and dismiss
 decisions are saved immediately; skip leaves a candidate new, and quit leaves
 the remaining queue untouched so review can resume later.
 
