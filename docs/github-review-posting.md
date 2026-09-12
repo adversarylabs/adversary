@@ -40,16 +40,18 @@ adversary run https://github.com/owner/repo/pull/123 --github-review --github-su
 
 Posting is **never** enabled solely because a PR URL was passed.
 
-## Auth
+## Review-posting auth
 
-Token resolution order:
+`adversary run --github-review` resolves an explicit environment token in this
+order:
 
 1. `ADVERSARY_GITHUB_TOKEN`
 2. `GITHUB_TOKEN`
 3. `GH_TOKEN`
 
-The CLI does not read `gh auth`’s on-disk store. Optionally:
-`export GH_TOKEN=$(gh auth token)`.
+The review-posting path does not read `gh auth`'s on-disk store. Optionally run
+`export GH_TOKEN=$(gh auth token)` before posting. Catalog training has separate
+read-only history authentication described below.
 
 ## Comment voice
 
