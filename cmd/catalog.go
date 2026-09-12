@@ -19,7 +19,9 @@ func newCatalogInitCommand(app *application.App) *cobra.Command {
 		Use:   "init [path]",
 		Short: "Generate a private adversary catalog locally",
 		Long: `Generate a private adversary catalog without connecting to GitHub or
-uploading source code. The destination must not already exist.`,
+uploading source code. The catalog includes a focused set of editable starter
+adversaries for common production concerns. The destination must not already
+exist.`,
 		Example: `  adversary catalog init
   adversary catalog init adversary-catalog
   adversary catalog init ../security/private-adversaries`,

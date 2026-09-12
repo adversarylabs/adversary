@@ -33,7 +33,9 @@ func TestCatalogHelpDescribesLocalGeneration(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "without connecting to GitHub") {
-		t.Fatalf("help=%q", output.String())
+	for _, want := range []string{"without connecting to GitHub", "editable starter"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("help=%q missing %q", output.String(), want)
+		}
 	}
 }
