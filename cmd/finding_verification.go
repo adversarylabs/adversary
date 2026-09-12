@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/findingverify"
@@ -67,16 +68,20 @@ func verifyComposedResults(ctx context.Context, opts *runOptions, runs []compose
 		envelope := *run.envelope
 		envelope.Result.Findings = []review.Finding{}
 		for _, f := range run.envelope.Result.Findings {
-			if report.Decisions[decision].Status == "keep" {
-				f = reanchorFindingToChangedCitation(f, report.Snapshot.Candidates[decision], report.Decisions[decision])
+			candidate := report.Snapshot.Candidates[decision]
+			verification := report.Decisions[decision]
+			if verificationDecisionPublishes(candidate, verification) {
+				if verification.Status == "keep" {
+					f = reanchorFindingToChangedCitation(f, candidate, verification)
+				}
 				envelope.Result.Findings = append(envelope.Result.Findings, f)
 			}
 			decision++
 		}
 		filtered[i].envelope = &envelope
 	}
-	keep, reject, unresolved := verificationCounts(report)
-	fmt.Fprintf(progress, "Finding verification: %d kept · %d rejected · %d unresolved\n", keep, reject, unresolved)
+	keep, fallback, reject, unresolved := verificationDispositionCounts(report)
+	fmt.Fprintf(progress, "Finding verification: %d kept · %d high-confidence fallback · %d rejected · %d unresolved\n", keep, fallback, reject, unresolved)
 	if opts.verificationOutput != "" {
 		if opts.verificationRuntime == nil {
 			return filtered, &report, fmt.Errorf("runtime cannot save verification report")
@@ -88,9 +93,34 @@ func verifyComposedResults(ctx context.Context, opts *runOptions, runs []compose
 	if ctx.Err() != nil {
 		return filtered, &report, ctx.Err()
 	}
-	// Uncertainty is a per-finding outcome, not a failed review. Only verified
-	// findings reach the merger; withheld candidates remain in the report.
+	// Uncertainty is a per-finding outcome, not a failed review. High-confidence
+	// candidates with usable source context survive an inconclusive verifier;
+	// operational failures and weaker candidates remain withheld in the report.
 	return filtered, &report, nil
+}
+
+func verificationDecisionPublishes(candidate findingverify.Candidate, decision findingverify.Decision) bool {
+	if decision.Status == "keep" {
+		return true
+	}
+	if decision.Status != "unresolved" || candidate.Finding.Confidence != "high" || candidate.ContextError != "" {
+		return false
+	}
+	hasUsableSource := false
+	for _, source := range append(append([]findingverify.Source(nil), candidate.Sources...), candidate.RetrievedSources...) {
+		if source.Unavailable == "" && strings.TrimSpace(source.Content) != "" {
+			hasUsableSource = true
+			break
+		}
+	}
+	if !hasUsableSource {
+		return false
+	}
+	// An inconclusive model decision carries evidence or a request for the
+	// missing decisive source. Structural correction exhaustion means the model
+	// attempted a decision against the supplied sources but failed the strict
+	// output contract. Bare operational failures carry none of these signals.
+	return len(decision.Evidence) > 0 || len(decision.Requests) > 0 || strings.HasPrefix(decision.Reason, "Invalid verification decision:")
 }
 
 func reanchorFindingToChangedCitation(f review.Finding, candidate findingverify.Candidate, decision findingverify.Decision) review.Finding {
@@ -129,12 +159,14 @@ func reanchorFindingToChangedCitation(f review.Finding, candidate findingverify.
 	return f
 }
 
-func verificationCounts(r findingverify.Report) (keep, reject, unresolved int) {
-	for _, d := range r.Decisions {
-		switch d.Status {
-		case "keep":
+func verificationDispositionCounts(r findingverify.Report) (keep, fallback, reject, unresolved int) {
+	for i, decision := range r.Decisions {
+		switch {
+		case decision.Status == "keep":
 			keep++
-		case "reject":
+		case verificationDecisionPublishes(r.Snapshot.Candidates[i], decision):
+			fallback++
+		case decision.Status == "reject":
 			reject++
 		default:
 			unresolved++
@@ -142,13 +174,14 @@ func verificationCounts(r findingverify.Report) (keep, reject, unresolved int) {
 	}
 	return
 }
+
 func applyVerificationSummary(env *review.RunEnvelope, r findingverify.Report, incomplete bool) {
-	_, reject, unresolved := verificationCounts(r)
-	// Include original unresolved findings for inspection without presenting them
-	// as confirmed review comments. Full source/replay data is an opt-in file.
+	_, fallback, reject, unresolved := verificationDispositionCounts(r)
+	// Include withheld unresolved findings for inspection without presenting them
+	// as review comments. Full source/replay data is an opt-in file.
 	pending := []findingverify.Candidate{}
 	for i, d := range r.Decisions {
-		if d.Status == "unresolved" {
+		if d.Status == "unresolved" && !verificationDecisionPublishes(r.Snapshot.Candidates[i], d) {
 			c := r.Snapshot.Candidates[i]
 			c.Sources = nil
 			c.RetrievedSources = nil
@@ -161,7 +194,7 @@ func applyVerificationSummary(env *review.RunEnvelope, r findingverify.Report, i
 		Decisions  []findingverify.Decision  `json:"decisions"`
 		Unresolved []findingverify.Candidate `json:"unresolvedCandidates"`
 	}{r.PromptRevision, r.Decisions, pending})
-	summary := fmt.Sprintf("%d verified findings after deduplication; %d rejected; %d unresolved.", len(env.Result.Findings), reject, unresolved)
+	summary := fmt.Sprintf("%d findings after deduplication; %d high-confidence verifier fallbacks released; %d rejected; %d unresolved withheld.", len(env.Result.Findings), fallback, reject, unresolved)
 	env.Result.Observations = append(env.Result.Observations, review.Note{Key: "composition.finding-verification", Summary: summary, Metadata: metadata})
 	risk := "none"
 	for _, f := range env.Result.Findings {

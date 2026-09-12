@@ -50,7 +50,7 @@ func TestComposedUnresolvedReviewReturnsUsableProtocolAndNormalExitCode(t *testi
 		count, exit int
 	}{
 		{"mixed", []string{"valid", "uncertain"}, 1, 1},
-		{"only-unresolved", []string{"uncertain"}, 0, 0},
+		{"only-unresolved", []string{"uncertain"}, 1, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, progress bytes.Buffer
@@ -79,7 +79,7 @@ func TestComposedUnresolvedReviewReturnsUsableProtocolAndNormalExitCode(t *testi
 			if err != nil {
 				t.Fatalf("invalid output: %v\n%s", err, out.String())
 			}
-			if len(env.Result.Findings) != tc.count || env.Result.Opinion.Ship != nil {
+			if len(env.Result.Findings) != tc.count || env.Result.Opinion.Ship == nil || *env.Result.Opinion.Ship {
 				t.Fatalf("lost findings or claimed clean: %+v", env.Result)
 			}
 			if !strings.Contains(out.String(), `"unresolved"`) {
@@ -206,6 +206,9 @@ func TestUnresolvedVerificationPreservesVerifiedPeersWithoutExecutionError(t *te
 	if len(env.Result.Findings) != 1 || env.Result.Findings[0].ID != "valid" || env.Result.Opinion.Ship != nil {
 		t.Fatal(env.Result)
 	}
+	if !strings.Contains(string(env.Result.Findings[0].Metadata), `"findingId":"uncertain"`) {
+		t.Fatal("fallback finding was not preserved as a deduplicated composition source")
+	}
 	metadata := string(env.Result.Observations[len(env.Result.Observations)-1].Metadata)
 	if !strings.Contains(metadata, `"id":"broken"`) || !strings.Contains(metadata, `"status":"unresolved"`) {
 		t.Fatal(metadata)
@@ -218,23 +221,46 @@ func TestUnavailableContextDoesNotPublishUnverifiedFindings(t *testing.T) {
 	}
 }
 
-func TestAllUnresolvedIsEmptyReviewNotCleanOpinionOrExecutionFailure(t *testing.T) {
-	for _, id := range []string{"uncertain", "broken"} {
-		t.Run(id, func(t *testing.T) {
-			filtered, report, err := verifyComposedResults(context.Background(), &runOptions{verificationProvider: verificationProvider{}}, verificationRuns(id), verificationCollector(t), nil, io.Discard)
-			if err != nil {
-				t.Fatal(err)
-			}
-			env, err := aggregateComposedReview("root", filtered)
-			if err != nil {
-				t.Fatal(err)
-			}
-			applyVerificationSummary(&env, *report, false)
-			if len(env.Result.Findings) != 0 || env.Result.Opinion.Ship != nil || !strings.Contains(env.Result.Opinion.Summary, "Unresolved findings withheld") {
-				t.Fatal(env.Result)
-			}
-			if len(report.Decisions) != 1 || report.Decisions[0].Status != "unresolved" {
-				t.Fatal(report)
+func TestOperationalUnresolvedIsWithheldWithoutCleanOpinion(t *testing.T) {
+	filtered, report, err := verifyComposedResults(context.Background(), &runOptions{verificationProvider: verificationProvider{}}, verificationRuns("broken"), verificationCollector(t), nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := aggregateComposedReview("root", filtered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyVerificationSummary(&env, *report, false)
+	if len(env.Result.Findings) != 0 || env.Result.Opinion.Ship != nil || !strings.Contains(env.Result.Opinion.Summary, "Unresolved findings withheld") {
+		t.Fatal(env.Result)
+	}
+	if len(report.Decisions) != 1 || report.Decisions[0].Status != "unresolved" {
+		t.Fatal(report)
+	}
+}
+
+func TestUnresolvedFallbackRequiresHighConfidenceAndSourceSignal(t *testing.T) {
+	usable := findingverify.Source{ID: "source", Path: "guard.go", Side: "head", StartLine: 1, Content: "guard\n"}
+	candidate := findingverify.Candidate{Finding: review.Finding{Confidence: "high"}, Sources: []findingverify.Source{usable}}
+	for _, tc := range []struct {
+		name      string
+		candidate findingverify.Candidate
+		decision  findingverify.Decision
+		want      bool
+	}{
+		{"evidenced uncertainty", candidate, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, true},
+		{"requested context", candidate, findingverify.Decision{Status: "unresolved", Requests: []findingverify.ReadRequest{{Path: "guard.go", Side: "head", StartLine: 1, EndLine: 1}}}, true},
+		{"structural correction exhausted", candidate, findingverify.Decision{Status: "unresolved", Reason: "Invalid verification decision: citation failed (structural correction attempts exhausted)"}, true},
+		{"provider failure", candidate, findingverify.Decision{Status: "unresolved", Reason: "Verification provider request failed."}, false},
+		{"missing sources", findingverify.Candidate{Finding: review.Finding{Confidence: "high"}}, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, false},
+		{"missing pinned context", findingverify.Candidate{Finding: review.Finding{Confidence: "high"}, Sources: []findingverify.Source{usable}, ContextError: "missing"}, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, false},
+		{"medium confidence", findingverify.Candidate{Finding: review.Finding{Confidence: "medium"}, Sources: []findingverify.Source{usable}}, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, false},
+		{"verified keep", findingverify.Candidate{}, findingverify.Decision{Status: "keep"}, true},
+		{"explicit reject", candidate, findingverify.Decision{Status: "reject"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := verificationDecisionPublishes(tc.candidate, tc.decision); got != tc.want {
+				t.Fatalf("publishes = %v, want %v", got, tc.want)
 			}
 		})
 	}
