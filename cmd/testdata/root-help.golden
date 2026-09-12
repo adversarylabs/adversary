@@ -5,6 +5,7 @@ Usage:
   adversary [command]
 
 Available Commands:
+  catalog         Manage a private adversary catalog
   completion      Generate shell completion code
   help            Help about any command
   init            Create a new adversary project

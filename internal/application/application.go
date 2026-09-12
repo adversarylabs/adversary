@@ -42,6 +42,8 @@ type HTTPClient interface {
 type Projects interface {
 	Init(ProjectInitOptions) (ProjectInitResult, error)
 	RenderInit(io.Writer, ProjectInitResult, string)
+	InitCatalog(CatalogInitOptions) (CatalogInitResult, error)
+	RenderCatalogInit(io.Writer, CatalogInitResult)
 	Validate(context.Context, string, Resolver) (ProjectValidation, error)
 	Check(pack.Options) (pack.Preflight, error)
 	Pack(context.Context, pack.Options) (pack.Artifact, error)
@@ -51,6 +53,8 @@ const DefaultProjectSDK = "typescript"
 
 type ProjectInitOptions struct{ Destination, SDK string }
 type ProjectInitResult struct{ Location, SDK string }
+type CatalogInitOptions struct{ Destination string }
+type CatalogInitResult struct{ Location string }
 type ProjectValidation struct {
 	Path, Name, Runtime string
 }
