@@ -60,6 +60,38 @@ See [finding verification](docs/finding-verification.md) for source-based checks
 before deduplication and replaying the filter on saved candidates.
 See [comment voice](docs/voice.md) for `agent/voice.md`, example banks, and GitHub
 rewrite with `--github-review`.
+
+## Private catalog training
+
+Create a private catalog, configure the GitHub repositories and human reviewers
+whose comments should count, then run a foreground scan. The scan never pauses
+for input: it stores resumable results in a local, gitignored SQLite inbox and
+exits. Review is a separate command.
+
+```sh
+adversary catalog init my-private-adversaries
+cd my-private-adversaries
+# Edit adversary.train.yaml, or select sources on the command line:
+adversary catalog train --source-repo acme/api --source-repo acme/web
+adversary catalog train review
+adversary catalog train inspect <id>
+adversary catalog train accept <id>
+```
+
+Use repeatable `--author` and `--exclude-author` flags for one-off reviewer
+selection; the equivalent committed policy is `sources.authors_only` and
+`sources.authors_ignore`. Accepted results record a decision only. They do not
+modify tracked catalog files, upload private evidence, or open a pull request.
+Interactive CLI commands display a one-line stderr reminder while registered
+catalogs still have unreviewed results; machine-readable and noninteractive
+commands remain quiet.
+
+The collector intentionally runs in the foreground and checkpoints its state.
+Shells and schedulers can run it unattended without a CLI-managed background
+process. A future catalog GitHub Action can use the same interface, but needs an
+explicit cross-repository credential and an agreed `--auto` contract before it
+can safely create catalog pull requests.
+
 See [review feedback](docs/github-feedback.md) for the SaaS-owned learning loop
 that watches replies and steers later reviews.
 

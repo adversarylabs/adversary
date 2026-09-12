@@ -23,6 +23,7 @@ import (
 const (
 	// Status is the lifecycle of a result row.
 	StatusNew       = "new"       // open / actionable
+	StatusAccepted  = "accepted"  // user approved for a future catalog change
 	StatusApplied   = "applied"   // user wrote draft into package
 	StatusDismissed = "dismissed" // user rejected
 	StatusCaught    = "caught"    // package matched the human concern (success)
@@ -257,6 +258,38 @@ func CountByRun(stateRoot, runID string) (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// CountStatus returns the number of inbox rows in one lifecycle state.
+func CountStatus(stateRoot, status string) (int, error) {
+	db, err := openDB(stateRoot)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+
+	var n int
+	err = db.QueryRow(`SELECT COUNT(1) FROM results WHERE lower(status) = lower(?)`, strings.TrimSpace(status)).Scan(&n)
+	return n, err
+}
+
+// CountStatusReadOnly is the low-latency variant used by best-effort CLI inbox
+// notices. It never migrates or creates a database and gives up quickly when a
+// concurrent training run holds a lock.
+func CountStatusReadOnly(stateRoot, status string) (int, error) {
+	path := DBPath(stateRoot)
+	if _, err := os.Stat(path); err != nil {
+		return 0, err
+	}
+	db, err := sql.Open("sqlite", path+"?mode=ro&_pragma=busy_timeout(25)")
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	var n int
+	err = db.QueryRow(`SELECT COUNT(1) FROM results WHERE lower(status) = lower(?)`, strings.TrimSpace(status)).Scan(&n)
+	return n, err
 }
 
 // WriteInput is enough of a finished grade run to build inbox rows.
@@ -581,6 +614,30 @@ func FormatListTable(rows []Result) string {
 		return "No results. Run: adversary train run\n"
 	}
 	var b strings.Builder
+	b.WriteString(formatListRows(rows))
+	fmt.Fprintf(&b, "\n%d result(s). Inspect: adversary train results inspect <id>\n", len(rows))
+	fmt.Fprintf(&b, "Apply:   adversary train results apply <id>\n")
+	fmt.Fprintf(&b, "Kinds:   human = human said it · miss = should have caught · false+ = we over-fired · draft = package fix idea\n")
+	fmt.Fprintf(&b, "Store:   SQLite results.db\n")
+	return b.String()
+}
+
+// FormatCatalogListTable renders the private-catalog inbox without suggesting
+// the legacy package issue/apply workflow.
+func FormatCatalogListTable(rows []Result) string {
+	if len(rows) == 0 {
+		return "No results. Run: adversary catalog train\n"
+	}
+	var b strings.Builder
+	b.WriteString(formatListRows(rows))
+	fmt.Fprintf(&b, "\n%d result(s).\n", len(rows))
+	fmt.Fprintf(&b, "Kinds: human = human said it · miss = should have caught · false+ = we over-fired · draft = package fix idea\n")
+	fmt.Fprintf(&b, "Store: local SQLite results.db\n")
+	return b.String()
+}
+
+func formatListRows(rows []Result) string {
+	var b strings.Builder
 	fmt.Fprintf(&b, "%-10s %-10s %-18s %-8s %s\n", "ID", "STATUS", "PACKAGE", "KIND", "SUMMARY")
 	fmt.Fprintf(&b, "%s\n", strings.Repeat("-", 100))
 	for _, r := range rows {
@@ -592,10 +649,6 @@ func FormatListTable(rows []Result) string {
 			soft(r.Summary, 68),
 		)
 	}
-	fmt.Fprintf(&b, "\n%d result(s). Inspect: adversary train results inspect <id>\n", len(rows))
-	fmt.Fprintf(&b, "Apply:   adversary train results apply <id>\n")
-	fmt.Fprintf(&b, "Kinds:   human = human said it · miss = should have caught · false+ = we over-fired · draft = package fix idea\n")
-	fmt.Fprintf(&b, "Store:   SQLite results.db\n")
 	return b.String()
 }
 

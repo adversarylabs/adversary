@@ -75,6 +75,9 @@ type Options struct {
 	LocalPackageDirs []string
 	// LocalPackageRoot loads every child with docs/scope.md (workspace adversaries/).
 	LocalPackageRoot string
+	// CollectOnly routes and persists human review evidence without executing or
+	// mutating adversary packages. Private catalog training uses this mode.
+	CollectOnly bool
 	// TrainOnlyIDs limits train-eligible locals (empty = all locals).
 	TrainOnlyIDs []string
 	// TrainExcludeIDs removes locals from both training and routing.
@@ -240,7 +243,11 @@ func Run(opts Options) (*Result, error) {
 		var siblingPkgs []adversaries.Package
 		var loadErr error
 		if opts.LocalPackageRoot != "" {
-			siblingPkgs, loadErr = adversaries.DiscoverRoot(opts.LocalPackageRoot)
+			if opts.CollectOnly {
+				siblingPkgs, loadErr = adversaries.DiscoverCatalogRoot(opts.LocalPackageRoot)
+			} else {
+				siblingPkgs, loadErr = adversaries.DiscoverRoot(opts.LocalPackageRoot)
+			}
 		} else if len(opts.LocalPackageDirs) > 0 {
 			for _, d := range opts.LocalPackageDirs {
 				pkg, err := adversaries.DiscoverRoot(d)
@@ -470,6 +477,19 @@ func Run(opts Options) (*Result, error) {
 		_, _ = receipt.Save(opts.DataRoot, rcpt)
 		out.ExitCode = dataroot.ExitFailed
 		out.Message = "no usable cases after reconstruction"
+		return out, nil
+	}
+	if opts.CollectOnly {
+		for _, c := range usable {
+			if _, err := results.WriteKeptCase(opts.DataRoot, runID, c); err != nil {
+				return nil, fmt.Errorf("persist catalog training result: %w", err)
+			}
+		}
+		refreshResultsAdded(out, opts.DataRoot, 0)
+		rcpt.Finish("success")
+		_, _ = receipt.Save(opts.DataRoot, rcpt)
+		out.ExitCode = dataroot.ExitSuccess
+		out.Message = fmt.Sprintf("%d catalog training result row(s) ready for review", out.ResultsAdded)
 		return out, nil
 	}
 

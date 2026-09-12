@@ -6,9 +6,11 @@ import (
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
+	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/internal/train/adversaries"
 	"github.com/adversarylabs/adversary/internal/train/collect"
 	"github.com/adversarylabs/adversary/internal/train/dataroot"
+	traininbox "github.com/adversarylabs/adversary/internal/train/inbox"
 	"github.com/adversarylabs/adversary/internal/train/pipeline"
 	"github.com/adversarylabs/adversary/internal/train/repos"
 	"github.com/adversarylabs/adversary/internal/train/results"
@@ -110,6 +112,9 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 		pr               int
 		owner            string
 		repo             string
+		authorsOnly      []string
+		authorsIgnore    []string
+		sourceRepos      []string
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -119,6 +124,7 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 issues for consolidated improvements. Drafts never target official package ids.
 Use --no-issues for a local-only run.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			catalogMode := cmd.Parent() != nil && cmd.Parent().Name() == "catalog"
 			if adversaryOnly != "" && allAdversaries {
 				return fmt.Errorf("--adversary and --all-adversaries cannot be combined")
 			}
@@ -144,6 +150,17 @@ Use --no-issues for a local-only run.`,
 			if err != nil {
 				return err
 			}
+			if len(authorsOnly) > 0 {
+				cfg.Sources.AuthorsOnly = append([]string{}, authorsOnly...)
+			}
+			if len(authorsIgnore) > 0 {
+				cfg.Sources.AuthorsIgnore = append(cfg.Sources.AuthorsIgnore, authorsIgnore...)
+			}
+			if len(sourceRepos) > 0 {
+				cfg.Sources.Repos = append([]string{}, sourceRepos...)
+				cfg.Sources.Org = ""
+				cfg.Sources.Discovery = "repos"
+			}
 			if !fixture {
 				if err := cfg.Validate(); err != nil {
 					return err
@@ -156,6 +173,15 @@ Use --no-issues for a local-only run.`,
 			stateRoot := workspace.ResolveStateAbs(cfgPath, cfg.StateDirResolved())
 			if err := workspace.EnsureStateDir(stateRoot); err != nil {
 				return err
+			}
+			if catalogMode {
+				dataRoot, err := internalpaths.DataDir()
+				if err != nil {
+					return err
+				}
+				if err := traininbox.Register(dataRoot, cfgPath, stateRoot); err != nil {
+					return fmt.Errorf("register catalog training inbox: %w", err)
+				}
 			}
 
 			if maxPRs > 0 {
@@ -329,6 +355,7 @@ Use --no-issues for a local-only run.`,
 				PR:                  pr,
 				Owner:               owner,
 				Repo:                repo,
+				CollectOnly:         catalogMode,
 			}
 			if opts.MaxPRs == 0 {
 				opts.MaxPRs = 1
@@ -342,7 +369,11 @@ Use --no-issues for a local-only run.`,
 			}
 
 			stderr := cmd.ErrOrStderr()
-			fmt.Fprintln(stderr, "adversary train run")
+			if catalogMode {
+				fmt.Fprintln(stderr, "adversary catalog train")
+			} else {
+				fmt.Fprintln(stderr, "adversary train run")
+			}
 			fmt.Fprintf(stderr, "  config: %s\n", cfgPath)
 			fmt.Fprintf(stderr, "  state:  %s\n", stateRoot)
 			if fixture {
@@ -368,7 +399,9 @@ Use --no-issues for a local-only run.`,
 			if cycleAdversaries {
 				fmt.Fprintln(stderr, "  targeting: persistent adversary round-robin (one package this run)")
 			}
-			if cfg.OfficialEnabled() && !fixture {
+			if catalogMode {
+				fmt.Fprintln(stderr, "  publishing: local candidates only; catalog changes require later review")
+			} else if cfg.OfficialEnabled() && !fixture {
 				fmt.Fprintln(stderr, "  official jury: enabled (drafts for locals only)")
 			} else {
 				fmt.Fprintln(stderr, "  official jury: disabled (catalog jury only — local uses composition still expands)")
@@ -388,7 +421,11 @@ Use --no-issues for a local-only run.`,
 					fmt.Fprintf(out, "  grade:   %d failure(s) scored\n", res.Scorecard.FailureCount)
 				}
 				fmt.Fprintf(out, "  results: %d row(s) written this run\n", res.ResultsAdded)
-				fmt.Fprintf(out, "  evidence: adversary train results ls\n")
+				if catalogMode {
+					fmt.Fprintf(out, "  review:  adversary catalog train review\n")
+				} else {
+					fmt.Fprintf(out, "  evidence: adversary train results ls\n")
+				}
 				if res.HumanReport != nil && res.HumanReport.READMEPath != "" {
 					fmt.Fprintf(out, "  story:   %s\n", res.HumanReport.READMEPath)
 				}
@@ -441,6 +478,9 @@ Use --no-issues for a local-only run.`,
 	cmd.Flags().IntVar(&pr, "pr", 0, "pin a single PR number (debug)")
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub owner with --pr/--repo")
 	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo with --pr/--owner")
+	cmd.Flags().StringSliceVar(&authorsOnly, "author", nil, "include review comments from this GitHub login (repeatable or comma-separated)")
+	cmd.Flags().StringSliceVar(&authorsIgnore, "exclude-author", nil, "exclude review comments from this GitHub login (repeatable or comma-separated)")
+	cmd.Flags().StringSliceVar(&sourceRepos, "source-repo", nil, "scan this owner/repository instead of configured repositories (repeatable or comma-separated)")
 	return cmd
 }
 
@@ -486,7 +526,7 @@ func newTrainResultsLSCommand(app *application.App) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&path, "path", "", "workspace with adversary.train.yaml")
 	cmd.Flags().StringVar(&pkg, "package", "", "filter by package id")
-	cmd.Flags().StringVar(&status, "status", "", "filter: new|applied|dismissed")
+	cmd.Flags().StringVar(&status, "status", "", "filter: new|accepted|applied|dismissed")
 	return cmd
 }
 

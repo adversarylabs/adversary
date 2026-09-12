@@ -150,7 +150,9 @@ func (r *Router) RouteCommentWithEvidence(body, path, author string, threadConte
 		// Hard path affinity for specialists
 		pathBoost := pathAffinity(path, cand)
 		var res Result
-		if isNitsCandidate(cand.ID) {
+		if isConventionCandidate(cand.ID) {
+			res = classifyConventionCandidate(body, path)
+		} else if isNitsCandidate(cand.ID) {
 			res = classifyNitsCandidate(body, path)
 		} else {
 			res = clf.Classify(body, path, author)
@@ -270,7 +272,12 @@ func explicitNonLocalReviewRemark(body, reviewSummary string) (string, bool) {
 
 func isNitsCandidate(id string) bool {
 	id = strings.ToLower(strings.TrimSpace(id))
-	return id == "nits" || strings.HasSuffix(id, "/nits") || strings.HasSuffix(id, "-nits")
+	return id == "nits" || strings.HasSuffix(id, "/nits") || strings.HasSuffix(id, "-nits") || isConventionCandidate(id)
+}
+
+func isConventionCandidate(id string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
+	return id == "engineering-conventions" || strings.HasSuffix(id, "/engineering-conventions")
 }
 
 // candidatePathEligible enforces the package's declared file surfaces before
@@ -384,6 +391,26 @@ func classifyNitsCandidate(body, path string) Result {
 		Reason:   "nits ownership requires scope-aware LLM confirmation of non-blocking intent",
 		Method:   "heuristic",
 	}
+}
+
+func classifyConventionCandidate(body, path string) Result {
+	lower := strings.ToLower(body)
+	materialMarkers := []string{
+		"charge", "data loss", "security", "panic", "crash", "race", "deadlock",
+		"incorrect", "broken", "failure", "fails", "leak", "corrupt", "unauthorized",
+	}
+	material := heuristicLikelyIn(body, path) || containsDefectAsk(lower)
+	for _, marker := range materialMarkers {
+		material = material || strings.Contains(lower, marker)
+	}
+	if isExplicitNit(lower) && !material {
+		return Result{
+			Decision: InScope,
+			Reason:   "explicit non-blocking review convention",
+			Method:   "heuristic",
+		}
+	}
+	return classifyNitsCandidate(body, path)
 }
 
 func isGeneralist(id string) bool {

@@ -416,6 +416,17 @@ func Dismiss(stateRoot, id string) error {
 	return SaveResult(stateRoot, r)
 }
 
+// Accept marks a result approved for a future catalog change without writing
+// tracked files, opening an issue, or creating a pull request.
+func Accept(stateRoot, id string) error {
+	r, err := Get(stateRoot, id)
+	if err != nil {
+		return err
+	}
+	r.Status = StatusAccepted
+	return SaveResult(stateRoot, r)
+}
+
 func formatApplyMarkdown(r Result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Train draft %s\n\n", r.ID)

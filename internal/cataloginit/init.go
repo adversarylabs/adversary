@@ -127,12 +127,45 @@ contract.
 Connect this private repository from the Private library in AdversaryLabs.
 `
 
+const trainConfig = `# Local training policy. Review evidence remains in .adversary-train/.
+version: 1
+
+adversaries:
+  root: ./adversaries
+
+# Public adversaries are reserved as a read-only coverage jury. Training never
+# writes private evidence into them or recreates them as private catalog entries.
+official:
+  enabled: true
+
+sources:
+  host: github.com
+  # Add one or more repositories whose human review history should be learned.
+  repos: []
+  # authors_only: [staff-eng-alice]
+  # authors_ignore: [automation-account]
+
+run:
+  max_prs: 50
+  max_turns: 200
+  concurrency: 4
+
+# Catalog training is local-only. Publishing accepted changes is a separate,
+# explicit catalog pull-request step.
+issues:
+  enabled: false
+
+state_dir: .adversary-train
+`
+
 func catalogFiles() map[string]string {
 	manifest := strings.Builder{}
 	manifest.WriteString("apiVersion: adversarylabs.dev/v1alpha1\nkind: AdversaryCatalog\nmetadata:\n  name: private-adversaries\nspec:\n  adversaries:\n")
 	readme := strings.Builder{}
 	readme.WriteString(readmeHeader)
 	files := map[string]string{
+		".gitignore":           ".adversary-train/\n",
+		"adversary.train.yaml": trainConfig,
 		"evaluations/.gitkeep": "",
 		"exceptions/.gitkeep":  "",
 	}
@@ -218,6 +251,12 @@ func RenderSuccess(w io.Writer, result Result, platform string) {
 	fmt.Fprintln(w, "  git add .")
 	fmt.Fprintln(w, `  git commit -m "Initialize private adversary catalog"`)
 	fmt.Fprintln(w, "  Create a private GitHub repository, push this directory, then link it from /library.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Train from human review history")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  Edit adversary.train.yaml and add the source repositories to scan.")
+	fmt.Fprintln(w, "  adversary catalog train")
+	fmt.Fprintln(w, "  adversary catalog train review")
 }
 
 func shellQuote(value string) string {
