@@ -55,6 +55,9 @@ func newRootCommand(app *application.App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
+		PersistentPostRun: func(executed *cobra.Command, args []string) {
+			renderTrainingInboxNotice(executed, deps)
+		},
 	}
 	cmd.Version = fmt.Sprintf("%s (commit %s, built %s, %s, review protocol %d)", version.Version, version.Commit, version.BuildDate, runtime.Version(), review.ProtocolVersion)
 	cmd.SetVersionTemplate("adversary {{.Version}}\n")

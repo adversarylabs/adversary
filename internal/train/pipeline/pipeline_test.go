@@ -286,6 +286,34 @@ func TestFixtureSliceEndToEnd(t *testing.T) {
 	})
 }
 
+func TestCollectOnlyPersistsInboxWithoutGrading(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoRoot := filepath.Clean(filepath.Join(wd, ".."))
+	dataRoot := t.TempDir()
+	res, err := Run(Options{
+		DataRoot:    dataRoot,
+		RepoRoot:    repoRoot,
+		Fixture:     true,
+		CollectOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Scorecard != nil || res.ResultsAdded == 0 {
+		t.Fatalf("collect-only result=%+v", res)
+	}
+	stored, err := results.CountByRun(dataRoot, res.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != res.ResultsAdded {
+		t.Fatalf("stored=%d reported=%d", stored, res.ResultsAdded)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
 		(len(s) > 0 && (stringIndex(s, sub) >= 0)))

@@ -665,3 +665,14 @@ func TestNitsHeuristicAlwaysFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestEngineeringConventionsKeepsExplicitNonBlockingNits(t *testing.T) {
+	got := classifyConventionCandidate("Nit: rename this variable to match the sibling helpers.", "src/service.go")
+	if got.Decision != InScope {
+		t.Fatalf("explicit convention was dropped: %+v", got)
+	}
+	defect := classifyConventionCandidate("Nit: this duplicate write charges the customer twice.", "src/service.go")
+	if defect.Decision != OutOfScope {
+		t.Fatalf("material defect was misclassified as a convention: %+v", defect)
+	}
+}

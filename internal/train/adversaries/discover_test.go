@@ -83,6 +83,26 @@ func TestDiscoverRootSinglePackageWorkspace(t *testing.T) {
 	}
 }
 
+func TestDiscoverCatalogRootUsesPolicyReadmes(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "engineering-conventions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mission := "# Engineering conventions\n\nKeep established naming and test patterns.\n"
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(mission), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	packages, err := DiscoverCatalogRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packages) != 1 || packages[0].ID != "engineering-conventions" || packages[0].ScopeMarkdown != mission {
+		t.Fatalf("packages=%+v", packages)
+	}
+}
+
 func TestDiscoverSiblings(t *testing.T) {
 	parent := t.TempDir()
 	// factory root

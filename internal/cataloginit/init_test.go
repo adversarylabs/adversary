@@ -21,6 +21,8 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 	}
 	for _, name := range []string{
 		"adversarylabs.yaml",
+		"adversary.train.yaml",
+		".gitignore",
 		"README.md",
 		"adversaries/data-integrity/README.md",
 		"adversaries/migrations-and-backfills/README.md",
@@ -82,7 +84,7 @@ func TestCreateRefusesExistingDestination(t *testing.T) {
 func TestRenderSuccessIncludesNextSteps(t *testing.T) {
 	var output bytes.Buffer
 	RenderSuccess(&output, Result{Location: "/tmp/private catalog"}, "linux")
-	for _, want := range []string{"Generated catalog with 7 starter adversaries", "git init", "git commit", "'/tmp/private catalog'"} {
+	for _, want := range []string{"Generated catalog with 7 starter adversaries", "git init", "git commit", "'/tmp/private catalog'", "adversary catalog train", "adversary catalog train review"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q missing %q", output.String(), want)
 		}
