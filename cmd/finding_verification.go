@@ -116,11 +116,11 @@ func verificationDecisionPublishes(candidate findingverify.Candidate, decision f
 	if !hasUsableSource {
 		return false
 	}
-	// An inconclusive model decision carries evidence or a request for the
-	// missing decisive source. Structural correction exhaustion means the model
-	// attempted a decision against the supplied sources but failed the strict
-	// output contract. Bare operational failures carry none of these signals.
-	return len(decision.Evidence) > 0 || len(decision.Requests) > 0 || strings.HasPrefix(decision.Reason, "Invalid verification decision:")
+	// An inconclusive model decision must cite supplied evidence. Structural
+	// correction exhaustion means the model attempted a decision against the
+	// supplied sources but failed the strict output contract. Requests for more
+	// context and bare operational failures are not evidence.
+	return len(decision.Evidence) > 0 || strings.HasPrefix(decision.Reason, "Invalid verification decision:")
 }
 
 func reanchorFindingToChangedCitation(f review.Finding, candidate findingverify.Candidate, decision findingverify.Decision) review.Finding {

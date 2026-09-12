@@ -249,7 +249,7 @@ func TestUnresolvedFallbackRequiresHighConfidenceAndSourceSignal(t *testing.T) {
 		want      bool
 	}{
 		{"evidenced uncertainty", candidate, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, true},
-		{"requested context", candidate, findingverify.Decision{Status: "unresolved", Requests: []findingverify.ReadRequest{{Path: "guard.go", Side: "head", StartLine: 1, EndLine: 1}}}, true},
+		{"request without retrieved proof", candidate, findingverify.Decision{Status: "unresolved", Requests: []findingverify.ReadRequest{{Path: "guard.go", Side: "head", StartLine: 1, EndLine: 1}}}, false},
 		{"structural correction exhausted", candidate, findingverify.Decision{Status: "unresolved", Reason: "Invalid verification decision: citation failed (structural correction attempts exhausted)"}, true},
 		{"provider failure", candidate, findingverify.Decision{Status: "unresolved", Reason: "Verification provider request failed."}, false},
 		{"missing sources", findingverify.Candidate{Finding: review.Finding{Confidence: "high"}}, findingverify.Decision{Status: "unresolved", Evidence: []findingverify.Citation{{SourceID: "source", Line: 1}}}, false},
