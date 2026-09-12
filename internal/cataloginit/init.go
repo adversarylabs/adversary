@@ -255,7 +255,7 @@ func RenderSuccess(w io.Writer, result Result, platform string) {
 	fmt.Fprintln(w, "Train from human review history")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  Edit adversary.train.yaml and add the source repositories to scan.")
-	fmt.Fprintln(w, "  adversary catalog train")
+	fmt.Fprintln(w, "  adversary catalog train --model codex/gpt-5.6-luna")
 	fmt.Fprintln(w, "  adversary catalog train review")
 }
 

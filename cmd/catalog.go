@@ -30,10 +30,12 @@ noise, route reusable concerns to a private adversary when there is enough evide
 plausible unmatched concerns as unassigned candidates in the catalog's private local SQLite inbox,
 then exit without prompting. Discovery state is durable, so interrupted and repeated scans resume safely.
 
-This command never uploads training evidence or creates issues. Review results
-later with "adversary catalog train review".`
-	command.Example = `  adversary catalog train
+This command never uploads training evidence to Adversary Labs or creates issues.
+It sends bounded review evidence to the model provider you configure for triage.
+Review results later with "adversary catalog train review".`
+	command.Example = `  adversary catalog train --model codex/gpt-5.6-luna
   adversary catalog train --source-repo acme/api --source-repo acme/web
+  adversary catalog train --model-provider cloudflare --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
   adversary catalog train --author alice --exclude-author dependabot[bot]
   adversary catalog train --max-prs 25
   adversary catalog train review`

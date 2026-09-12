@@ -2,8 +2,8 @@
 
 `adversary catalog train` mines human pull-request review comments into a
 local, reviewable inbox for a private adversary catalog. It does not fine-tune
-model weights, upload review evidence, modify catalog files, or create pull
-requests.
+model weights, upload review evidence to Adversary Labs, modify catalog files,
+or create pull requests.
 
 The former top-level `adversary train` package-training interface has been
 removed from the public CLI. Its implementation remains an internal engine
@@ -17,7 +17,7 @@ Create a starter catalog and configure repositories in
 ```sh
 adversary catalog init my-private-adversaries
 cd my-private-adversaries
-adversary catalog train
+adversary catalog train --model codex/gpt-5.6-luna
 ```
 
 You can also select repositories and reviewers for one run:
@@ -27,12 +27,35 @@ adversary catalog train \
   --source-repo acme/api \
   --source-repo acme/web \
   --author alice \
-  --exclude-author release-bot
+  --exclude-author release-bot \
+  --model-provider cloudflare \
+  --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
 ```
 
 The command runs in the foreground without prompting and checkpoints
 discovery state as it works. It searches successive PR waves until it reaches
 the configured result target or turn limit, or exhausts unseen candidates.
+
+Live catalog training requires model-backed triage. Use `--model-provider` and
+`--model`, or set `ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. It supports
+the same OpenAI, Cloudflare, Anthropic, Fireworks, Camel, and Codex providers as
+`adversary run`. The model separates noise and broadly applicable public
+concerns from codebase-specific private candidates, chooses an existing private
+adversary or suggests a new one, and drafts a generalized rule for review.
+
+For example, Camel can be configured once in the shell:
+
+```sh
+export CAMEL_API_KEY='qaml_live_...'
+export ADVERSARY_MODEL_PROVIDER=camel
+export ADVERSARY_MODEL=auto
+adversary catalog train
+```
+
+Training evidence is not uploaded to Adversary Labs. Bounded comment, thread,
+review-summary, and diff evidence is sent to the model provider selected by the
+user, so teams should choose a provider and retention policy appropriate for
+their private source code.
 
 An active `gh auth login` session is used automatically. Explicit credentials
 may instead be supplied with `ADVERSARY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or

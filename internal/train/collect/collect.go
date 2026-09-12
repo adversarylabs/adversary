@@ -657,6 +657,9 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 			)
 			labels[i].OwnerAdversary = route.OwnerID
 			labels[i].ScopeReason = route.Reason
+			if strings.TrimSpace(route.GeneralizedRule) != "" {
+				labels[i].ScopeReason += "\nProposed rule: " + strings.TrimSpace(route.GeneralizedRule)
+			}
 			labels[i].ScopeMethod = route.Method
 			// Broad generalists keep short comments (LGTM, "why?", etc.); specialists
 			// still require a minimal summary so empty stubs are not gold.

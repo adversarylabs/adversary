@@ -600,7 +600,7 @@ func TestWriteCatalogCaseRetainsUnassignedHumanConcern(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows=%+v err=%v", rows, err)
 	}
-	if !strings.Contains(rows[0].DraftBody, "Routing:") {
+	if !strings.Contains(rows[0].DraftBody, "Triage:") {
 		t.Fatalf("unassigned row omitted routing context: %s", rows[0].DraftBody)
 	}
 }

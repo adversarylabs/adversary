@@ -83,6 +83,8 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 		authorsOnly      []string
 		authorsIgnore    []string
 		sourceRepos      []string
+		modelProvider    string
+		model            string
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -294,6 +296,19 @@ Use --no-issues for a local-only run.`,
 			if cfg.Sources.Org != "" {
 				authorOrgs = append(authorOrgs, cfg.Sources.Org)
 			}
+			var catalogTriageLLM func(string) ([]byte, error)
+			var catalogTriageModelName string
+			if catalogMode && !fixture {
+				modelRuntime, ok := app.Dependencies().Runtime.(application.ModelReviewRuntime)
+				if !ok {
+					return fmt.Errorf("catalog triage model runtime is unavailable")
+				}
+				catalogTriageLLM, catalogTriageModelName, err = newCatalogTriageModel(cmd.Context(), modelRuntime, modelProvider, model)
+				if err != nil {
+					return err
+				}
+			}
+
 			opts := pipeline.Options{
 				Context:             cmd.Context(),
 				DataRoot:            stateRoot,
@@ -327,6 +342,7 @@ Use --no-issues for a local-only run.`,
 				Owner:               owner,
 				Repo:                repo,
 				CollectOnly:         catalogMode,
+				CatalogTriageLLM:    catalogTriageLLM,
 			}
 			if catalogMode {
 				opts.DiscoveryNamespace = "private-catalog"
@@ -375,6 +391,9 @@ Use --no-issues for a local-only run.`,
 			}
 			if catalogMode {
 				fmt.Fprintln(stderr, "  publishing: local candidates only; catalog changes require later review")
+				if catalogTriageModelName != "" {
+					fmt.Fprintf(stderr, "  triage model: %s\n", catalogTriageModelName)
+				}
 			} else if cfg.OfficialEnabled() && !fixture {
 				fmt.Fprintln(stderr, "  official jury: enabled (drafts for locals only)")
 			} else {
@@ -463,6 +482,8 @@ Use --no-issues for a local-only run.`,
 	cmd.Flags().StringSliceVar(&authorsOnly, "author", nil, "include review comments from this GitHub login (repeatable or comma-separated)")
 	cmd.Flags().StringSliceVar(&authorsIgnore, "exclude-author", nil, "exclude review comments from this GitHub login (repeatable or comma-separated)")
 	cmd.Flags().StringSliceVar(&sourceRepos, "source-repo", nil, "scan this owner/repository instead of configured repositories (repeatable or comma-separated)")
+	cmd.Flags().StringVar(&modelProvider, "model-provider", "", "triage model provider: openai, cloudflare, anthropic, fireworks, camel, or codex (overrides ADVERSARY_MODEL_PROVIDER)")
+	cmd.Flags().StringVar(&model, "model", "", "triage model identifier (overrides ADVERSARY_MODEL)")
 	return cmd
 }
 

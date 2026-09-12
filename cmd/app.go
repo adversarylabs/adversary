@@ -858,6 +858,39 @@ func (p processRuntime) prepareFindingVerification(ctx context.Context, change *
 func (p processRuntime) findingVerificationProvider(config modelreview.Config) (modelreview.Provider, error) {
 	return modelreview.ProviderFromConfig(config, p.environment.Lookup, modelreview.HTTPClientFromEnvironment(p.environment.Lookup))
 }
+
+func (p processRuntime) ModelReviewProvider(config application.ModelReviewConfig) (application.ModelReviewProvider, error) {
+	provider, err := modelreview.ProviderFromConfig(
+		modelreview.Config{Provider: config.Provider, Model: config.Model},
+		p.environment.Lookup,
+		modelreview.HTTPClientFromEnvironment(p.environment.Lookup),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return processModelReviewProvider{provider: provider}, nil
+}
+
+type processModelReviewProvider struct{ provider modelreview.Provider }
+
+func (p processModelReviewProvider) Name() string  { return p.provider.Name() }
+func (p processModelReviewProvider) Model() string { return p.provider.Model() }
+func (p processModelReviewProvider) Review(ctx context.Context, request application.ModelReviewRequest) (json.RawMessage, error) {
+	result, err := p.provider.Review(ctx, modelreview.Request{
+		ProtocolVersion: modelreview.ProtocolVersion,
+		Prompt:          request.Prompt,
+		Input:           request.Input,
+		Schema:          request.Schema,
+		Budget: modelreview.Budget{
+			MaximumOutputTokens: request.MaximumOutputTokens,
+			TimeoutMS:           request.TimeoutMS,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.Output, nil
+}
 func (p processRuntime) readFindingVerification(name string) (findingverify.Report, error) {
 	return findingverify.ReadReport(name)
 }

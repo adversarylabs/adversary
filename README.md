@@ -71,8 +71,9 @@ exits. Review is a separate command.
 ```sh
 adversary catalog init my-private-adversaries
 cd my-private-adversaries
-# Edit adversary.train.yaml, or select sources on the command line:
-adversary catalog train --source-repo acme/api --source-repo acme/web
+# Edit adversary.train.yaml, or select sources and a model on the command line:
+adversary catalog train --source-repo acme/api --source-repo acme/web \
+  --model-provider cloudflare --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
 adversary catalog train review
 adversary catalog train inspect <id>
 adversary catalog train accept <id>
@@ -80,8 +81,11 @@ adversary catalog train accept <id>
 
 Use repeatable `--author` and `--exclude-author` flags for one-off reviewer
 selection; the equivalent committed policy is `sources.authors_only` and
-`sources.authors_ignore`. Accepted results record a decision only. They do not
-modify tracked catalog files, upload private evidence, or open a pull request.
+`sources.authors_ignore`. Model configuration can also come from
+`ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Accepted results record a
+decision only. They do not modify tracked catalog files, upload private evidence
+to Adversary Labs, or open a pull request. The scan does send bounded comment,
+thread, review-summary, and diff evidence to the model provider you select.
 Interactive CLI commands display a one-line stderr reminder while registered
 catalogs still have unreviewed results; machine-readable and noninteractive
 commands remain quiet.

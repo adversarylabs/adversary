@@ -1,6 +1,7 @@
 package scope
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -41,6 +42,74 @@ func TestRouterSuppliesLabeledThreadContextToLLM(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("routing prompt omitted %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestCatalogRouterUsesModelForPrivateSpecificTriage(t *testing.T) {
+	r := &Router{
+		Candidates:    []Candidate{{ID: "operability", Mission: "Organization-specific logging and operational diagnosis rules."}},
+		CatalogTriage: true,
+		UseLLM:        true,
+		CallLLM: func(prompt string) ([]byte, error) {
+			for _, want := range []string{"private adversary catalog", "general_public", "private_candidate", "generalized_rule"} {
+				if !strings.Contains(prompt, want) {
+					t.Fatalf("catalog prompt omitted %q:\n%s", want, prompt)
+				}
+			}
+			return []byte(`{"disposition":"private_candidate","private_specific":true,"owner_id":"operability","suggested_adversary":"","generalized_rule":"Log restore failures with the internal installation identifier.","reason":"This is an organization-specific diagnostic convention.","material":true,"actionable":true,"change_local":true,"engineering_primary":false,"non_blocking":false}`), nil
+		},
+	}
+	route := r.RouteComment("Use our installation ID field when logging this restore failure.", "restore.go", "reviewer")
+	if route.Decision != InScope || route.OwnerID != "operability" {
+		t.Fatalf("private candidate was not routed: %+v", route)
+	}
+	if !strings.Contains(route.GeneralizedRule, "installation identifier") {
+		t.Fatalf("generalized rule was lost: %+v", route)
+	}
+}
+
+func TestCatalogRouterDropsGeneralPublicConcernAfterModelTriage(t *testing.T) {
+	r := &Router{
+		Candidates:    []Candidate{{ID: "reliability-and-concurrency", Mission: "Reliability rules."}},
+		CatalogTriage: true,
+		UseLLM:        true,
+		CallLLM: func(string) ([]byte, error) {
+			return []byte(`{"disposition":"general_public","private_specific":false,"owner_id":"","suggested_adversary":"","generalized_rule":"Pass request contexts to subprocesses.","reason":"This is broadly applicable Go guidance.","material":true,"actionable":true,"change_local":true,"engineering_primary":false,"non_blocking":false}`), nil
+		},
+	}
+	route := r.RouteComment("Pass request context to cancel kubectl when it hangs.", "command.go", "reviewer")
+	if route.Decision != OutOfScope || route.OwnerID != "" || !strings.Contains(route.Reason, "general_public") {
+		t.Fatalf("public concern entered the private catalog: %+v", route)
+	}
+}
+
+func TestCatalogRouterKeepsProposedNewPrivateAdversaryUnassigned(t *testing.T) {
+	r := &Router{
+		Candidates:    []Candidate{{ID: "operability", Mission: "Operational diagnosis rules."}},
+		CatalogTriage: true,
+		UseLLM:        true,
+		CallLLM: func(string) ([]byte, error) {
+			return []byte(`{"disposition":"private_candidate","private_specific":true,"owner_id":"","suggested_adversary":"release-channel-contracts","generalized_rule":"Keep application and cluster release channels synchronized.","reason":"The comment describes a private release topology.","material":true,"actionable":true,"change_local":true,"engineering_primary":false,"non_blocking":false}`), nil
+		},
+	}
+	route := r.RouteComment("Our EC and app channels must update together.", "release.go", "reviewer")
+	if route.Decision != Unclear || route.OwnerID != "" || !strings.Contains(route.Reason, "release-channel-contracts") {
+		t.Fatalf("new private category was not retained as unassigned: %+v", route)
+	}
+}
+
+func TestCatalogRouterDoesNotSilentlyFallBackWhenModelFails(t *testing.T) {
+	r := &Router{
+		Candidates:    []Candidate{{ID: "operability", Mission: "Operational diagnosis rules."}},
+		CatalogTriage: true,
+		UseLLM:        true,
+		CallLLM: func(string) ([]byte, error) {
+			return nil, errors.New("provider unavailable")
+		},
+	}
+	route := r.RouteComment("Use our deployment ID when logging restore failures.", "restore.go", "reviewer")
+	if route.Decision != Unclear || route.Method != "llm-error" || !strings.Contains(route.Reason, "provider unavailable") {
+		t.Fatalf("model failure silently fell back to heuristics: %+v", route)
 	}
 }
 

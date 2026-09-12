@@ -369,8 +369,8 @@ func writeKeptCase(stateRoot, runID string, c *cases.Case, includeUnassigned boo
 			return n, err
 		}
 		body := fmt.Sprintf("## Human concern (awaiting review)\n\nAdversary: `%s`\n\n%s\n\n", owner, e.Summary)
-		if owner == "unassigned" && e.ScopeReason != "" {
-			body += fmt.Sprintf("Routing: %s\n\n", e.ScopeReason)
+		if e.ScopeReason != "" {
+			body += fmt.Sprintf("Triage: %s\n\n", e.ScopeReason)
 		}
 		if prURL != "" {
 			body += fmt.Sprintf("PR: %s\n", prURL)

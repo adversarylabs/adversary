@@ -78,6 +78,9 @@ type Options struct {
 	// CollectOnly routes and persists human review evidence without executing or
 	// mutating adversary packages. Private catalog training uses this mode.
 	CollectOnly bool
+	// CatalogTriageLLM performs provider-neutral semantic triage for plausible
+	// catalog comments. Live catalog training requires this callback.
+	CatalogTriageLLM func(string) ([]byte, error)
 	// TrainOnlyIDs limits train-eligible locals (empty = all locals).
 	TrainOnlyIDs []string
 	// TrainExcludeIDs removes locals from both training and routing.
@@ -335,8 +338,9 @@ func Run(opts Options) (*Result, error) {
 			cands := routerCandidates(routingPkgs)
 			commentRouter = &scope.Router{
 				Candidates:    cands,
-				UseLLM:        os.Getenv("OPENAI_API_KEY") != "",
+				UseLLM:        opts.CatalogTriageLLM != nil || os.Getenv("OPENAI_API_KEY") != "",
 				CatalogTriage: opts.CollectOnly,
+				CallLLM:       opts.CatalogTriageLLM,
 			}
 			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing: %v\n", len(routingPkgs), packageIDs(routingPkgs))
 			fmt.Fprintf(os.Stderr, "Training %d adversaries this run: %v\n", len(siblingPkgs), packageIDs(siblingPkgs))

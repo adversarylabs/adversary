@@ -152,6 +152,32 @@ type Runtime interface {
 	Inspect(context.Context, AdversaryRunOptions) error
 	Auto(context.Context, AdversaryAutoOptions) (AdversaryAutoResult, error)
 }
+
+// ModelReviewRuntime is the optional provider-neutral structured-model port
+// implemented by the process runtime. Catalog training uses it without reading
+// process credentials or constructing provider clients in command handlers.
+type ModelReviewRuntime interface {
+	ModelReviewProvider(ModelReviewConfig) (ModelReviewProvider, error)
+}
+
+type ModelReviewConfig struct {
+	Provider string
+	Model    string
+}
+
+type ModelReviewRequest struct {
+	Prompt              string
+	Input               json.RawMessage
+	Schema              json.RawMessage
+	MaximumOutputTokens int
+	TimeoutMS           int
+}
+
+type ModelReviewProvider interface {
+	Name() string
+	Model() string
+	Review(context.Context, ModelReviewRequest) (json.RawMessage, error)
+}
 type RunSourceIdentity struct {
 	Ref string
 	SHA string
