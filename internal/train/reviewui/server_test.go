@@ -25,7 +25,7 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/?token=secret", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Catalog training") {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
 	}
 	if got := page.Header().Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'none'") {
@@ -85,6 +85,8 @@ func saveCandidate(t *testing.T, state string) {
 	if err := results.SaveResult(state, results.Result{
 		ID: "candidate-1", Package: "operability", Kind: results.KindHuman,
 		Status: results.StatusNew, Summary: "Log the private operation failure.",
+		PRAuthor: "octocat", CommentAuthor: "reviewer", CommentURL: "https://github.com/acme/api/pull/1#discussion_r2",
+		File: "internal/worker.go", Line: 42, DiffHunk: "@@ -40,2 +40,2 @@\n-old()\n+new()",
 		ProposedRule: "Log operation failures.", CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatal(err)

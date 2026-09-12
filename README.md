@@ -81,7 +81,8 @@ adversary catalog train accept <id>
 ```
 
 Bare `inspect` opens a localhost review queue with every candidate in a left
-nav. Reviewers can edit the proposed rule, route it to an existing or new
+nav. Inline comments appear with their file, diff hunk, PR author, and reviewer
+identity. Reviewers can edit the proposed rule, route it to an existing or new
 private adversary, accept or dismiss it, and reopen earlier decisions. Use
 `inspect --all` for the terminal wizard instead.
 

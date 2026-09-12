@@ -59,7 +59,10 @@ type Result struct {
 	PRTitle       string    `json:"pr_title,omitempty"`
 	PRAuthor      string    `json:"pr_author,omitempty"`
 	CommentAuthor string    `json:"comment_author,omitempty"`
+	CommentURL    string    `json:"comment_url,omitempty"`
 	File          string    `json:"file,omitempty"`
+	Line          int       `json:"line,omitempty"`
+	DiffHunk      string    `json:"diff_hunk,omitempty"`
 	ProposedRule  string    `json:"proposed_rule,omitempty"`
 	TriageReason  string    `json:"triage_reason,omitempty"`
 	CaseID        string    `json:"case_id,omitempty"`
@@ -400,7 +403,10 @@ func writeKeptCase(stateRoot, runID string, c *cases.Case, includeUnassigned boo
 			PRTitle:       c.PullRequest.Title,
 			PRAuthor:      c.PullRequest.Author,
 			CommentAuthor: e.CommentAuthor,
+			CommentURL:    e.CommentURL,
 			File:          e.File,
+			Line:          e.Line,
+			DiffHunk:      e.DiffHunk,
 			ProposedRule:  e.ProposedRule,
 			TriageReason:  e.ScopeReason,
 			CaseID:        c.ID,
@@ -714,7 +720,14 @@ func FormatCatalogInspect(r Result) string {
 		fmt.Fprintf(&b, "PR title:  %s\n", r.PRTitle)
 	}
 	if r.File != "" {
-		fmt.Fprintf(&b, "File:      %s\n", r.File)
+		fmt.Fprintf(&b, "File:      %s", r.File)
+		if r.Line > 0 {
+			fmt.Fprintf(&b, ":%d", r.Line)
+		}
+		fmt.Fprintln(&b)
+	}
+	if r.CommentURL != "" {
+		fmt.Fprintf(&b, "Comment:   %s\n", r.CommentURL)
 	}
 	if r.ProposedRule != "" {
 		fmt.Fprintf(&b, "\nProposed rule:\n%s\n", r.ProposedRule)

@@ -75,6 +75,7 @@ adversary catalog train dismiss <id>
 Bare `inspect` starts a token-authenticated server on a random localhost port
 and opens the browser review queue. Its left nav includes new, accepted, and
 dismissed candidates. The detail view shows PR and comment authors and supports
+the source file and diff hunk with the reviewer comment attached. It supports
 editing the proposed rule, assigning an existing or new private adversary,
 accepting, dismissing, and reopening decisions. No third-party assets are loaded.
 

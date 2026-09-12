@@ -645,10 +645,12 @@ func TestWriteCatalogCaseDeduplicatesRepeatedEvidenceInRun(t *testing.T) {
 		return &cases.Case{
 			ID:          id,
 			Repository:  cases.Repository{Owner: "acme", Name: "api", URL: "https://github.com/acme/api"},
-			PullRequest: cases.PullRequest{Number: 42, Title: "Fix cancellation"},
+			PullRequest: cases.PullRequest{Number: 42, Title: "Fix cancellation", Author: "pr-author"},
 			Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
 				ID: concernID, Summary: "Pass request context to cancel kubectl commands in case they hang.",
 				Scope: "in_scope", Approved: true, OwnerAdversary: "reliability-and-concurrency",
+				CommentAuthor: "reviewer", CommentURL: "https://github.com/acme/api/pull/42#discussion_r9",
+				File: "worker.go", Line: 42, DiffHunk: "@@ -40,2 +40,2 @@\n-old()\n+new()",
 			}}},
 		}
 	}
@@ -661,6 +663,9 @@ func TestWriteCatalogCaseDeduplicatesRepeatedEvidenceInRun(t *testing.T) {
 	rows, err := List(state, "", StatusNew)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	if rows[0].PRAuthor != "pr-author" || rows[0].CommentAuthor != "reviewer" || rows[0].Line != 42 || !strings.Contains(rows[0].DiffHunk, "+new()") {
+		t.Fatalf("presentation evidence was not persisted: %+v", rows[0])
 	}
 }
 

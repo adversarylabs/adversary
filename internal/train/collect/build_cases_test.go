@@ -28,7 +28,7 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	comments := `[
 	  {"id": 2, "pull_request_review_id": 1, "user": {"login": "mitchellh"}, "body": "Also a data race on the shared map without synchronization.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:01:00Z"},
 	  {"id": 3, "pull_request_review_id": 1, "in_reply_to_id": 2, "user": {"login": "author1"}, "body": "For context, this is because we already serialize access in the caller.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:02:00Z"},
-	  {"id": 4, "pull_request_review_id": 1, "in_reply_to_id": 2, "user": {"login": "mitchellh"}, "body": "Please add an assertion that proves the caller keeps this map serialized.", "path": "worker.go", "line": 10, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:03:00Z"},
+	  {"id": 4, "pull_request_review_id": 1, "in_reply_to_id": 2, "user": {"login": "mitchellh"}, "body": "Please add an assertion that proves the caller keeps this map serialized.", "html_url": "https://github.com/acme/r/pull/42#discussion_r4", "path": "worker.go", "line": 10, "diff_hunk": "@@ -8,2 +8,2 @@\\n-old()\\n+new()", "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:03:00Z"},
 	  {"id": 5, "pull_request_review_id": 1, "user": {"login": "mitchellh"}, "body": "<!-- Thoughts represent an idea that popped up from reviewing. These comments are non-blocking by nature. --> Data race: this shared map is written without synchronization; guard it with the existing mutex.", "path": "worker.go", "line": 12, "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "created_at": "2024-01-02T01:04:00Z"}
 	]`
 	_ = os.WriteFile(filepath.Join(dir, "pull.json"), []byte(pull), 0o600)
@@ -47,6 +47,9 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 	}
 	if len(cases) == 0 {
 		t.Fatal("expected cases")
+	}
+	if cases[0].PullRequest.Author != "author1" {
+		t.Fatalf("pull request author=%q", cases[0].PullRequest.Author)
 	}
 	foundExplanation, foundRequest, foundNormalized, foundRootContext := false, false, false, false
 	for _, label := range cases[0].Labels.ExpectedConcerns {
@@ -71,6 +74,9 @@ func TestBuildCasesFromCacheFiltered(t *testing.T) {
 			foundRequest = true
 			if !label.Approved || label.Scope != string(scope.InScope) {
 				t.Errorf("explicit reviewer request should remain gold: %+v", label)
+			}
+			if label.CommentAuthor != "mitchellh" || label.CommentURL == "" || label.Line != 10 || !strings.Contains(label.DiffHunk, "-old()") {
+				t.Errorf("inline review presentation evidence was lost: %+v", label)
 			}
 		case strings.Contains(label.Summary, "Data race"):
 			foundNormalized = true

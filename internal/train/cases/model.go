@@ -98,6 +98,9 @@ type ExpectedConcern struct {
 	Source        []string `json:"source" yaml:"source"`
 	File          string   `json:"file,omitempty" yaml:"file,omitempty"`
 	CommentAuthor string   `json:"comment_author,omitempty" yaml:"comment_author,omitempty"`
+	CommentURL    string   `json:"comment_url,omitempty" yaml:"comment_url,omitempty"`
+	Line          int      `json:"line,omitempty" yaml:"line,omitempty"`
+	DiffHunk      string   `json:"diff_hunk,omitempty" yaml:"diff_hunk,omitempty"`
 	ProposedRule  string   `json:"proposed_rule,omitempty" yaml:"proposed_rule,omitempty"`
 	Approved      bool     `json:"approved" yaml:"approved"`
 	// Scope relative to the owning adversary mission.

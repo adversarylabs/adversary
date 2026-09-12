@@ -50,6 +50,7 @@ type rawReviewComment struct {
 	Body                  string         `json:"body"`
 	Path                  string         `json:"path"`
 	Line                  int            `json:"line"`
+	OriginalLine          int            `json:"original_line"`
 	OriginalCommitID      string         `json:"original_commit_id"`
 	CommitID              string         `json:"commit_id"`
 	CreatedAt             string         `json:"created_at"`
@@ -381,7 +382,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 					Author:           c.User.Login,
 					Body:             c.Body,
 					Path:             c.Path,
-					Line:             c.Line,
+					Line:             reviewCommentLine(c),
 					OriginalCommitID: oc,
 					CreatedAt:        created,
 					// Manual approval path: not auto-gold
@@ -492,7 +493,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			created, _ := time.Parse(time.RFC3339, c.CreatedAt)
 			allComments = append(allComments, cases.Comment{
 				ID: c.ID, Kind: "review-comment", URL: githubCommentURL(prObj.HTMLURL, c.HTMLURL, "discussion_r", c.ID), Author: c.User.Login, Body: c.Body,
-				Path: c.Path, Line: c.Line, OriginalCommitID: oc, CreatedAt: created,
+				Path: c.Path, Line: reviewCommentLine(c), OriginalCommitID: oc, CreatedAt: created,
 			})
 		}
 		sha, source, excl := cases.ReconstructReviewedSHA(cases.ReviewSignal{OriginalCommitIDs: origIDs, PRHeadSHA: prObj.Head.SHA})
@@ -511,6 +512,13 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		})
 	}
 	return out, nil
+}
+
+func reviewCommentLine(comment rawReviewComment) int {
+	if comment.Line > 0 {
+		return comment.Line
+	}
+	return comment.OriginalLine
 }
 
 // AuthorFilter decides if a comment author may count as gold (train config).
@@ -577,6 +585,9 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 		labels[i].CommentAuthor = author
 		if matched != nil {
 			ctx := commentContext[commentKey{kind: matched.Kind, id: matched.ID}]
+			labels[i].CommentURL = matched.URL
+			labels[i].Line = matched.Line
+			labels[i].DiffHunk = ctx.diffHunk
 			labels[i].ThreadContext = append([]cases.ReviewThreadContext(nil), ctx.threadContext...)
 			labels[i].ThreadDisposition = ctx.threadDisposition
 			labels[i].ThreadDispositionURL = ctx.threadDispositionURL

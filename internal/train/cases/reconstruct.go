@@ -137,6 +137,8 @@ func CandidateLabelsFromComments(comments []Comment) []ExpectedConcern {
 			Source:        []string{"human-review"},
 			File:          c.Path,
 			CommentAuthor: c.Author,
+			CommentURL:    c.URL,
+			Line:          c.Line,
 			Approved:      c.ApprovedAsLabel,
 		})
 	}
