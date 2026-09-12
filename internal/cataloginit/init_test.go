@@ -28,6 +28,7 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 		"adversaries/reliability-and-concurrency/README.md",
 		"adversaries/compatibility/README.md",
 		"adversaries/operability/README.md",
+		"adversaries/engineering-conventions/README.md",
 		"evaluations/.gitkeep",
 		"exceptions/.gitkeep",
 	} {
@@ -81,7 +82,7 @@ func TestCreateRefusesExistingDestination(t *testing.T) {
 func TestRenderSuccessIncludesNextSteps(t *testing.T) {
 	var output bytes.Buffer
 	RenderSuccess(&output, Result{Location: "/tmp/private catalog"}, "linux")
-	for _, want := range []string{"Generated catalog with 6 starter adversaries", "git init", "git commit", "'/tmp/private catalog'"} {
+	for _, want := range []string{"Generated catalog with 7 starter adversaries", "git init", "git commit", "'/tmp/private catalog'"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q missing %q", output.String(), want)
 		}
