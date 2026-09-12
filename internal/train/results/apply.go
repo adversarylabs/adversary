@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/githubapi"
+	"github.com/adversarylabs/adversary/internal/githubauth"
 )
 
 // ErrResultDismissed prevents a stale apply decision from overriding a human
@@ -164,7 +165,7 @@ func createApplyIssue(opts ApplyOptions, packagePath string, r Result, draftPath
 	}
 	client := opts.IssueClient
 	if client == nil {
-		tok, err := githubapi.RequireToken()
+		tok, err := githubauth.RequireToken()
 		if err != nil {
 			return "", false, err
 		}

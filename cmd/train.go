@@ -576,7 +576,7 @@ implementation issue per reviewer comment. Use --include-individual-issues or
   adversary train results apply --all --include-individual-issues
   adversary train results apply --all --include-human-issues
 
-Requires ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN with issues:write
+Uses an active gh auth login, or ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN with issues:write
 on the package repo (unless --no-issue). Does not open a PR.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -33,7 +33,7 @@ Related design notes (internal quality bar, full product sketch):
 1. **Local package(s)** with `adversary.yaml` and a scope file:
    - Prefer `agent/scope.md` or `docs/scope.md` (mission: what is a fair miss).
 2. **GitHub token** for history and automatic improvement issues:
-   - `ADVERSARY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`
+   - An active `gh auth login`, or `ADVERSARY_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`
    - Read access to orgs/repos you train on; `issues:write` on each **package**
      repo. Use `train run --no-issues` for a local-only run.
 3. Packages you care about are **local checkouts**, not only catalog pulls.
@@ -331,8 +331,8 @@ when you publish.
 
 ## 7. Auth and hosts
 
-- History and issues use the **direct GitHub HTTP API** (no `gh` CLI required).  
-- Token: `ADVERSARY_GITHUB_TOKEN` → `GITHUB_TOKEN` → `GH_TOKEN`.  
+- History and issues use the **direct GitHub HTTP API**; `gh` is only consulted for its active token when no token environment variable is set.
+- Token: `ADVERSARY_GITHUB_TOKEN` → `GITHUB_TOKEN` → `GH_TOKEN` → active `gh auth` login.
 - `sources.host: github.com` is the supported host for v1.
 
 ## 8. Reset and hygiene
