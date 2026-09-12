@@ -34,6 +34,9 @@ type Route struct {
 type Router struct {
 	Candidates []Candidate
 	UseLLM     bool
+	// CatalogTriage enables conservative mission routing for the starter private
+	// catalog. Executable-adversary training keeps its existing classifiers.
+	CatalogTriage bool
 	// callLLM is injectable for focused routing tests. Production uses
 	// callOpenAIJSON when this is nil.
 	callLLM func(string) ([]byte, error)
@@ -154,6 +157,8 @@ func (r *Router) RouteCommentWithEvidence(body, path, author string, threadConte
 			res = classifyConventionCandidate(body, path)
 		} else if isNitsCandidate(cand.ID) {
 			res = classifyNitsCandidate(body, path)
+		} else if r.CatalogTriage && isStarterCatalogCandidate(cand.ID) {
+			res = classifyStarterCatalogCandidate(body, cand.ID)
 		} else {
 			res = clf.Classify(body, path, author)
 		}
@@ -413,6 +418,57 @@ func classifyConventionCandidate(body, path string) Result {
 	return classifyNitsCandidate(body, path)
 }
 
+func isStarterCatalogCandidate(id string) bool {
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case "compatibility", "data-integrity", "migrations-and-backfills", "operability",
+		"reliability-and-concurrency", "tenant-and-access-boundaries":
+		return true
+	default:
+		return false
+	}
+}
+
+// classifyStarterCatalogCandidate prevents a generic defect keyword from
+// making every starter adversary claim the same comment. These broad starter
+// categories require evidence for their own mission; uncertain but plausible
+// human comments remain in the catalog inbox as unassigned candidates.
+func classifyStarterCatalogCandidate(body, id string) Result {
+	lower := strings.ToLower(body)
+	markers := map[string][]string{
+		"compatibility": {
+			"backward compat", "backwards compat", "breaking change", "deprecated", "deprecation",
+			"version pin", "pin the version", "older version", "newer version", "upgrade path",
+			"api contract", "wire format", "release version", "version skew", "pinning", "endpointoverride",
+		},
+		"data-integrity": {
+			"data loss", "corrupt", "consistency", "inconsistent state", "partial state",
+			"stale state", "transaction", "atomic write", "lost update", "duplicate record",
+		},
+		"migrations-and-backfills": {
+			"migration", "migrate", "backfill", "schema change", "schema version",
+			"rollout order", "rollback", "mixed version", "rqlite",
+		},
+		"operability": {
+			"log this", "log these", "logging", "debuggability", "diagnos", "metric",
+			"telemetry", "trace", "observable", "health check", "alert", "error visibility",
+		},
+		"reliability-and-concurrency": {
+			"context", "cancel", "timeout", "retry", "idempot", "race", "deadlock",
+			"concurr", "goroutine", "mutex", "parallel", "hang", "leak",
+		},
+		"tenant-and-access-boundaries": {
+			"tenant", "authorization", "permission", "access control", "privilege",
+			"cross-tenant", "workspace boundary", "organization boundary", "org boundary",
+		},
+	}
+	for _, marker := range markers[strings.ToLower(strings.TrimSpace(id))] {
+		if strings.Contains(lower, marker) {
+			return Result{Decision: InScope, Reason: "comment contains mission-specific evidence: " + marker, Method: "heuristic"}
+		}
+	}
+	return Result{Decision: OutOfScope, Reason: "no mission-specific evidence for this starter adversary", Method: "heuristic"}
+}
+
 func isGeneralist(id string) bool {
 	id = strings.ToLower(id)
 	return id == "engineering-review" || id == "complexity" ||
@@ -494,6 +550,18 @@ func keywordBoost(body, path string, cand Candidate) int {
 		}
 	}
 	switch {
+	case id == "compatibility":
+		add("backward compat", "breaking change", "deprecated", "version pin", "older version", "upgrade path", "version skew", "pinning", "endpointoverride")
+	case id == "data-integrity":
+		add("data loss", "corrupt", "consistency", "partial state", "transaction", "lost update")
+	case id == "migrations-and-backfills":
+		add("migration", "migrate", "backfill", "schema", "rollout order", "rollback")
+	case id == "operability":
+		add("log this", "log these", "logging", "debuggability", "diagnos", "metric", "telemetry", "trace")
+	case id == "reliability-and-concurrency":
+		add("context", "cancel", "timeout", "retry", "idempot", "race", "deadlock", "concurr", "goroutine", "hang")
+	case id == "tenant-and-access-boundaries":
+		add("tenant", "authorization", "permission", "access control", "privilege", "cross-tenant")
 	case id == "go-concurrency":
 		// Word-aware: bare "race" must not match "trace".
 		add("data race", "goroutine", "mutex", "channel", "deadlock", "concurrent",

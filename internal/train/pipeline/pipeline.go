@@ -333,7 +333,11 @@ func Run(opts Options) (*Result, error) {
 			}
 			opts.targetAdversaryOnly = len(siblingPkgs) == 1
 			cands := routerCandidates(routingPkgs)
-			commentRouter = &scope.Router{Candidates: cands, UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
+			commentRouter = &scope.Router{
+				Candidates:    cands,
+				UseLLM:        os.Getenv("OPENAI_API_KEY") != "",
+				CatalogTriage: opts.CollectOnly,
+			}
 			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing: %v\n", len(routingPkgs), packageIDs(routingPkgs))
 			fmt.Fprintf(os.Stderr, "Training %d adversaries this run: %v\n", len(siblingPkgs), packageIDs(siblingPkgs))
 			// Always expand each local package's adversary.yaml uses for product

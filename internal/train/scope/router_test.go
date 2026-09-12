@@ -240,6 +240,43 @@ func TestRouterDoesNotOwnSoftOKOrNit(t *testing.T) {
 	}
 }
 
+func TestRouterTriagesStarterCatalogByMission(t *testing.T) {
+	r := &Router{CatalogTriage: true, Candidates: []Candidate{
+		{ID: "compatibility"},
+		{ID: "data-integrity"},
+		{ID: "migrations-and-backfills"},
+		{ID: "operability"},
+		{ID: "reliability-and-concurrency"},
+		{ID: "tenant-and-access-boundaries"},
+		{ID: "engineering-conventions"},
+	}}
+	cases := []struct {
+		body string
+		want string
+	}{
+		{"Should we log these errors for debuggability?", "operability"},
+		{"Pass the request context through so cancellation stops kubectl too.", "reliability-and-concurrency"},
+		{"Endpoints is deprecated; use EndpointSlice for newer versions.", "compatibility"},
+		{"This transaction can leave partial state after the second write fails.", "data-integrity"},
+		{"The backfill must tolerate mixed version rollout order.", "migrations-and-backfills"},
+		{"This permission check allows cross-tenant access.", "tenant-and-access-boundaries"},
+	}
+	for _, tc := range cases {
+		route := r.RouteComment(tc.body, "internal/change.go", "reviewer")
+		if route.OwnerID != tc.want || route.Decision != InScope {
+			t.Errorf("body=%q owner=%q decision=%s reason=%s; want %q", tc.body, route.OwnerID, route.Decision, route.Reason, tc.want)
+		}
+	}
+}
+
+func TestRouterLeavesPlausibleUnmatchedCatalogCommentUnassigned(t *testing.T) {
+	r := &Router{CatalogTriage: true, Candidates: []Candidate{{ID: "compatibility"}, {ID: "operability"}}}
+	route := r.RouteComment("How about tcp6 and unix for completeness?", "network.go", "reviewer")
+	if route.OwnerID != "" || route.Decision != Unclear {
+		t.Fatalf("plausible unmatched comment was forced into an adversary: %+v", route)
+	}
+}
+
 func TestRouterDocsPathNotKustomize(t *testing.T) {
 	r := &Router{
 		Candidates: []Candidate{

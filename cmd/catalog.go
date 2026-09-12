@@ -24,10 +24,11 @@ func newCatalogCommand(app *application.App) *cobra.Command {
 func newCatalogTrainCommand(app *application.App) *cobra.Command {
 	command := newTrainRunCommand(app)
 	command.Use = "train"
-	command.Short = "Collect review history into the local catalog training inbox"
-	command.Long = `Collect and classify human pull-request review history, save results in
-the catalog's private local SQLite inbox, and exit without prompting. Discovery
-state is durable, so interrupted and repeated scans resume safely.
+	command.Short = "Triage review history into the local catalog training inbox"
+	command.Long = `Collect and triage human pull-request review history, discard conversation
+noise, route reusable concerns to a private adversary when there is enough evidence, and save
+plausible unmatched concerns as unassigned candidates in the catalog's private local SQLite inbox,
+then exit without prompting. Discovery state is durable, so interrupted and repeated scans resume safely.
 
 This command never uploads training evidence or creates issues. Review results
 later with "adversary catalog train review".`
@@ -50,9 +51,32 @@ later with "adversary catalog train review".`
 		flag.Usage = "catalog workspace with adversary.train.yaml"
 	}
 	command.AddCommand(newCatalogTrainReviewCommand())
-	command.AddCommand(newTrainResultsInspectCommand(app))
+	command.AddCommand(newCatalogTrainInspectCommand())
 	command.AddCommand(newCatalogTrainDecisionCommand("accept", results.Accept))
 	command.AddCommand(newCatalogTrainDecisionCommand("dismiss", results.Dismiss))
+	return command
+}
+
+func newCatalogTrainInspectCommand() *cobra.Command {
+	var path string
+	command := &cobra.Command{
+		Use:   "inspect <id>",
+		Short: "Show the triage evidence for one catalog candidate",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			state, err := resolveStateDir(path)
+			if err != nil {
+				return err
+			}
+			row, err := results.Get(state, args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), results.FormatCatalogInspect(row))
+			return nil
+		},
+	}
+	command.Flags().StringVar(&path, "path", "", "catalog workspace with adversary.train.yaml")
 	return command
 }
 

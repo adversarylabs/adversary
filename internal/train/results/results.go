@@ -355,6 +355,19 @@ func writeKeptCase(stateRoot, runID string, c *cases.Case, includeUnassigned boo
 		if err != sql.ErrNoRows {
 			return n, err
 		}
+		// A concern may be repeated in multiple review rounds or returned by
+		// multiple GitHub comment endpoints. One exact piece of human evidence is
+		// enough for catalog triage; do not make the user dismiss duplicates.
+		var duplicate int
+		err = db.QueryRow(`SELECT 1 FROM results
+			WHERE run_id = ? AND pr_url = ? AND lower(trim(summary)) = lower(trim(?))
+			LIMIT 1`, runID, prURL, e.Summary).Scan(&duplicate)
+		if err == nil {
+			continue
+		}
+		if err != sql.ErrNoRows {
+			return n, err
+		}
 		body := fmt.Sprintf("## Human concern (awaiting review)\n\nAdversary: `%s`\n\n%s\n\n", owner, e.Summary)
 		if owner == "unassigned" && e.ScopeReason != "" {
 			body += fmt.Sprintf("Routing: %s\n\n", e.ScopeReason)
@@ -646,10 +659,45 @@ func FormatCatalogListTable(rows []Result) string {
 		return "No results. Run: adversary catalog train\n"
 	}
 	var b strings.Builder
-	b.WriteString(formatListRows(rows))
-	fmt.Fprintf(&b, "\n%d result(s).\n", len(rows))
-	fmt.Fprintf(&b, "Kinds: human = human said it · miss = should have caught · false+ = we over-fired · draft = package fix idea\n")
+	fmt.Fprintf(&b, "%-10s %-10s %-28s %s\n", "ID", "STATUS", "ADVERSARY", "HUMAN REVIEW EVIDENCE")
+	fmt.Fprintf(&b, "%s\n", strings.Repeat("-", 100))
+	for _, r := range rows {
+		owner := strings.TrimSpace(r.Package)
+		if owner == "" {
+			owner = "unassigned"
+		}
+		fmt.Fprintf(&b, "%-10s %-10s %-28s %s\n",
+			trunc(r.ID, 10), trunc(r.Status, 10), trunc(owner, 28), soft(r.Summary, 62))
+	}
+	fmt.Fprintf(&b, "\n%d triaged candidate(s). `unassigned` means the comment survived noise filtering but no adversary confidently owns it yet.\n", len(rows))
 	fmt.Fprintf(&b, "Store: local SQLite results.db\n")
+	return b.String()
+}
+
+// FormatCatalogInspect describes a private-catalog candidate in catalog terms,
+// without exposing the executable-adversary trainer's package/kind vocabulary.
+func FormatCatalogInspect(r Result) string {
+	owner := strings.TrimSpace(r.Package)
+	if owner == "" {
+		owner = "unassigned"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "ID:        %s\n", r.ID)
+	fmt.Fprintf(&b, "Status:    %s\n", r.Status)
+	fmt.Fprintf(&b, "Adversary: %s\n", owner)
+	fmt.Fprintf(&b, "Evidence:  %s\n", r.Summary)
+	if r.PRURL != "" {
+		fmt.Fprintf(&b, "PR:        %s\n", r.PRURL)
+	}
+	if r.PRTitle != "" {
+		fmt.Fprintf(&b, "PR title:  %s\n", r.PRTitle)
+	}
+	if r.DraftBody != "" {
+		fmt.Fprintf(&b, "\nTriage context:\n%s", r.DraftBody)
+		if !strings.HasSuffix(r.DraftBody, "\n") {
+			b.WriteByte('\n')
+		}
+	}
 	return b.String()
 }
 
