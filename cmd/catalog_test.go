@@ -57,6 +57,15 @@ func TestCatalogTrainHelpDescribesNonInteractiveLocalInbox(t *testing.T) {
 	}
 }
 
+func TestTopLevelTrainCommandIsNotExposed(t *testing.T) {
+	root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	for _, command := range root.Commands() {
+		if command.Name() == "train" {
+			t.Fatal("top-level train command must not be exposed; use catalog train")
+		}
+	}
+}
+
 func TestCatalogTrainReviewAndAcceptUseLocalResultsDatabase(t *testing.T) {
 	catalog := t.TempDir()
 	config := `version: 1

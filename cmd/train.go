@@ -19,38 +19,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newTrainCommand(app *application.App) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "train",
-		Short: "Train adversary packages from PR review history (draft gaps; stateful)",
-		Long: `Train walks your PR review history, grades local adversary packages against
-human review comments, and drafts suggested improvements.
-
-Workflow:
-  adversary train run
-  adversary train results ls
-  adversary train results inspect <id>
-  adversary train results apply <id>  # optional manual control
-  adversary train reset          # forget seen PRs and re-hunt
-
-It does not fine-tune model weights. Official catalog packages (when enabled)
-act as a read-only jury only.
-
-Configure history sources and packages in adversary.train.yaml (see train init).`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(newTrainInitCommand(app))
-	cmd.AddCommand(newTrainRunCommand(app))
-	cmd.AddCommand(newTrainResultsCommand(app))
-	cmd.AddCommand(newTrainResetCommand(app))
-	cmd.AddCommand(newTrainStoryCommand(app))
-	cmd.AddCommand(newTrainStatusCommand(app))
-	cmd.AddCommand(newTrainIssuesCommand(app))
-	return cmd
-}
-
 func newTrainInitCommand(app *application.App) *cobra.Command {
 	var path string
 	var force bool
@@ -144,7 +112,10 @@ Use --no-issues for a local-only run.`,
 			}
 			cfgPath, err := workspace.FindConfig(ws)
 			if err != nil {
-				return fmt.Errorf("%w (run: adversary train init)", err)
+				if catalogMode {
+					return fmt.Errorf("%w (run: adversary catalog init)", err)
+				}
+				return err
 			}
 			cfg, err := workspace.Load(cfgPath)
 			if err != nil {
@@ -357,6 +328,9 @@ Use --no-issues for a local-only run.`,
 				Repo:                repo,
 				CollectOnly:         catalogMode,
 			}
+			if catalogMode {
+				opts.DiscoveryNamespace = "private-catalog"
+			}
 			if opts.MaxPRs == 0 {
 				opts.MaxPRs = 1
 			}
@@ -412,9 +386,17 @@ Use --no-issues for a local-only run.`,
 			// Always show progress toward results — including on interrupt (partial SQLite writes).
 			if res != nil {
 				if err != nil {
-					fmt.Fprintf(out, "train run stopped\n")
+					if catalogMode {
+						fmt.Fprintln(out, "catalog train stopped")
+					} else {
+						fmt.Fprintln(out, "train run stopped")
+					}
 				} else {
-					fmt.Fprintf(out, "train run complete\n")
+					if catalogMode {
+						fmt.Fprintln(out, "catalog train complete")
+					} else {
+						fmt.Fprintln(out, "train run complete")
+					}
 				}
 				fmt.Fprintf(out, "  run:     %s\n", res.RunID)
 				if res.Scorecard != nil {
@@ -471,7 +453,7 @@ Use --no-issues for a local-only run.`,
 	cmd.Flags().StringSliceVar(&excluded, "exclude-adversary", nil, "exclude a local adversary id (repeatable or comma-separated)")
 	cmd.Flags().BoolVar(&noIssues, "no-issues", false, "keep results local instead of creating GitHub issues")
 	cmd.Flags().IntVar(&maxPRs, "max-prs", 0, "override run.max_prs")
-	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns (PR attempts and catalog probe window)")
+	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns (maximum PR attempts)")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 0, "override run.concurrency (parallel PR collect; default 2)")
 	cmd.Flags().BoolVar(&resetDiscovery, "reset-discovery", false, "forget seen PRs and restart catalog discovery before hunting")
 	cmd.Flags().BoolVar(&fixture, "fixture", false, "hermetic fixture run (for tests/gates; ignores empty sources)")

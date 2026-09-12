@@ -21,6 +21,7 @@ const (
 	OutcomeAttempted PROutcome = "attempted"
 	OutcomeGraded    PROutcome = "graded"      // had in-scope gold and ran review path
 	OutcomeNoInScope PROutcome = "no_in_scope" // collected but nothing in mission scope
+	OutcomeCandidate PROutcome = "candidate"   // plausible human evidence retained for catalog review
 	OutcomeNoCases   PROutcome = "no_cases"    // no reconstructable review rounds
 	OutcomeBlocked   PROutcome = "blocked"     // collect/review blocked
 	OutcomeExcluded  PROutcome = "excluded"    // SHA unrecoverable etc.

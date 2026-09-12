@@ -41,7 +41,11 @@ func runAuthorHunt(
 
 	progress("Hunting by author activity for %s", opts.AdversaryName)
 	progress("authors=%v roles=%v orgs=%v", authors, roles, opts.AuthorOrgs)
-	progress("max-turns=%d, target in-scope PRs=%d, concurrency=%d", maxTurns, targetPRs, concurrency)
+	targetLabel := "in-scope PRs"
+	if opts.CollectOnly {
+		targetLabel = "catalog candidates"
+	}
+	progress("max-turns=%d, target %s=%d, concurrency=%d", maxTurns, targetLabel, targetPRs, concurrency)
 
 	fetchLimit := maxTurns * 3
 	if fetchLimit < 50 {
@@ -134,7 +138,7 @@ func runAuthorHunt(
 				}
 				res := collectOnePR(ctx, opts, dataRoot, job, scopeClf, commentRouter, progress)
 				if ctx.Err() != nil {
-					if res.inScopeN > 0 && len(res.kept) > 0 {
+					if (res.inScopeN > 0 || (res.retainUnassigned && res.unassignedN > 0)) && len(res.kept) > 0 {
 						mu.Lock()
 						accepted := applyCollectResult(&out, res, job.pinned, targetPRs)
 						if accepted && onKeep != nil {
@@ -213,9 +217,9 @@ drain:
 		}
 	}
 	if out.interrupted != nil {
-		progress("Author hunt stopped: turns=%d, in-scope PRs kept=%d (%v)", out.turnsUsed, out.prsWithInScope, out.interrupted)
+		progress("Author hunt stopped: turns=%d, %s kept=%d (%v)", out.turnsUsed, targetLabel, out.prsWithInScope, out.interrupted)
 		return out
 	}
-	progress("Author hunt finished: turns=%d, in-scope PRs kept=%d", out.turnsUsed, out.prsWithInScope)
+	progress("Author hunt finished: turns=%d, %s kept=%d", out.turnsUsed, targetLabel, out.prsWithInScope)
 	return out
 }

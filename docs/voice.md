@@ -145,16 +145,12 @@ style only. JSON input includes severity, title, template body, path/line, and
 
 Env overrides: `ADVERSARY_MODEL_PROVIDER`, `ADVERSARY_MODEL`.
 
-## Train: banking gold
+## Training: banking gold
 
-`adversary train results apply` opens issues that require, for **human** miss/human
-rows:
-
-1. Teach **detection** for the spirit class (when to post)  
-2. Bank the **human** excerpt into the package voice example bank  
-
-Do **not** bank synthetic draft titles or package-generated text. Detection strings
-in `src/` stay generic; wording variance comes from rewrite + the bank.
+Private catalog training retains human review evidence in its local inbox.
+Accepted evidence can later teach detection and supply human-authored voice
+examples through a reviewed catalog change. Do not bank synthetic draft titles
+or package-generated text.
 
 ## Authoring checklist
 
@@ -167,7 +163,7 @@ in `src/` stay generic; wording variance comes from rewrite + the bank.
 
 ## Related
 
-- [Train home-built adversaries](./train.md) — grade locals; bank gold on apply  
+- [Private catalog training](../README.md#private-catalog-training) — collect and review human evidence locally
 - [GitHub PR review posting](./github-review-posting.md) — flags, auth, placement  
 - [Composition (`uses`)](./composition.md) — entry package owns voice under multi-run  
 - [Automatic detection](./automatic-detection.md) — who runs; separate from voice  

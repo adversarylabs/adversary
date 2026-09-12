@@ -92,6 +92,9 @@ process. A future catalog GitHub Action can use the same interface, but needs an
 explicit cross-repository credential and an agreed `--auto` contract before it
 can safely create catalog pull requests.
 
+See the [private catalog training guide](docs/train.md) for discovery and inbox
+behavior.
+
 See [review feedback](docs/github-feedback.md) for the SaaS-owned learning loop
 that watches replies and steers later reviews.
 
@@ -360,35 +363,4 @@ Release, rollback, and provenance policy is in [docs/release.md](docs/release.md
 
 Security reports: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Train (review history → package improvement issues)
-
-Grade **home-built** (local) packages against your team’s PR review history and
-file deduplicated improvement issues. Official catalog packages can act as a
-read-only jury only.
-
-```sh
-cd my-adversary
-adversary train init --single-package
-# edit adversary.train.yaml (sources, authors, official jury)
-adversary train run
-adversary train results ls
-```
-
-In a workspace of sibling packages, repeat the following for durable
-round-robin coverage. Each target gets independent discovery memory; the
-separately trained `torvalds` package is excluded automatically.
-
-```sh
-adversary train run --cycle-adversaries --max-prs 1
-```
-
-For large public-repository catalogs, `sources.discovery: github_events`
-batches candidate selection through ClickHouse's read-only GH Archive mirror.
-Selected PRs are still hydrated from GitHub before any review evidence is used.
-
-`train run` opens issues for consolidated drafts and false-positive fixes by
-default. Individual misses remain in the local results database as evidence.
-Use `--no-issues` when you want a local-only run.
-
-Guide: **[docs/train.md](docs/train.md)** (home-built workflow).  
 Also: [composition](docs/composition.md), [comment voice](docs/voice.md).

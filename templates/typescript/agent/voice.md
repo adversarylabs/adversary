@@ -34,7 +34,7 @@ These are **real human review comments banked from train gold**. Use them as
 - **Never** invent facts from these examples that are not in the finding.
 - Keep entries short; dedupe when train apply adds the same text again.
 
-`adversary train results apply` will ask implementers to append under the matching
+Catalog training may ask implementers to append under the matching
 subsection below. Create subsections as needed; keep this heading.
 
 ### Ship / OK

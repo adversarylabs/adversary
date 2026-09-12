@@ -111,7 +111,8 @@ failure into success; all-failed compositions retain the underlying error class.
 - The aggregate summary synthesizes actual findings only; clean adversaries never add review-body noise
 - Max 50 inline comments; overflow goes to the review body
 
-## Train without `gh`
+## Catalog training authentication
 
-`adversary train` collect/discover/org expansion uses the same direct GitHub
-HTTP client. Set a token env var; install of the `gh` CLI is not required.
+`adversary catalog train` uses the direct GitHub HTTP client. Explicit token
+environment variables take precedence; otherwise it uses the active `gh auth`
+token. The `gh` CLI is not required when an environment token is configured.

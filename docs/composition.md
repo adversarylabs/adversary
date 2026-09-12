@@ -152,6 +152,6 @@ workflows, but is intentionally hidden from normal CLI help.
 
 ## Related
 
-- [Train home-built adversaries](./train.md) — improve local packages from review history  
+- [Private catalog training](../README.md#private-catalog-training) — collect and review human evidence locally
 - [Comment voice](./voice.md) — `agent/voice.md`, example banks, rewrite  
 - [GitHub PR review posting](./github-review-posting.md) — posting flags

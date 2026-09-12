@@ -139,7 +139,7 @@ func Get(stateRoot, id string) (Result, error) {
 
 	r, err := getResultDB(db, id)
 	if err == sql.ErrNoRows {
-		return Result{}, fmt.Errorf("result %q not found (run: adversary train results ls)", id)
+		return Result{}, fmt.Errorf("result %q not found", id)
 	}
 	if err != nil {
 		return Result{}, err
@@ -311,6 +311,16 @@ func concernResultID(runID, owner, caseID, concernID string) string {
 // Safe to call from concurrent hunt workers (SQLite single-conn + busy timeout).
 // Returns how many rows were newly inserted (not updated).
 func WriteKeptCase(stateRoot, runID string, c *cases.Case) (int, error) {
+	return writeKeptCase(stateRoot, runID, c, false)
+}
+
+// WriteCatalogCase persists assigned concerns plus plausible human comments
+// whose catalog owner still needs to be selected during inbox review.
+func WriteCatalogCase(stateRoot, runID string, c *cases.Case) (int, error) {
+	return writeKeptCase(stateRoot, runID, c, true)
+}
+
+func writeKeptCase(stateRoot, runID string, c *cases.Case, includeUnassigned bool) (int, error) {
 	if stateRoot == "" || c == nil {
 		return 0, nil
 	}
@@ -326,10 +336,14 @@ func WriteKeptCase(stateRoot, runID string, c *cases.Case) (int, error) {
 		prURL = fmt.Sprintf("https://github.com/%s/%s/pull/%d", c.Repository.Owner, c.Repository.Name, c.PullRequest.Number)
 	}
 	n := 0
-	for _, e := range cases.ApprovedLabels(c.Labels.ExpectedConcerns) {
+	labels := cases.ApprovedLabels(c.Labels.ExpectedConcerns)
+	if includeUnassigned {
+		labels = append(labels, cases.UnclearLabels(c.Labels.ExpectedConcerns)...)
+	}
+	for _, e := range labels {
 		owner := e.OwnerAdversary
 		if owner == "" {
-			owner = "unknown"
+			owner = "unassigned"
 		}
 		id := concernResultID(runID, owner, c.ID, e.ID)
 		var existing string
@@ -341,7 +355,10 @@ func WriteKeptCase(stateRoot, runID string, c *cases.Case) (int, error) {
 		if err != sql.ErrNoRows {
 			return n, err
 		}
-		body := fmt.Sprintf("## Human concern (awaiting grade)\n\nPackage: `%s`\n\n%s\n\n", owner, e.Summary)
+		body := fmt.Sprintf("## Human concern (awaiting review)\n\nAdversary: `%s`\n\n%s\n\n", owner, e.Summary)
+		if owner == "unassigned" && e.ScopeReason != "" {
+			body += fmt.Sprintf("Routing: %s\n\n", e.ScopeReason)
+		}
 		if prURL != "" {
 			body += fmt.Sprintf("PR: %s\n", prURL)
 		}

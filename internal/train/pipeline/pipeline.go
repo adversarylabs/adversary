@@ -60,8 +60,8 @@ type Options struct {
 	MaxPRs int
 	// MaxTurns is how many PRs we may attempt while hunting (default 15).
 	// Each turn = try one not-yet-seen PR (collect + scope). For repo-catalog
-	// discovery it also bounds the rotating repository probe window, so an
-	// invocation may attempt fewer turns when that window has no candidates.
+	// discovery it also bounds the rotating repository probe window. Successive
+	// waves continue within that window until an exit condition is reached.
 	// Stops early when MaxPRs usable cases are collected.
 	MaxTurns int
 	// Concurrency is how many PR collects may run in parallel (gh API). Default 4.
@@ -364,7 +364,11 @@ func Run(opts Options) (*Result, error) {
 		onKeep := func(kept []*cases.Case) int {
 			added := 0
 			for _, c := range kept {
-				n, err := results.WriteKeptCase(opts.DataRoot, runID, c)
+				writeCase := results.WriteKeptCase
+				if opts.CollectOnly {
+					writeCase = results.WriteCatalogCase
+				}
+				n, err := writeCase(opts.DataRoot, runID, c)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "warning: results persist: %v\n", err)
 					continue
@@ -378,7 +382,13 @@ func Run(opts Options) (*Result, error) {
 		}
 
 		if opts.ResetDiscovery {
-			removed, err := results.ResetDiscovery(opts.DataRoot)
+			var removed int
+			var err error
+			if strings.TrimSpace(opts.DiscoveryNamespace) != "" {
+				removed, err = results.ResetDiscoveryTarget(opts.DataRoot, opts.DiscoveryNamespace)
+			} else {
+				removed, err = results.ResetDiscovery(opts.DataRoot)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("reset discovery state: %w", err)
 			}
@@ -397,7 +407,7 @@ func Run(opts Options) (*Result, error) {
 		rateLimited := hunt.interrupted != nil && collect.IsRateLimit(hunt.interrupted)
 		if hunt.interrupted != nil && !rateLimited {
 			// Ctrl+C / hard stop — gold already in SQLite.
-			out.Message = fmt.Sprintf("train interrupted during hunt (%d result row(s) saved)\n  next: adversary train results ls", out.ResultsAdded)
+			out.Message = fmt.Sprintf("train interrupted during hunt (%d result row(s) saved)\n  next: %s", out.ResultsAdded, reviewResultsCommand(opts))
 			return out, hunt.interrupted
 		}
 		caseList = hunt.caseList
@@ -406,7 +416,7 @@ func Run(opts Options) (*Result, error) {
 			progress("Using last out-of-scope-only PR for the story (no in-scope gold this hunt)")
 		}
 		if rateLimited {
-			out.Message = fmt.Sprintf("GitHub rate limit during hunt (%d result row(s) saved)\n  wait for quota reset; use --concurrency 1 or 2\n  next: adversary train results ls", out.ResultsAdded)
+			out.Message = fmt.Sprintf("GitHub rate limit during hunt (%d result row(s) saved)\n  wait for quota reset; use --concurrency 1 or 2\n  next: %s", out.ResultsAdded, reviewResultsCommand(opts))
 			if len(caseList) > 0 {
 				progress("rate limited — grading %d kept case(s) already collected (no more hunting)", len(caseList))
 			}
@@ -450,11 +460,11 @@ func Run(opts Options) (*Result, error) {
 			out.ExitCode = dataroot.ExitBlocked
 			out.Message = out.Blocked.NextAction + "\n" + out.Blocked.SanitizedError
 			if out.ResultsAdded > 0 {
-				out.Message += fmt.Sprintf("\n%d result row(s) already in results.db — adversary train results ls\n", out.ResultsAdded)
+				out.Message += fmt.Sprintf("\n%d result row(s) already in results.db — %s\n", out.ResultsAdded, reviewResultsCommand(opts))
 			}
 			return out, nil
 		}
-		rcpt.Notes = fmt.Sprintf("hunt turns=%d in_scope_prs=%d target_prs=%d max_turns=%d concurrency=%d repos=%d; %s",
+		rcpt.Notes = fmt.Sprintf("hunt turns=%d kept_prs=%d target_prs=%d max_turns=%d concurrency=%d repos=%d; %s",
 			hunt.turnsUsed, hunt.prsWithInScope, targetPRs, maxTurns, normalizeConcurrency(opts.Concurrency), len(catalogRepos), strings.Join(huntLog, " | "))
 	}
 
@@ -481,7 +491,7 @@ func Run(opts Options) (*Result, error) {
 	}
 	if opts.CollectOnly {
 		for _, c := range usable {
-			if _, err := results.WriteKeptCase(opts.DataRoot, runID, c); err != nil {
+			if _, err := results.WriteCatalogCase(opts.DataRoot, runID, c); err != nil {
 				return nil, fmt.Errorf("persist catalog training result: %w", err)
 			}
 		}
@@ -525,7 +535,7 @@ func Run(opts Options) (*Result, error) {
 			_, _ = receipt.Save(opts.DataRoot, rcpt)
 			out.ExitCode = 130
 			out.Failures = allFailures
-			out.Message = fmt.Sprintf("train interrupted during grade (%d result row(s) saved)\n  next: adversary train results ls", out.ResultsAdded)
+			out.Message = fmt.Sprintf("train interrupted during grade (%d result row(s) saved)\n  next: %s", out.ResultsAdded, reviewResultsCommand(opts))
 			return out, fmt.Errorf("train interrupted: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Grading case %d/%d: %s\n", i+1, len(usable), c.ID)
@@ -950,6 +960,13 @@ func Run(opts Options) (*Result, error) {
 	// Message is the full plain-English CLI block only.
 	out.Message = human.CLIBlock
 	return out, nil
+}
+
+func reviewResultsCommand(opts Options) string {
+	if opts.CollectOnly {
+		return "adversary catalog train review"
+	}
+	return "the package-training results viewer"
 }
 
 func collectChangedFileEvidence(ctx context.Context, runtimes []caseRuntime) map[string]map[string]string {

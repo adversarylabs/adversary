@@ -676,3 +676,21 @@ func TestEngineeringConventionsKeepsExplicitNonBlockingNits(t *testing.T) {
 		t.Fatalf("material defect was misclassified as a convention: %+v", defect)
 	}
 }
+
+func TestRouterRetainsPlausibleUnassignedHumanComment(t *testing.T) {
+	router := &Router{
+		Candidates: []Candidate{{
+			ID: "engineering-conventions", AdversaryName: "engineering-conventions",
+			Mission:   "Repository-specific naming, layout, API, and testing conventions.",
+			Languages: []string{"any"},
+		}},
+	}
+	route := router.RouteComment(
+		"How about tcp6? For completeness you can also add unix.",
+		"pkg/redact/redact.go",
+		"reviewer",
+	)
+	if route.OwnerID != "" || route.Decision != Unclear {
+		t.Fatalf("plausible independent comment should be retained as unassigned: %+v", route)
+	}
+}

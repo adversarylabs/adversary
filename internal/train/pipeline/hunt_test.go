@@ -116,7 +116,77 @@ func TestParallelHuntProbesOneRotatingMaxTurnsWindow(t *testing.T) {
 	}
 }
 
-func TestGitHubEventsHuntUsesOneBatchThenHydratesFromGitHub(t *testing.T) {
+func TestParallelHuntContinuesDiscoveryWavesToMaxTurns(t *testing.T) {
+	var mu sync.Mutex
+	listCalls := 0
+	transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		body := `[]`
+		if r.URL.Path == "/repos/acme/api/pulls" {
+			mu.Lock()
+			listCalls++
+			mu.Unlock()
+			body = `[
+				{"number":4,"title":"four","html_url":"https://github.com/acme/api/pull/4","merged_at":"2026-09-12T04:00:00Z","user":{"login":"human"}},
+				{"number":3,"title":"three","html_url":"https://github.com/acme/api/pull/3","merged_at":"2026-09-12T03:00:00Z","user":{"login":"human"}},
+				{"number":2,"title":"two","html_url":"https://github.com/acme/api/pull/2","merged_at":"2026-09-12T02:00:00Z","user":{"login":"human"}},
+				{"number":1,"title":"one","html_url":"https://github.com/acme/api/pull/1","merged_at":"2026-09-12T01:00:00Z","user":{"login":"human"}}
+			]`
+		} else if strings.Contains(r.URL.Path, "/pulls/") && !strings.HasSuffix(r.URL.Path, "/reviews") && !strings.HasSuffix(r.URL.Path, "/comments") {
+			body = `{"number":1,"html_url":"https://github.com/acme/api/pull/1","title":"candidate","merged_at":"2026-09-12T05:00:00Z","user":{"login":"human"},"base":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"head":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+	client := githubapi.NewClient("test")
+	client.HTTP = &http.Client{Transport: transport}
+	client.RESTBase = "https://api.test"
+	collect.SetDefaultClient(client)
+	t.Cleanup(func() { collect.SetDefaultClient(nil) })
+
+	out := runParallelHunt(
+		context.Background(),
+		Options{Context: context.Background(), AdversaryName: "private-catalog", Concurrency: 1},
+		[]repos.Repo{{Owner: "acme", Name: "api"}},
+		t.TempDir(),
+		50,
+		3,
+		nil,
+		nil,
+		func(string, ...any) {},
+		nil,
+	)
+	if out.interrupted != nil {
+		t.Fatal(out.interrupted)
+	}
+	if out.turnsUsed != 3 {
+		t.Fatalf("turns=%d want 3", out.turnsUsed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if listCalls != 3 {
+		t.Fatalf("discovery list calls=%d want 3 waves", listCalls)
+	}
+}
+
+func TestApplyCollectResultRetainsUnassignedOnlyForCatalog(t *testing.T) {
+	c := &cases.Case{ID: "unassigned"}
+	ordinary := &huntOutcome{}
+	if applyCollectResult(ordinary, collectResult{kept: []*cases.Case{c}, unassignedN: 1}, false, 1) {
+		t.Fatal("ordinary package training retained an unassigned comment")
+	}
+	catalog := &huntOutcome{}
+	if !applyCollectResult(catalog, collectResult{kept: []*cases.Case{c}, unassignedN: 1, retainUnassigned: true}, false, 1) {
+		t.Fatal("catalog training dropped an unassigned comment")
+	}
+	if len(catalog.caseList) != 1 || catalog.prsWithInScope != 1 {
+		t.Fatalf("catalog outcome=%+v", catalog)
+	}
+}
+
+func TestGitHubEventsHuntContinuesUntilCandidatesAreExhausted(t *testing.T) {
 	var mu sync.Mutex
 	var githubPaths []string
 	githubTransport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
@@ -184,8 +254,8 @@ func TestGitHubEventsHuntUsesOneBatchThenHydratesFromGitHub(t *testing.T) {
 	if out.interrupted != nil {
 		t.Fatal(out.interrupted)
 	}
-	if eventsRequests != 1 {
-		t.Fatalf("events requests=%d want 1", eventsRequests)
+	if eventsRequests != 2 {
+		t.Fatalf("events requests=%d want 2 (candidate wave plus exhaustion check)", eventsRequests)
 	}
 	mu.Lock()
 	defer mu.Unlock()
