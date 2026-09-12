@@ -360,13 +360,15 @@ func writeKeptCase(stateRoot, runID string, c *cases.Case, includeUnassigned boo
 		if err != sql.ErrNoRows {
 			return n, err
 		}
-		// A concern may be repeated in multiple review rounds or returned by
-		// multiple GitHub comment endpoints. One exact piece of human evidence is
-		// enough for catalog triage; do not make the user dismiss duplicates.
+		// A concern may be repeated across review rounds, GitHub endpoints, or
+		// later training runs. Preserve distinct owner proposals, but do not make
+		// the user review the same PR evidence for the same owner twice.
 		var duplicate int
 		err = db.QueryRow(`SELECT 1 FROM results
-			WHERE run_id = ? AND pr_url = ? AND lower(trim(summary)) = lower(trim(?))
-			LIMIT 1`, runID, prURL, e.Summary).Scan(&duplicate)
+			WHERE lower(trim(pr_url)) = lower(trim(?))
+			  AND lower(trim(summary)) = lower(trim(?))
+			  AND lower(trim(package)) = lower(trim(?))
+			LIMIT 1`, prURL, e.Summary, owner).Scan(&duplicate)
 		if err == nil {
 			continue
 		}

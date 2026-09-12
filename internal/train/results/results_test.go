@@ -664,6 +664,48 @@ func TestWriteCatalogCaseDeduplicatesRepeatedEvidenceInRun(t *testing.T) {
 	}
 }
 
+func TestWriteCatalogCaseDeduplicatesRepeatedEvidenceAcrossRuns(t *testing.T) {
+	state := t.TempDir()
+	makeCase := func(id string) *cases.Case {
+		return &cases.Case{
+			ID: id, Repository: cases.Repository{Owner: "acme", Name: "api", URL: "https://github.com/acme/api"},
+			PullRequest: cases.PullRequest{Number: 42}, Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+				ID: id, Summary: "Preserve the private API contract.", Scope: "in_scope", Approved: true,
+				OwnerAdversary: "compatibility",
+			}}},
+		}
+	}
+	if n, err := WriteCatalogCase(state, "run-1", makeCase("first")); err != nil || n != 1 {
+		t.Fatalf("first write: n=%d err=%v", n, err)
+	}
+	if n, err := WriteCatalogCase(state, "run-2", makeCase("second")); err != nil || n != 0 {
+		t.Fatalf("cross-run duplicate: n=%d err=%v", n, err)
+	}
+}
+
+func TestWriteCatalogCasePreservesSameEvidenceForDistinctOwners(t *testing.T) {
+	state := t.TempDir()
+	makeCase := func(id, owner string) *cases.Case {
+		return &cases.Case{
+			ID: id, Repository: cases.Repository{Owner: "acme", Name: "api", URL: "https://github.com/acme/api"},
+			PullRequest: cases.PullRequest{Number: 42}, Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+				ID: id, Summary: "Preserve the private API contract.", Scope: "in_scope", Approved: true,
+				OwnerAdversary: owner,
+			}}},
+		}
+	}
+	if n, err := WriteCatalogCase(state, "run-1", makeCase("first", "compatibility")); err != nil || n != 1 {
+		t.Fatalf("first write: n=%d err=%v", n, err)
+	}
+	if n, err := WriteCatalogCase(state, "run-1", makeCase("second", "data-integrity")); err != nil || n != 1 {
+		t.Fatalf("distinct owner write: n=%d err=%v", n, err)
+	}
+	rows, err := List(state, "", StatusNew)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+}
+
 func TestLegacyJSONMigration(t *testing.T) {
 	state := t.TempDir()
 	legacy := filepath.Join(state, "results")
