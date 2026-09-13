@@ -201,6 +201,25 @@ func TestResolveNPMUsesNVMBinWhenProcessPATHIsMinimal(t *testing.T) {
 	}
 }
 
+func TestExecCommandKeepsAbsoluteLaunchersSiblingRuntimeOnPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shebang behavior is Unix-specific")
+	}
+	bin := t.TempDir()
+	node := filepath.Join(bin, "node")
+	if err := os.WriteFile(node, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	npm := filepath.Join(bin, "npm")
+	if err := os.WriteFile(npm, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if output, err := execCommand(context.Background(), t.TempDir(), npm, "--version"); err != nil {
+		t.Fatalf("absolute npm launcher could not find sibling node: %v\n%s", err, output)
+	}
+}
+
 func regressionYAML(request ChangeRequest) string {
 	return "version: 1\n" +
 		"candidate_id: " + request.CandidateID + "\n" +

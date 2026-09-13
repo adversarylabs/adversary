@@ -54,7 +54,26 @@ type commandRunner func(context.Context, string, string, ...string) ([]byte, err
 func execCommand(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = dir
+	// Version managers commonly expose npm as an absolute launcher whose
+	// shebang is /usr/bin/env node. The review UI may not inherit the
+	// interactive shell PATH, so keep the resolved launcher's sibling runtime
+	// visible to env when executing it.
+	if filepath.IsAbs(name) {
+		command.Env = prependPath(os.Environ(), filepath.Dir(name))
+	}
 	return command.CombinedOutput()
+}
+
+func prependPath(environment []string, directory string) []string {
+	prefix := "PATH="
+	for index, entry := range environment {
+		if strings.HasPrefix(entry, prefix) {
+			copy := append([]string(nil), environment...)
+			copy[index] = prefix + directory + string(os.PathListSeparator) + strings.TrimPrefix(entry, prefix)
+			return copy
+		}
+	}
+	return append(append([]string(nil), environment...), prefix+directory)
 }
 
 func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner, run commandRunner) error {
