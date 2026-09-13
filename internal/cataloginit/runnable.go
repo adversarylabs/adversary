@@ -122,7 +122,7 @@ func EnsureRunnableAdversary(dir, slug string) (bool, error) {
 			return false, nil
 		}
 		files := runnableAdversaryFiles(slug, purposeFromREADME(string(readme)), string(readme))
-		for _, name := range []string{"package.json", "package-lock.json", "src/index.ts", "dist/index.js", "dist/index.d.ts", "test/index.test.ts"} {
+		for _, name := range []string{"package.json", "package-lock.json", "tsconfig.json", "src/index.ts", "dist/index.js", "dist/index.d.ts", "test/index.test.ts"} {
 			path := filepath.Join(dir, filepath.FromSlash(name))
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return false, err

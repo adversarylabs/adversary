@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -27,6 +28,7 @@ type catalogModelProviderStub struct {
 	output      json.RawMessage
 	outputs     []json.RawMessage
 	requests    *[]application.ModelReviewRequest
+	err         error
 }
 
 func (s catalogModelProviderStub) Name() string  { return s.name }
@@ -40,10 +42,22 @@ func (s catalogModelProviderStub) Review(_ context.Context, request application.
 		s.outputs = s.outputs[1:]
 		return output, nil
 	}
+	if s.err != nil {
+		return nil, s.err
+	}
 	if len(s.output) > 0 {
 		return s.output, nil
 	}
 	return json.RawMessage(`{"disposition":"noise"}`), nil
+}
+
+func TestCatalogOverlapPreservesContextCancellation(t *testing.T) {
+	wrapped := fmt.Errorf("provider stopped: %w", context.Canceled)
+	runtime := &catalogModelRuntimeStub{provider: catalogModelProviderStub{name: "camel", model: "auto", err: wrapped}}
+	_, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{ManagedRuntime: 3})
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "check current catalog") {
+		t.Fatalf("cancellation was reclassified: %v", err)
+	}
 }
 
 type catalogSequenceProviderStub struct {

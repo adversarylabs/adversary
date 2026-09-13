@@ -460,6 +460,9 @@ func TestCatalogRollbackRestoresManifestSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(manifest, []byte("changed through symlink\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(manifest); err != nil {
 		t.Fatal(err)
 	}

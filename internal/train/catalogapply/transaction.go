@@ -15,9 +15,12 @@ type catalogSnapshotEntry struct {
 }
 
 type catalogTreeSnapshot struct {
-	existed bool
-	mode    fs.FileMode
-	entries map[string]catalogSnapshotEntry
+	existed          bool
+	mode             fs.FileMode
+	entries          map[string]catalogSnapshotEntry
+	linkTargetPath   string
+	linkTargetExists bool
+	linkTarget       catalogSnapshotEntry
 }
 
 func snapshotCatalogChange(adversaryDir, manifestPath string) (func() error, error) {
@@ -137,6 +140,9 @@ func restoreCatalogTree(root string, snapshot catalogTreeSnapshot) error {
 			if err := os.MkdirAll(path, entry.mode.Perm()); err != nil {
 				return err
 			}
+			if err := os.Chmod(path, entry.mode.Perm()); err != nil {
+				return err
+			}
 		case entry.mode&os.ModeSymlink != 0:
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return err
@@ -149,6 +155,9 @@ func restoreCatalogTree(root string, snapshot catalogTreeSnapshot) error {
 				return err
 			}
 			if err := os.WriteFile(path, entry.data, entry.mode.Perm()); err != nil {
+				return err
+			}
+			if err := os.Chmod(path, entry.mode.Perm()); err != nil {
 				return err
 			}
 		}
@@ -169,6 +178,23 @@ func captureCatalogFile(path string) (catalogTreeSnapshot, error) {
 	entry := catalogSnapshotEntry{mode: info.Mode()}
 	if info.Mode()&os.ModeSymlink != 0 {
 		entry.link, err = os.Readlink(path)
+		if err == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(path)
+			if resolveErr != nil {
+				return snapshot, fmt.Errorf("resolve catalog manifest symlink: %w", resolveErr)
+			}
+			targetInfo, targetErr := os.Lstat(resolved)
+			if targetErr != nil {
+				return snapshot, fmt.Errorf("inspect catalog manifest symlink target: %w", targetErr)
+			}
+			if !targetInfo.Mode().IsRegular() {
+				return snapshot, fmt.Errorf("catalog manifest symlink target is not a regular file: %s", resolved)
+			}
+			snapshot.linkTargetPath = resolved
+			snapshot.linkTargetExists = true
+			snapshot.linkTarget = catalogSnapshotEntry{mode: targetInfo.Mode()}
+			snapshot.linkTarget.data, err = os.ReadFile(resolved)
+		}
 	} else if info.Mode().IsRegular() {
 		entry.data, err = os.ReadFile(path)
 	} else {
@@ -189,11 +215,28 @@ func restoreCatalogFile(path string, snapshot catalogTreeSnapshot) error {
 		return nil
 	}
 	entry := snapshot.entries["."]
+	if snapshot.linkTargetPath != "" {
+		if !snapshot.linkTargetExists {
+			if err := os.Remove(snapshot.linkTargetPath); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		} else {
+			if err := os.WriteFile(snapshot.linkTargetPath, snapshot.linkTarget.data, snapshot.linkTarget.mode.Perm()); err != nil {
+				return err
+			}
+			if err := os.Chmod(snapshot.linkTargetPath, snapshot.linkTarget.mode.Perm()); err != nil {
+				return err
+			}
+		}
+	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	if entry.mode&os.ModeSymlink != 0 {
 		return os.Symlink(entry.link, path)
 	}
-	return os.WriteFile(path, entry.data, entry.mode.Perm())
+	if err := os.WriteFile(path, entry.data, entry.mode.Perm()); err != nil {
+		return err
+	}
+	return os.Chmod(path, entry.mode.Perm())
 }

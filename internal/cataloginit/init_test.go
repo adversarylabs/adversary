@@ -222,6 +222,10 @@ func TestEnsureRunnableAdversaryUpgradesManagedV2Runtime(t *testing.T) {
 	if err != nil || strings.Contains(string(packageLock), "stale-runtime-2") || !strings.Contains(string(packageLock), `"yaml": "^2.8.1"`) {
 		t.Fatalf("runtime lockfile was not upgraded: %q err=%v", packageLock, err)
 	}
+	tsconfig, err := os.ReadFile(filepath.Join(dir, "tsconfig.json"))
+	if err != nil || !strings.Contains(string(tsconfig), `"outDir": "dist"`) {
+		t.Fatalf("runtime tsconfig was not restored: %q err=%v", tsconfig, err)
+	}
 }
 
 func TestCreateRefusesExistingDestination(t *testing.T) {

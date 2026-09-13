@@ -32,6 +32,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/score"
 	"github.com/adversarylabs/adversary/internal/train/securefs"
 	"github.com/adversarylabs/adversary/internal/train/state"
+	"gopkg.in/yaml.v3"
 )
 
 // Options for the first-slice end-to-end path.
@@ -1224,7 +1225,14 @@ func learnedRuleSummaries(packageDir string) string {
 		return ""
 	}
 	sort.Strings(paths)
-	var b strings.Builder
+	type learnedRuleEvidence struct {
+		Path     string `json:"path"`
+		ID       string `json:"id"`
+		Summary  string `json:"summary"`
+		Guidance string `json:"guidance"`
+	}
+	var summaries []learnedRuleEvidence
+	total := 0
 	for _, path := range paths {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -1234,12 +1242,27 @@ func learnedRuleSummaries(packageDir string) string {
 		if err != nil {
 			continue
 		}
-		fmt.Fprintf(&b, "%s:\n%s\n", filepath.ToSlash(rel), string(raw))
-		if b.Len() >= 8_000 {
+		var rule struct {
+			ID       string `yaml:"id"`
+			Summary  string `yaml:"summary"`
+			Guidance string `yaml:"guidance"`
+		}
+		if yaml.Unmarshal(raw, &rule) != nil {
+			continue
+		}
+		item := learnedRuleEvidence{
+			Path: filepath.ToSlash(rel), ID: truncate(rule.ID, 200),
+			Summary: truncate(rule.Summary, 800), Guidance: truncate(rule.Guidance, 2_000),
+		}
+		encoded, _ := json.Marshal(item)
+		if total+len(encoded) > 8_000 {
 			break
 		}
+		total += len(encoded)
+		summaries = append(summaries, item)
 	}
-	return b.String()
+	encoded, _ := json.Marshal(summaries)
+	return string(encoded)
 }
 
 func gradeOwners(c *cases.Case, primaryID string) map[string][]cases.ExpectedConcern {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -307,6 +308,9 @@ func rejectCoveredCatalogCandidate(ctx context.Context, provider application.Mod
 		Input:  input, Schema: catalogOverlapSchema, MaximumOutputTokens: 1_200, TimeoutMS: 120_000,
 	})
 	if err != nil {
+		if cancellation := catalogModelCancellation(ctx, err); cancellation != nil {
+			return cancellation
+		}
 		return fmt.Errorf("check current catalog for overlapping rules: %w", err)
 	}
 	if err := validateCatalogModelJSON(raw, catalogOverlapSchema); err != nil {
@@ -331,6 +335,16 @@ func rejectCoveredCatalogCandidate(ctx context.Context, provider application.Mod
 		reason = "the existing policy already checks the same changed-code condition"
 	}
 	return fmt.Errorf("candidate is already covered by %s: %s; no catalog pull request was created", owner, reason)
+}
+
+func catalogModelCancellation(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return nil
 }
 
 func evaluateGeneratedManagedCases(ctx context.Context, provider application.ModelReviewProvider, plan catalogapply.ChangePlan) error {
