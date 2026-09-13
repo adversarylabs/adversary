@@ -38,22 +38,23 @@ const (
 type ChangePlanner func(context.Context, ChangeRequest) (ChangePlan, error)
 
 type ChangeRequest struct {
-	CandidateID        string       `json:"candidate_id"`
-	Adversary          string       `json:"adversary"`
-	AdversaryMission   string       `json:"adversary_mission,omitempty"`
-	ProposedRule       string       `json:"proposed_rule"`
-	Evidence           string       `json:"evidence"`
-	EvidenceComment    string       `json:"evidence_comment"`
-	EvidenceFile       string       `json:"evidence_file,omitempty"`
-	EvidenceDiff       string       `json:"evidence_diff,omitempty"`
-	ExistingAdversary  bool         `json:"existing_adversary"`
-	Executable         bool         `json:"executable"`
-	PolicyDriven       bool         `json:"policy_driven"`
-	ManagedRuntime     int          `json:"managed_runtime,omitempty"`
-	Files              []SourceFile `json:"files"`
-	CatalogPolicies    []SourceFile `json:"catalog_policies,omitempty"`
-	ValidationFeedback string       `json:"validation_feedback,omitempty"`
-	PreviousPlanFiles  []string     `json:"previous_plan_files,omitempty"`
+	CandidateID        string           `json:"candidate_id"`
+	Adversary          string           `json:"adversary"`
+	AdversaryMission   string           `json:"adversary_mission,omitempty"`
+	ProposedRule       string           `json:"proposed_rule"`
+	Evidence           string           `json:"evidence"`
+	EvidenceComment    string           `json:"evidence_comment"`
+	EvidenceFile       string           `json:"evidence_file,omitempty"`
+	EvidenceDiff       string           `json:"evidence_diff,omitempty"`
+	ExistingAdversary  bool             `json:"existing_adversary"`
+	Executable         bool             `json:"executable"`
+	PolicyDriven       bool             `json:"policy_driven"`
+	ManagedRuntime     int              `json:"managed_runtime,omitempty"`
+	Files              []SourceFile     `json:"files"`
+	CatalogPolicies    []SourceFile     `json:"catalog_policies,omitempty"`
+	Progress           ProgressReporter `json:"-"`
+	ValidationFeedback string           `json:"validation_feedback,omitempty"`
+	PreviousPlanFiles  []string         `json:"previous_plan_files,omitempty"`
 }
 
 type SourceFile struct {
@@ -148,6 +149,7 @@ func applyPlannedCandidateWithProgress(ctx context.Context, workspaceRoot string
 		return "", "", err
 	}
 	request.ExistingAdversary = wasExisting
+	request.Progress = report
 	var target, pullRequestTitle string
 	for attempt := 0; attempt < maxPlanAttempts; attempt++ {
 		detail := "Writing a scoped rule bundle from the accepted evidence"

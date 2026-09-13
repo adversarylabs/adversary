@@ -29,7 +29,7 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
 	}
-	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Repositories ·", "Show all", "Hide all", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "job-tray", "job-dismiss", "Dismiss finished task", "JOB_RETENTION_MS", "/api/jobs/"} {
+	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Repositories ·", "Show all", "Hide all", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "Check existing catalog coverage", "Evaluate finding and no-finding cases", "job-tray", "job-dismiss", "Dismiss finished task", "JOB_RETENTION_MS", "/api/jobs/"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted %q", want)
 		}
