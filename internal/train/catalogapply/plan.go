@@ -288,8 +288,8 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			return "", fmt.Errorf("generated change exceeds %d bytes", maxPlanBytes)
 		}
 		relInAdversary := strings.TrimPrefix(clean, adversaryPrefix)
-		if request.PolicyDriven && (strings.HasPrefix(relInAdversary, "src/") || strings.HasPrefix(relInAdversary, "dist/") || relInAdversary == "adversary.yaml" || relInAdversary == "package.json" || relInAdversary == "package-lock.json") {
-			return "", fmt.Errorf("policy-driven catalog training may not rewrite the trusted runtime (%s)", clean)
+		if request.PolicyDriven && (strings.HasPrefix(relInAdversary, "dist/") || relInAdversary == "adversary.yaml" || relInAdversary == "package.json" || relInAdversary == "package-lock.json") {
+			return "", fmt.Errorf("policy-driven catalog training may not rewrite generated output or package metadata (%s)", clean)
 		}
 		base := filepath.Base(clean)
 		changed := existing[clean] != file.Content
@@ -324,7 +324,7 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 		} else if changed && (strings.Contains(strings.ToLower(base), "test") || strings.Contains(strings.ToLower(base), "spec")) {
 			regression = clean
 			nativeRegression = true
-			if strings.Contains(file.Content, "/src/index") && strings.Contains(file.Content, ".run(") {
+			if strings.Contains(file.Content, "/src/index") {
 				runtimeRegression = true
 			}
 		}
@@ -338,13 +338,16 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	if regression == "" {
 		return "", fmt.Errorf("generated change did not add regression coverage")
 	}
-	if request.Executable && !request.PolicyDriven && !implementation {
+	if request.Executable && !implementation {
 		return "", fmt.Errorf("generated change did not update the executable adversary implementation")
 	}
-	if request.Executable && !request.PolicyDriven && !nativeRegression {
+	if request.Executable && !nativeRegression {
 		return "", fmt.Errorf("generated change did not update the executable adversary's native tests")
 	}
-	if request.Executable && !request.PolicyDriven && newImplementation {
+	if request.Executable && request.PolicyDriven && !runtimeRegression {
+		return "", fmt.Errorf("generated policy-driven change did not add a native test through src/index")
+	}
+	if request.Executable && newImplementation {
 		entrypoint := adversaryPrefix + "src/index.ts"
 		if _, hasTypeScriptEntrypoint := finalSources[entrypoint]; hasTypeScriptEntrypoint {
 			reachable := reachableSourceFiles(finalSources, entrypoint)
@@ -359,7 +362,7 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			}
 		}
 	}
-	if request.Executable && !request.PolicyDriven && newImplementation && !runtimeRegression {
+	if request.Executable && newImplementation && !runtimeRegression {
 		return "", fmt.Errorf("generated change added an implementation module but did not add a runtime integration test through src/index")
 	}
 	for _, file := range plan.Files {
