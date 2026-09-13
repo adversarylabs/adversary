@@ -72,6 +72,15 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 			}
 		}
 	}
+	operability, err := os.ReadFile(filepath.Join(destination, "adversaries", "operability", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"User-facing errors", "concrete recovery step", "underlying cause", "leak secrets", "logs, metrics, and traces", "identifiers operators need"} {
+		if !strings.Contains(string(operability), want) {
+			t.Fatalf("operability brief missing %q:\n%s", want, operability)
+		}
+	}
 }
 
 func TestCreateRefusesExistingDestination(t *testing.T) {

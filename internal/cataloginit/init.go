@@ -77,10 +77,12 @@ var starterAdversaries = []starterAdversary{
 	{
 		Slug:    "operability",
 		Title:   "Operability",
-		Summary: "Make production failures visible, diagnosable, and recoverable.",
+		Summary: "Make failures clear to users and observable to operators through actionable errors, logs, metrics, and traces.",
 		ReviewFor: []string{
-			"Errors that discard actionable context or report success before work is durable.",
-			"Missing metrics, logs, or traces at important asynchronous and failure boundaries.",
+			"User-facing errors that do not say what failed, preserve safe relevant context, or offer a concrete recovery step.",
+			"Errors that discard the underlying cause, leak secrets, or report success before work is durable.",
+			"Missing or misleading logs, metrics, and traces at important asynchronous and failure boundaries.",
+			"Logs that omit the operation and identifiers operators need to diagnose a failure, or use a severity that hides or overstates it.",
 			"Health and recovery paths that cannot distinguish degraded, blocked, and failed work.",
 		},
 	},
