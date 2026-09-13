@@ -844,8 +844,9 @@ Valid ids: %s or empty
 	if r.CatalogTriage {
 		route := routeFromCatalogLLMDecisionForPath(out, eligible, path)
 		disposition := strings.ToLower(strings.TrimSpace(out.Disposition))
-		ownerPassEligible := disposition == "private_candidate" || (disposition == "unclear" && strings.TrimSpace(out.GeneralizedRule) != "")
-		if route.Decision == Unclear && ownerPassEligible && out.PrivateSpecific && out.Actionable && out.ChangeLocal {
+		privateCandidate := disposition == "private_candidate" && out.PrivateSpecific && out.Actionable && out.ChangeLocal
+		ownerPassEligible := privateCandidate || disposition == "unclear"
+		if route.Decision == Unclear && route.OwnerID == "" && ownerPassEligible {
 			secondPrompt := fmt.Sprintf(`The first private-catalog triage pass retained this as a real private candidate but did not assign an existing owner. Perform a focused ownership pass.
 
 Untrusted review evidence:
@@ -859,6 +860,15 @@ Choose the single best existing owner by the rule's primary failure mode. Close 
 			if secondErr == nil {
 				var second routeDecision
 				if json.Unmarshal(secondRaw, &second) == nil {
+					if disposition == "unclear" {
+						if owner := validCatalogOwner(strings.TrimSpace(second.OwnerID), eligible, path); owner != "" {
+							reason := strings.TrimSpace(second.Reason)
+							if reason == "" {
+								reason = route.Reason
+							}
+							return Route{OwnerID: owner, Decision: Unclear, Reason: reason, Method: "llm-owner-pass", GeneralizedRule: strings.TrimSpace(out.GeneralizedRule)}, nil
+						}
+					}
 					if second.Disposition == "" {
 						second.Disposition = "private_candidate"
 					}
@@ -891,7 +901,8 @@ func routeFromCatalogLLMDecisionForPath(out routeDecision, candidates []Candidat
 	case "noise", "general_public":
 		return Route{Decision: OutOfScope, Reason: disposition + ": " + reason, Method: "llm"}
 	case "unclear":
-		return Route{Decision: Unclear, Reason: reason, Method: "llm", GeneralizedRule: strings.TrimSpace(out.GeneralizedRule)}
+		owner := validCatalogOwner(strings.TrimSpace(out.OwnerID), candidates, path)
+		return Route{OwnerID: owner, Decision: Unclear, Reason: reason, Method: "llm", GeneralizedRule: strings.TrimSpace(out.GeneralizedRule)}
 	case "private_candidate":
 		if !out.PrivateSpecific || !out.Actionable || !out.ChangeLocal {
 			return Route{Decision: OutOfScope, Reason: "model gate: candidate is not private-specific, actionable, and change-local", Method: "llm"}
@@ -927,6 +938,22 @@ func routeFromCatalogLLMDecisionForPath(out routeDecision, candidates []Candidat
 	default:
 		return Route{Decision: OutOfScope, Reason: "model returned invalid catalog disposition", Method: "llm"}
 	}
+}
+
+func validCatalogOwner(owner string, candidates []Candidate, path string) string {
+	if owner == "" || owner == "empty" || owner == "none" || owner == "null" {
+		return ""
+	}
+	for _, candidate := range candidates {
+		if candidate.ID != owner {
+			continue
+		}
+		if ok, _ := candidateModelEligible(path, candidate); ok {
+			return owner
+		}
+		return ""
+	}
+	return ""
 }
 
 func routeFromLLMDecisionForPath(out routeDecision, candidates []Candidate, path string) Route {

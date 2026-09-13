@@ -94,6 +94,29 @@ func TestCatalogRouterRunsFocusedOwnerPassForPrivateCandidate(t *testing.T) {
 	}
 }
 
+func TestCatalogRouterNamesUnclearEvidenceWithoutApprovingIt(t *testing.T) {
+	calls := 0
+	r := &Router{
+		CatalogTriage: true,
+		UseLLM:        true,
+		Candidates: []Candidate{
+			{ID: "compatibility", Mission: "Preserve supported-version and API behavior contracts."},
+			{ID: "operability", Mission: "Keep failures actionable."},
+		},
+		CallLLM: func(string) ([]byte, error) {
+			calls++
+			if calls == 1 {
+				return []byte(`{"disposition":"unclear","private_specific":false,"owner_id":"","suggested_adversary":"","generalized_rule":"","reason":"The supported OS contract is not present in the bounded evidence.","material":true,"actionable":false,"change_local":false,"engineering_primary":false,"non_blocking":false}`), nil
+			}
+			return []byte(`{"disposition":"private_candidate","private_specific":true,"owner_id":"compatibility","suggested_adversary":"","generalized_rule":"Preserve the supported OS matrix.","reason":"Compatibility is the closest topical owner.","material":true,"actionable":true,"change_local":true,"engineering_primary":false,"non_blocking":false}`), nil
+		},
+	}
+	route := r.RouteComment("Are we intentionally dropping support for the previous OS release?", "images/versions.yaml", "reviewer")
+	if route.OwnerID != "compatibility" || route.Decision != Unclear || route.Method != "llm-owner-pass" || calls != 2 {
+		t.Fatalf("route=%+v calls=%d", route, calls)
+	}
+}
+
 func TestCatalogRouterDropsGeneralPublicConcernAfterModelTriage(t *testing.T) {
 	r := &Router{
 		Candidates:    []Candidate{{ID: "reliability-and-concurrency", Mission: "Reliability rules."}},
