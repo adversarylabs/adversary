@@ -152,19 +152,26 @@ func restoreCatalogTree(root string, snapshot catalogTreeSnapshot) error {
 
 func captureCatalogFile(path string) (catalogTreeSnapshot, error) {
 	snapshot := catalogTreeSnapshot{entries: map[string]catalogSnapshotEntry{}}
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return snapshot, nil
 	}
 	if err != nil {
 		return snapshot, err
 	}
-	raw, err := os.ReadFile(path)
+	snapshot.existed = true
+	entry := catalogSnapshotEntry{mode: info.Mode()}
+	if info.Mode()&os.ModeSymlink != 0 {
+		entry.link, err = os.Readlink(path)
+	} else if info.Mode().IsRegular() {
+		entry.data, err = os.ReadFile(path)
+	} else {
+		return snapshot, fmt.Errorf("unsupported catalog manifest type: %s", path)
+	}
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.existed = true
-	snapshot.entries["."] = catalogSnapshotEntry{mode: info.Mode(), data: raw}
+	snapshot.entries["."] = entry
 	return snapshot, nil
 }
 
@@ -176,5 +183,11 @@ func restoreCatalogFile(path string, snapshot catalogTreeSnapshot) error {
 		return nil
 	}
 	entry := snapshot.entries["."]
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if entry.mode&os.ModeSymlink != 0 {
+		return os.Symlink(entry.link, path)
+	}
 	return os.WriteFile(path, entry.data, entry.mode.Perm())
 }

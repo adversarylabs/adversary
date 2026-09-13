@@ -14,6 +14,7 @@ type Candidate struct {
 	ID            string
 	AdversaryName string // display / package id
 	Mission       string
+	LearnedRules  string
 	Languages     []string
 	FileGlobs     []string
 }
@@ -741,7 +742,11 @@ func (r *Router) routeLLM(body, path, author string, threadContext []ReviewThrea
 	var scopes strings.Builder
 	for _, c := range eligible {
 		ids = append(ids, c.ID)
-		fmt.Fprintf(&scopes, "### %s\nFile-surface evidence: %s\n%s\n\n", c.ID, eligibility[c.ID], truncate(c.Mission, 800))
+		fmt.Fprintf(&scopes, "### %s\nFile-surface evidence: %s\nMission:\n%s\n", c.ID, eligibility[c.ID], truncate(c.Mission, 1_200))
+		if strings.TrimSpace(c.LearnedRules) != "" {
+			fmt.Fprintf(&scopes, "Current learned rules:\n%s\n", truncate(c.LearnedRules, 1_600))
+		}
+		scopes.WriteString("\n")
 	}
 	reviewSummary := truncate(strings.TrimSpace(evidence.Summary), 800)
 	diffHunk := truncate(strings.TrimSpace(evidence.DiffHunk), 4_000)
@@ -771,6 +776,8 @@ func (r *Router) routeLLM(body, path, author string, threadContext []ReviewThrea
 - Praise, reactions, questions answered in-thread, author explanations, withdrawn concerns, verification-only reports, and no-action resolutions are disposition=noise
 - Nits may be valuable private conventions. Keep them only when they imply a reusable organization-specific preference; material may be false and non_blocking should be true
 - Choose an existing owner_id only when its mission genuinely fits. If a real private rule needs a category not listed, leave owner_id empty and set suggested_adversary to a concise kebab-case id
+- For every private candidate, actively select the best existing owner by its primary failure mode. A rule may be cross-cutting and still have one best owner. Do not leave owner_id empty merely because several missions are plausible
+- Use suggested_adversary only when none of the existing missions can express the reusable rule, not when the choice between two existing owners is close
 - Generalize private candidates into a self-contained rule that does not contain repository secrets, personal names, PR numbers, or incidental implementation details
 - Use disposition=unclear when the evidence is plausible but insufficient; unclear candidates remain available for human review
 `
@@ -835,7 +842,41 @@ Valid ids: %s or empty
 		}
 	}
 	if r.CatalogTriage {
-		return routeFromCatalogLLMDecisionForPath(out, eligible, path), nil
+		route := routeFromCatalogLLMDecisionForPath(out, eligible, path)
+		disposition := strings.ToLower(strings.TrimSpace(out.Disposition))
+		ownerPassEligible := disposition == "private_candidate" || (disposition == "unclear" && strings.TrimSpace(out.GeneralizedRule) != "")
+		if route.Decision == Unclear && ownerPassEligible && out.PrivateSpecific && out.Actionable && out.ChangeLocal {
+			secondPrompt := fmt.Sprintf(`The first private-catalog triage pass retained this as a real private candidate but did not assign an existing owner. Perform a focused ownership pass.
+
+Untrusted review evidence:
+%s
+
+Existing adversaries, missions, and learned rules:
+%s
+
+Choose the single best existing owner by the rule's primary failure mode. Close or cross-cutting choices still require the best existing owner. Propose a new adversary only when every existing mission is genuinely incapable of expressing the rule. Return the same catalog-triage JSON shape, preserving disposition=private_candidate and the generalized rule.`, string(untrustedEvidenceJSON), scopes.String())
+			secondRaw, secondErr := call(secondPrompt)
+			if secondErr == nil {
+				var second routeDecision
+				if json.Unmarshal(secondRaw, &second) == nil {
+					if second.Disposition == "" {
+						second.Disposition = "private_candidate"
+					}
+					second.PrivateSpecific, second.Actionable, second.ChangeLocal = true, true, true
+					if second.GeneralizedRule == "" {
+						second.GeneralizedRule = out.GeneralizedRule
+					}
+					if second.Reason == "" {
+						second.Reason = out.Reason
+					}
+					if resolved := routeFromCatalogLLMDecisionForPath(second, eligible, path); resolved.Decision == InScope {
+						resolved.Method = "llm-owner-pass"
+						return resolved, nil
+					}
+				}
+			}
+		}
+		return route, nil
 	}
 	return routeFromLLMDecisionForPath(out, eligible, path), nil
 }

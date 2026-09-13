@@ -68,6 +68,32 @@ func TestCatalogRouterUsesModelForPrivateSpecificTriage(t *testing.T) {
 	}
 }
 
+func TestCatalogRouterRunsFocusedOwnerPassForPrivateCandidate(t *testing.T) {
+	calls := 0
+	r := &Router{
+		CatalogTriage: true,
+		UseLLM:        true,
+		Candidates: []Candidate{
+			{ID: "operability", Mission: "Keep failures actionable with useful errors and logs.", LearnedRules: "actionable-errors: preserve recovery details"},
+			{ID: "engineering-conventions", Mission: "Preserve organization-specific naming, layout, and testing conventions."},
+		},
+		CallLLM: func(prompt string) ([]byte, error) {
+			calls++
+			if calls == 1 {
+				if !strings.Contains(prompt, "actionable-errors") {
+					t.Fatalf("routing prompt omitted learned rules: %s", prompt)
+				}
+				return []byte(`{"disposition":"private_candidate","private_specific":true,"owner_id":"","suggested_adversary":"","generalized_rule":"Preserve internal error codes in user-facing failures.","reason":"Private error contract.","material":true,"actionable":true,"change_local":true,"engineering_primary":false,"non_blocking":false}`), nil
+			}
+			return []byte(`{"disposition":"private_candidate","private_specific":true,"owner_id":"operability","suggested_adversary":"","generalized_rule":"Preserve internal error codes in user-facing failures.","reason":"Operability owns actionable user failures.","material":true,"actionable":true,"change_local":true,"engineering_primary":false,"non_blocking":false}`), nil
+		},
+	}
+	route := r.RouteComment("Keep our deployment error code in this API response so support can diagnose it.", "api/errors.go", "reviewer")
+	if route.OwnerID != "operability" || route.Decision != InScope || route.Method != "llm-owner-pass" || calls != 2 {
+		t.Fatalf("route=%+v calls=%d", route, calls)
+	}
+}
+
 func TestCatalogRouterDropsGeneralPublicConcernAfterModelTriage(t *testing.T) {
 	r := &Router{
 		Candidates:    []Candidate{{ID: "reliability-and-concurrency", Mission: "Reliability rules."}},

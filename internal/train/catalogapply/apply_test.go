@@ -392,6 +392,107 @@ func TestExecCommandKeepsAbsoluteLaunchersSiblingRuntimeOnPATH(t *testing.T) {
 	}
 }
 
+func TestCatalogRollbackRestoresManifestSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior requires elevated privileges on some Windows hosts")
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "real-manifest.yaml")
+	manifest := filepath.Join(root, "adversarylabs.yaml")
+	if err := os.WriteFile(target, []byte("original\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real-manifest.yaml", manifest); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := captureCatalogFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte("generated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreCatalogFile(manifest, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	link, err := os.Readlink(manifest)
+	if err != nil || link != "real-manifest.yaml" {
+		t.Fatalf("restored manifest link=%q err=%v", link, err)
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil || string(raw) != "original\n" {
+		t.Fatalf("symlink target changed: %q err=%v", raw, err)
+	}
+}
+
+func TestRunnableValidationDoesNotMutatePackageDependencies(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "adversary")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"package.json":      `{"scripts":{"test":"true"}}`,
+		"package-lock.json": `{"lockfileVersion":3}`,
+		"adversary.yaml":    "name: private/test\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := func(_ context.Context, commandDir, name string, args ...string) ([]byte, error) {
+		if name == "npm" && len(args) > 0 && args[0] == "ci" {
+			dependency := filepath.Join(commandDir, "node_modules", "generated", "index.js")
+			if err := os.MkdirAll(filepath.Dir(dependency), 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(dependency, []byte("generated"), 0o644); err != nil {
+				return nil, err
+			}
+		}
+		return []byte("ok"), nil
+	}
+	if err := validateRunnablePackage(context.Background(), dir, runner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("validation mutated source package: %v", err)
+	}
+}
+
+func TestReadCatalogPoliciesIncludesEveryAdversaryAndLearnedRule(t *testing.T) {
+	root := t.TempDir()
+	adversaries := filepath.Join(root, "adversaries")
+	for path, content := range map[string]string{
+		"operability/README.md":                         "# Operability",
+		"operability/rules/actionable-errors/rule.yaml": "id: actionable-errors",
+		"compatibility/README.md":                       "# Compatibility",
+		"compatibility/src/index.ts":                    "ignored",
+	} {
+		full := filepath.Join(adversaries, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := readCatalogPolicies(root, adversaries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("catalog policy files=%+v", files)
+	}
+	for _, file := range files {
+		if strings.HasSuffix(file.Path, "src/index.ts") {
+			t.Fatalf("implementation leaked into overlap corpus: %+v", files)
+		}
+	}
+}
+
 func regressionYAML(request ChangeRequest) string {
 	return "version: 1\n" +
 		"candidate_id: " + request.CandidateID + "\n" +

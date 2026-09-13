@@ -1210,11 +1210,36 @@ func routerCandidates(pkgs []adversaries.Package) []scope.Candidate {
 			ID:            pkg.ID,
 			AdversaryName: pkg.ID,
 			Mission:       pkg.ScopeMarkdown,
+			LearnedRules:  learnedRuleSummaries(pkg.Dir),
 			Languages:     pkg.Languages,
 			FileGlobs:     pkg.FileGlobs,
 		})
 	}
 	return candidates
+}
+
+func learnedRuleSummaries(packageDir string) string {
+	paths, err := filepath.Glob(filepath.Join(packageDir, "rules", "*", "rule.yaml"))
+	if err != nil || len(paths) == 0 {
+		return ""
+	}
+	sort.Strings(paths)
+	var b strings.Builder
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(packageDir, path)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(&b, "%s:\n%s\n", filepath.ToSlash(rel), string(raw))
+		if b.Len() >= 8_000 {
+			break
+		}
+	}
+	return b.String()
 }
 
 func gradeOwners(c *cases.Case, primaryID string) map[string][]cases.ExpectedConcern {

@@ -98,7 +98,7 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 		}
 	}
 	packageJSON, err := os.ReadFile(filepath.Join(destination, "adversaries", "operability", "package.json"))
-	if err != nil || !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 2`) {
+	if err != nil || !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 3`) {
 		t.Fatalf("managed runtime package=%q err=%v", packageJSON, err)
 	}
 	source, err := os.ReadFile(filepath.Join(destination, "adversaries", "operability", "src", "index.ts"))
@@ -183,11 +183,39 @@ func TestUpgradeReplacesOnlyManagedV1RuntimeFiles(t *testing.T) {
 	packageJSON, _ := os.ReadFile(filepath.Join(dir, "package.json"))
 	source, _ := os.ReadFile(filepath.Join(dir, "src", "index.ts"))
 	readme, _ := os.ReadFile(filepath.Join(dir, "README.md"))
-	if !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 2`) || !strings.Contains(string(source), "loadLearnedRules") {
+	if !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 3`) || !strings.Contains(string(source), "loadLearnedRules") {
 		t.Fatalf("runtime was not upgraded: package=%s source=%s", packageJSON, source)
 	}
 	if !strings.Contains(string(readme), "Keep failures actionable") {
 		t.Fatalf("policy changed: %s", readme)
+	}
+}
+
+func TestEnsureRunnableAdversaryUpgradesManagedV2Runtime(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"README.md":       "# Operability\n\n## Purpose\n\nKeep failures actionable.\n",
+		"adversary.yaml":  "name: private/operability\n",
+		"package.json":    `{"adversarylabsCatalogRuntime": 2}`,
+		"src/index.ts":    "// managed v2\n",
+		"dist/index.js":   "// managed v2\n",
+		"dist/index.d.ts": "// managed v2\n",
+	} {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upgraded, err := EnsureRunnableAdversary(dir, "operability")
+	if err != nil || !upgraded {
+		t.Fatalf("upgraded=%v err=%v", upgraded, err)
+	}
+	packageJSON, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil || !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 3`) {
+		t.Fatalf("runtime was not upgraded: %q err=%v", packageJSON, err)
 	}
 }
 

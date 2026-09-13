@@ -29,6 +29,8 @@ const (
 	maxPlanFiles    = 16
 	maxPlanBytes    = 512 << 10
 	maxPlanAttempts = 3
+	maxPolicyFiles  = 500
+	maxPolicyBytes  = 1 << 20
 )
 
 // ChangePlanner turns reviewed evidence plus the current adversary source into
@@ -49,6 +51,7 @@ type ChangeRequest struct {
 	PolicyDriven       bool         `json:"policy_driven"`
 	ManagedRuntime     int          `json:"managed_runtime,omitempty"`
 	Files              []SourceFile `json:"files"`
+	CatalogPolicies    []SourceFile `json:"catalog_policies,omitempty"`
 	ValidationFeedback string       `json:"validation_feedback,omitempty"`
 	PreviousPlanFiles  []string     `json:"previous_plan_files,omitempty"`
 }
@@ -154,6 +157,10 @@ func applyPlannedCandidateWithProgress(ctx context.Context, workspaceRoot string
 		emit("generate", "running", detail)
 		plan, err := planner(ctx, request)
 		if err != nil {
+			if attempt < maxPlanAttempts-1 && isRetryablePlanError(err) {
+				request.ValidationFeedback = strings.TrimSpace(request.ValidationFeedback + " " + err.Error() + ". Regenerate the complete change and correct this problem.")
+				continue
+			}
 			return "", "", fmt.Errorf("generate substantive adversary change: %w", err)
 		}
 		emit("generate", "complete", "Rule implementation generated")
@@ -208,12 +215,62 @@ func buildChangeRequest(workspaceRoot string, cfg workspace.Config, row results.
 	if err != nil {
 		return ChangeRequest{}, "", "", err
 	}
+	catalogPolicies, err := readCatalogPolicies(workspaceRoot, root)
+	if err != nil {
+		return ChangeRequest{}, "", "", err
+	}
 	return ChangeRequest{
 		CandidateID: row.ID, Adversary: row.Package, AdversaryMission: row.AdversaryMission,
 		ProposedRule: row.ProposedRule, Evidence: evidenceURL(row), EvidenceComment: row.Summary,
 		EvidenceFile: row.File, EvidenceDiff: row.DiffHunk, ExistingAdversary: exists,
-		Executable: executable, PolicyDriven: policyDriven, ManagedRuntime: managedRuntime, Files: files,
+		Executable: executable, PolicyDriven: policyDriven, ManagedRuntime: managedRuntime, Files: files, CatalogPolicies: catalogPolicies,
 	}, root, dir, nil
+}
+
+func readCatalogPolicies(workspaceRoot, root string) ([]SourceFile, error) {
+	var files []SourceFile
+	total := 0
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path != root && (entry.Name() == "node_modules" || entry.Name() == "dist" || entry.Name() == ".git") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		relRoot, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		cleanRoot := filepath.ToSlash(relRoot)
+		parts := strings.Split(cleanRoot, "/")
+		include := len(parts) == 2 && parts[1] == "README.md"
+		include = include || (len(parts) == 4 && parts[1] == "rules" && parts[3] == "rule.yaml")
+		if !include || len(files) >= maxPolicyFiles || total >= maxPolicyBytes {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if len(raw) > 64<<10 || total+len(raw) > maxPolicyBytes {
+			return nil
+		}
+		relWorkspace, err := filepath.Rel(workspaceRoot, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, SourceFile{Path: filepath.ToSlash(relWorkspace), Content: string(raw)})
+		total += len(raw)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read catalog policies: %w", err)
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, nil
 }
 
 func readAdversaryFiles(workspaceRoot, dir string) ([]SourceFile, bool, bool, int, error) {
@@ -657,6 +714,23 @@ func quoteRegressionScalars(raw []byte) []byte {
 var nowUTC = func() time.Time { return time.Now().UTC() }
 
 func validateRunnablePackage(ctx context.Context, dir string, run commandRunner) error {
+	snapshot, err := captureCatalogTree(dir)
+	if err != nil {
+		return fmt.Errorf("prepare isolated adversary validation: %w", err)
+	}
+	tempRoot, err := os.MkdirTemp("", "adversary-catalog-validate-")
+	if err != nil {
+		return fmt.Errorf("prepare isolated adversary validation: %w", err)
+	}
+	defer os.RemoveAll(tempRoot)
+	isolated := filepath.Join(tempRoot, "package")
+	if err := restoreCatalogTree(isolated, snapshot); err != nil {
+		return fmt.Errorf("prepare isolated adversary validation: %w", err)
+	}
+	return validateRunnablePackageInPlace(ctx, isolated, run)
+}
+
+func validateRunnablePackageInPlace(ctx context.Context, dir string, run commandRunner) error {
 	type step struct {
 		name string
 		args []string
