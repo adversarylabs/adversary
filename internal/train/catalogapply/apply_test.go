@@ -2,6 +2,7 @@ package catalogapply
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -109,7 +110,8 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 	runner := func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 		if name == "gh" {
 			calledGH = true
-			if !strings.Contains(strings.Join(args, " "), "--base main") {
+			joined := strings.Join(args, " ")
+			if !strings.Contains(joined, "--base main") || !strings.Contains(joined, "--title Add actionable error checks to operability") {
 				t.Fatalf("gh args=%q", args)
 			}
 			return []byte("https://github.com/acme/catalog/pull/17\n"), nil
@@ -163,8 +165,12 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 	}
 	manifest := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/adversary.yaml")
 	source := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/src/index.ts")
+	commitTitle := strings.TrimSpace(runGit(t, "", "--git-dir", remote, "log", "-1", "--format=%s", "refs/heads/"+row.Branch))
 	if !strings.Contains(manifest, "runtime:") || !strings.Contains(source, "reviewPolicy") {
 		t.Fatalf("generated adversary is not runnable:\n%s\n%s", manifest, source)
+	}
+	if commitTitle != "Add actionable error checks to operability" {
+		t.Fatalf("commit title=%q", commitTitle)
 	}
 	tree := runGit(t, "", "--git-dir", remote, "ls-tree", "-r", "--name-only", "refs/heads/"+row.Branch)
 	if strings.Contains(tree, "node_modules/") {
@@ -176,7 +182,44 @@ func managedRulePlan(request ChangeRequest, id string) ChangePlan {
 	rule := fmt.Sprintf("version: 1\nid: %s\nsummary: Return actionable recovery details to users.\nguidance: Report changed code that hides a concrete failure; allow code that preserves actionable detail.\nseverity: medium\nconfidence: high\nevidence: %s\n", id, request.Evidence)
 	cases := fmt.Sprintf("version: 1\nrule_id: %s\ncandidate_id: %s\nevidence: %s\ncases:\n  - name: hidden failure\n    review_input: The exact changed path hides the failure.\n    expected: finding\n    reason: The user cannot recover.\n  - name: actionable failure\n    review_input: The change displays the cause and recovery step.\n    expected: no_finding\n    reason: The error is actionable.\n", id, request.CandidateID, request.Evidence)
 	base := "adversaries/" + request.Adversary + "/rules/" + id + "/"
-	return ChangePlan{Summary: "Teach actionable failures", Files: []ChangeFile{{Path: base + "rule.yaml", Content: rule}, {Path: base + "cases.yaml", Content: cases}}}
+	return ChangePlan{Summary: "Add actionable error checks to " + request.Adversary, Files: []ChangeFile{{Path: base + "rule.yaml", Content: rule}, {Path: base + "cases.yaml", Content: cases}}}
+}
+
+func TestCatalogPullRequestTitleFallsBackToSpecificRule(t *testing.T) {
+	row := results.Result{Package: "engineering-conventions", ProposedRule: "Prevent seedData from being re-invented."}
+	if got, want := catalogPullRequestTitle(row, ""), "Update engineering-conventions: Prevent seedData from being re-invented"; got != want {
+		t.Fatalf("title=%q want %q", got, want)
+	}
+}
+
+func TestApplyPlannedRollsBackNewAdversaryWhenGenerationFails(t *testing.T) {
+	root, state := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "adversaries"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "adversarylabs.yaml")
+	manifest := []byte("apiVersion: adversarylabs.dev/v1alpha1\nkind: AdversaryCatalog\nspec:\n  adversaries: []\n")
+	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	saveResult(t, state, results.Result{
+		ID: "candidate-rollback", Package: "release-contracts", ProposedRule: "Keep release channels synchronized.",
+		AdversaryMission: "Protect private release channel contracts.",
+	})
+	cfg := workspace.Config{Adversaries: workspace.AdversariesConfig{Root: filepath.Join(root, "adversaries")}}
+	err := ApplyPlanned(context.Background(), state, root, cfg, "candidate-rollback", func(context.Context, ChangeRequest) (ChangePlan, error) {
+		return ChangePlan{}, errors.New("model unavailable")
+	})
+	if err == nil || !strings.Contains(err.Error(), "model unavailable") {
+		t.Fatalf("err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "adversaries", "release-contracts")); !os.IsNotExist(err) {
+		t.Fatalf("failed generation left scaffold behind: %v", err)
+	}
+	gotManifest, err := os.ReadFile(manifestPath)
+	if err != nil || string(gotManifest) != string(manifest) {
+		t.Fatalf("manifest changed after rollback: %q err=%v", gotManifest, err)
+	}
 }
 
 func TestApplyPlannedRejectsBookkeepingOnlyChange(t *testing.T) {
@@ -191,7 +234,7 @@ func TestApplyPlannedRejectsBookkeepingOnlyChange(t *testing.T) {
 	saveResult(t, state, results.Result{ID: "candidate-4", Package: "operability", ProposedRule: "Show actionable errors."})
 	cfg := workspace.Config{Adversaries: workspace.AdversariesConfig{Root: filepath.Join(root, "adversaries")}}
 	planner := func(context.Context, ChangeRequest) (ChangePlan, error) {
-		return ChangePlan{Files: []ChangeFile{
+		return ChangePlan{Summary: "Add actionable error checks to operability", Files: []ChangeFile{
 			{Path: "adversaries/operability/README.md", Content: "# Operability\n\n## Learned rules\n- Show actionable errors.\n"},
 			{Path: "adversaries/operability/notes.md", Content: "candidate-4\n"},
 		}}, nil
@@ -239,7 +282,7 @@ func TestApplyPlannedRetriesDisconnectedImplementation(t *testing.T) {
 				ChangeFile{Path: "adversaries/migrations/test/naming-runtime.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nvoid createApp().run({});\n"},
 			)
 		}
-		return ChangePlan{Summary: "Add migration naming", Files: files}, nil
+		return ChangePlan{Summary: "Enforce migration naming in migrations", Files: files}, nil
 	}
 	if _, err := applyPlannedCandidate(context.Background(), root, cfg, row, planner); err != nil {
 		t.Fatal(err)
@@ -295,7 +338,7 @@ func TestApplyPlannedCorrectsReplacedTestAndEvidencePath(t *testing.T) {
 			}
 			files = append(files, ChangeFile{Path: "adversaries/conventions/test/app-spec-metadata.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nconst evidencePath = \"gen/gen/kots_default_specs/LICENSE\";\nif (!evidencePath || !createApp().learnedRule) throw new Error(\"rule is not executable\");\n"})
 		}
-		return ChangePlan{Summary: "Add caller convention", Files: files}, nil
+		return ChangePlan{Summary: "Enforce caller conventions in conventions", Files: files}, nil
 	}
 	if _, err := applyPlannedCandidate(context.Background(), root, cfg, row, planner); err != nil {
 		t.Fatal(err)

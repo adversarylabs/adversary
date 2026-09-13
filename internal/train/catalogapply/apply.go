@@ -169,11 +169,11 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	if err != nil {
 		return err
 	}
-	var target string
+	var target, generatedTitle string
 	if planner == nil {
 		target, err = applyCandidate(targetWorkspace, worktreeConfig, row)
 	} else {
-		target, err = applyPlannedCandidateWithProgress(ctx, targetWorkspace, worktreeConfig, row, planner, report)
+		target, generatedTitle, err = applyPlannedCandidateWithProgress(ctx, targetWorkspace, worktreeConfig, row, planner, report)
 	}
 	if err != nil {
 		return err
@@ -200,7 +200,7 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	if strings.TrimSpace(string(changed)) == "" {
 		return fmt.Errorf("candidate %s produced no catalog change", row.ID)
 	}
-	commitTitle := "Train " + row.Package + " from review evidence"
+	commitTitle := catalogPullRequestTitle(row, generatedTitle)
 	if _, err := requireCommand(ctx, run, worktree, "git", "commit", "-m", commitTitle); err != nil {
 		return fmt.Errorf("commit catalog change: %w", err)
 	}
@@ -234,6 +234,22 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	}
 	emit("pull_request", "complete", prURL)
 	return nil
+}
+
+func catalogPullRequestTitle(row results.Result, generated string) string {
+	title := strings.Join(strings.Fields(generated), " ")
+	if title != "" {
+		return title
+	}
+	title = "Update " + row.Package + " adversary rules"
+	if rule := strings.TrimRight(strings.Join(strings.Fields(row.ProposedRule), " "), "."); rule != "" {
+		title = "Update " + row.Package + ": " + rule
+	}
+	runes := []rune(title)
+	if len(runes) > 120 {
+		title = strings.TrimSpace(string(runes[:119])) + "…"
+	}
+	return title
 }
 
 func configForWorktree(cfg workspace.Config, sourceWorkspace, targetWorkspace string) (workspace.Config, error) {

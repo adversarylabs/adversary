@@ -3,6 +3,7 @@ package catalogapply
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -69,16 +70,26 @@ type ChangeFile struct {
 
 // ApplyPlanned updates the current checkout with a substantive model-planned
 // adversary change. It does not commit the result.
-func ApplyPlanned(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner) error {
+func ApplyPlanned(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner) (returnErr error) {
 	row, err := results.Get(stateRoot, id)
 	if err != nil {
 		return err
 	}
-	target, err := applyPlannedCandidate(ctx, workspaceRoot, cfg, row, planner)
+	root, err := adversaryRoot(workspaceRoot, cfg)
 	if err != nil {
 		return err
 	}
-	root, err := adversaryRoot(workspaceRoot, cfg)
+	rollback, err := snapshotCatalogChange(filepath.Join(root, row.Package), filepath.Join(workspaceRoot, "adversarylabs.yaml"))
+	if err != nil {
+		return fmt.Errorf("snapshot catalog before applying candidate: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			returnErr = errors.Join(returnErr, rollback())
+		}
+	}()
+	target, err := applyPlannedCandidate(ctx, workspaceRoot, cfg, row, planner)
 	if err != nil {
 		return err
 	}
@@ -88,48 +99,53 @@ func ApplyPlanned(ctx context.Context, stateRoot, workspaceRoot string, cfg work
 	row.Status = results.StatusApplied
 	row.AppliedAt = nowUTC()
 	row.AppliedPath = target
-	return results.SaveResult(stateRoot, row)
+	if err := results.SaveResult(stateRoot, row); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func applyPlannedCandidate(ctx context.Context, workspaceRoot string, cfg workspace.Config, row results.Result, planner ChangePlanner) (string, error) {
-	return applyPlannedCandidateWithProgress(ctx, workspaceRoot, cfg, row, planner, nil)
+	target, _, err := applyPlannedCandidateWithProgress(ctx, workspaceRoot, cfg, row, planner, nil)
+	return target, err
 }
 
-func applyPlannedCandidateWithProgress(ctx context.Context, workspaceRoot string, cfg workspace.Config, row results.Result, planner ChangePlanner, report ProgressReporter) (string, error) {
+func applyPlannedCandidateWithProgress(ctx context.Context, workspaceRoot string, cfg workspace.Config, row results.Result, planner ChangePlanner, report ProgressReporter) (string, string, error) {
 	emit := func(stage, state, detail string) {
 		if report != nil {
 			report(Progress{Stage: stage, State: state, Detail: detail})
 		}
 	}
 	if planner == nil {
-		return "", fmt.Errorf("catalog change generation needs a configured model provider")
+		return "", "", fmt.Errorf("catalog change generation needs a configured model provider")
 	}
 	if err := validateCandidate(row); err != nil {
-		return "", err
+		return "", "", err
 	}
 	root, err := adversaryRoot(workspaceRoot, cfg)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	dir := filepath.Join(root, row.Package)
 	_, policyErr := os.Stat(filepath.Join(dir, "README.md"))
 	wasExisting := policyErr == nil
 	if os.IsNotExist(policyErr) {
 		if err := createAdversary(dir, row.Package, row.AdversaryMission); err != nil {
-			return "", err
+			return "", "", err
 		}
 	} else if policyErr != nil {
-		return "", policyErr
+		return "", "", policyErr
 	}
 	if _, err := cataloginit.EnsureRunnableAdversary(dir, row.Package); err != nil {
-		return "", fmt.Errorf("make catalog adversary runnable: %w", err)
+		return "", "", fmt.Errorf("make catalog adversary runnable: %w", err)
 	}
 	request, root, dir, err := buildChangeRequest(workspaceRoot, cfg, row)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	request.ExistingAdversary = wasExisting
-	var target string
+	var target, pullRequestTitle string
 	for attempt := 0; attempt < maxPlanAttempts; attempt++ {
 		detail := "Writing a scoped rule bundle from the accepted evidence"
 		if attempt > 0 {
@@ -138,17 +154,18 @@ func applyPlannedCandidateWithProgress(ctx context.Context, workspaceRoot string
 		emit("generate", "running", detail)
 		plan, err := planner(ctx, request)
 		if err != nil {
-			return "", fmt.Errorf("generate substantive adversary change: %w", err)
+			return "", "", fmt.Errorf("generate substantive adversary change: %w", err)
 		}
 		emit("generate", "complete", "Rule implementation generated")
 		emit("test", "running", "Writing and checking regression cases")
 		target, err = writeChangePlan(workspaceRoot, root, dir, row, request, plan)
 		if err == nil {
+			pullRequestTitle = strings.TrimSpace(plan.Summary)
 			emit("test", "complete", "Regression cases added from the original review evidence")
 			break
 		}
 		if attempt == maxPlanAttempts-1 || !isRetryablePlanError(err) {
-			return "", err
+			return "", "", err
 		}
 		request.ValidationFeedback = strings.TrimSpace(request.ValidationFeedback + " " + err.Error() + ". Regenerate the complete change and correct this problem.")
 		request.PreviousPlanFiles = request.PreviousPlanFiles[:0]
@@ -158,10 +175,10 @@ func applyPlannedCandidateWithProgress(ctx context.Context, workspaceRoot string
 	}
 	if !request.ExistingAdversary {
 		if err := addManifestEntry(filepath.Join(workspaceRoot, "adversarylabs.yaml"), row.Package, row.AdversaryMission); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
-	return target, nil
+	return target, pullRequestTitle, nil
 }
 
 func isRetryablePlanError(err error) bool {
@@ -274,6 +291,10 @@ type regressionSpec struct {
 }
 
 func writeChangePlan(workspaceRoot, root, dir string, row results.Result, request ChangeRequest, plan ChangePlan) (string, error) {
+	title := strings.Join(strings.Fields(plan.Summary), " ")
+	if title == "" || len(title) > 120 || !strings.Contains(strings.ToLower(title), strings.ToLower(row.Package)) || strings.Contains(strings.ToLower(title), "review evidence") {
+		return "", fmt.Errorf("generated change must include a specific pull-request title of at most 120 characters that names %s and does not say review evidence", row.Package)
+	}
 	if len(plan.Files) < 2 || len(plan.Files) > maxPlanFiles {
 		return "", fmt.Errorf("generated change must contain an operative adversary edit and regression coverage (got %d files)", len(plan.Files))
 	}
