@@ -115,9 +115,10 @@ workflows.
 ## Starter adversaries
 
 The initializer includes a small set of editable seeds for concerns shared by
-most production systems. They are starting policies, not claims about your
-architecture. Keep the relevant ones, remove the others, and let accepted
-review examples make them specific to your team:
+most production systems. Each is a runnable model-backed adversary whose README
+is its operative private review policy, not a claim about your architecture.
+Keep the relevant ones, remove the others, and let accepted review examples
+make them specific to your team:
 
 `
 
@@ -177,7 +178,10 @@ func catalogFiles() map[string]string {
 	for _, adversary := range starterAdversaries {
 		fmt.Fprintf(&manifest, "    - id: %s\n      path: adversaries/%s\n      summary: %s\n", adversary.Slug, adversary.Slug, adversary.Summary)
 		fmt.Fprintf(&readme, "- [%s](adversaries/%s/README.md) — %s\n", adversary.Title, adversary.Slug, adversary.Summary)
-		files[filepath.ToSlash(filepath.Join("adversaries", adversary.Slug, "README.md"))] = renderStarterAdversary(adversary)
+		prefix := filepath.ToSlash(filepath.Join("adversaries", adversary.Slug))
+		for name, content := range runnableAdversaryFiles(adversary.Slug, adversary.Summary, renderStarterAdversary(adversary)) {
+			files[prefix+"/"+name] = content
+		}
 	}
 	readme.WriteString(readmeFooter)
 	files["adversarylabs.yaml"] = manifest.String()

@@ -127,6 +127,15 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	if err != nil {
 		return err
 	}
+	if planner != nil {
+		packageRoot, rootErr := adversaryRoot(targetWorkspace, worktreeConfig)
+		if rootErr != nil {
+			return rootErr
+		}
+		if err := validateRunnablePackage(ctx, filepath.Join(packageRoot, row.Package), run); err != nil {
+			return err
+		}
+	}
 	if _, err := requireCommand(ctx, run, worktree, "git", "add", "-A"); err != nil {
 		return fmt.Errorf("stage catalog change: %w", err)
 	}

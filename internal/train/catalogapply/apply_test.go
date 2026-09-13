@@ -114,6 +114,9 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 			}
 			return []byte("https://github.com/acme/catalog/pull/17\n"), nil
 		}
+		if name == "npm" || (len(args) > 0 && (args[0] == "validate" || args[0] == "pack")) {
+			return []byte("ok\n"), nil
+		}
 		command := exec.CommandContext(ctx, name, args...)
 		command.Dir = dir
 		return command.CombinedOutput()
@@ -145,6 +148,11 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 	regression := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/tests/candidate-3.yaml")
 	if !strings.Contains(regression, "expected: no_finding") || !strings.Contains(regression, "discussion_r4") {
 		t.Fatalf("proposed regression:\n%s", regression)
+	}
+	manifest := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/adversary.yaml")
+	source := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/src/index.ts")
+	if !strings.Contains(manifest, "runtime:") || !strings.Contains(source, "reviewPolicy") {
+		t.Fatalf("generated adversary is not runnable:\n%s\n%s", manifest, source)
 	}
 }
 

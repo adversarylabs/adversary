@@ -87,6 +87,17 @@ adversary catalog train accept <id>
 adversary catalog train dismiss <id>
 ```
 
+Catalogs created by older CLI versions may contain README-only routing policies.
+Upgrade them in place without replacing those policies:
+
+```sh
+adversary catalog upgrade
+```
+
+The command adds a locked, model-backed runtime, manifest, built entrypoint,
+and executable tests to each README-only entry. New `catalog init` repositories
+contain these runnable packages from the start.
+
 Bare `inspect` starts a token-authenticated server on a random localhost port
 and opens the browser review queue. Its left nav includes new, accepted, and
 dismissed candidates. The detail view shows PR and comment authors and supports
@@ -106,7 +117,9 @@ regression coverage; executable adversaries must also update their implementatio
 fetches the remote default branch, creates an isolated temporary worktree and a
 candidate-specific branch, asks the configured model to integrate the rule and
 create positive and negative regression cases, validates the shape of that
-change, commits it, pushes the branch, and opens a GitHub pull request with `gh`;
+change, installs locked dependencies, runs the package build and tests, runs
+`adversary validate` and `adversary pack --check`, then commits it, pushes the
+branch, and opens a GitHub pull request with `gh`;
 it never switches or writes catalog files in the current checkout. Selecting a
 finding updates the browser URL, so refresh and browser back/forward preserve
 your place. **Approve for later** records the decision in SQLite for a later

@@ -31,6 +31,13 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 		"adversaries/compatibility/README.md",
 		"adversaries/operability/README.md",
 		"adversaries/engineering-conventions/README.md",
+		"adversaries/tenant-and-access-boundaries/adversary.yaml",
+		"adversaries/tenant-and-access-boundaries/package.json",
+		"adversaries/tenant-and-access-boundaries/package-lock.json",
+		"adversaries/tenant-and-access-boundaries/src/index.ts",
+		"adversaries/tenant-and-access-boundaries/dist/index.js",
+		"adversaries/tenant-and-access-boundaries/test/index.test.ts",
+		"adversaries/tenant-and-access-boundaries/docs/scope.md",
 		"evaluations/.gitkeep",
 		"exceptions/.gitkeep",
 	} {
@@ -71,6 +78,11 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 				t.Fatalf("%s brief missing %q", adversary.Slug, want)
 			}
 		}
+		for _, name := range []string{"adversary.yaml", "package.json", "package-lock.json", "src/index.ts", "dist/index.js", "test/index.test.ts", "docs/scope.md"} {
+			if _, err := os.Stat(filepath.Join(destination, "adversaries", adversary.Slug, filepath.FromSlash(name))); err != nil {
+				t.Fatalf("%s is not runnable; missing %s: %v", adversary.Slug, name, err)
+			}
+		}
 	}
 	operability, err := os.ReadFile(filepath.Join(destination, "adversaries", "operability", "README.md"))
 	if err != nil {
@@ -80,6 +92,41 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 		if !strings.Contains(string(operability), want) {
 			t.Fatalf("operability brief missing %q:\n%s", want, operability)
 		}
+	}
+}
+
+func TestUpgradePreservesPoliciesAndMakesEntriesRunnable(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "adversarylabs.yaml"), []byte("kind: AdversaryCatalog\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "adversaries", "operability")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	policy := "# Operability\n\n## Purpose\n\nKeep failures actionable.\n"
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(policy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Upgrade(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Upgraded) != 1 || result.Upgraded[0] != "operability" {
+		t.Fatalf("result=%+v", result)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil || string(raw) != policy {
+		t.Fatalf("README changed: %q err=%v", raw, err)
+	}
+	for _, name := range []string{"adversary.yaml", "package.json", "src/index.ts", "dist/index.js", "test/index.test.ts"} {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(name))); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+	}
+	again, err := Upgrade(root)
+	if err != nil || len(again.Upgraded) != 0 {
+		t.Fatalf("second upgrade=%+v err=%v", again, err)
 	}
 }
 

@@ -44,6 +44,8 @@ type Projects interface {
 	RenderInit(io.Writer, ProjectInitResult, string)
 	InitCatalog(CatalogInitOptions) (CatalogInitResult, error)
 	RenderCatalogInit(io.Writer, CatalogInitResult)
+	UpgradeCatalog(CatalogUpgradeOptions) (CatalogUpgradeResult, error)
+	RenderCatalogUpgrade(io.Writer, CatalogUpgradeResult)
 	Validate(context.Context, string, Resolver) (ProjectValidation, error)
 	Check(pack.Options) (pack.Preflight, error)
 	Pack(context.Context, pack.Options) (pack.Artifact, error)
@@ -55,6 +57,11 @@ type ProjectInitOptions struct{ Destination, SDK string }
 type ProjectInitResult struct{ Location, SDK string }
 type CatalogInitOptions struct{ Destination string }
 type CatalogInitResult struct{ Location string }
+type CatalogUpgradeOptions struct{ Path string }
+type CatalogUpgradeResult struct {
+	Location string
+	Upgraded []string
+}
 type ProjectValidation struct {
 	Path, Name, Runtime string
 }

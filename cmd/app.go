@@ -71,6 +71,13 @@ func (processProjects) InitCatalog(opts application.CatalogInitOptions) (applica
 func (p processProjects) RenderCatalogInit(w io.Writer, result application.CatalogInitResult) {
 	cataloginit.RenderSuccess(w, cataloginit.Result{Location: result.Location}, p.platform)
 }
+func (processProjects) UpgradeCatalog(opts application.CatalogUpgradeOptions) (application.CatalogUpgradeResult, error) {
+	result, err := cataloginit.Upgrade(opts.Path)
+	return application.CatalogUpgradeResult{Location: result.Location, Upgraded: result.Upgraded}, err
+}
+func (processProjects) RenderCatalogUpgrade(w io.Writer, result application.CatalogUpgradeResult) {
+	cataloginit.RenderUpgradeSuccess(w, cataloginit.UpgradeResult{Location: result.Location, Upgraded: result.Upgraded})
+}
 func (processProjects) Validate(ctx context.Context, value string, resolver application.Resolver) (application.ProjectValidation, error) {
 	path, err := filepath.Abs(value)
 	if err != nil {

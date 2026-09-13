@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/cataloginit"
 	"github.com/adversarylabs/adversary/internal/train/results"
 	"github.com/adversarylabs/adversary/internal/train/workspace"
 	"gopkg.in/yaml.v3"
@@ -37,6 +38,7 @@ type ChangeRequest struct {
 	EvidenceDiff      string       `json:"evidence_diff,omitempty"`
 	ExistingAdversary bool         `json:"existing_adversary"`
 	Executable        bool         `json:"executable"`
+	PolicyDriven      bool         `json:"policy_driven"`
 	Files             []SourceFile `json:"files"`
 }
 
@@ -66,6 +68,13 @@ func ApplyPlanned(ctx context.Context, stateRoot, workspaceRoot string, cfg work
 	if err != nil {
 		return err
 	}
+	root, err := adversaryRoot(workspaceRoot, cfg)
+	if err != nil {
+		return err
+	}
+	if err := validateRunnablePackage(ctx, filepath.Join(root, row.Package), execCommand); err != nil {
+		return err
+	}
 	row.Status = results.StatusApplied
 	row.AppliedAt = nowUTC()
 	row.AppliedPath = target
@@ -79,10 +88,28 @@ func applyPlannedCandidate(ctx context.Context, workspaceRoot string, cfg worksp
 	if err := validateCandidate(row); err != nil {
 		return "", err
 	}
+	root, err := adversaryRoot(workspaceRoot, cfg)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, row.Package)
+	_, policyErr := os.Stat(filepath.Join(dir, "README.md"))
+	wasExisting := policyErr == nil
+	if os.IsNotExist(policyErr) {
+		if err := createAdversary(dir, row.Package, row.AdversaryMission); err != nil {
+			return "", err
+		}
+	} else if policyErr != nil {
+		return "", policyErr
+	}
+	if _, err := cataloginit.EnsureRunnableAdversary(dir, row.Package); err != nil {
+		return "", fmt.Errorf("make catalog adversary runnable: %w", err)
+	}
 	request, root, dir, err := buildChangeRequest(workspaceRoot, cfg, row)
 	if err != nil {
 		return "", err
 	}
+	request.ExistingAdversary = wasExisting
 	plan, err := planner(ctx, request)
 	if err != nil {
 		return "", fmt.Errorf("generate substantive adversary change: %w", err)
@@ -117,7 +144,7 @@ func buildChangeRequest(workspaceRoot string, cfg workspace.Config, row results.
 	if !exists && strings.TrimSpace(row.AdversaryMission) == "" {
 		return ChangeRequest{}, "", "", fmt.Errorf("new adversary %q needs a mission before it can be created", row.Package)
 	}
-	files, executable, err := readAdversaryFiles(workspaceRoot, dir)
+	files, executable, policyDriven, err := readAdversaryFiles(workspaceRoot, dir)
 	if err != nil {
 		return ChangeRequest{}, "", "", err
 	}
@@ -125,17 +152,18 @@ func buildChangeRequest(workspaceRoot string, cfg workspace.Config, row results.
 		CandidateID: row.ID, Adversary: row.Package, AdversaryMission: row.AdversaryMission,
 		ProposedRule: row.ProposedRule, Evidence: evidenceURL(row), EvidenceComment: row.Summary,
 		EvidenceFile: row.File, EvidenceDiff: row.DiffHunk, ExistingAdversary: exists,
-		Executable: executable, Files: files,
+		Executable: executable, PolicyDriven: policyDriven, Files: files,
 	}, root, dir, nil
 }
 
-func readAdversaryFiles(workspaceRoot, dir string) ([]SourceFile, bool, error) {
+func readAdversaryFiles(workspaceRoot, dir string) ([]SourceFile, bool, bool, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 	var files []SourceFile
 	total := 0
 	executable := false
+	policyDriven := false
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -149,7 +177,7 @@ func readAdversaryFiles(workspaceRoot, dir string) ([]SourceFile, bool, error) {
 		if len(files) >= maxSourceFiles || total >= maxSourceBytes {
 			return nil
 		}
-		if entry.Type()&os.ModeSymlink != 0 || strings.HasSuffix(entry.Name(), ".lock") {
+		if entry.Type()&os.ModeSymlink != 0 || strings.HasSuffix(entry.Name(), ".lock") || entry.Name() == "package-lock.json" {
 			return nil
 		}
 		raw, err := os.ReadFile(path)
@@ -167,15 +195,18 @@ func readAdversaryFiles(workspaceRoot, dir string) ([]SourceFile, bool, error) {
 		if name == "package.json" || name == "go.mod" || name == "pyproject.toml" {
 			executable = true
 		}
+		if name == "package.json" && strings.Contains(string(raw), `"adversarylabsCatalogRuntime"`) {
+			policyDriven = true
+		}
 		files = append(files, SourceFile{Path: filepath.ToSlash(rel), Content: string(raw)})
 		total += len(raw)
 		return nil
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("read adversary source: %w", err)
+		return nil, false, false, fmt.Errorf("read adversary source: %w", err)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	return files, executable, nil
+	return files, executable, policyDriven, nil
 }
 
 type regressionSpec struct {
@@ -225,6 +256,9 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			return "", fmt.Errorf("generated change exceeds %d bytes", maxPlanBytes)
 		}
 		relInAdversary := strings.TrimPrefix(clean, adversaryPrefix)
+		if request.PolicyDriven && (strings.HasPrefix(relInAdversary, "src/") || strings.HasPrefix(relInAdversary, "dist/") || relInAdversary == "adversary.yaml" || relInAdversary == "package.json" || relInAdversary == "package-lock.json") {
+			return "", fmt.Errorf("policy-driven catalog training may not rewrite the trusted runtime (%s)", clean)
+		}
 		base := filepath.Base(clean)
 		changed := existing[clean] != file.Content
 		if changed && (base == "README.md" || relInAdversary == "agent/scope.md" || relInAdversary == "docs/scope.md") {
@@ -249,10 +283,10 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	if regression == "" {
 		return "", fmt.Errorf("generated change did not add regression coverage")
 	}
-	if request.Executable && !implementation {
+	if request.Executable && !request.PolicyDriven && !implementation {
 		return "", fmt.Errorf("generated change did not update the executable adversary implementation")
 	}
-	if request.Executable && !nativeRegression {
+	if request.Executable && !request.PolicyDriven && !nativeRegression {
 		return "", fmt.Errorf("generated change did not update the executable adversary's native tests")
 	}
 	for _, file := range plan.Files {
@@ -297,3 +331,36 @@ func validateRegression(raw []byte, row results.Result) error {
 }
 
 var nowUTC = func() time.Time { return time.Now().UTC() }
+
+func validateRunnablePackage(ctx context.Context, dir string, run commandRunner) error {
+	type step struct {
+		name string
+		args []string
+		what string
+	}
+	var steps []step
+	if _, err := os.Stat(filepath.Join(dir, "package.json")); err == nil {
+		steps = append(steps,
+			step{name: "npm", args: []string{"ci", "--ignore-scripts"}, what: "install locked adversary dependencies"},
+			step{name: "npm", args: []string{"test"}, what: "build and test generated adversary"},
+		)
+	} else if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		steps = append(steps, step{name: "go", args: []string{"test", "./..."}, what: "build and test generated adversary"})
+	} else {
+		return fmt.Errorf("generated adversary has no supported runnable package (package.json or go.mod)")
+	}
+	cli, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate adversary CLI for validation: %w", err)
+	}
+	steps = append(steps,
+		step{name: cli, args: []string{"validate", "."}, what: "validate generated adversary"},
+		step{name: cli, args: []string{"pack", ".", "--check"}, what: "check generated adversary package"},
+	)
+	for _, current := range steps {
+		if _, err := requireCommand(ctx, run, dir, current.name, current.args...); err != nil {
+			return fmt.Errorf("%s: %w", current.what, err)
+		}
+	}
+	return nil
+}

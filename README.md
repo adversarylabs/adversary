@@ -80,6 +80,13 @@ adversary catalog train inspect <id>
 adversary catalog train accept <id>
 ```
 
+Catalogs initialized before runnable private starters were introduced can be
+updated in place while preserving their policies:
+
+```sh
+adversary catalog upgrade
+```
+
 For an exhaustive, resumable repository scan, set a date boundary and remove
 the normal candidate limits:
 

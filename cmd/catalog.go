@@ -25,6 +25,7 @@ func newCatalogCommand(app *application.App) *cobra.Command {
 		Short: "Manage a private adversary catalog",
 	}
 	command.AddCommand(newCatalogInitCommand(app))
+	command.AddCommand(newCatalogUpgradeCommand(app))
 	command.AddCommand(newCatalogTrainCommand(app))
 	return command
 }
@@ -396,6 +397,31 @@ exist.`,
 				return err
 			}
 			app.Dependencies().Projects.RenderCatalogInit(cmd.OutOrStdout(), result)
+			return nil
+		},
+	}
+}
+
+func newCatalogUpgradeCommand(app *application.App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "upgrade [path]",
+		Short: "Upgrade README-only catalog entries into runnable adversaries",
+		Long: `Preserve existing private policies while adding the model-backed runtime,
+manifest, build output, and tests required to run every catalog entry as an adversary.
+Existing runnable adversaries are left unchanged.`,
+		Example: `  adversary catalog upgrade
+  adversary catalog upgrade ../security/private-adversaries`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := "."
+			if len(args) == 1 {
+				path = args[0]
+			}
+			result, err := app.Dependencies().Projects.UpgradeCatalog(application.CatalogUpgradeOptions{Path: path})
+			if err != nil {
+				return err
+			}
+			app.Dependencies().Projects.RenderCatalogUpgrade(cmd.OutOrStdout(), result)
 			return nil
 		},
 	}
