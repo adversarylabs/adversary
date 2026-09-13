@@ -22,10 +22,11 @@ import (
 )
 
 const (
-	maxSourceFiles = 40
-	maxSourceBytes = 240 << 10
-	maxPlanFiles   = 16
-	maxPlanBytes   = 512 << 10
+	maxSourceFiles  = 40
+	maxSourceBytes  = 240 << 10
+	maxPlanFiles    = 16
+	maxPlanBytes    = 512 << 10
+	maxPlanAttempts = 3
 )
 
 // ChangePlanner turns reviewed evidence plus the current adversary source into
@@ -118,7 +119,7 @@ func applyPlannedCandidate(ctx context.Context, workspaceRoot string, cfg worksp
 	}
 	request.ExistingAdversary = wasExisting
 	var target string
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < maxPlanAttempts; attempt++ {
 		plan, err := planner(ctx, request)
 		if err != nil {
 			return "", fmt.Errorf("generate substantive adversary change: %w", err)
@@ -127,10 +128,10 @@ func applyPlannedCandidate(ctx context.Context, workspaceRoot string, cfg worksp
 		if err == nil {
 			break
 		}
-		if attempt == 1 || !isRetryablePlanError(err) {
+		if attempt == maxPlanAttempts-1 || !isRetryablePlanError(err) {
 			return "", err
 		}
-		request.ValidationFeedback = err.Error() + ". Regenerate the complete change and correct this problem."
+		request.ValidationFeedback = strings.TrimSpace(request.ValidationFeedback + " " + err.Error() + ". Regenerate the complete change and correct this problem.")
 		request.PreviousPlanFiles = request.PreviousPlanFiles[:0]
 		for _, file := range plan.Files {
 			request.PreviousPlanFiles = append(request.PreviousPlanFiles, file.Path)
@@ -262,6 +263,7 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	total, operative, regression := 0, "", ""
 	implementation, nativeRegression := false, false
 	newImplementation, runtimeRegression := false, false
+	evidencePathRegression := strings.TrimSpace(request.EvidenceFile) == ""
 	var newSourcePaths []string
 	finalSources := make(map[string]string)
 	for path, content := range existing {
@@ -321,11 +323,17 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			}
 			file.Content = string(canonical)
 			regression = clean
-		} else if changed && (strings.Contains(strings.ToLower(base), "test") || strings.Contains(strings.ToLower(base), "spec")) {
+		} else if changed && isNativeTestPath(relInAdversary) {
+			if _, existed := existing[clean]; existed {
+				return "", fmt.Errorf("generated change replaced existing native test %s; add a new focused test file instead", clean)
+			}
 			regression = clean
 			nativeRegression = true
 			if strings.Contains(file.Content, "/src/index") {
 				runtimeRegression = true
+			}
+			if strings.Contains(file.Content, request.EvidenceFile) {
+				evidencePathRegression = true
 			}
 		}
 	}
@@ -342,10 +350,13 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 		return "", fmt.Errorf("generated change did not update the executable adversary implementation")
 	}
 	if request.Executable && !nativeRegression {
-		return "", fmt.Errorf("generated change did not update the executable adversary's native tests")
+		return "", fmt.Errorf("generated change did not add a focused native test file for the executable adversary")
+	}
+	if request.Executable && !evidencePathRegression {
+		return "", fmt.Errorf("generated change native test does not exercise the exact evidence path %q", request.EvidenceFile)
 	}
 	if request.Executable && request.PolicyDriven && !runtimeRegression {
-		return "", fmt.Errorf("generated policy-driven change did not add a native test through src/index")
+		return "", fmt.Errorf("generated change for policy-driven adversary did not add a native test through src/index")
 	}
 	if request.Executable && newImplementation {
 		entrypoint := adversaryPrefix + "src/index.ts"
@@ -376,6 +387,14 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	}
 	_ = root // retained in the signature to make the trust boundary explicit.
 	return filepath.Join(workspaceRoot, filepath.FromSlash(operative)), nil
+}
+
+func isNativeTestPath(path string) bool {
+	clean := strings.ToLower(filepath.ToSlash(path))
+	base := filepath.Base(clean)
+	return strings.HasPrefix(clean, "test/") || strings.HasPrefix(clean, "tests/") ||
+		strings.Contains(clean, "/__tests__/") || strings.Contains(base, ".test.") ||
+		strings.Contains(base, ".spec.") || strings.HasSuffix(base, "_test.go")
 }
 
 var sourceImportPattern = regexp.MustCompile(`(?m)(?:from\s+|import\s*(?:\(\s*)?)["'](\.[^"']+)["']`)

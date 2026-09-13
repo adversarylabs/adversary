@@ -103,20 +103,17 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 	})
 	calledGH := false
 	planner := func(_ context.Context, request ChangeRequest) (ChangePlan, error) {
-		var source, nativeTest string
+		var source string
 		for _, file := range request.Files {
-			switch file.Path {
-			case "adversaries/operability/src/index.ts":
+			if file.Path == "adversaries/operability/src/index.ts" {
 				source = file.Content
-			case "adversaries/operability/test/index.test.ts":
-				nativeTest = file.Content
 			}
 		}
 		return ChangePlan{Summary: "Teach actionable failures", Files: []ChangeFile{
 			{Path: "adversaries/operability/README.md", Content: "# Operability\n\n## Review for\n\n- Return actionable recovery details to users.\n"},
 			{Path: "adversaries/operability/tests/candidate-3.yaml", Content: regressionYAML(request)},
 			{Path: "adversaries/operability/src/index.ts", Content: source + "\nexport const ACTIONABLE_FAILURE_RULE = \"Return actionable recovery details to users.\";\n"},
-			{Path: "adversaries/operability/test/index.test.ts", Content: nativeTest + "\n// Runtime regression imports the operative src/index entry point.\n"},
+			{Path: "adversaries/operability/test/candidate-3.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nvoid createApp().run({});\n"},
 		}}, nil
 	}
 	runner := func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
@@ -242,7 +239,7 @@ func TestApplyPlannedRetriesDisconnectedImplementation(t *testing.T) {
 			}
 			files = append(files,
 				ChangeFile{Path: "adversaries/migrations/src/index.ts", Content: "import { checksNaming } from \"./naming.js\";\nexport function createApp() { return { checksNaming }; }\n"},
-				ChangeFile{Path: "adversaries/migrations/test/index.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nvoid createApp().run({});\n"},
+				ChangeFile{Path: "adversaries/migrations/test/naming-runtime.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nvoid createApp().run({});\n"},
 			)
 		}
 		return ChangePlan{Summary: "Add migration naming", Files: files}, nil
@@ -259,7 +256,7 @@ func TestApplyPlannedRetriesDisconnectedImplementation(t *testing.T) {
 	}
 }
 
-func TestApplyPlannedRetriesPolicyAndFixtureOnlyChange(t *testing.T) {
+func TestApplyPlannedCorrectsReplacedTestAndEvidencePath(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "adversaries", "conventions")
 	for path, content := range map[string]string{
@@ -277,31 +274,37 @@ func TestApplyPlannedRetriesPolicyAndFixtureOnlyChange(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	row := results.Result{ID: "candidate-policy", Package: "conventions", ProposedRule: "Call established APIs directly."}
+	row := results.Result{ID: "candidate-policy", Package: "conventions", ProposedRule: "Keep metadata out of app specs.", File: "gen/gen/kots_default_specs/LICENSE"}
 	cfg := workspace.Config{Adversaries: workspace.AdversariesConfig{Root: filepath.Join(root, "adversaries")}}
 	calls := 0
 	planner := func(_ context.Context, request ChangeRequest) (ChangePlan, error) {
 		calls++
 		files := []ChangeFile{
-			{Path: "adversaries/conventions/README.md", Content: "# Conventions\n\n- Call established APIs directly.\n"},
+			{Path: "adversaries/conventions/README.md", Content: "# Conventions\n\n- Keep metadata out of app specs.\n"},
 			{Path: "adversaries/conventions/tests/candidate-policy.yaml", Content: regressionYAML(request)},
+			{Path: "adversaries/conventions/src/index.ts", Content: "export function createApp() { return { learnedRule: \"Keep metadata out of app specs.\", run() {} }; }\n"},
 		}
-		if calls == 2 {
-			if !strings.Contains(request.ValidationFeedback, "did not update the executable adversary implementation") {
-				t.Fatalf("retry request lacks implementation feedback: %+v", request)
+		switch calls {
+		case 1:
+			files = append(files, ChangeFile{Path: "adversaries/conventions/test/index.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nvoid createApp().run();\n"})
+		case 2:
+			if !strings.Contains(request.ValidationFeedback, "replaced existing native test") {
+				t.Fatalf("retry request lacks preservation feedback: %+v", request)
 			}
-			files = append(files,
-				ChangeFile{Path: "adversaries/conventions/src/index.ts", Content: "export function createApp() { return { learnedRule: \"Call established APIs directly.\", run() {} }; }\n"},
-				ChangeFile{Path: "adversaries/conventions/test/index.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nconst app = createApp();\nif (!app.learnedRule) throw new Error(\"rule is not executable\");\nvoid app.run();\n"},
-			)
+			files = append(files, ChangeFile{Path: "adversaries/conventions/test/app-spec-metadata.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nconst evidencePath = \"gen/app-specs/LICENSE\";\nif (!evidencePath || !createApp().learnedRule) throw new Error(\"rule is not executable\");\n"})
+		case 3:
+			if !strings.Contains(request.ValidationFeedback, "replaced existing native test") || !strings.Contains(request.ValidationFeedback, "exact evidence path") {
+				t.Fatalf("retry request did not retain validation feedback: %+v", request)
+			}
+			files = append(files, ChangeFile{Path: "adversaries/conventions/test/app-spec-metadata.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nconst evidencePath = \"gen/gen/kots_default_specs/LICENSE\";\nif (!evidencePath || !createApp().learnedRule) throw new Error(\"rule is not executable\");\n"})
 		}
 		return ChangePlan{Summary: "Add caller convention", Files: files}, nil
 	}
 	if _, err := applyPlannedCandidate(context.Background(), root, cfg, row, planner); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 2 {
-		t.Fatalf("planner calls=%d want 2", calls)
+	if calls != 3 {
+		t.Fatalf("planner calls=%d want 3", calls)
 	}
 	source, err := os.ReadFile(filepath.Join(dir, "src", "index.ts"))
 	if err != nil || !strings.Contains(string(source), "learnedRule") {
