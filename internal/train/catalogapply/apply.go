@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/train/results"
@@ -18,6 +19,7 @@ import (
 )
 
 var safeID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+var catalogGitMu sync.Mutex
 
 // Apply writes one approved rule into its adversary source and marks the inbox
 // row applied. The caller owns any later git commit or pull request.
@@ -40,13 +42,25 @@ func Apply(_ context.Context, stateRoot, workspaceRoot string, cfg workspace.Con
 // remote default branch, commits it, pushes it, and opens a GitHub pull request.
 // It never switches or writes catalog files in the caller's current checkout.
 func CreatePullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string) error {
-	return createPullRequest(ctx, stateRoot, workspaceRoot, cfg, id, nil, execCommand)
+	return createPullRequest(ctx, stateRoot, workspaceRoot, cfg, id, nil, execCommand, nil)
 }
 
 // CreatePullRequestPlanned generates a substantive adversary change in the
 // isolated worktree before committing and proposing it.
 func CreatePullRequestPlanned(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner) error {
-	return createPullRequest(ctx, stateRoot, workspaceRoot, cfg, id, planner, execCommand)
+	return CreatePullRequestPlannedWithProgress(ctx, stateRoot, workspaceRoot, cfg, id, planner, nil)
+}
+
+type Progress struct {
+	Stage  string `json:"stage"`
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type ProgressReporter func(Progress)
+
+func CreatePullRequestPlannedWithProgress(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner, report ProgressReporter) error {
+	return createPullRequest(ctx, stateRoot, workspaceRoot, cfg, id, planner, execCommand, report)
 }
 
 type commandRunner func(context.Context, string, string, ...string) ([]byte, error)
@@ -76,7 +90,13 @@ func prependPath(environment []string, directory string) []string {
 	return append(append([]string(nil), environment...), prefix+directory)
 }
 
-func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner, run commandRunner) error {
+func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner, run commandRunner, report ProgressReporter) error {
+	emit := func(stage, state, detail string) {
+		if report != nil {
+			report(Progress{Stage: stage, State: state, Detail: detail})
+		}
+	}
+	emit("bootstrap", "running", "Preparing an isolated catalog branch")
 	row, err := results.Get(stateRoot, id)
 	if err != nil {
 		return err
@@ -102,6 +122,13 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	if err != nil || workspaceRelative == ".." || strings.HasPrefix(workspaceRelative, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("catalog workspace is outside its Git repository")
 	}
+	catalogGitMu.Lock()
+	gitSetupLocked := true
+	defer func() {
+		if gitSetupLocked {
+			catalogGitMu.Unlock()
+		}
+	}()
 	if _, err := requireCommand(ctx, run, gitRoot, "git", "fetch", "origin"); err != nil {
 		return fmt.Errorf("refresh catalog default branch: %w", err)
 	}
@@ -120,6 +147,8 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	branch := pullRequestBranch(row)
 	added := false
 	defer func() {
+		catalogGitMu.Lock()
+		defer catalogGitMu.Unlock()
 		if added {
 			_, _ = run(context.Background(), gitRoot, "git", "worktree", "remove", "--force", worktree)
 			_, _ = run(context.Background(), gitRoot, "git", "branch", "-D", branch)
@@ -131,6 +160,9 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 		return fmt.Errorf("create isolated catalog branch: %w", err)
 	}
 	added = true
+	catalogGitMu.Unlock()
+	gitSetupLocked = false
+	emit("bootstrap", "complete", "Isolated branch ready")
 
 	targetWorkspace := filepath.Join(worktree, workspaceRelative)
 	worktreeConfig, err := configForWorktree(cfg, canonicalWorkspace, targetWorkspace)
@@ -141,12 +173,13 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	if planner == nil {
 		target, err = applyCandidate(targetWorkspace, worktreeConfig, row)
 	} else {
-		target, err = applyPlannedCandidate(ctx, targetWorkspace, worktreeConfig, row, planner)
+		target, err = applyPlannedCandidateWithProgress(ctx, targetWorkspace, worktreeConfig, row, planner, report)
 	}
 	if err != nil {
 		return err
 	}
 	if planner != nil {
+		emit("validate", "running", "Building and testing the generated adversary")
 		packageRoot, rootErr := adversaryRoot(targetWorkspace, worktreeConfig)
 		if rootErr != nil {
 			return rootErr
@@ -154,7 +187,9 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 		if err := validateRunnablePackage(ctx, filepath.Join(packageRoot, row.Package), run); err != nil {
 			return err
 		}
+		emit("validate", "complete", "Build, tests, validation, and package checks passed")
 	}
+	emit("commit", "running", "Committing the reviewed catalog change")
 	if _, err := requireCommand(ctx, run, worktree, "git", "add", "-A", "--", ".", ":(glob,exclude)**/node_modules/**", ":(glob,exclude)**/.adversary/**"); err != nil {
 		return fmt.Errorf("stage catalog change: %w", err)
 	}
@@ -169,9 +204,13 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	if _, err := requireCommand(ctx, run, worktree, "git", "commit", "-m", commitTitle); err != nil {
 		return fmt.Errorf("commit catalog change: %w", err)
 	}
+	emit("commit", "complete", "Catalog change committed")
+	emit("push", "running", "Pushing the isolated catalog branch")
 	if _, err := requireCommand(ctx, run, worktree, "git", "push", "origin", "HEAD:refs/heads/"+branch); err != nil {
 		return fmt.Errorf("push catalog branch: %w", err)
 	}
+	emit("push", "complete", "Catalog branch pushed")
+	emit("pull_request", "running", "Opening the catalog pull request")
 	body := pullRequestBody(row)
 	created, err := requireCommand(ctx, run, worktree, "gh", "pr", "create", "--base", baseBranch, "--head", branch, "--title", commitTitle, "--body", body)
 	if err != nil {
@@ -193,6 +232,7 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	if err := results.SaveResult(stateRoot, row); err != nil {
 		return fmt.Errorf("pull request created at %s, but its inbox record could not be updated: %w", prURL, err)
 	}
+	emit("pull_request", "complete", prURL)
 	return nil
 }
 

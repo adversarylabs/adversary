@@ -2,6 +2,7 @@ package catalogapply
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,18 +104,7 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 	})
 	calledGH := false
 	planner := func(_ context.Context, request ChangeRequest) (ChangePlan, error) {
-		var source string
-		for _, file := range request.Files {
-			if file.Path == "adversaries/operability/src/index.ts" {
-				source = file.Content
-			}
-		}
-		return ChangePlan{Summary: "Teach actionable failures", Files: []ChangeFile{
-			{Path: "adversaries/operability/README.md", Content: "# Operability\n\n## Review for\n\n- Return actionable recovery details to users.\n"},
-			{Path: "adversaries/operability/tests/candidate-3.yaml", Content: regressionYAML(request)},
-			{Path: "adversaries/operability/src/index.ts", Content: source + "\nexport const ACTIONABLE_FAILURE_RULE = \"Return actionable recovery details to users.\";\n"},
-			{Path: "adversaries/operability/test/candidate-3.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nvoid createApp().run({});\n"},
-		}}, nil
+		return managedRulePlan(request, "actionable-errors"), nil
 	}
 	runner := func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 		if name == "gh" {
@@ -146,7 +136,7 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 	// Absolute catalog roots must be safely rebased into the temporary worktree,
 	// never followed back into the current checkout.
 	cfg := workspace.Config{Adversaries: workspace.AdversariesConfig{Root: filepath.Join(root, "adversaries")}}
-	if err := createPullRequest(context.Background(), state, root, cfg, "candidate-3", planner, runner); err != nil {
+	if err := createPullRequest(context.Background(), state, root, cfg, "candidate-3", planner, runner, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !calledGH {
@@ -160,14 +150,14 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Status != results.StatusProposed || row.CatalogPRURL != "https://github.com/acme/catalog/pull/17" || row.Branch == "" || row.AppliedPath != "adversaries/operability/README.md" {
+	if row.Status != results.StatusProposed || row.CatalogPRURL != "https://github.com/acme/catalog/pull/17" || row.Branch == "" || row.AppliedPath != "adversaries/operability/rules/actionable-errors/rule.yaml" {
 		t.Fatalf("row=%+v", row)
 	}
-	proposed := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/README.md")
+	proposed := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/rules/actionable-errors/rule.yaml")
 	if !strings.Contains(proposed, "Return actionable recovery details") {
 		t.Fatalf("proposed policy:\n%s", proposed)
 	}
-	regression := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/tests/candidate-3.yaml")
+	regression := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/rules/actionable-errors/cases.yaml")
 	if !strings.Contains(regression, "expected: no_finding") || !strings.Contains(regression, "discussion_r4") {
 		t.Fatalf("proposed regression:\n%s", regression)
 	}
@@ -180,6 +170,13 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 	if strings.Contains(tree, "node_modules/") {
 		t.Fatalf("catalog PR committed installed dependencies:\n%s", tree)
 	}
+}
+
+func managedRulePlan(request ChangeRequest, id string) ChangePlan {
+	rule := fmt.Sprintf("version: 1\nid: %s\nsummary: Return actionable recovery details to users.\nguidance: Report changed code that hides a concrete failure; allow code that preserves actionable detail.\nseverity: medium\nconfidence: high\nevidence: %s\n", id, request.Evidence)
+	cases := fmt.Sprintf("version: 1\nrule_id: %s\ncandidate_id: %s\nevidence: %s\ncases:\n  - name: hidden failure\n    review_input: The exact changed path hides the failure.\n    expected: finding\n    reason: The user cannot recover.\n  - name: actionable failure\n    review_input: The change displays the cause and recovery step.\n    expected: no_finding\n    reason: The error is actionable.\n", id, request.CandidateID, request.Evidence)
+	base := "adversaries/" + request.Adversary + "/rules/" + id + "/"
+	return ChangePlan{Summary: "Teach actionable failures", Files: []ChangeFile{{Path: base + "rule.yaml", Content: rule}, {Path: base + "cases.yaml", Content: cases}}}
 }
 
 func TestApplyPlannedRejectsBookkeepingOnlyChange(t *testing.T) {
@@ -200,7 +197,7 @@ func TestApplyPlannedRejectsBookkeepingOnlyChange(t *testing.T) {
 		}}, nil
 	}
 	err := ApplyPlanned(context.Background(), state, root, cfg, "candidate-4", planner)
-	if err == nil || !strings.Contains(err.Error(), "regression coverage") {
+	if err == nil || !strings.Contains(err.Error(), "managed rule") {
 		t.Fatalf("expected regression error, got %v", err)
 	}
 }

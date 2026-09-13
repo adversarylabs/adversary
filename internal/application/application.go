@@ -180,7 +180,13 @@ type CatalogReviewOptions struct {
 	Output      io.Writer
 	Assist      func(context.Context, CatalogAssistRequest) (CatalogAssistResult, error)
 	Apply       func(context.Context, string) error
-	CreatePR    func(context.Context, string) error
+	CreatePR    func(context.Context, string, func(CatalogProgress)) error
+}
+
+type CatalogProgress struct {
+	Stage  string `json:"stage"`
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
 }
 
 type CatalogAssistRequest struct {

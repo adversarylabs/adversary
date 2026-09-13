@@ -214,9 +214,17 @@ func (p processRuntime) ReviewCatalog(ctx context.Context, opts application.Cata
 			}, err
 		}
 	}
+	var createPR func(context.Context, string, func(trainreviewui.Progress)) error
+	if opts.CreatePR != nil {
+		createPR = func(ctx context.Context, id string, report func(trainreviewui.Progress)) error {
+			return opts.CreatePR(ctx, id, func(update application.CatalogProgress) {
+				report(trainreviewui.Progress{Stage: update.Stage, State: update.State, Detail: update.Detail})
+			})
+		}
+	}
 	return trainreviewui.Serve(ctx, trainreviewui.Options{
 		StateRoot: opts.StateRoot, Adversaries: opts.Adversaries, Output: opts.Output,
-		Entropy: rand.Reader, Listen: net.Listen, Assist: assist, Apply: opts.Apply, CreatePR: opts.CreatePR,
+		Entropy: rand.Reader, Listen: net.Listen, Assist: assist, Apply: opts.Apply, CreatePR: createPR,
 		OpenURL: func(ctx context.Context, u string) error {
 			return openBrowser(ctx, u, p.environment, p.resolveExecutable, internaladversary.ExecProcessOutputRunner{})
 		},

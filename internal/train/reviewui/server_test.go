@@ -29,7 +29,7 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
 	}
-	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Repositories ·", "Show all", "Hide all", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState"} {
+	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Repositories ·", "Show all", "Hide all", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "job-tray", "/api/jobs/"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted %q", want)
 		}
@@ -67,7 +67,8 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 		row.Status = results.StatusApplied
 		row.AppliedPath = "/catalog/adversaries/release-contracts/README.md"
 		return results.SaveResult(state, row)
-	}, func(_ context.Context, id string) error {
+	}, func(_ context.Context, id string, report func(Progress)) error {
+		report(Progress{Stage: "bootstrap", State: "complete", Detail: "ready"})
 		row, err := results.Get(state, id)
 		if err != nil {
 			return err
@@ -119,8 +120,28 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPost, "/api/candidates/candidate-1/pull-request", nil)
 	req.Header.Set(tokenHeader, "secret")
 	handler.ServeHTTP(pullRequest, req)
-	if pullRequest.Code != http.StatusOK || !strings.Contains(pullRequest.Body.String(), "https://github.com/acme/catalog/pull/7") {
+	if pullRequest.Code != http.StatusAccepted {
 		t.Fatalf("pull request status=%d body=%q", pullRequest.Code, pullRequest.Body.String())
+	}
+	var job progressJob
+	if err := json.Unmarshal(pullRequest.Body.Bytes(), &job); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 100; attempt++ {
+		status := httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/jobs/"+job.ID, nil)
+		req.Header.Set(tokenHeader, "secret")
+		handler.ServeHTTP(status, req)
+		if err := json.Unmarshal(status.Body.Bytes(), &job); err != nil {
+			t.Fatal(err)
+		}
+		if job.Done {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !job.Done || job.Error != "" || job.Candidate == nil || job.Candidate.CatalogPRURL != "https://github.com/acme/catalog/pull/7" {
+		t.Fatalf("pull request job=%+v", job)
 	}
 	if err := results.Reopen(state, "candidate-1"); err != nil {
 		t.Fatal(err)

@@ -2,6 +2,7 @@ package catalogapply
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -45,6 +46,7 @@ type ChangeRequest struct {
 	ExistingAdversary  bool         `json:"existing_adversary"`
 	Executable         bool         `json:"executable"`
 	PolicyDriven       bool         `json:"policy_driven"`
+	ManagedRuntime     int          `json:"managed_runtime,omitempty"`
 	Files              []SourceFile `json:"files"`
 	ValidationFeedback string       `json:"validation_feedback,omitempty"`
 	PreviousPlanFiles  []string     `json:"previous_plan_files,omitempty"`
@@ -90,6 +92,15 @@ func ApplyPlanned(ctx context.Context, stateRoot, workspaceRoot string, cfg work
 }
 
 func applyPlannedCandidate(ctx context.Context, workspaceRoot string, cfg workspace.Config, row results.Result, planner ChangePlanner) (string, error) {
+	return applyPlannedCandidateWithProgress(ctx, workspaceRoot, cfg, row, planner, nil)
+}
+
+func applyPlannedCandidateWithProgress(ctx context.Context, workspaceRoot string, cfg workspace.Config, row results.Result, planner ChangePlanner, report ProgressReporter) (string, error) {
+	emit := func(stage, state, detail string) {
+		if report != nil {
+			report(Progress{Stage: stage, State: state, Detail: detail})
+		}
+	}
 	if planner == nil {
 		return "", fmt.Errorf("catalog change generation needs a configured model provider")
 	}
@@ -120,12 +131,20 @@ func applyPlannedCandidate(ctx context.Context, workspaceRoot string, cfg worksp
 	request.ExistingAdversary = wasExisting
 	var target string
 	for attempt := 0; attempt < maxPlanAttempts; attempt++ {
+		detail := "Writing a scoped rule bundle from the accepted evidence"
+		if attempt > 0 {
+			detail = fmt.Sprintf("Repairing generated output (attempt %d of %d)", attempt+1, maxPlanAttempts)
+		}
+		emit("generate", "running", detail)
 		plan, err := planner(ctx, request)
 		if err != nil {
 			return "", fmt.Errorf("generate substantive adversary change: %w", err)
 		}
+		emit("generate", "complete", "Rule implementation generated")
+		emit("test", "running", "Writing and checking regression cases")
 		target, err = writeChangePlan(workspaceRoot, root, dir, row, request, plan)
 		if err == nil {
+			emit("test", "complete", "Regression cases added from the original review evidence")
 			break
 		}
 		if attempt == maxPlanAttempts-1 || !isRetryablePlanError(err) {
@@ -168,7 +187,7 @@ func buildChangeRequest(workspaceRoot string, cfg workspace.Config, row results.
 	if !exists && strings.TrimSpace(row.AdversaryMission) == "" {
 		return ChangeRequest{}, "", "", fmt.Errorf("new adversary %q needs a mission before it can be created", row.Package)
 	}
-	files, executable, policyDriven, err := readAdversaryFiles(workspaceRoot, dir)
+	files, executable, policyDriven, managedRuntime, err := readAdversaryFiles(workspaceRoot, dir)
 	if err != nil {
 		return ChangeRequest{}, "", "", err
 	}
@@ -176,18 +195,19 @@ func buildChangeRequest(workspaceRoot string, cfg workspace.Config, row results.
 		CandidateID: row.ID, Adversary: row.Package, AdversaryMission: row.AdversaryMission,
 		ProposedRule: row.ProposedRule, Evidence: evidenceURL(row), EvidenceComment: row.Summary,
 		EvidenceFile: row.File, EvidenceDiff: row.DiffHunk, ExistingAdversary: exists,
-		Executable: executable, PolicyDriven: policyDriven, Files: files,
+		Executable: executable, PolicyDriven: policyDriven, ManagedRuntime: managedRuntime, Files: files,
 	}, root, dir, nil
 }
 
-func readAdversaryFiles(workspaceRoot, dir string) ([]SourceFile, bool, bool, error) {
+func readAdversaryFiles(workspaceRoot, dir string) ([]SourceFile, bool, bool, int, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, false, false, nil
+		return nil, false, false, 0, nil
 	}
 	var files []SourceFile
 	total := 0
 	executable := false
 	policyDriven := false
+	managedRuntime := 0
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -221,16 +241,22 @@ func readAdversaryFiles(workspaceRoot, dir string) ([]SourceFile, bool, bool, er
 		}
 		if name == "package.json" && strings.Contains(string(raw), `"adversarylabsCatalogRuntime"`) {
 			policyDriven = true
+			var metadata struct {
+				Runtime int `json:"adversarylabsCatalogRuntime"`
+			}
+			if json.Unmarshal(raw, &metadata) == nil {
+				managedRuntime = metadata.Runtime
+			}
 		}
 		files = append(files, SourceFile{Path: filepath.ToSlash(rel), Content: string(raw)})
 		total += len(raw)
 		return nil
 	})
 	if err != nil {
-		return nil, false, false, fmt.Errorf("read adversary source: %w", err)
+		return nil, false, false, 0, fmt.Errorf("read adversary source: %w", err)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	return files, executable, policyDriven, nil
+	return files, executable, policyDriven, managedRuntime, nil
 }
 
 type regressionSpec struct {
@@ -256,6 +282,9 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 		return "", err
 	}
 	adversaryPrefix := filepath.ToSlash(adversaryRel) + "/"
+	if request.ManagedRuntime >= 2 {
+		return writeManagedRulePlan(workspaceRoot, adversaryPrefix, row, plan)
+	}
 	existing := make(map[string]string, len(request.Files))
 	for _, file := range request.Files {
 		existing[file.Path] = file.Content
@@ -387,6 +416,108 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	}
 	_ = root // retained in the signature to make the trust boundary explicit.
 	return filepath.Join(workspaceRoot, filepath.FromSlash(operative)), nil
+}
+
+type managedRule struct {
+	Version    int    `yaml:"version"`
+	ID         string `yaml:"id"`
+	Summary    string `yaml:"summary"`
+	Guidance   string `yaml:"guidance"`
+	Severity   string `yaml:"severity"`
+	Confidence string `yaml:"confidence"`
+	Evidence   string `yaml:"evidence"`
+}
+
+type managedCases struct {
+	Version     int    `yaml:"version"`
+	RuleID      string `yaml:"rule_id"`
+	CandidateID string `yaml:"candidate_id"`
+	Evidence    string `yaml:"evidence"`
+	Cases       []struct {
+		Name     string `yaml:"name"`
+		Input    string `yaml:"review_input"`
+		Expected string `yaml:"expected"`
+		Reason   string `yaml:"reason"`
+	} `yaml:"cases"`
+}
+
+var managedRuleID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+func writeManagedRulePlan(workspaceRoot, prefix string, row results.Result, plan ChangePlan) (string, error) {
+	if len(plan.Files) != 2 {
+		return "", fmt.Errorf("generated managed rule must contain exactly rule.yaml and cases.yaml (got %d files)", len(plan.Files))
+	}
+	var rulePath, casesPath string
+	var rule managedRule
+	var cases managedCases
+	seen := map[string]bool{}
+	for _, file := range plan.Files {
+		clean := filepath.ToSlash(filepath.Clean(file.Path))
+		if filepath.IsAbs(file.Path) || clean == ".." || strings.HasPrefix(clean, "../") || !strings.HasPrefix(clean, prefix+"rules/") || seen[clean] {
+			return "", fmt.Errorf("generated managed rule contains unsafe path %q", file.Path)
+		}
+		seen[clean] = true
+		rel := strings.TrimPrefix(clean, prefix)
+		parts := strings.Split(rel, "/")
+		if len(parts) != 3 || parts[0] != "rules" || !managedRuleID.MatchString(parts[1]) {
+			return "", fmt.Errorf("managed rule files must be rules/<rule-id>/rule.yaml and cases.yaml")
+		}
+		switch parts[2] {
+		case "rule.yaml":
+			if err := yaml.Unmarshal([]byte(file.Content), &rule); err != nil {
+				return "", fmt.Errorf("validate generated rule %s: %w", clean, err)
+			}
+			rulePath = clean
+		case "cases.yaml":
+			if err := yaml.Unmarshal([]byte(file.Content), &cases); err != nil {
+				return "", fmt.Errorf("validate generated cases %s: %w", clean, err)
+			}
+			casesPath = clean
+		default:
+			return "", fmt.Errorf("managed rule may only generate rule.yaml and cases.yaml")
+		}
+	}
+	if rulePath == "" || casesPath == "" || filepath.Dir(rulePath) != filepath.Dir(casesPath) {
+		return "", fmt.Errorf("generated managed rule must colocate rule.yaml and cases.yaml")
+	}
+	ruleID := filepath.Base(filepath.Dir(rulePath))
+	if rule.Version != 1 || rule.ID != ruleID || strings.TrimSpace(rule.Summary) == "" || strings.TrimSpace(rule.Guidance) == "" || rule.Evidence != evidenceURL(row) {
+		return "", fmt.Errorf("generated rule must identify version 1, its directory id, guidance, and exact evidence URL")
+	}
+	if !map[string]bool{"low": true, "medium": true, "high": true, "critical": true}[rule.Severity] || !map[string]bool{"medium": true, "high": true}[rule.Confidence] {
+		return "", fmt.Errorf("generated rule has unsupported severity or confidence")
+	}
+	if cases.Version != 1 || cases.RuleID != ruleID || cases.CandidateID != row.ID || cases.Evidence != evidenceURL(row) {
+		return "", fmt.Errorf("generated cases must identify the rule, candidate, and exact evidence URL")
+	}
+	hasFinding, hasNoFinding := false, false
+	for _, item := range cases.Cases {
+		if strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.Input) == "" || strings.TrimSpace(item.Reason) == "" {
+			return "", fmt.Errorf("every managed case needs name, review_input, expected, and reason")
+		}
+		if item.Expected == "finding" {
+			hasFinding = true
+		} else if item.Expected == "no_finding" {
+			hasNoFinding = true
+		} else {
+			return "", fmt.Errorf("managed case expected must be finding or no_finding")
+		}
+	}
+	if !hasFinding || !hasNoFinding {
+		return "", fmt.Errorf("managed rule needs finding and no_finding cases")
+	}
+	ruleRaw, _ := yaml.Marshal(&rule)
+	casesRaw, _ := yaml.Marshal(&cases)
+	for path, content := range map[string][]byte{rulePath: ruleRaw, casesPath: casesRaw} {
+		full := filepath.Join(workspaceRoot, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(full, content, 0o644); err != nil {
+			return "", err
+		}
+	}
+	return filepath.Join(workspaceRoot, filepath.FromSlash(rulePath)), nil
 }
 
 func isNativeTestPath(path string) bool {
