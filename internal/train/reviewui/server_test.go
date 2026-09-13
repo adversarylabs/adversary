@@ -29,7 +29,7 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
 	}
-	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Repositories ·", "Show all", "Hide all", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "job-tray", "/api/jobs/"} {
+	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Repositories ·", "Show all", "Hide all", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "job-tray", "job-dismiss", "Dismiss finished task", "JOB_RETENTION_MS", "/api/jobs/"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted %q", want)
 		}
@@ -142,6 +142,20 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 	}
 	if !job.Done || job.Error != "" || job.Candidate == nil || job.Candidate.CatalogPRURL != "https://github.com/acme/catalog/pull/7" {
 		t.Fatalf("pull request job=%+v", job)
+	}
+	dismissJob := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodDelete, "/api/jobs/"+job.ID, nil)
+	req.Header.Set(tokenHeader, "secret")
+	handler.ServeHTTP(dismissJob, req)
+	if dismissJob.Code != http.StatusNoContent {
+		t.Fatalf("dismiss job status=%d body=%q", dismissJob.Code, dismissJob.Body.String())
+	}
+	missingJob := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/jobs/"+job.ID, nil)
+	req.Header.Set(tokenHeader, "secret")
+	handler.ServeHTTP(missingJob, req)
+	if missingJob.Code != http.StatusNotFound {
+		t.Fatalf("dismissed job status=%d body=%q", missingJob.Code, missingJob.Body.String())
 	}
 	if err := results.Reopen(state, "candidate-1"); err != nil {
 		t.Fatal(err)
