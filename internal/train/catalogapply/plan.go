@@ -261,7 +261,11 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 		}
 		base := filepath.Base(clean)
 		changed := existing[clean] != file.Content
-		if changed && (base == "README.md" || relInAdversary == "agent/scope.md" || relInAdversary == "docs/scope.md") {
+		operativePolicy := base == "README.md" || relInAdversary == "agent/scope.md" || relInAdversary == "docs/scope.md"
+		if request.PolicyDriven {
+			operativePolicy = relInAdversary == "README.md"
+		}
+		if changed && operativePolicy {
 			operative = clean
 		}
 		if changed && strings.HasPrefix(relInAdversary, "src/") {
@@ -278,6 +282,9 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 		}
 	}
 	if operative == "" {
+		if request.PolicyDriven {
+			return "", fmt.Errorf("generated change did not update the policy-driven adversary's operative README.md")
+		}
 		return "", fmt.Errorf("generated change did not update the adversary's operative README or scope")
 	}
 	if regression == "" {
