@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -241,7 +242,8 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	total, operative, regression := 0, "", ""
 	implementation, nativeRegression := false, false
 	seen := map[string]bool{}
-	for _, file := range plan.Files {
+	for index := range plan.Files {
+		file := &plan.Files[index]
 		clean := filepath.ToSlash(filepath.Clean(file.Path))
 		if clean == "." || filepath.IsAbs(file.Path) || clean == ".." || strings.HasPrefix(clean, "../") || seen[clean] {
 			return "", fmt.Errorf("generated change contains unsafe or duplicate path %q", file.Path)
@@ -274,9 +276,15 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			implementation = true
 		}
 		if changed && strings.HasPrefix(relInAdversary, "tests/") && (strings.HasSuffix(clean, ".yaml") || strings.HasSuffix(clean, ".yml")) {
-			if err := validateRegression([]byte(file.Content), row); err != nil {
+			canonical, err := canonicalRegression([]byte(file.Content), row)
+			if err != nil {
 				return "", fmt.Errorf("validate generated regression %s: %w", clean, err)
 			}
+			total += len(canonical) - len(file.Content)
+			if total > maxPlanBytes {
+				return "", fmt.Errorf("generated change exceeds %d bytes", maxPlanBytes)
+			}
+			file.Content = string(canonical)
 			regression = clean
 		} else if changed && (strings.Contains(strings.ToLower(base), "test") || strings.Contains(strings.ToLower(base), "spec")) {
 			regression = clean
@@ -311,18 +319,21 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	return filepath.Join(workspaceRoot, filepath.FromSlash(operative)), nil
 }
 
-func validateRegression(raw []byte, row results.Result) error {
+func canonicalRegression(raw []byte, row results.Result) ([]byte, error) {
 	var spec regressionSpec
 	if err := yaml.Unmarshal(raw, &spec); err != nil {
-		return err
+		repaired := quoteRegressionScalars(raw)
+		if repairedErr := yaml.Unmarshal(repaired, &spec); repairedErr != nil {
+			return nil, err
+		}
 	}
 	if spec.Version != 1 || spec.CandidateID != row.ID || spec.Adversary != row.Package || spec.Evidence != evidenceURL(row) || strings.TrimSpace(spec.Rule) == "" {
-		return fmt.Errorf("regression must identify version 1, candidate %s, adversary %s, and its rule", row.ID, row.Package)
+		return nil, fmt.Errorf("regression must identify version 1, candidate %s, adversary %s, and its rule", row.ID, row.Package)
 	}
 	hasFinding, hasNoFinding := false, false
 	for _, c := range spec.Cases {
 		if strings.TrimSpace(c.Name) == "" || strings.TrimSpace(c.Input) == "" || strings.TrimSpace(c.Reason) == "" {
-			return fmt.Errorf("every regression case needs name, review_input, expected, and reason")
+			return nil, fmt.Errorf("every regression case needs name, review_input, expected, and reason")
 		}
 		switch c.Expected {
 		case "finding":
@@ -330,13 +341,45 @@ func validateRegression(raw []byte, row results.Result) error {
 		case "no_finding":
 			hasNoFinding = true
 		default:
-			return fmt.Errorf("expected must be finding or no_finding")
+			return nil, fmt.Errorf("expected must be finding or no_finding")
 		}
 	}
 	if !hasFinding || !hasNoFinding {
-		return fmt.Errorf("regression needs both a finding and a no_finding case")
+		return nil, fmt.Errorf("regression needs both a finding and a no_finding case")
 	}
-	return nil
+	canonical, err := yaml.Marshal(&spec)
+	if err != nil {
+		return nil, err
+	}
+	return canonical, nil
+}
+
+// quoteRegressionScalars repairs a common model-output failure: YAML plain
+// strings containing ": ". The regression schema is deliberately fixed, so
+// its string fields can be made unambiguous without guessing at arbitrary YAML.
+func quoteRegressionScalars(raw []byte) []byte {
+	stringKeys := map[string]bool{
+		"candidate_id": true, "adversary": true, "evidence": true, "rule": true,
+		"name": true, "review_input": true, "expected": true, "reason": true,
+	}
+	lines := strings.Split(string(raw), "\n")
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- ") {
+			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+		}
+		colon := strings.Index(trimmed, ":")
+		if colon < 0 || !stringKeys[strings.TrimSpace(trimmed[:colon])] {
+			continue
+		}
+		value := strings.TrimSpace(trimmed[colon+1:])
+		if value == "" || value == "|" || value == ">" || strings.HasPrefix(value, "|-") || strings.HasPrefix(value, ">-") || strings.HasPrefix(value, "\"") || strings.HasPrefix(value, "'") {
+			continue
+		}
+		lineColon := strings.Index(line, ":")
+		lines[index] = strings.TrimRight(line[:lineColon+1], " \t") + " " + strconv.Quote(value)
+	}
+	return []byte(strings.Join(lines, "\n"))
 }
 
 var nowUTC = func() time.Time { return time.Now().UTC() }

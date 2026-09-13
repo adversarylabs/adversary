@@ -12,6 +12,7 @@ import (
 
 	"github.com/adversarylabs/adversary/internal/train/results"
 	"github.com/adversarylabs/adversary/internal/train/workspace"
+	"gopkg.in/yaml.v3"
 )
 
 func TestApplyExistingAdversaryWritesRuleOnce(t *testing.T) {
@@ -251,6 +252,39 @@ func regressionYAML(request ChangeRequest) string {
 		"    review_input: user sees the cause and recovery command\n" +
 		"    expected: no_finding\n" +
 		"    reason: actionable context is preserved\n"
+}
+
+func TestCanonicalRegressionRepairsColonInPlainScalar(t *testing.T) {
+	row := results.Result{
+		ID: "api-boundary-and-logging", Package: "engineering-conventions",
+		CommentURL: "https://github.com/acme/api/pull/42#discussion_r9",
+	}
+	raw := []byte(`version: 1
+candidate_id: api-boundary-and-logging
+adversary: engineering-conventions
+evidence: https://github.com/acme/api/pull/42#discussion_r9
+rule: At API boundaries: preserve actionable errors and log context
+cases:
+  - name: reports missing context
+    review_input: Handler failure: returns a generic message without logging the cause
+    expected: finding
+    reason: The boundary loses context: operators cannot diagnose it
+  - name: accepts useful context
+    review_input: Handler preserves the cause and logs a safe request identifier
+    expected: no_finding
+    reason: The user and operator both have actionable context
+`)
+	canonical, err := canonicalRegression(raw, row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec regressionSpec
+	if err := yaml.Unmarshal(canonical, &spec); err != nil {
+		t.Fatalf("canonical regression is invalid: %v\n%s", err, canonical)
+	}
+	if spec.Rule != "At API boundaries: preserve actionable errors and log context" || len(spec.Cases) != 2 || !strings.Contains(spec.Cases[0].Input, "Handler failure:") {
+		t.Fatalf("repaired regression lost content: %+v", spec)
+	}
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {
