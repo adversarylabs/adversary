@@ -98,11 +98,15 @@ editing the proposed rule, assigning an existing or new private adversary,
 and asking the configured model
 to draft a missing rule. New-adversary proposals use a dedicated modal and
 remain local until later catalog publication. The workspace also supports
-accepting, dismissing, and reopening decisions. **Apply to catalog** writes the
-edited rule into the selected local adversary policy and leaves git untouched;
-**Approve for later** records the decision in SQLite for a later batch. Applying
-a proposed new adversary creates its local policy directory and manifest entry.
-No third-party assets are loaded.
+accepting, dismissing, and reopening decisions. **Apply to working tree** writes
+the edited rule into the selected local adversary policy and leaves git untouched.
+**Create catalog PR**
+fetches the remote default branch, creates an isolated temporary worktree and a
+candidate-specific branch, applies and commits the proposal there, pushes the
+branch, and opens a GitHub pull request with `gh`; it never switches or writes
+catalog files in the current checkout. **Approve for later** records the decision
+in SQLite for a later batch. Applying a proposed new adversary creates its policy
+directory and manifest entry. No third-party assets are loaded.
 
 `inspect --all` walks the new-candidate queue in the terminal. Accept and dismiss
 decisions are saved immediately; skip leaves a candidate new, and quit leaves
@@ -128,8 +132,10 @@ adversary catalog train
 ```
 
 Results approved for later record a decision in the local inbox only. Applying
-updates tracked catalog files but does not commit, push, or open a pull request;
-publishing through Git remains an explicit later step.
+to the working tree updates tracked catalog files but performs no Git operation.
+Creating a catalog PR requires a configured `origin`, an authenticated `gh`
+session, and permission to push a branch and open a pull request. Neither path
+publishes an adversary package; merge and release remain explicit later steps.
 
 For older product context, see the
 [historical customer-training sketch](train/customer-train-cli.md).

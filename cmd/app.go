@@ -209,7 +209,7 @@ func (p processRuntime) ReviewCatalog(ctx context.Context, opts application.Cata
 	}
 	return trainreviewui.Serve(ctx, trainreviewui.Options{
 		StateRoot: opts.StateRoot, Adversaries: opts.Adversaries, Output: opts.Output,
-		Entropy: rand.Reader, Listen: net.Listen, Assist: assist, Apply: opts.Apply,
+		Entropy: rand.Reader, Listen: net.Listen, Assist: assist, Apply: opts.Apply, CreatePR: opts.CreatePR,
 		OpenURL: func(ctx context.Context, u string) error {
 			return openBrowser(ctx, u, p.environment, p.resolveExecutable, internaladversary.ExecProcessOutputRunner{})
 		},

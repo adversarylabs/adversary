@@ -25,6 +25,7 @@ const (
 	StatusNew       = "new"       // open / actionable
 	StatusAccepted  = "accepted"  // user approved for a future catalog change
 	StatusApplied   = "applied"   // user wrote draft into package
+	StatusProposed  = "proposed"  // user opened a catalog pull request
 	StatusDismissed = "dismissed" // user rejected
 	StatusCaught    = "caught"    // package matched the human concern (success)
 
@@ -74,6 +75,7 @@ type Result struct {
 	AppliedPath      string    `json:"applied_path,omitempty"`
 	Branch           string    `json:"branch,omitempty"`
 	IssueURL         string    `json:"issue_url,omitempty"`
+	CatalogPRURL     string    `json:"catalog_pr_url,omitempty"`
 }
 
 // normalizeKind maps legacy stored values to current vocabulary.

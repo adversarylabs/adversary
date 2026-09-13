@@ -173,6 +173,7 @@ type CatalogReviewOptions struct {
 	Output      io.Writer
 	Assist      func(context.Context, CatalogAssistRequest) (CatalogAssistResult, error)
 	Apply       func(context.Context, string) error
+	CreatePR    func(context.Context, string) error
 }
 
 type CatalogAssistRequest struct {

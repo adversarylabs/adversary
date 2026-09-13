@@ -16,7 +16,7 @@ import (
 func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	state := t.TempDir()
 	saveCandidate(t, state)
-	handler := NewHandler(state, []string{"operability"}, "secret", nil, nil, nil, nil)
+	handler := NewHandler(state, []string{"operability"}, "secret", nil, nil, nil, nil, nil)
 
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -29,7 +29,7 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
 	}
-	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Repositories ·", "Show all", "Hide all", "New adversary", "AI assist", "Apply to catalog", "Approve for later", "View GitHub evidence"} {
+	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Repositories ·", "Show all", "Hide all", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted %q", want)
 		}
@@ -61,6 +61,15 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 		}
 		row.Status = results.StatusApplied
 		row.AppliedPath = "/catalog/adversaries/release-contracts/README.md"
+		return results.SaveResult(state, row)
+	}, func(_ context.Context, id string) error {
+		row, err := results.Get(state, id)
+		if err != nil {
+			return err
+		}
+		row.Status = results.StatusProposed
+		row.Branch = "adversary/train-release-contracts-candidate-1"
+		row.CatalogPRURL = "https://github.com/acme/catalog/pull/7"
 		return results.SaveResult(state, row)
 	}, nil)
 
@@ -97,6 +106,16 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 	handler.ServeHTTP(apply, req)
 	if apply.Code != http.StatusOK || !strings.Contains(apply.Body.String(), "release-contracts/README.md") {
 		t.Fatalf("apply status=%d body=%q", apply.Code, apply.Body.String())
+	}
+	if err := results.Reopen(state, "candidate-1"); err != nil {
+		t.Fatal(err)
+	}
+	pullRequest := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/candidates/candidate-1/pull-request", nil)
+	req.Header.Set(tokenHeader, "secret")
+	handler.ServeHTTP(pullRequest, req)
+	if pullRequest.Code != http.StatusOK || !strings.Contains(pullRequest.Body.String(), "https://github.com/acme/catalog/pull/7") {
+		t.Fatalf("pull request status=%d body=%q", pullRequest.Code, pullRequest.Body.String())
 	}
 	if err := results.Reopen(state, "candidate-1"); err != nil {
 		t.Fatal(err)

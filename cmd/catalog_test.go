@@ -217,7 +217,7 @@ func TestCatalogTrainInspectDefaultsToBrowserReviewRuntime(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.options.StateRoot != filepath.Join(catalog, ".adversary-train") || len(runtime.options.Adversaries) != 1 || runtime.options.Adversaries[0] != "operability" {
+	if runtime.options.StateRoot != filepath.Join(catalog, ".adversary-train") || len(runtime.options.Adversaries) != 1 || runtime.options.Adversaries[0] != "operability" || runtime.options.Apply == nil || runtime.options.CreatePR == nil {
 		t.Fatalf("review options=%+v", runtime.options)
 	}
 }

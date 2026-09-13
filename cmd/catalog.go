@@ -128,6 +128,9 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 					Apply: func(ctx context.Context, id string) error {
 						return catalogapply.Apply(ctx, state, filepath.Dir(configPath), cfg, id)
 					},
+					CreatePR: func(ctx context.Context, id string) error {
+						return catalogapply.CreatePullRequest(ctx, state, filepath.Dir(configPath), cfg, id)
+					},
 				})
 			}
 			row, err := results.Get(state, args[0])
