@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -347,9 +349,17 @@ func validateRunnablePackage(ctx context.Context, dir string, run commandRunner)
 	}
 	var steps []step
 	if _, err := os.Stat(filepath.Join(dir, "package.json")); err == nil {
+		npm := "npm"
+		if _, err := run(ctx, dir, npm, "--version"); err != nil {
+			resolved, resolveErr := resolveNPM(ctx)
+			if resolveErr != nil {
+				return fmt.Errorf("locate npm for generated adversary validation: %w", resolveErr)
+			}
+			npm = resolved
+		}
 		steps = append(steps,
-			step{name: "npm", args: []string{"ci", "--ignore-scripts"}, what: "install locked adversary dependencies"},
-			step{name: "npm", args: []string{"test"}, what: "build and test generated adversary"},
+			step{name: npm, args: []string{"ci", "--ignore-scripts"}, what: "install locked adversary dependencies"},
+			step{name: npm, args: []string{"test"}, what: "build and test generated adversary"},
 		)
 	} else if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 		steps = append(steps, step{name: "go", args: []string{"test", "./..."}, what: "build and test generated adversary"})
@@ -370,4 +380,59 @@ func validateRunnablePackage(ctx context.Context, dir string, run commandRunner)
 		}
 	}
 	return nil
+}
+
+func resolveNPM(ctx context.Context) (string, error) {
+	names := []string{"npm"}
+	if runtime.GOOS == "windows" {
+		names = append(names, "npm.cmd")
+	}
+	for _, name := range names {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, nil
+		}
+	}
+	var candidates []string
+	if nvmBin := strings.TrimSpace(os.Getenv("NVM_BIN")); nvmBin != "" {
+		candidates = append(candidates, filepath.Join(nvmBin, names[0]))
+	}
+	if node, err := exec.LookPath("node"); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(node), names[0]))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(home, ".volta", "bin", names[0]),
+			filepath.Join(home, ".asdf", "shims", names[0]),
+		)
+		if matches, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", names[0])); len(matches) > 0 {
+			sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+			candidates = append(candidates, matches...)
+		}
+	}
+	for _, candidate := range candidates {
+		if isExecutableFile(candidate) {
+			return candidate, nil
+		}
+	}
+	if shell := strings.TrimSpace(os.Getenv("SHELL")); filepath.IsAbs(shell) && isExecutableFile(shell) {
+		command := exec.CommandContext(ctx, shell, "-lic", "command -v npm")
+		if raw, err := command.Output(); err == nil {
+			lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+			for index := len(lines) - 1; index >= 0; index-- {
+				candidate := strings.TrimSpace(lines[index])
+				if filepath.IsAbs(candidate) && isExecutableFile(candidate) {
+					return candidate, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("npm is available in your interactive shell but not to this process; set NVM_BIN or add npm's bin directory to PATH before starting the review UI")
+}
+
+func isExecutableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0
 }

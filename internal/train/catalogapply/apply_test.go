@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -176,6 +177,27 @@ func TestApplyPlannedRejectsBookkeepingOnlyChange(t *testing.T) {
 	err := ApplyPlanned(context.Background(), state, root, cfg, "candidate-4", planner)
 	if err == nil || !strings.Contains(err.Error(), "regression coverage") {
 		t.Fatalf("expected regression error, got %v", err)
+	}
+}
+
+func TestResolveNPMUsesNVMBinWhenProcessPATHIsMinimal(t *testing.T) {
+	bin := t.TempDir()
+	name := "npm"
+	if runtime.GOOS == "windows" {
+		name = "npm.cmd"
+	}
+	path := filepath.Join(bin, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("NVM_BIN", bin)
+	resolved, err := resolveNPM(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != path {
+		t.Fatalf("resolved=%q want %q", resolved, path)
 	}
 }
 
