@@ -34,6 +34,11 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 			t.Fatalf("review page omitted %q", want)
 		}
 	}
+	for _, want := range []string{"aside{border-right:1px solid var(--line);overflow:hidden", "#list{padding:8px;overflow:auto", ".repo-menu{position:static", ".repo-head{position:sticky;top:0"} {
+		if !strings.Contains(page.Body.String(), want) {
+			t.Fatalf("review page omitted contained repository navigation style %q", want)
+		}
+	}
 	if got := page.Header().Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'none'") {
 		t.Fatalf("CSP=%q", got)
 	}
