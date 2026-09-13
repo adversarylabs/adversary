@@ -115,7 +115,19 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 			}
 			return []byte("https://github.com/acme/catalog/pull/17\n"), nil
 		}
-		if name == "npm" || (len(args) > 0 && (args[0] == "validate" || args[0] == "pack")) {
+		if name == "npm" {
+			if len(args) > 0 && args[0] == "ci" {
+				dependency := filepath.Join(dir, "node_modules", "transitive-package", "index.js")
+				if err := os.MkdirAll(filepath.Dir(dependency), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(dependency, []byte("generated dependency\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return []byte("ok\n"), nil
+		}
+		if len(args) > 0 && (args[0] == "validate" || args[0] == "pack") {
 			return []byte("ok\n"), nil
 		}
 		command := exec.CommandContext(ctx, name, args...)
@@ -154,6 +166,10 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 	source := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/src/index.ts")
 	if !strings.Contains(manifest, "runtime:") || !strings.Contains(source, "reviewPolicy") {
 		t.Fatalf("generated adversary is not runnable:\n%s\n%s", manifest, source)
+	}
+	tree := runGit(t, "", "--git-dir", remote, "ls-tree", "-r", "--name-only", "refs/heads/"+row.Branch)
+	if strings.Contains(tree, "node_modules/") {
+		t.Fatalf("catalog PR committed installed dependencies:\n%s", tree)
 	}
 }
 

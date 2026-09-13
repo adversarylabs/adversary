@@ -170,7 +170,7 @@ func catalogFiles() map[string]string {
 	readme := strings.Builder{}
 	readme.WriteString(readmeHeader)
 	files := map[string]string{
-		".gitignore":           ".adversary-train/\n",
+		".gitignore":           catalogGitignore,
 		"adversary.train.yaml": trainConfig,
 		"evaluations/.gitkeep": "",
 		"exceptions/.gitkeep":  "",
@@ -188,6 +188,11 @@ func catalogFiles() map[string]string {
 	files["README.md"] = readme.String()
 	return files
 }
+
+const catalogGitignore = `.adversary-train/
+node_modules/
+.adversary/
+`
 
 func renderStarterAdversary(adversary starterAdversary) string {
 	brief := strings.Builder{}

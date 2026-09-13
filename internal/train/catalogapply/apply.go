@@ -155,10 +155,10 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 			return err
 		}
 	}
-	if _, err := requireCommand(ctx, run, worktree, "git", "add", "-A"); err != nil {
+	if _, err := requireCommand(ctx, run, worktree, "git", "add", "-A", "--", ".", ":(glob,exclude)**/node_modules/**", ":(glob,exclude)**/.adversary/**"); err != nil {
 		return fmt.Errorf("stage catalog change: %w", err)
 	}
-	changed, err := requireCommand(ctx, run, worktree, "git", "status", "--porcelain")
+	changed, err := requireCommand(ctx, run, worktree, "git", "diff", "--cached", "--name-only")
 	if err != nil {
 		return fmt.Errorf("inspect catalog change: %w", err)
 	}

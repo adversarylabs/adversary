@@ -15,12 +15,17 @@ import (
 const runtimeVersion = "0.0.1"
 
 type UpgradeResult struct {
-	Location string
-	Upgraded []string
+	Location      string
+	Upgraded      []string
+	IgnoreUpdated bool
 }
 
 func RenderUpgradeSuccess(w io.Writer, result UpgradeResult) {
 	if len(result.Upgraded) == 0 {
+		if result.IgnoreUpdated {
+			fmt.Fprintln(w, "✓ Updated the catalog .gitignore; adversaries are already runnable.")
+			return
+		}
 		fmt.Fprintln(w, "Catalog adversaries are already runnable; no files changed.")
 		return
 	}
@@ -49,7 +54,11 @@ func Upgrade(catalogRoot string) (UpgradeResult, error) {
 	if err != nil {
 		return UpgradeResult{}, fmt.Errorf("read catalog adversaries: %w", err)
 	}
-	result := UpgradeResult{Location: abs}
+	ignoreUpdated, err := ensureIgnorePatterns(filepath.Join(abs, ".gitignore"), strings.Split(strings.TrimSpace(catalogGitignore), "\n"))
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("update catalog .gitignore: %w", err)
+	}
+	result := UpgradeResult{Location: abs, IgnoreUpdated: ignoreUpdated}
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
@@ -65,6 +74,32 @@ func Upgrade(catalogRoot string) (UpgradeResult, error) {
 	}
 	sort.Strings(result.Upgraded)
 	return result, nil
+}
+
+func ensureIgnorePatterns(path string, patterns []string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	content := string(raw)
+	existing := make(map[string]bool)
+	for _, line := range strings.Split(content, "\n") {
+		existing[strings.TrimSpace(line)] = true
+	}
+	var missing []string
+	for _, pattern := range patterns {
+		if pattern != "" && !existing[pattern] {
+			missing = append(missing, pattern)
+		}
+	}
+	if len(missing) == 0 {
+		return false, nil
+	}
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += strings.Join(missing, "\n") + "\n"
+	return true, os.WriteFile(path, []byte(content), 0o644)
 }
 
 // EnsureRunnableAdversary adds the trusted policy-driven runtime to one

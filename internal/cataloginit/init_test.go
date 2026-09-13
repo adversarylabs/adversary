@@ -49,6 +49,10 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 	if err != nil || !strings.Contains(string(manifest), "kind: AdversaryCatalog") {
 		t.Fatalf("manifest=%q err=%v", manifest, err)
 	}
+	ignore, err := os.ReadFile(filepath.Join(destination, ".gitignore"))
+	if err != nil || !strings.Contains(string(ignore), "node_modules/") || !strings.Contains(string(ignore), ".adversary/") {
+		t.Fatalf("gitignore=%q err=%v", ignore, err)
+	}
 	var catalog struct {
 		Spec struct {
 			Adversaries []struct {
@@ -100,6 +104,9 @@ func TestUpgradePreservesPoliciesAndMakesEntriesRunnable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "adversarylabs.yaml"), []byte("kind: AdversaryCatalog\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("custom-cache/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(root, "adversaries", "operability")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -115,6 +122,13 @@ func TestUpgradePreservesPoliciesAndMakesEntriesRunnable(t *testing.T) {
 	if len(result.Upgraded) != 1 || result.Upgraded[0] != "operability" {
 		t.Fatalf("result=%+v", result)
 	}
+	if !result.IgnoreUpdated {
+		t.Fatal("upgrade did not harden the catalog .gitignore")
+	}
+	ignore, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil || !strings.Contains(string(ignore), "custom-cache/") || !strings.Contains(string(ignore), "node_modules/") {
+		t.Fatalf("gitignore=%q err=%v", ignore, err)
+	}
 	raw, err := os.ReadFile(filepath.Join(dir, "README.md"))
 	if err != nil || string(raw) != policy {
 		t.Fatalf("README changed: %q err=%v", raw, err)
@@ -125,7 +139,7 @@ func TestUpgradePreservesPoliciesAndMakesEntriesRunnable(t *testing.T) {
 		}
 	}
 	again, err := Upgrade(root)
-	if err != nil || len(again.Upgraded) != 0 {
+	if err != nil || len(again.Upgraded) != 0 || again.IgnoreUpdated {
 		t.Fatalf("second upgrade=%+v err=%v", again, err)
 	}
 }
