@@ -197,6 +197,57 @@ func TestApplyPlannedRejectsBookkeepingOnlyChange(t *testing.T) {
 	}
 }
 
+func TestApplyPlannedRetriesDisconnectedImplementation(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "adversaries", "migrations")
+	for path, content := range map[string]string{
+		"README.md":          "# Migrations\n",
+		"adversary.yaml":     "name: private/migrations\nruntime:\n  name: node\n  command: [dist/index.js]\n",
+		"package.json":       `{"name":"migrations","scripts":{"test":"tsx --test test/*.test.ts"}}`,
+		"src/index.ts":       "export function createApp() { return {}; }\n",
+		"test/index.test.ts": "import { createApp } from \"../src/index.ts\";\nvoid createApp();\n",
+	} {
+		target := filepath.Join(dir, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	row := results.Result{ID: "candidate-wiring", Package: "migrations", ProposedRule: "Enforce migration names."}
+	cfg := workspace.Config{Adversaries: workspace.AdversariesConfig{Root: filepath.Join(root, "adversaries")}}
+	calls := 0
+	planner := func(_ context.Context, request ChangeRequest) (ChangePlan, error) {
+		calls++
+		files := []ChangeFile{
+			{Path: "adversaries/migrations/README.md", Content: "# Migrations\n\n- Enforce migration names.\n"},
+			{Path: "adversaries/migrations/src/naming.ts", Content: "export const checksNaming = true;\n"},
+			{Path: "adversaries/migrations/test/naming.test.ts", Content: "import { checksNaming } from \"../src/naming.ts\";\nvoid checksNaming;\n"},
+		}
+		if calls == 2 {
+			if !strings.Contains(request.ValidationFeedback, "not reachable") || len(request.PreviousPlanFiles) != 3 {
+				t.Fatalf("retry request lacks useful feedback: %+v", request)
+			}
+			files = append(files,
+				ChangeFile{Path: "adversaries/migrations/src/index.ts", Content: "import { checksNaming } from \"./naming.js\";\nexport function createApp() { return { checksNaming }; }\n"},
+				ChangeFile{Path: "adversaries/migrations/test/index.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nvoid createApp().run({});\n"},
+			)
+		}
+		return ChangePlan{Summary: "Add migration naming", Files: files}, nil
+	}
+	if _, err := applyPlannedCandidate(context.Background(), root, cfg, row, planner); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("planner calls=%d want 2", calls)
+	}
+	index, err := os.ReadFile(filepath.Join(dir, "src", "index.ts"))
+	if err != nil || !strings.Contains(string(index), "./naming.js") {
+		t.Fatalf("runtime was not wired: %q err=%v", index, err)
+	}
+}
+
 func TestResolveNPMUsesNVMBinWhenProcessPATHIsMinimal(t *testing.T) {
 	bin := t.TempDir()
 	name := "npm"

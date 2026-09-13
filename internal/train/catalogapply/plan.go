@@ -6,7 +6,9 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -31,18 +33,20 @@ const (
 type ChangePlanner func(context.Context, ChangeRequest) (ChangePlan, error)
 
 type ChangeRequest struct {
-	CandidateID       string       `json:"candidate_id"`
-	Adversary         string       `json:"adversary"`
-	AdversaryMission  string       `json:"adversary_mission,omitempty"`
-	ProposedRule      string       `json:"proposed_rule"`
-	Evidence          string       `json:"evidence"`
-	EvidenceComment   string       `json:"evidence_comment"`
-	EvidenceFile      string       `json:"evidence_file,omitempty"`
-	EvidenceDiff      string       `json:"evidence_diff,omitempty"`
-	ExistingAdversary bool         `json:"existing_adversary"`
-	Executable        bool         `json:"executable"`
-	PolicyDriven      bool         `json:"policy_driven"`
-	Files             []SourceFile `json:"files"`
+	CandidateID        string       `json:"candidate_id"`
+	Adversary          string       `json:"adversary"`
+	AdversaryMission   string       `json:"adversary_mission,omitempty"`
+	ProposedRule       string       `json:"proposed_rule"`
+	Evidence           string       `json:"evidence"`
+	EvidenceComment    string       `json:"evidence_comment"`
+	EvidenceFile       string       `json:"evidence_file,omitempty"`
+	EvidenceDiff       string       `json:"evidence_diff,omitempty"`
+	ExistingAdversary  bool         `json:"existing_adversary"`
+	Executable         bool         `json:"executable"`
+	PolicyDriven       bool         `json:"policy_driven"`
+	Files              []SourceFile `json:"files"`
+	ValidationFeedback string       `json:"validation_feedback,omitempty"`
+	PreviousPlanFiles  []string     `json:"previous_plan_files,omitempty"`
 }
 
 type SourceFile struct {
@@ -113,13 +117,24 @@ func applyPlannedCandidate(ctx context.Context, workspaceRoot string, cfg worksp
 		return "", err
 	}
 	request.ExistingAdversary = wasExisting
-	plan, err := planner(ctx, request)
-	if err != nil {
-		return "", fmt.Errorf("generate substantive adversary change: %w", err)
-	}
-	target, err := writeChangePlan(workspaceRoot, root, dir, row, request, plan)
-	if err != nil {
-		return "", err
+	var target string
+	for attempt := 0; attempt < 2; attempt++ {
+		plan, err := planner(ctx, request)
+		if err != nil {
+			return "", fmt.Errorf("generate substantive adversary change: %w", err)
+		}
+		target, err = writeChangePlan(workspaceRoot, root, dir, row, request, plan)
+		if err == nil {
+			break
+		}
+		if attempt == 1 || !isRetryablePlanError(err) {
+			return "", err
+		}
+		request.ValidationFeedback = err.Error() + ". Regenerate the complete change and correct this problem."
+		request.PreviousPlanFiles = request.PreviousPlanFiles[:0]
+		for _, file := range plan.Files {
+			request.PreviousPlanFiles = append(request.PreviousPlanFiles, file.Path)
+		}
 	}
 	if !request.ExistingAdversary {
 		if err := addManifestEntry(filepath.Join(workspaceRoot, "adversarylabs.yaml"), row.Package, row.AdversaryMission); err != nil {
@@ -127,6 +142,11 @@ func applyPlannedCandidate(ctx context.Context, workspaceRoot string, cfg worksp
 		}
 	}
 	return target, nil
+}
+
+func isRetryablePlanError(err error) bool {
+	message := err.Error()
+	return strings.HasPrefix(message, "generated change") || strings.HasPrefix(message, "validate generated regression")
 }
 
 func buildChangeRequest(workspaceRoot string, cfg workspace.Config, row results.Result) (ChangeRequest, string, string, error) {
@@ -241,6 +261,14 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	}
 	total, operative, regression := 0, "", ""
 	implementation, nativeRegression := false, false
+	newImplementation, runtimeRegression := false, false
+	var newSourcePaths []string
+	finalSources := make(map[string]string)
+	for path, content := range existing {
+		if strings.Contains(path, "/src/") {
+			finalSources[path] = content
+		}
+	}
 	seen := map[string]bool{}
 	for index := range plan.Files {
 		file := &plan.Files[index]
@@ -274,6 +302,13 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 		}
 		if changed && strings.HasPrefix(relInAdversary, "src/") {
 			implementation = true
+			if _, existed := existing[clean]; !existed {
+				newImplementation = true
+				newSourcePaths = append(newSourcePaths, clean)
+			}
+		}
+		if strings.HasPrefix(relInAdversary, "src/") {
+			finalSources[clean] = file.Content
 		}
 		if changed && strings.HasPrefix(relInAdversary, "tests/") && (strings.HasSuffix(clean, ".yaml") || strings.HasSuffix(clean, ".yml")) {
 			canonical, err := canonicalRegression([]byte(file.Content), row)
@@ -289,6 +324,9 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 		} else if changed && (strings.Contains(strings.ToLower(base), "test") || strings.Contains(strings.ToLower(base), "spec")) {
 			regression = clean
 			nativeRegression = true
+			if strings.Contains(file.Content, "/src/index") && strings.Contains(file.Content, ".run(") {
+				runtimeRegression = true
+			}
 		}
 	}
 	if operative == "" {
@@ -306,6 +344,24 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	if request.Executable && !request.PolicyDriven && !nativeRegression {
 		return "", fmt.Errorf("generated change did not update the executable adversary's native tests")
 	}
+	if request.Executable && !request.PolicyDriven && newImplementation {
+		entrypoint := adversaryPrefix + "src/index.ts"
+		if _, hasTypeScriptEntrypoint := finalSources[entrypoint]; hasTypeScriptEntrypoint {
+			reachable := reachableSourceFiles(finalSources, entrypoint)
+			var disconnected []string
+			for _, path := range newSourcePaths {
+				if !reachable[path] {
+					disconnected = append(disconnected, path)
+				}
+			}
+			if len(disconnected) > 0 {
+				return "", fmt.Errorf("generated change added implementation modules that are not reachable from src/index: %s", strings.Join(disconnected, ", "))
+			}
+		}
+	}
+	if request.Executable && !request.PolicyDriven && newImplementation && !runtimeRegression {
+		return "", fmt.Errorf("generated change added an implementation module but did not add a runtime integration test through src/index")
+	}
 	for _, file := range plan.Files {
 		path := filepath.Join(workspaceRoot, filepath.FromSlash(file.Path))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -317,6 +373,48 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	}
 	_ = root // retained in the signature to make the trust boundary explicit.
 	return filepath.Join(workspaceRoot, filepath.FromSlash(operative)), nil
+}
+
+var sourceImportPattern = regexp.MustCompile(`(?m)(?:from\s+|import\s*(?:\(\s*)?)["'](\.[^"']+)["']`)
+
+func reachableSourceFiles(sources map[string]string, entrypoint string) map[string]bool {
+	reachable := make(map[string]bool)
+	queue := []string{entrypoint}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if reachable[current] {
+			continue
+		}
+		content, exists := sources[current]
+		if !exists {
+			continue
+		}
+		reachable[current] = true
+		for _, match := range sourceImportPattern.FindAllStringSubmatch(content, -1) {
+			for _, candidate := range sourceImportCandidates(current, match[1]) {
+				if _, exists := sources[candidate]; exists && !reachable[candidate] {
+					queue = append(queue, candidate)
+					break
+				}
+			}
+		}
+	}
+	return reachable
+}
+
+func sourceImportCandidates(importer, specifier string) []string {
+	base := pathpkg.Clean(pathpkg.Join(pathpkg.Dir(importer), specifier))
+	candidates := []string{base}
+	for _, pair := range [][2]string{{".js", ".ts"}, {".mjs", ".mts"}, {".cjs", ".cts"}} {
+		if strings.HasSuffix(base, pair[0]) {
+			candidates = append(candidates, strings.TrimSuffix(base, pair[0])+pair[1])
+		}
+	}
+	if pathpkg.Ext(base) == "" {
+		candidates = append(candidates, base+".ts", base+".tsx", pathpkg.Join(base, "index.ts"))
+	}
+	return candidates
 }
 
 func canonicalRegression(raw []byte, row results.Result) ([]byte, error) {
