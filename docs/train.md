@@ -99,14 +99,19 @@ and asking the configured model
 to draft a missing rule. New-adversary proposals use a dedicated modal and
 remain local until later catalog publication. The workspace also supports
 accepting, dismissing, and reopening decisions. **Apply to working tree** writes
-the edited rule into the selected local adversary policy and leaves git untouched.
+the model-generated adversary change into the current checkout and leaves git
+untouched. A change is refused unless it updates the operative policy and adds
+regression coverage; executable adversaries must also update their implementation.
 **Create catalog PR**
 fetches the remote default branch, creates an isolated temporary worktree and a
-candidate-specific branch, applies and commits the proposal there, pushes the
-branch, and opens a GitHub pull request with `gh`; it never switches or writes
-catalog files in the current checkout. **Approve for later** records the decision
-in SQLite for a later batch. Applying a proposed new adversary creates its policy
-directory and manifest entry. No third-party assets are loaded.
+candidate-specific branch, asks the configured model to integrate the rule and
+create positive and negative regression cases, validates the shape of that
+change, commits it, pushes the branch, and opens a GitHub pull request with `gh`;
+it never switches or writes catalog files in the current checkout. Selecting a
+finding updates the browser URL, so refresh and browser back/forward preserve
+your place. **Approve for later** records the decision in SQLite for a later
+batch. Applying a proposed new adversary creates its policy directory and
+manifest entry. No third-party assets are loaded.
 
 `inspect --all` walks the new-candidate queue in the terminal. Accept and dismiss
 decisions are saved immediately; skip leaves a candidate new, and quit leaves

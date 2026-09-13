@@ -100,6 +100,12 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 		CommentURL: "https://github.com/acme/api/pull/9#discussion_r4",
 	})
 	calledGH := false
+	planner := func(_ context.Context, request ChangeRequest) (ChangePlan, error) {
+		return ChangePlan{Summary: "Teach actionable failures", Files: []ChangeFile{
+			{Path: "adversaries/operability/README.md", Content: "# Operability\n\n## Review for\n\n- Return actionable recovery details to users.\n"},
+			{Path: "adversaries/operability/tests/candidate-3.yaml", Content: regressionYAML(request)},
+		}}, nil
+	}
 	runner := func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 		if name == "gh" {
 			calledGH = true
@@ -115,7 +121,7 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 	// Absolute catalog roots must be safely rebased into the temporary worktree,
 	// never followed back into the current checkout.
 	cfg := workspace.Config{Adversaries: workspace.AdversariesConfig{Root: filepath.Join(root, "adversaries")}}
-	if err := createPullRequest(context.Background(), state, root, cfg, "candidate-3", runner); err != nil {
+	if err := createPullRequest(context.Background(), state, root, cfg, "candidate-3", planner, runner); err != nil {
 		t.Fatal(err)
 	}
 	if !calledGH {
@@ -133,9 +139,53 @@ func TestCreatePullRequestUsesIsolatedWorktree(t *testing.T) {
 		t.Fatalf("row=%+v", row)
 	}
 	proposed := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/README.md")
-	if !strings.Contains(proposed, "Return an actionable recovery step.") || !strings.Contains(proposed, "discussion_r4") {
+	if !strings.Contains(proposed, "Return actionable recovery details") {
 		t.Fatalf("proposed policy:\n%s", proposed)
 	}
+	regression := runGit(t, "", "--git-dir", remote, "show", "refs/heads/"+row.Branch+":adversaries/operability/tests/candidate-3.yaml")
+	if !strings.Contains(regression, "expected: no_finding") || !strings.Contains(regression, "discussion_r4") {
+		t.Fatalf("proposed regression:\n%s", regression)
+	}
+}
+
+func TestApplyPlannedRejectsBookkeepingOnlyChange(t *testing.T) {
+	root, state := t.TempDir(), t.TempDir()
+	dir := filepath.Join(root, "adversaries", "operability")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Operability\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	saveResult(t, state, results.Result{ID: "candidate-4", Package: "operability", ProposedRule: "Show actionable errors."})
+	cfg := workspace.Config{Adversaries: workspace.AdversariesConfig{Root: filepath.Join(root, "adversaries")}}
+	planner := func(context.Context, ChangeRequest) (ChangePlan, error) {
+		return ChangePlan{Files: []ChangeFile{
+			{Path: "adversaries/operability/README.md", Content: "# Operability\n\n## Learned rules\n- Show actionable errors.\n"},
+			{Path: "adversaries/operability/notes.md", Content: "candidate-4\n"},
+		}}, nil
+	}
+	err := ApplyPlanned(context.Background(), state, root, cfg, "candidate-4", planner)
+	if err == nil || !strings.Contains(err.Error(), "regression coverage") {
+		t.Fatalf("expected regression error, got %v", err)
+	}
+}
+
+func regressionYAML(request ChangeRequest) string {
+	return "version: 1\n" +
+		"candidate_id: " + request.CandidateID + "\n" +
+		"adversary: " + request.Adversary + "\n" +
+		"evidence: " + request.Evidence + "\n" +
+		"rule: " + request.ProposedRule + "\n" +
+		"cases:\n" +
+		"  - name: reports generic failures\n" +
+		"    review_input: user sees an error without recovery detail\n" +
+		"    expected: finding\n" +
+		"    reason: the failure is not actionable\n" +
+		"  - name: accepts actionable failures\n" +
+		"    review_input: user sees the cause and recovery command\n" +
+		"    expected: no_finding\n" +
+		"    reason: actionable context is preserved\n"
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {

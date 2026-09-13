@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/train/catalogapply"
 )
 
 type catalogModelRuntimeStub struct {
@@ -71,5 +72,20 @@ func TestCatalogTriageModelRequiresConfiguration(t *testing.T) {
 	_, _, err := newCatalogTriageModel(context.Background(), runtime, "", "")
 	if err == nil || !strings.Contains(err.Error(), "--model-provider and --model") {
 		t.Fatalf("missing model configuration error=%v", err)
+	}
+}
+
+func TestCatalogChangePlannerUsesConfiguredModel(t *testing.T) {
+	runtime := &catalogModelRuntimeStub{provider: catalogModelProviderStub{
+		name: "camel", model: "auto", output: json.RawMessage(`{"summary":"add policy and regression","files":[{"path":"adversaries/operability/README.md","content":"# Operability"},{"path":"adversaries/operability/tests/candidate.yaml","content":"version: 1"}]}`),
+	}}
+	plan, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{
+		CandidateID: "candidate", Adversary: "operability", ProposedRule: "Show actionable errors.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.config.Provider != "camel" || runtime.config.Model != "auto" || len(plan.Files) != 2 {
+		t.Fatalf("config=%+v plan=%+v", runtime.config, plan)
 	}
 }

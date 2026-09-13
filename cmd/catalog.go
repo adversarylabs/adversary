@@ -115,8 +115,10 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 					return fmt.Errorf("local browser review is unavailable in this runtime; use catalog train inspect --all")
 				}
 				var assist func(context.Context, application.CatalogAssistRequest) (application.CatalogAssistResult, error)
+				var planner catalogapply.ChangePlanner
 				if modelRuntime, ok := app.Dependencies().Runtime.(application.ModelReviewRuntime); ok {
 					assist = catalogReviewAssist(modelRuntime, modelProvider, model)
+					planner = catalogChangePlanner(modelRuntime, modelProvider, model)
 				}
 				configPath, cfg, err := resolveTrainConfig(path)
 				if err != nil {
@@ -126,10 +128,10 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 					StateRoot: state, Adversaries: adversaryIDs, Output: cmd.OutOrStdout(),
 					Assist: assist,
 					Apply: func(ctx context.Context, id string) error {
-						return catalogapply.Apply(ctx, state, filepath.Dir(configPath), cfg, id)
+						return catalogapply.ApplyPlanned(ctx, state, filepath.Dir(configPath), cfg, id, planner)
 					},
 					CreatePR: func(ctx context.Context, id string) error {
-						return catalogapply.CreatePullRequest(ctx, state, filepath.Dir(configPath), cfg, id)
+						return catalogapply.CreatePullRequestPlanned(ctx, state, filepath.Dir(configPath), cfg, id, planner)
 					},
 				})
 			}

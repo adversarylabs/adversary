@@ -40,7 +40,13 @@ func Apply(_ context.Context, stateRoot, workspaceRoot string, cfg workspace.Con
 // remote default branch, commits it, pushes it, and opens a GitHub pull request.
 // It never switches or writes catalog files in the caller's current checkout.
 func CreatePullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string) error {
-	return createPullRequest(ctx, stateRoot, workspaceRoot, cfg, id, execCommand)
+	return createPullRequest(ctx, stateRoot, workspaceRoot, cfg, id, nil, execCommand)
+}
+
+// CreatePullRequestPlanned generates a substantive adversary change in the
+// isolated worktree before committing and proposing it.
+func CreatePullRequestPlanned(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner) error {
+	return createPullRequest(ctx, stateRoot, workspaceRoot, cfg, id, planner, execCommand)
 }
 
 type commandRunner func(context.Context, string, string, ...string) ([]byte, error)
@@ -51,7 +57,7 @@ func execCommand(ctx context.Context, dir, name string, args ...string) ([]byte,
 	return command.CombinedOutput()
 }
 
-func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, run commandRunner) error {
+func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner, run commandRunner) error {
 	row, err := results.Get(stateRoot, id)
 	if err != nil {
 		return err
@@ -112,7 +118,12 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	if err != nil {
 		return err
 	}
-	target, err := applyCandidate(targetWorkspace, worktreeConfig, row)
+	var target string
+	if planner == nil {
+		target, err = applyCandidate(targetWorkspace, worktreeConfig, row)
+	} else {
+		target, err = applyPlannedCandidate(ctx, targetWorkspace, worktreeConfig, row, planner)
+	}
 	if err != nil {
 		return err
 	}
