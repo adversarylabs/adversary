@@ -25,6 +25,7 @@ const (
 	StatusNew       = "new"       // open / actionable
 	StatusAccepted  = "accepted"  // user approved for a future catalog change
 	StatusApplied   = "applied"   // user wrote draft into package
+	StatusProposed  = "proposed"  // user opened a catalog pull request
 	StatusDismissed = "dismissed" // user rejected
 	StatusCaught    = "caught"    // package matched the human concern (success)
 
@@ -48,23 +49,33 @@ const (
 
 // Result is one actionable row in the train inbox.
 type Result struct {
-	ID          string    `json:"id"`
-	RunID       string    `json:"run_id"`
-	Package     string    `json:"package"`
-	Kind        string    `json:"kind"` // human | miss | false-positive | draft
-	Status      string    `json:"status"`
-	Summary     string    `json:"summary"`
-	Title       string    `json:"title,omitempty"`
-	PRURL       string    `json:"pr_url,omitempty"`
-	PRTitle     string    `json:"pr_title,omitempty"`
-	CaseID      string    `json:"case_id,omitempty"`
-	ConcernID   string    `json:"concern_id,omitempty"`
-	DraftBody   string    `json:"draft_body,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	AppliedAt   time.Time `json:"applied_at,omitempty"`
-	AppliedPath string    `json:"applied_path,omitempty"`
-	Branch      string    `json:"branch,omitempty"`
-	IssueURL    string    `json:"issue_url,omitempty"`
+	ID               string    `json:"id"`
+	RunID            string    `json:"run_id"`
+	Package          string    `json:"package"`
+	Kind             string    `json:"kind"` // human | miss | false-positive | draft
+	Status           string    `json:"status"`
+	Summary          string    `json:"summary"`
+	Title            string    `json:"title,omitempty"`
+	PRURL            string    `json:"pr_url,omitempty"`
+	PRTitle          string    `json:"pr_title,omitempty"`
+	PRAuthor         string    `json:"pr_author,omitempty"`
+	CommentAuthor    string    `json:"comment_author,omitempty"`
+	CommentURL       string    `json:"comment_url,omitempty"`
+	File             string    `json:"file,omitempty"`
+	Line             int       `json:"line,omitempty"`
+	DiffHunk         string    `json:"diff_hunk,omitempty"`
+	ProposedRule     string    `json:"proposed_rule,omitempty"`
+	TriageReason     string    `json:"triage_reason,omitempty"`
+	AdversaryMission string    `json:"adversary_mission,omitempty"`
+	CaseID           string    `json:"case_id,omitempty"`
+	ConcernID        string    `json:"concern_id,omitempty"`
+	DraftBody        string    `json:"draft_body,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	AppliedAt        time.Time `json:"applied_at,omitempty"`
+	AppliedPath      string    `json:"applied_path,omitempty"`
+	Branch           string    `json:"branch,omitempty"`
+	IssueURL         string    `json:"issue_url,omitempty"`
+	CatalogPRURL     string    `json:"catalog_pr_url,omitempty"`
 }
 
 // normalizeKind maps legacy stored values to current vocabulary.
@@ -355,9 +366,27 @@ func writeKeptCase(stateRoot, runID string, c *cases.Case, includeUnassigned boo
 		if err != sql.ErrNoRows {
 			return n, err
 		}
+		// A concern may be repeated across review rounds, GitHub endpoints, or
+		// later training runs. Preserve distinct owner proposals, but do not make
+		// the user review the same PR evidence for the same owner twice.
+		var duplicate int
+		err = db.QueryRow(`SELECT 1 FROM results
+			WHERE lower(trim(pr_url)) = lower(trim(?))
+			  AND lower(trim(summary)) = lower(trim(?))
+			  AND lower(trim(package)) = lower(trim(?))
+			LIMIT 1`, prURL, e.Summary, owner).Scan(&duplicate)
+		if err == nil {
+			continue
+		}
+		if err != sql.ErrNoRows {
+			return n, err
+		}
 		body := fmt.Sprintf("## Human concern (awaiting review)\n\nAdversary: `%s`\n\n%s\n\n", owner, e.Summary)
-		if owner == "unassigned" && e.ScopeReason != "" {
-			body += fmt.Sprintf("Routing: %s\n\n", e.ScopeReason)
+		if e.ScopeReason != "" {
+			body += fmt.Sprintf("Triage: %s\n\n", e.ScopeReason)
+		}
+		if e.ProposedRule != "" {
+			body += fmt.Sprintf("Proposed rule: %s\n\n", e.ProposedRule)
 		}
 		if prURL != "" {
 			body += fmt.Sprintf("PR: %s\n", prURL)
@@ -366,19 +395,27 @@ func writeKeptCase(stateRoot, runID string, c *cases.Case, includeUnassigned boo
 			body += fmt.Sprintf("File: `%s`\n", e.File)
 		}
 		r := Result{
-			ID:        id,
-			RunID:     runID,
-			Package:   owner,
-			Kind:      KindHuman,
-			Status:    StatusNew,
-			Summary:   strings.TrimSpace(e.Summary),
-			Title:     soft(e.Summary, 80),
-			PRURL:     prURL,
-			PRTitle:   c.PullRequest.Title,
-			CaseID:    c.ID,
-			ConcernID: e.ID,
-			DraftBody: body,
-			CreatedAt: now,
+			ID:            id,
+			RunID:         runID,
+			Package:       owner,
+			Kind:          KindHuman,
+			Status:        StatusNew,
+			Summary:       strings.TrimSpace(e.Summary),
+			Title:         soft(e.Summary, 80),
+			PRURL:         prURL,
+			PRTitle:       c.PullRequest.Title,
+			PRAuthor:      c.PullRequest.Author,
+			CommentAuthor: e.CommentAuthor,
+			CommentURL:    e.CommentURL,
+			File:          e.File,
+			Line:          e.Line,
+			DiffHunk:      e.DiffHunk,
+			ProposedRule:  e.ProposedRule,
+			TriageReason:  e.ScopeReason,
+			CaseID:        c.ID,
+			ConcernID:     e.ID,
+			DraftBody:     body,
+			CreatedAt:     now,
 		}
 		if err := upsertResult(db, r); err != nil {
 			return n, err
@@ -646,11 +683,139 @@ func FormatCatalogListTable(rows []Result) string {
 		return "No results. Run: adversary catalog train\n"
 	}
 	var b strings.Builder
-	b.WriteString(formatListRows(rows))
-	fmt.Fprintf(&b, "\n%d result(s).\n", len(rows))
-	fmt.Fprintf(&b, "Kinds: human = human said it · miss = should have caught · false+ = we over-fired · draft = package fix idea\n")
+	fmt.Fprintf(&b, "%-10s %-10s %-28s %s\n", "ID", "STATUS", "ADVERSARY", "HUMAN REVIEW EVIDENCE")
+	fmt.Fprintf(&b, "%s\n", strings.Repeat("-", 100))
+	for _, r := range rows {
+		owner := strings.TrimSpace(r.Package)
+		if owner == "" {
+			owner = "unassigned"
+		}
+		fmt.Fprintf(&b, "%-10s %-10s %-28s %s\n",
+			trunc(r.ID, 10), trunc(r.Status, 10), trunc(owner, 28), soft(r.Summary, 62))
+	}
+	fmt.Fprintf(&b, "\n%d triaged candidate(s). `unassigned` means the comment survived noise filtering but no adversary confidently owns it yet.\n", len(rows))
 	fmt.Fprintf(&b, "Store: local SQLite results.db\n")
 	return b.String()
+}
+
+// FormatCatalogInspect describes a private-catalog candidate in catalog terms,
+// without exposing the executable-adversary trainer's package/kind vocabulary.
+func FormatCatalogInspect(r Result) string {
+	owner := strings.TrimSpace(r.Package)
+	if owner == "" {
+		owner = "unassigned"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "ID:        %s\n", r.ID)
+	fmt.Fprintf(&b, "Status:    %s\n", r.Status)
+	fmt.Fprintf(&b, "Adversary: %s\n", owner)
+	fmt.Fprintf(&b, "Evidence:  %s\n", r.Summary)
+	if r.CommentAuthor != "" {
+		fmt.Fprintf(&b, "Commenter: @%s\n", strings.TrimPrefix(r.CommentAuthor, "@"))
+	}
+	if r.PRAuthor != "" {
+		fmt.Fprintf(&b, "PR author: @%s\n", strings.TrimPrefix(r.PRAuthor, "@"))
+	}
+	if r.PRURL != "" {
+		fmt.Fprintf(&b, "PR:        %s\n", r.PRURL)
+	}
+	if r.PRTitle != "" {
+		fmt.Fprintf(&b, "PR title:  %s\n", r.PRTitle)
+	}
+	if r.File != "" {
+		fmt.Fprintf(&b, "File:      %s", r.File)
+		if r.Line > 0 {
+			fmt.Fprintf(&b, ":%d", r.Line)
+		}
+		fmt.Fprintln(&b)
+	}
+	if r.CommentURL != "" {
+		fmt.Fprintf(&b, "Comment:   %s\n", r.CommentURL)
+	}
+	if r.ProposedRule != "" {
+		fmt.Fprintf(&b, "\nProposed rule:\n%s\n", r.ProposedRule)
+	}
+	if r.AdversaryMission != "" {
+		fmt.Fprintf(&b, "\nProposed adversary mission:\n%s\n", r.AdversaryMission)
+	}
+	if r.TriageReason != "" {
+		fmt.Fprintf(&b, "\nModel rationale:\n%s\n", r.TriageReason)
+	}
+	return b.String()
+}
+
+// ReassignCatalogCandidate changes the proposed existing adversary without
+// accepting the candidate.
+func ReassignCatalogCandidate(stateRoot, id, adversary string) error {
+	adversary = strings.TrimSpace(adversary)
+	if !validCatalogAdversaryID(adversary) {
+		return fmt.Errorf("adversary id must use lowercase letters, numbers, dots, dashes, or underscores")
+	}
+	db, err := openDB(stateRoot)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	res, err := db.Exec(`UPDATE results SET package = ? WHERE id = ?`, adversary, strings.TrimSpace(id))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("result %q not found", id)
+	}
+	return nil
+}
+
+func validCatalogAdversaryID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i, r := range value {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || i > 0 && (r == '-' || r == '_' || r == '.') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// UpdateCatalogProposedRule edits the model proposal without accepting it.
+func UpdateCatalogProposedRule(stateRoot, id, rule string) error {
+	rule = strings.TrimSpace(rule)
+	if rule == "" {
+		return fmt.Errorf("proposed rule must not be empty")
+	}
+	db, err := openDB(stateRoot)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	res, err := db.Exec(`UPDATE results SET proposed_rule = ? WHERE id = ?`, rule, strings.TrimSpace(id))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("result %q not found", id)
+	}
+	return nil
+}
+
+// UpdateCatalogAdversaryMission stores the proposed scope for a new private
+// adversary without creating tracked catalog files.
+func UpdateCatalogAdversaryMission(stateRoot, id, mission string) error {
+	db, err := openDB(stateRoot)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	res, err := db.Exec(`UPDATE results SET adversary_mission = ? WHERE id = ?`, strings.TrimSpace(mission), strings.TrimSpace(id))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("result %q not found", id)
+	}
+	return nil
 }
 
 func formatListRows(rows []Result) string {

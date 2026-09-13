@@ -70,8 +70,9 @@ type SourcesConfig struct {
 }
 
 type RunConfig struct {
-	MaxPRs   int `yaml:"max_prs"`
-	MaxTurns int `yaml:"max_turns"`
+	MaxPRs     int  `yaml:"max_prs"`
+	MaxTurns   int  `yaml:"max_turns"`
+	AllHistory bool `yaml:"all_history"`
 	// Concurrency is parallel PR collect workers (gh). 0 = default (4). Cap 16.
 	// Local package runs stay serialized under a per-path lock.
 	Concurrency int      `yaml:"concurrency"`
@@ -161,11 +162,17 @@ func (c Config) Validate() error {
 				return fmt.Errorf("sources.github_events_url must be an HTTPS URL without embedded credentials")
 			}
 		}
-		if since := strings.TrimSpace(c.Sources.Since); since != "" {
-			if _, err := time.Parse("2006-01-02", since); err != nil {
-				return fmt.Errorf("sources.since must be YYYY-MM-DD for github_events discovery")
-			}
+	}
+	if since := strings.TrimSpace(c.Sources.Since); since != "" {
+		if _, err := time.Parse("2006-01-02", since); err != nil {
+			return fmt.Errorf("sources.since must be YYYY-MM-DD")
 		}
+	}
+	if c.Run.AllHistory && strings.TrimSpace(c.Sources.Since) == "" {
+		return fmt.Errorf("run.all_history requires sources.since")
+	}
+	if c.Run.AllHistory && mode != "repos" {
+		return fmt.Errorf("run.all_history requires sources.discovery: repos")
 	}
 	if c.Run.MaxPRs < 0 || c.Run.MaxTurns < 0 {
 		return fmt.Errorf("run.max_prs and run.max_turns must be non-negative")

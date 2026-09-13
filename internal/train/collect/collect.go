@@ -50,6 +50,7 @@ type rawReviewComment struct {
 	Body                  string         `json:"body"`
 	Path                  string         `json:"path"`
 	Line                  int            `json:"line"`
+	OriginalLine          int            `json:"original_line"`
 	OriginalCommitID      string         `json:"original_commit_id"`
 	CommitID              string         `json:"commit_id"`
 	CreatedAt             string         `json:"created_at"`
@@ -381,7 +382,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 					Author:           c.User.Login,
 					Body:             c.Body,
 					Path:             c.Path,
-					Line:             c.Line,
+					Line:             reviewCommentLine(c),
 					OriginalCommitID: oc,
 					CreatedAt:        created,
 					// Manual approval path: not auto-gold
@@ -427,6 +428,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			},
 			PullRequest: cases.PullRequest{
 				Number:         pr,
+				Author:         prObj.User.Login,
 				BaseSHA:        prObj.Base.SHA,
 				InitialHeadSHA: sha,
 				FinalHeadSHA:   prObj.Head.SHA,
@@ -491,7 +493,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			created, _ := time.Parse(time.RFC3339, c.CreatedAt)
 			allComments = append(allComments, cases.Comment{
 				ID: c.ID, Kind: "review-comment", URL: githubCommentURL(prObj.HTMLURL, c.HTMLURL, "discussion_r", c.ID), Author: c.User.Login, Body: c.Body,
-				Path: c.Path, Line: c.Line, OriginalCommitID: oc, CreatedAt: created,
+				Path: c.Path, Line: reviewCommentLine(c), OriginalCommitID: oc, CreatedAt: created,
 			})
 		}
 		sha, source, excl := cases.ReconstructReviewedSHA(cases.ReviewSignal{OriginalCommitIDs: origIDs, PRHeadSHA: prObj.Head.SHA})
@@ -501,7 +503,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			SchemaVersion: 4,
 			ID:            cases.CaseID(repoSlug, pr, 1),
 			Repository:    cases.Repository{Owner: owner, Name: repo, URL: prObj.HTMLURL},
-			PullRequest:   cases.PullRequest{Number: pr, BaseSHA: prObj.Base.SHA, InitialHeadSHA: sha, FinalHeadSHA: prObj.Head.SHA, Title: prObj.Title},
+			PullRequest:   cases.PullRequest{Number: pr, Author: prObj.User.Login, BaseSHA: prObj.Base.SHA, InitialHeadSHA: sha, FinalHeadSHA: prObj.Head.SHA, Title: prObj.Title},
 			ReviewEvent:   cases.ReviewEvent{RoundIndex: 1, Kind: "inline-comment-cluster", ReviewedSHA: sha, ReviewedSHASource: source},
 			Comments:      allComments,
 			Labels:        cases.Labels{ExpectedConcerns: labels},
@@ -510,6 +512,13 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		})
 	}
 	return out, nil
+}
+
+func reviewCommentLine(comment rawReviewComment) int {
+	if comment.Line > 0 {
+		return comment.Line
+	}
+	return comment.OriginalLine
 }
 
 // AuthorFilter decides if a comment author may count as gold (train config).
@@ -573,8 +582,12 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 		}
 		body = scope.NormalizeReviewComment(body)
 		labels[i].Summary = body
+		labels[i].CommentAuthor = author
 		if matched != nil {
 			ctx := commentContext[commentKey{kind: matched.Kind, id: matched.ID}]
+			labels[i].CommentURL = matched.URL
+			labels[i].Line = matched.Line
+			labels[i].DiffHunk = ctx.diffHunk
 			labels[i].ThreadContext = append([]cases.ReviewThreadContext(nil), ctx.threadContext...)
 			labels[i].ThreadDisposition = ctx.threadDisposition
 			labels[i].ThreadDispositionURL = ctx.threadDispositionURL
@@ -657,6 +670,7 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 			)
 			labels[i].OwnerAdversary = route.OwnerID
 			labels[i].ScopeReason = route.Reason
+			labels[i].ProposedRule = strings.TrimSpace(route.GeneralizedRule)
 			labels[i].ScopeMethod = route.Method
 			// Broad generalists keep short comments (LGTM, "why?", etc.); specialists
 			// still require a minimal summary so empty stubs are not gold.

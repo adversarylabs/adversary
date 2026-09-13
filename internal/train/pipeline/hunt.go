@@ -142,7 +142,11 @@ func runParallelHunt(
 	if opts.CollectOnly {
 		targetLabel = "catalog candidates"
 	}
-	progress("max-turns=%d, target %s=%d, concurrency=%d", maxTurns, targetLabel, targetPRs, concurrency)
+	if opts.AllHistory {
+		progress("limits=none, since=%s, concurrency=%d", opts.AuthorSince, concurrency)
+	} else {
+		progress("max-turns=%d, target %s=%d, concurrency=%d", maxTurns, targetLabel, targetPRs, concurrency)
+	}
 
 	var mu sync.Mutex
 	stores := map[string]*state.DiscoveryStore{}
@@ -175,6 +179,19 @@ func runParallelHunt(
 					continue
 				}
 				res := collectOnePR(ctx, opts, dataRoot, job, scopeClf, commentRouter, progress)
+				for opts.AllHistory && collect.IsRateLimit(res.err) && ctx.Err() == nil {
+					reset := collect.RateLimitReset(res.err)
+					if reset.IsZero() {
+						progress("GitHub rate limit while collecting %s/%s#%d — backing off", job.owner, job.name, job.ref.Number)
+					} else {
+						progress("GitHub rate limit while collecting %s/%s#%d — waiting until %s", job.owner, job.name, job.ref.Number, reset.Local().Format(time.RFC3339))
+					}
+					if err := collect.WaitForRateLimit(ctx, res.err); err != nil {
+						res.err = err
+						break
+					}
+					res = collectOnePR(ctx, opts, dataRoot, job, scopeClf, commentRouter, progress)
+				}
 				if ctx.Err() != nil {
 					// Still persist any usable catalog evidence from a finished collect.
 					if (res.inScopeN > 0 || (res.retainUnassigned && res.unassignedN > 0)) && len(res.kept) > 0 {
@@ -212,8 +229,49 @@ func runParallelHunt(
 	// A per-target cursor lets later runs resume at the next window while a shared
 	// seed staggers different targets' first run. Collect workers already run up
 	// to `concurrency` PRs at once.
+	historical := map[string][]collect.PRRef{}
+	historicalIndex := map[string]int{}
+	historicalDiscoveryFailed := false
+	if opts.AllHistory {
+		since, err := time.Parse("2006-01-02", strings.TrimSpace(opts.AuthorSince))
+		if err != nil {
+			out.interrupted = fmt.Errorf("parse historical cutoff: %w", err)
+			historicalDiscoveryFailed = true
+		} else {
+			progress("Historical scan: every merged PR since %s (no PR or turn limit)", since.Format("2006-01-02"))
+			for _, r := range catalogRepos {
+				store, storeErr := storeFor(r.Owner, r.Name)
+				if storeErr != nil {
+					out.interrupted = storeErr
+					historicalDiscoveryFailed = true
+					break
+				}
+				found, discoverErr := collect.DiscoverHistoricalPRs(r.Owner, r.Name, collect.HistoricalDiscoverOpts{
+					Context: ctx, Since: since, Skip: store.SeenSet(),
+					OnRateLimit: func(reset time.Time) {
+						if reset.IsZero() {
+							progress("GitHub rate limit while paging %s — backing off", r.FullName())
+						} else {
+							progress("GitHub rate limit while paging %s — waiting until %s", r.FullName(), reset.Local().Format(time.RFC3339))
+						}
+					},
+				})
+				if discoverErr != nil {
+					out.interrupted = discoverErr
+					historicalDiscoveryFailed = true
+					break
+				}
+				historical[r.FullName()] = found
+				progress("Historical candidates in %s: %d new", r.FullName(), len(found))
+			}
+		}
+	}
+
 feedLoop:
 	for {
+		if historicalDiscoveryFailed {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			mu.Lock()
 			out.interrupted = fmt.Errorf("train interrupted: %w", err)
@@ -238,7 +296,25 @@ feedLoop:
 			ok    bool
 		}
 		hits := make([]discHit, len(catalogRepos))
-		if githubEventsMode {
+		if opts.AllHistory {
+			for i, r := range catalogRepos {
+				store, err := storeFor(r.Owner, r.Name)
+				if err != nil {
+					out.interrupted = err
+					break feedLoop
+				}
+				key := r.FullName()
+				refs, index := historical[key], historicalIndex[key]
+				for index < len(refs) && store.Seen(refs[index].Number) {
+					index++
+				}
+				if index < len(refs) {
+					hits[i] = discHit{repo: r, store: store, ref: refs[index], ok: true}
+					index++
+				}
+				historicalIndex[key] = index
+			}
+		} else if githubEventsMode {
 			repoNames := make([]string, 0, len(catalogRepos))
 			for _, r := range catalogRepos {
 				repoNames = append(repoNames, r.FullName())

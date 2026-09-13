@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS results (
   title         TEXT NOT NULL DEFAULT '',
   pr_url        TEXT NOT NULL DEFAULT '',
   pr_title      TEXT NOT NULL DEFAULT '',
+  pr_author     TEXT NOT NULL DEFAULT '',
+  comment_author TEXT NOT NULL DEFAULT '',
+	comment_url   TEXT NOT NULL DEFAULT '',
+  file          TEXT NOT NULL DEFAULT '',
+	line          INTEGER NOT NULL DEFAULT 0,
+	diff_hunk     TEXT NOT NULL DEFAULT '',
+  proposed_rule TEXT NOT NULL DEFAULT '',
+  triage_reason TEXT NOT NULL DEFAULT '',
+	adversary_mission TEXT NOT NULL DEFAULT '',
   case_id       TEXT NOT NULL DEFAULT '',
   concern_id    TEXT NOT NULL DEFAULT '',
   draft_body    TEXT NOT NULL DEFAULT '',
@@ -58,7 +67,8 @@ CREATE TABLE IF NOT EXISTS results (
   applied_at    TEXT NOT NULL DEFAULT '',
   applied_path  TEXT NOT NULL DEFAULT '',
   branch        TEXT NOT NULL DEFAULT '',
-  issue_url     TEXT NOT NULL DEFAULT ''
+  issue_url     TEXT NOT NULL DEFAULT '',
+  catalog_pr_url TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_results_status ON results(status);
 CREATE INDEX IF NOT EXISTS idx_results_package ON results(package);
@@ -73,11 +83,22 @@ CREATE INDEX IF NOT EXISTS idx_results_run ON results(run_id);
 	_, _ = db.Exec(`UPDATE results SET kind = 'false-positive' WHERE kind IN ('extra', 'fp', 'false_positive')`)
 	// Additive columns for older DBs.
 	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN issue_url TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN pr_author TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN comment_author TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN comment_url TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN file TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN line INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN diff_hunk TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN proposed_rule TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN triage_reason TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN adversary_mission TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE results ADD COLUMN catalog_pr_url TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
 const resultCols = `id, run_id, package, kind, status, summary, title, pr_url, pr_title,
-	case_id, concern_id, draft_body, created_at, applied_at, applied_path, branch, issue_url`
+	pr_author, comment_author, comment_url, file, line, diff_hunk, proposed_rule, triage_reason, adversary_mission, case_id, concern_id, draft_body,
+	created_at, applied_at, applied_path, branch, issue_url, catalog_pr_url`
 
 func scanResult(row interface {
 	Scan(dest ...any) error
@@ -86,8 +107,9 @@ func scanResult(row interface {
 	var created, applied string
 	err := row.Scan(
 		&r.ID, &r.RunID, &r.Package, &r.Kind, &r.Status, &r.Summary, &r.Title,
-		&r.PRURL, &r.PRTitle, &r.CaseID, &r.ConcernID, &r.DraftBody,
-		&created, &applied, &r.AppliedPath, &r.Branch, &r.IssueURL,
+		&r.PRURL, &r.PRTitle, &r.PRAuthor, &r.CommentAuthor, &r.CommentURL, &r.File, &r.Line, &r.DiffHunk, &r.ProposedRule, &r.TriageReason, &r.AdversaryMission,
+		&r.CaseID, &r.ConcernID, &r.DraftBody,
+		&created, &applied, &r.AppliedPath, &r.Branch, &r.IssueURL, &r.CatalogPRURL,
 	)
 	if err != nil {
 		return Result{}, err
@@ -97,7 +119,25 @@ func scanResult(row interface {
 		r.AppliedAt = parseTime(applied)
 	}
 	r.Kind = normalizeKind(r.Kind)
+	if r.ProposedRule == "" {
+		r.ProposedRule = draftField(r.DraftBody, "Proposed rule:")
+	}
+	if r.TriageReason == "" {
+		r.TriageReason = draftField(r.DraftBody, "Triage:")
+	}
 	return r, nil
+}
+
+func draftField(body, label string) string {
+	start := strings.Index(body, label)
+	if start < 0 {
+		return ""
+	}
+	value := strings.TrimSpace(body[start+len(label):])
+	if end := strings.Index(value, "\n\n"); end >= 0 {
+		value = value[:end]
+	}
+	return strings.TrimSpace(value)
 }
 
 func parseTime(s string) time.Time {
@@ -126,8 +166,9 @@ func upsertResult(db *sql.DB, r Result) error {
 	_, err := db.Exec(`
 INSERT INTO results (
   id, run_id, package, kind, status, summary, title, pr_url, pr_title,
-  case_id, concern_id, draft_body, created_at, applied_at, applied_path, branch, issue_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  pr_author, comment_author, comment_url, file, line, diff_hunk, proposed_rule, triage_reason, adversary_mission, case_id, concern_id, draft_body,
+  created_at, applied_at, applied_path, branch, issue_url, catalog_pr_url
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   run_id=excluded.run_id,
   package=excluded.package,
@@ -137,6 +178,15 @@ ON CONFLICT(id) DO UPDATE SET
   title=excluded.title,
   pr_url=excluded.pr_url,
   pr_title=excluded.pr_title,
+  pr_author=excluded.pr_author,
+  comment_author=excluded.comment_author,
+	comment_url=excluded.comment_url,
+  file=excluded.file,
+	line=excluded.line,
+	diff_hunk=excluded.diff_hunk,
+  proposed_rule=excluded.proposed_rule,
+  triage_reason=excluded.triage_reason,
+	adversary_mission=excluded.adversary_mission,
   case_id=excluded.case_id,
   concern_id=excluded.concern_id,
   draft_body=excluded.draft_body,
@@ -144,11 +194,13 @@ ON CONFLICT(id) DO UPDATE SET
   applied_at=excluded.applied_at,
   applied_path=excluded.applied_path,
   branch=excluded.branch,
-  issue_url=excluded.issue_url
+  issue_url=excluded.issue_url,
+  catalog_pr_url=excluded.catalog_pr_url
 `,
 		r.ID, r.RunID, r.Package, r.Kind, r.Status, r.Summary, r.Title,
-		r.PRURL, r.PRTitle, r.CaseID, r.ConcernID, r.DraftBody,
-		formatTime(r.CreatedAt), formatTime(r.AppliedAt), r.AppliedPath, r.Branch, r.IssueURL,
+		r.PRURL, r.PRTitle, r.PRAuthor, r.CommentAuthor, r.CommentURL, r.File, r.Line, r.DiffHunk, r.ProposedRule, r.TriageReason, r.AdversaryMission,
+		r.CaseID, r.ConcernID, r.DraftBody,
+		formatTime(r.CreatedAt), formatTime(r.AppliedAt), r.AppliedPath, r.Branch, r.IssueURL, r.CatalogPRURL,
 	)
 	return err
 }

@@ -262,6 +262,40 @@ func TestNonActionableHumanCommentRejectsSuccessfulVerificationReport(t *testing
 	}
 }
 
+func TestNonActionableHumanCommentRejectsCatalogTrainingNoise(t *testing.T) {
+	for _, body := range []string{
+		"nice",
+		"smart",
+		":shipit:",
+		"Great improvement!",
+		"This looks valid.",
+		"let's go securebuild 🛡️ 🚀",
+		"~what's using this?~ nm, found the answer",
+		"Airgap tests have passed, I'm going to dismiss this.",
+		"I see 90 checks passing and greptile not complaining. I think this is valid.",
+		"No need to change this.",
+		"There are tests for this already, so this can stay as-is.",
+		"But I see DoJSON does the same thing. So this was probably just copied.",
+	} {
+		if reason, rejected := NonActionableHumanComment(body); !rejected {
+			t.Errorf("training noise remained actionable: %q (%s)", body, reason)
+		}
+	}
+}
+
+func TestNonActionableHumanCommentKeepsCatalogTrainingSignals(t *testing.T) {
+	for _, body := range []string{
+		"Should we log these errors for debuggability?",
+		"Pass the request context through so canceling the request also stops kubectl.",
+		"Endpoints is deprecated; use EndpointSlice so this remains compatible with newer clusters.",
+		"Nit: use our existing requestID helper here.",
+	} {
+		if reason, rejected := NonActionableHumanComment(body); rejected {
+			t.Errorf("training signal was rejected: %q (%s)", body, reason)
+		}
+	}
+}
+
 func TestNonActionableHumanCommentRejectsBotInvocationOnly(t *testing.T) {
 	for _, body := range []string{
 		"@copilot",
