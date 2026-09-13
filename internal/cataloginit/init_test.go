@@ -194,12 +194,13 @@ func TestUpgradeReplacesOnlyManagedV1RuntimeFiles(t *testing.T) {
 func TestEnsureRunnableAdversaryUpgradesManagedV2Runtime(t *testing.T) {
 	dir := t.TempDir()
 	for name, content := range map[string]string{
-		"README.md":       "# Operability\n\n## Purpose\n\nKeep failures actionable.\n",
-		"adversary.yaml":  "name: private/operability\n",
-		"package.json":    `{"adversarylabsCatalogRuntime": 2}`,
-		"src/index.ts":    "// managed v2\n",
-		"dist/index.js":   "// managed v2\n",
-		"dist/index.d.ts": "// managed v2\n",
+		"README.md":         "# Operability\n\n## Purpose\n\nKeep failures actionable.\n",
+		"adversary.yaml":    "name: private/operability\n",
+		"package.json":      `{"adversarylabsCatalogRuntime": 2}`,
+		"package-lock.json": `{"name":"stale-runtime-2","lockfileVersion":3,"packages":{}}`,
+		"src/index.ts":      "// managed v2\n",
+		"dist/index.js":     "// managed v2\n",
+		"dist/index.d.ts":   "// managed v2\n",
 	} {
 		path := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -216,6 +217,10 @@ func TestEnsureRunnableAdversaryUpgradesManagedV2Runtime(t *testing.T) {
 	packageJSON, err := os.ReadFile(filepath.Join(dir, "package.json"))
 	if err != nil || !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 3`) {
 		t.Fatalf("runtime was not upgraded: %q err=%v", packageJSON, err)
+	}
+	packageLock, err := os.ReadFile(filepath.Join(dir, "package-lock.json"))
+	if err != nil || strings.Contains(string(packageLock), "stale-runtime-2") || !strings.Contains(string(packageLock), `"yaml": "^2.8.1"`) {
+		t.Fatalf("runtime lockfile was not upgraded: %q err=%v", packageLock, err)
 	}
 }
 

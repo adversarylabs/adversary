@@ -16,6 +16,7 @@ type catalogSnapshotEntry struct {
 
 type catalogTreeSnapshot struct {
 	existed bool
+	mode    fs.FileMode
 	entries map[string]catalogSnapshotEntry
 }
 
@@ -41,6 +42,10 @@ func snapshotCatalogChange(adversaryDir, manifestPath string) (func() error, err
 }
 
 func captureCatalogTree(root string) (catalogTreeSnapshot, error) {
+	return captureCatalogTreeSkipping(root, nil)
+}
+
+func captureCatalogTreeSkipping(root string, skipDir func(string) bool) (catalogTreeSnapshot, error) {
 	snapshot := catalogTreeSnapshot{entries: map[string]catalogSnapshotEntry{}}
 	info, err := os.Lstat(root)
 	if os.IsNotExist(err) {
@@ -53,6 +58,7 @@ func captureCatalogTree(root string) (catalogTreeSnapshot, error) {
 		return snapshot, fmt.Errorf("adversary path is not a directory: %s", root)
 	}
 	snapshot.existed = true
+	snapshot.mode = info.Mode()
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -61,7 +67,7 @@ func captureCatalogTree(root string) (catalogTreeSnapshot, error) {
 		if err != nil || rel == "." {
 			return err
 		}
-		if entry.IsDir() && (entry.Name() == "node_modules" || entry.Name() == ".adversary" || entry.Name() == ".git") {
+		if entry.IsDir() && skipDir != nil && skipDir(entry.Name()) {
 			return filepath.SkipDir
 		}
 		info, err := os.Lstat(path)
@@ -101,9 +107,6 @@ func restoreCatalogTree(root string, snapshot catalogTreeSnapshot) error {
 		if path == root {
 			return nil
 		}
-		if entry.IsDir() && (entry.Name() == "node_modules" || entry.Name() == ".adversary" || entry.Name() == ".git") {
-			return filepath.SkipDir
-		}
 		current = append(current, path)
 		return nil
 	}); err != nil && !os.IsNotExist(err) {
@@ -115,7 +118,10 @@ func restoreCatalogTree(root string, snapshot catalogTreeSnapshot) error {
 			return err
 		}
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, snapshot.mode.Perm()); err != nil {
+		return err
+	}
+	if err := os.Chmod(root, snapshot.mode.Perm()); err != nil {
 		return err
 	}
 	paths := make([]string, 0, len(snapshot.entries))

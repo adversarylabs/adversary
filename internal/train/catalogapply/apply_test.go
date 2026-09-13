@@ -222,6 +222,57 @@ func TestApplyPlannedRollsBackNewAdversaryWhenGenerationFails(t *testing.T) {
 	}
 }
 
+func TestCatalogTreeRollbackRestoresCachesAndRootMode(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "operability")
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"README.md":              "original policy",
+		"node_modules/cache.txt": "original dependency cache",
+		".adversary/state.json":  "original runtime state",
+		".git/config":            "original nested repository",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := captureCatalogTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(root, "node_modules")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".adversary", "state.json"), []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreCatalogTree(root, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(root)
+	if err != nil || info.Mode().Perm() != 0o750 {
+		t.Fatalf("root mode=%v err=%v", info.Mode().Perm(), err)
+	}
+	for name, want := range map[string]string{
+		"node_modules/cache.txt": "original dependency cache",
+		".adversary/state.json":  "original runtime state",
+		".git/config":            "original nested repository",
+	} {
+		got, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil || string(got) != want {
+			t.Fatalf("restored %s=%q err=%v", name, got, err)
+		}
+	}
+}
+
 func TestApplyPlannedRejectsBookkeepingOnlyChange(t *testing.T) {
 	root, state := t.TempDir(), t.TempDir()
 	dir := filepath.Join(root, "adversaries", "operability")

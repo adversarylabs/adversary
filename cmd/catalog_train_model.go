@@ -1,15 +1,19 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/train/catalogapply"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
 
@@ -70,7 +74,7 @@ var catalogCaseEvaluationSchema = json.RawMessage(`{
   "required": ["results"],
   "properties": {
     "results": {
-      "type": "array",
+	  "type": "array", "minItems": 1, "maxItems": 64,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -102,6 +106,20 @@ type catalogOverlapDecision struct {
 	Adversary   string `json:"adversary"`
 	RuleID      string `json:"rule_id"`
 	Reason      string `json:"reason"`
+}
+
+type catalogTriageDecision struct {
+	Disposition        string `json:"disposition"`
+	PrivateSpecific    bool   `json:"private_specific"`
+	OwnerID            string `json:"owner_id"`
+	SuggestedAdversary string `json:"suggested_adversary"`
+	GeneralizedRule    string `json:"generalized_rule"`
+	Reason             string `json:"reason"`
+	Material           bool   `json:"material"`
+	Actionable         bool   `json:"actionable"`
+	ChangeLocal        bool   `json:"change_local"`
+	EngineeringPrimary bool   `json:"engineering_primary"`
+	NonBlocking        bool   `json:"non_blocking"`
 }
 
 type generatedManagedRule struct {
@@ -150,6 +168,18 @@ func newCatalogTriageModel(ctx context.Context, runtime application.ModelReviewR
 		if err != nil {
 			return nil, err
 		}
+		if err := validateCatalogModelJSON(output, catalogTriageSchema); err != nil {
+			return nil, fmt.Errorf("decode catalog triage: %w", err)
+		}
+		var decision catalogTriageDecision
+		if err := decodeStrictJSONObject(output, &decision,
+			"disposition", "private_specific", "owner_id", "suggested_adversary", "generalized_rule", "reason",
+			"material", "actionable", "change_local", "engineering_primary", "non_blocking"); err != nil {
+			return nil, fmt.Errorf("decode catalog triage: %w", err)
+		}
+		if !oneOf(decision.Disposition, "noise", "general_public", "private_candidate", "unclear") {
+			return nil, fmt.Errorf("decode catalog triage: invalid disposition %q", decision.Disposition)
+		}
 		return output, nil
 	}
 	return call, provider.Name() + "/" + provider.Model(), nil
@@ -172,8 +202,11 @@ func catalogReviewAssist(runtime application.ModelReviewRuntime, providerName, m
 		if err != nil {
 			return application.CatalogAssistResult{}, err
 		}
+		if err := validateCatalogModelJSON(raw, catalogAssistSchema); err != nil {
+			return application.CatalogAssistResult{}, fmt.Errorf("decode AI assist: %w", err)
+		}
 		var result application.CatalogAssistResult
-		if err := json.Unmarshal(raw, &result); err != nil {
+		if err := decodeStrictJSONObject(raw, &result, "adversary", "proposed_rule", "adversary_mission", "rationale"); err != nil {
 			return application.CatalogAssistResult{}, fmt.Errorf("decode AI assist: %w", err)
 		}
 		if result.ProposedRule == "" {
@@ -232,9 +265,23 @@ cases.yaml must contain exactly: version (1), rule_id, candidate_id, evidence, a
 		if err != nil {
 			return catalogapply.ChangePlan{}, err
 		}
-		var plan catalogapply.ChangePlan
-		if err := json.Unmarshal(raw, &plan); err != nil {
+		if err := validateCatalogModelJSON(raw, catalogChangeSchema); err != nil {
 			return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: %w", err)
+		}
+		var plan catalogapply.ChangePlan
+		if err := decodeStrictJSONObject(raw, &plan, "summary", "files"); err != nil {
+			return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: %w", err)
+		}
+		if count := utf8.RuneCountInString(plan.Summary); count < 12 || count > 120 {
+			return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: summary length %d is outside 12..120", count)
+		}
+		if len(plan.Files) < 2 || len(plan.Files) > 16 {
+			return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: file count %d is outside 2..16", len(plan.Files))
+		}
+		for index, file := range plan.Files {
+			if strings.TrimSpace(file.Path) == "" {
+				return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: file %d has no path", index+1)
+			}
 		}
 		if request.ManagedRuntime >= 2 {
 			if request.Progress != nil {
@@ -262,9 +309,15 @@ func rejectCoveredCatalogCandidate(ctx context.Context, provider application.Mod
 	if err != nil {
 		return fmt.Errorf("check current catalog for overlapping rules: %w", err)
 	}
-	var decision catalogOverlapDecision
-	if err := json.Unmarshal(raw, &decision); err != nil {
+	if err := validateCatalogModelJSON(raw, catalogOverlapSchema); err != nil {
 		return fmt.Errorf("decode catalog overlap decision: %w", err)
+	}
+	var decision catalogOverlapDecision
+	if err := decodeStrictJSONObject(raw, &decision, "disposition", "adversary", "rule_id", "reason"); err != nil {
+		return fmt.Errorf("decode catalog overlap decision: %w", err)
+	}
+	if !oneOf(decision.Disposition, "new_rule", "already_covered") {
+		return fmt.Errorf("decode catalog overlap decision: invalid disposition %q", decision.Disposition)
 	}
 	if decision.Disposition != "already_covered" {
 		return nil
@@ -329,15 +382,24 @@ func evaluateGeneratedManagedCases(ctx context.Context, provider application.Mod
 	if err != nil {
 		return fmt.Errorf("generated change executable regression evaluation failed: %w", err)
 	}
-	var evaluation generatedCaseEvaluation
-	if err := json.Unmarshal(raw, &evaluation); err != nil {
+	if err := validateCatalogModelJSON(raw, catalogCaseEvaluationSchema); err != nil {
 		return fmt.Errorf("generated change executable regression returned invalid output: %w", err)
+	}
+	var evaluation generatedCaseEvaluation
+	if err := decodeStrictJSONObject(raw, &evaluation, "results"); err != nil {
+		return fmt.Errorf("generated change executable regression returned invalid output: %w", err)
+	}
+	if len(evaluation.Results) < 1 || len(evaluation.Results) > 64 {
+		return fmt.Errorf("generated change executable regression returned %d results; expected 1..64", len(evaluation.Results))
 	}
 	actual := make(map[string]string, len(evaluation.Results))
 	for _, result := range evaluation.Results {
 		name := strings.TrimSpace(result.Name)
 		if expected[name] == "" || actual[name] != "" {
 			return fmt.Errorf("generated change executable regression returned an unknown or duplicate case %q", name)
+		}
+		if !oneOf(result.Actual, "finding", "no_finding") {
+			return fmt.Errorf("generated change executable regression returned invalid result %q for case %q", result.Actual, name)
 		}
 		actual[name] = result.Actual
 	}
@@ -355,4 +417,65 @@ func evaluateGeneratedManagedCases(ctx context.Context, provider application.Mod
 		return fmt.Errorf("generated change executable regression cases failed: %s", strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+func decodeStrictJSONObject(raw []byte, target any, required ...string) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	if fields == nil {
+		return fmt.Errorf("expected JSON object")
+	}
+	for _, name := range required {
+		if _, ok := fields[name]; !ok {
+			return fmt.Errorf("missing required property %q", name)
+		}
+	}
+	return nil
+}
+
+func oneOf(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// validateCatalogModelJSON provides the local trust boundary for model output.
+// Provider-side structured output is useful, but callers must remain safe when
+// a provider ignores or weakens its schema enforcement.
+func validateCatalogModelJSON(raw, schemaRaw []byte) error {
+	var schemaDocument any
+	if err := json.Unmarshal(schemaRaw, &schemaDocument); err != nil {
+		return fmt.Errorf("invalid local response schema: %w", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	const resource = "urn:adversary:catalog-model-response"
+	if err := compiler.AddResource(resource, schemaDocument); err != nil {
+		return fmt.Errorf("compile local response schema: %w", err)
+	}
+	schema, err := compiler.Compile(resource)
+	if err != nil {
+		return fmt.Errorf("compile local response schema: %w", err)
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	return schema.Validate(value)
 }

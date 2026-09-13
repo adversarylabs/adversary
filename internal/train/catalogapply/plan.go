@@ -716,7 +716,9 @@ func quoteRegressionScalars(raw []byte) []byte {
 var nowUTC = func() time.Time { return time.Now().UTC() }
 
 func validateRunnablePackage(ctx context.Context, dir string, run commandRunner) error {
-	snapshot, err := captureCatalogTree(dir)
+	snapshot, err := captureCatalogTreeSkipping(dir, func(name string) bool {
+		return name == "node_modules" || name == ".adversary" || name == ".git"
+	})
 	if err != nil {
 		return fmt.Errorf("prepare isolated adversary validation: %w", err)
 	}

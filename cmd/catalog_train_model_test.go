@@ -168,3 +168,32 @@ func TestCatalogChangePlannerStopsWhenCatalogAlreadyCoversCandidate(t *testing.T
 		t.Fatalf("model calls=%d want 1", len(provider.requests))
 	}
 }
+
+func TestCatalogChangePlannerRejectsMalformedProviderOutputLocally(t *testing.T) {
+	for name, overlap := range map[string]json.RawMessage{
+		"unknown property": json.RawMessage(`{"disposition":"new_rule","adversary":"","rule_id":"","reason":"distinct","surprise":true}`),
+		"invalid enum":     json.RawMessage(`{"disposition":"maybe","adversary":"","rule_id":"","reason":"distinct"}`),
+		"missing required": json.RawMessage(`{"disposition":"new_rule","adversary":"","rule_id":""}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{overlap}}
+			runtime := &catalogModelRuntimeStub{provider: provider}
+			_, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{ManagedRuntime: 3})
+			if err == nil || !strings.Contains(err.Error(), "decode catalog overlap decision") {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+}
+
+func TestCatalogChangePlannerRejectsMalformedNestedPlanLocally(t *testing.T) {
+	provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{
+		json.RawMessage(`{"disposition":"new_rule","adversary":"","rule_id":"","reason":"distinct"}`),
+		json.RawMessage(`{"summary":"Add a concrete operability rule","files":[{"path":"adversaries/operability/rules/a/rule.yaml"},{"path":"adversaries/operability/rules/a/cases.yaml","content":"cases"}]}`),
+	}}
+	runtime := &catalogModelRuntimeStub{provider: provider}
+	_, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{ManagedRuntime: 3})
+	if err == nil || !strings.Contains(err.Error(), "missing property 'content'") {
+		t.Fatalf("err=%v", err)
+	}
+}

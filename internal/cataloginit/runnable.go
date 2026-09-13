@@ -122,7 +122,7 @@ func EnsureRunnableAdversary(dir, slug string) (bool, error) {
 			return false, nil
 		}
 		files := runnableAdversaryFiles(slug, purposeFromREADME(string(readme)), string(readme))
-		for _, name := range []string{"package.json", "src/index.ts", "dist/index.js", "dist/index.d.ts", "test/index.test.ts"} {
+		for _, name := range []string{"package.json", "package-lock.json", "src/index.ts", "dist/index.js", "dist/index.d.ts", "test/index.test.ts"} {
 			path := filepath.Join(dir, filepath.FromSlash(name))
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return false, err
@@ -150,8 +150,6 @@ func runnableAdversaryFiles(slug, summary, policy string) map[string]string {
 	lock, _ := projecttemplates.FS.ReadFile("typescript/package-lock.json")
 	lockText := strings.ReplaceAll(string(lock), "{{name}}", slug)
 	lockText = strings.ReplaceAll(lockText, `"version": "something"`, `"version": "`+runtimeVersion+`"`)
-	lockText = strings.Replace(lockText, `"@adversarylabs/sdk": "^0.1.18"`, `"@adversarylabs/sdk": "^0.1.18",
-        "yaml": "^2.8.1"`, 1)
 	values := map[string]string{
 		"{{slug}}":    slug,
 		"{{summary}}": string(quotedSummary),
