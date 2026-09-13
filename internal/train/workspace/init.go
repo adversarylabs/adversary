@@ -67,6 +67,8 @@ sources:
 run:
   max_prs: 50
   max_turns: 200
+  # Process every merged PR back to sources.since, ignoring max_prs/max_turns.
+  # all_history: true
   # Parallel PR collect (GitHub HTTP API). Default 4; raise carefully to avoid rate limits.
   # Local package runs stay serialized (safe to edit drafts in another turn).
   concurrency: 4

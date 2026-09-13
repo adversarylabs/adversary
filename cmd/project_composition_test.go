@@ -27,7 +27,11 @@ func (p *recordingProjects) Init(opts application.ProjectInitOptions) (applicati
 func (p *recordingProjects) InitCatalog(opts application.CatalogInitOptions) (application.CatalogInitResult, error) {
 	return application.CatalogInitResult{Location: opts.Destination}, nil
 }
-func (p *recordingProjects) RenderCatalogInit(io.Writer, application.CatalogInitResult) {}
+func (p *recordingProjects) UpgradeCatalog(application.CatalogUpgradeOptions) (application.CatalogUpgradeResult, error) {
+	return application.CatalogUpgradeResult{}, nil
+}
+func (p *recordingProjects) RenderCatalogUpgrade(io.Writer, application.CatalogUpgradeResult) {}
+func (p *recordingProjects) RenderCatalogInit(io.Writer, application.CatalogInitResult)       {}
 func (p *recordingProjects) RenderInit(w io.Writer, result application.ProjectInitResult, _ string) {
 	_, _ = io.WriteString(w, result.Location)
 }

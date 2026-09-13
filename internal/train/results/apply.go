@@ -428,6 +428,16 @@ func Accept(stateRoot, id string) error {
 	return SaveResult(stateRoot, r)
 }
 
+// Reopen returns a previously accepted or dismissed result to the review queue.
+func Reopen(stateRoot, id string) error {
+	r, err := Get(stateRoot, id)
+	if err != nil {
+		return err
+	}
+	r.Status = StatusNew
+	return SaveResult(stateRoot, r)
+}
+
 func formatApplyMarkdown(r Result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Train draft %s\n\n", r.ID)

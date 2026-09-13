@@ -28,6 +28,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/initproject"
 	"github.com/adversarylabs/adversary/internal/modelreview"
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
+	trainreviewui "github.com/adversarylabs/adversary/internal/train/reviewui"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/manifest"
@@ -69,6 +70,13 @@ func (processProjects) InitCatalog(opts application.CatalogInitOptions) (applica
 }
 func (p processProjects) RenderCatalogInit(w io.Writer, result application.CatalogInitResult) {
 	cataloginit.RenderSuccess(w, cataloginit.Result{Location: result.Location}, p.platform)
+}
+func (processProjects) UpgradeCatalog(opts application.CatalogUpgradeOptions) (application.CatalogUpgradeResult, error) {
+	result, err := cataloginit.Upgrade(opts.Path)
+	return application.CatalogUpgradeResult{Location: result.Location, Upgraded: result.Upgraded}, err
+}
+func (processProjects) RenderCatalogUpgrade(w io.Writer, result application.CatalogUpgradeResult) {
+	cataloginit.RenderUpgradeSuccess(w, cataloginit.UpgradeResult{Location: result.Location, Upgraded: result.Upgraded})
 }
 func (processProjects) Validate(ctx context.Context, value string, resolver application.Resolver) (application.ProjectValidation, error) {
 	path, err := filepath.Abs(value)
@@ -192,6 +200,28 @@ type processRuntime struct {
 }
 
 func (p processRuntime) BindingIdentity() string { return p.resolver.Repository.RootPath() }
+func (p processRuntime) ReviewCatalog(ctx context.Context, opts application.CatalogReviewOptions) error {
+	var assist func(context.Context, trainreviewui.AssistRequest) (trainreviewui.AssistResult, error)
+	if opts.Assist != nil {
+		assist = func(ctx context.Context, request trainreviewui.AssistRequest) (trainreviewui.AssistResult, error) {
+			result, err := opts.Assist(ctx, application.CatalogAssistRequest{
+				Evidence: request.Evidence, File: request.File, DiffHunk: request.DiffHunk,
+				CurrentAdversary: request.CurrentAdversary, CurrentRule: request.CurrentRule, Adversaries: request.Adversaries,
+			})
+			return trainreviewui.AssistResult{
+				Adversary: result.Adversary, ProposedRule: result.ProposedRule,
+				AdversaryMission: result.AdversaryMission, Rationale: result.Rationale,
+			}, err
+		}
+	}
+	return trainreviewui.Serve(ctx, trainreviewui.Options{
+		StateRoot: opts.StateRoot, Adversaries: opts.Adversaries, Output: opts.Output,
+		Entropy: rand.Reader, Listen: net.Listen, Assist: assist, Apply: opts.Apply, CreatePR: opts.CreatePR,
+		OpenURL: func(ctx context.Context, u string) error {
+			return openBrowser(ctx, u, p.environment, p.resolveExecutable, internaladversary.ExecProcessOutputRunner{})
+		},
+	})
+}
 func (p processRuntime) RunSourceIdentity(ctx context.Context, repoPath string) (application.RunSourceIdentity, error) {
 	resolver, ok := p.git.(internaladversary.GitSourceIdentityResolver)
 	if !ok {
@@ -857,6 +887,39 @@ func (p processRuntime) prepareFindingVerification(ctx context.Context, change *
 }
 func (p processRuntime) findingVerificationProvider(config modelreview.Config) (modelreview.Provider, error) {
 	return modelreview.ProviderFromConfig(config, p.environment.Lookup, modelreview.HTTPClientFromEnvironment(p.environment.Lookup))
+}
+
+func (p processRuntime) ModelReviewProvider(config application.ModelReviewConfig) (application.ModelReviewProvider, error) {
+	provider, err := modelreview.ProviderFromConfig(
+		modelreview.Config{Provider: config.Provider, Model: config.Model},
+		p.environment.Lookup,
+		modelreview.HTTPClientFromEnvironment(p.environment.Lookup),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return processModelReviewProvider{provider: provider}, nil
+}
+
+type processModelReviewProvider struct{ provider modelreview.Provider }
+
+func (p processModelReviewProvider) Name() string  { return p.provider.Name() }
+func (p processModelReviewProvider) Model() string { return p.provider.Model() }
+func (p processModelReviewProvider) Review(ctx context.Context, request application.ModelReviewRequest) (json.RawMessage, error) {
+	result, err := p.provider.Review(ctx, modelreview.Request{
+		ProtocolVersion: modelreview.ProtocolVersion,
+		Prompt:          request.Prompt,
+		Input:           request.Input,
+		Schema:          request.Schema,
+		Budget: modelreview.Budget{
+			MaximumOutputTokens: request.MaximumOutputTokens,
+			TimeoutMS:           request.TimeoutMS,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.Output, nil
 }
 func (p processRuntime) readFindingVerification(name string) (findingverify.Report, error) {
 	return findingverify.ReadReport(name)

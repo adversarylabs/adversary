@@ -64,6 +64,9 @@ type Options struct {
 	// waves continue within that window until an exit condition is reached.
 	// Stops early when MaxPRs usable cases are collected.
 	MaxTurns int
+	// AllHistory processes every merged PR back to AuthorSince and ignores the
+	// normal target and turn limits. It is supported by repository discovery.
+	AllHistory bool
 	// Concurrency is how many PR collects may run in parallel (gh API). Default 4.
 	// Local package `adversary run` stays serialized via a per-path lock.
 	Concurrency int
@@ -78,6 +81,9 @@ type Options struct {
 	// CollectOnly routes and persists human review evidence without executing or
 	// mutating adversary packages. Private catalog training uses this mode.
 	CollectOnly bool
+	// CatalogTriageLLM performs provider-neutral semantic triage for plausible
+	// catalog comments. Live catalog training requires this callback.
+	CatalogTriageLLM func(string) ([]byte, error)
 	// TrainOnlyIDs limits train-eligible locals (empty = all locals).
 	TrainOnlyIDs []string
 	// TrainExcludeIDs removes locals from both training and routing.
@@ -207,6 +213,12 @@ func Run(opts Options) (*Result, error) {
 		if maxTurns <= 0 {
 			maxTurns = 15
 		}
+		if opts.AllHistory {
+			// Date-bounded exhaustive mode uses source exhaustion as its stop
+			// condition rather than candidate or attempt counts.
+			unlimited := int(^uint(0) >> 1)
+			targetPRs, maxTurns = unlimited, unlimited
+		}
 
 		// Build the set of repos to hunt across (config sources first).
 		// Author-reviews mode does not need a catalog.
@@ -333,7 +345,12 @@ func Run(opts Options) (*Result, error) {
 			}
 			opts.targetAdversaryOnly = len(siblingPkgs) == 1
 			cands := routerCandidates(routingPkgs)
-			commentRouter = &scope.Router{Candidates: cands, UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
+			commentRouter = &scope.Router{
+				Candidates:    cands,
+				UseLLM:        opts.CatalogTriageLLM != nil || os.Getenv("OPENAI_API_KEY") != "",
+				CatalogTriage: opts.CollectOnly,
+				CallLLM:       opts.CatalogTriageLLM,
+			}
 			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing: %v\n", len(routingPkgs), packageIDs(routingPkgs))
 			fmt.Fprintf(os.Stderr, "Training %d adversaries this run: %v\n", len(siblingPkgs), packageIDs(siblingPkgs))
 			// Always expand each local package's adversary.yaml uses for product

@@ -44,6 +44,8 @@ type Projects interface {
 	RenderInit(io.Writer, ProjectInitResult, string)
 	InitCatalog(CatalogInitOptions) (CatalogInitResult, error)
 	RenderCatalogInit(io.Writer, CatalogInitResult)
+	UpgradeCatalog(CatalogUpgradeOptions) (CatalogUpgradeResult, error)
+	RenderCatalogUpgrade(io.Writer, CatalogUpgradeResult)
 	Validate(context.Context, string, Resolver) (ProjectValidation, error)
 	Check(pack.Options) (pack.Preflight, error)
 	Pack(context.Context, pack.Options) (pack.Artifact, error)
@@ -55,6 +57,11 @@ type ProjectInitOptions struct{ Destination, SDK string }
 type ProjectInitResult struct{ Location, SDK string }
 type CatalogInitOptions struct{ Destination string }
 type CatalogInitResult struct{ Location string }
+type CatalogUpgradeOptions struct{ Path string }
+type CatalogUpgradeResult struct {
+	Location string
+	Upgraded []string
+}
 type ProjectValidation struct {
 	Path, Name, Runtime string
 }
@@ -151,6 +158,64 @@ type Runtime interface {
 	Run(context.Context, AdversaryRunOptions) error
 	Inspect(context.Context, AdversaryRunOptions) error
 	Auto(context.Context, AdversaryAutoOptions) (AdversaryAutoResult, error)
+}
+
+// ModelReviewRuntime is the optional provider-neutral structured-model port
+// implemented by the process runtime. Catalog training uses it without reading
+// process credentials or constructing provider clients in command handlers.
+type ModelReviewRuntime interface {
+	ModelReviewProvider(ModelReviewConfig) (ModelReviewProvider, error)
+}
+
+// CatalogReviewRuntime is the optional local-browser review port implemented by
+// the process runtime. Keeping the listener and browser launch behind this port
+// leaves command handlers free of direct process and network effects.
+type CatalogReviewRuntime interface {
+	ReviewCatalog(context.Context, CatalogReviewOptions) error
+}
+
+type CatalogReviewOptions struct {
+	StateRoot   string
+	Adversaries []string
+	Output      io.Writer
+	Assist      func(context.Context, CatalogAssistRequest) (CatalogAssistResult, error)
+	Apply       func(context.Context, string) error
+	CreatePR    func(context.Context, string) error
+}
+
+type CatalogAssistRequest struct {
+	Evidence         string   `json:"evidence"`
+	File             string   `json:"file,omitempty"`
+	DiffHunk         string   `json:"diff_hunk,omitempty"`
+	CurrentAdversary string   `json:"current_adversary,omitempty"`
+	CurrentRule      string   `json:"current_rule,omitempty"`
+	Adversaries      []string `json:"adversaries"`
+}
+
+type CatalogAssistResult struct {
+	Adversary        string `json:"adversary,omitempty"`
+	ProposedRule     string `json:"proposed_rule,omitempty"`
+	AdversaryMission string `json:"adversary_mission,omitempty"`
+	Rationale        string `json:"rationale,omitempty"`
+}
+
+type ModelReviewConfig struct {
+	Provider string
+	Model    string
+}
+
+type ModelReviewRequest struct {
+	Prompt              string
+	Input               json.RawMessage
+	Schema              json.RawMessage
+	MaximumOutputTokens int
+	TimeoutMS           int
+}
+
+type ModelReviewProvider interface {
+	Name() string
+	Model() string
+	Review(context.Context, ModelReviewRequest) (json.RawMessage, error)
 }
 type RunSourceIdentity struct {
 	Ref string

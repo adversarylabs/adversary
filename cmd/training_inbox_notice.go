@@ -18,6 +18,9 @@ func renderTrainingInboxNotice(command *cobra.Command, deps application.Dependen
 	if strings.Contains(path, " completion") || strings.HasSuffix(path, " help") {
 		return
 	}
+	if strings.Contains(path, " catalog train") {
+		return
+	}
 	if flag := command.Flag("json"); flag != nil && flag.Changed {
 		return
 	}

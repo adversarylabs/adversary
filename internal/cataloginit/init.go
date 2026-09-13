@@ -77,10 +77,12 @@ var starterAdversaries = []starterAdversary{
 	{
 		Slug:    "operability",
 		Title:   "Operability",
-		Summary: "Make production failures visible, diagnosable, and recoverable.",
+		Summary: "Make failures clear to users and observable to operators through actionable errors, logs, metrics, and traces.",
 		ReviewFor: []string{
-			"Errors that discard actionable context or report success before work is durable.",
-			"Missing metrics, logs, or traces at important asynchronous and failure boundaries.",
+			"User-facing errors that do not say what failed, preserve safe relevant context, or offer a concrete recovery step.",
+			"Errors that discard the underlying cause, leak secrets, or report success before work is durable.",
+			"Missing or misleading logs, metrics, and traces at important asynchronous and failure boundaries.",
+			"Logs that omit the operation and identifiers operators need to diagnose a failure, or use a severity that hides or overstates it.",
 			"Health and recovery paths that cannot distinguish degraded, blocked, and failed work.",
 		},
 	},
@@ -113,9 +115,10 @@ workflows.
 ## Starter adversaries
 
 The initializer includes a small set of editable seeds for concerns shared by
-most production systems. They are starting policies, not claims about your
-architecture. Keep the relevant ones, remove the others, and let accepted
-review examples make them specific to your team:
+most production systems. Each is a runnable model-backed adversary whose README
+is its operative private review policy, not a claim about your architecture.
+Keep the relevant ones, remove the others, and let accepted review examples
+make them specific to your team:
 
 `
 
@@ -140,14 +143,17 @@ official:
 
 sources:
   host: github.com
+  # discovery: repos
   # Add one or more repositories whose human review history should be learned.
   repos: []
+  # since: "2025-09-12"
   # authors_only: [staff-eng-alice]
   # authors_ignore: [automation-account]
 
 run:
   max_prs: 50
   max_turns: 200
+  # all_history: true # requires sources.since; ignores max_prs/max_turns
   concurrency: 4
 
 # Catalog training is local-only. Publishing accepted changes is a separate,
@@ -164,7 +170,7 @@ func catalogFiles() map[string]string {
 	readme := strings.Builder{}
 	readme.WriteString(readmeHeader)
 	files := map[string]string{
-		".gitignore":           ".adversary-train/\n",
+		".gitignore":           catalogGitignore,
 		"adversary.train.yaml": trainConfig,
 		"evaluations/.gitkeep": "",
 		"exceptions/.gitkeep":  "",
@@ -172,13 +178,21 @@ func catalogFiles() map[string]string {
 	for _, adversary := range starterAdversaries {
 		fmt.Fprintf(&manifest, "    - id: %s\n      path: adversaries/%s\n      summary: %s\n", adversary.Slug, adversary.Slug, adversary.Summary)
 		fmt.Fprintf(&readme, "- [%s](adversaries/%s/README.md) — %s\n", adversary.Title, adversary.Slug, adversary.Summary)
-		files[filepath.ToSlash(filepath.Join("adversaries", adversary.Slug, "README.md"))] = renderStarterAdversary(adversary)
+		prefix := filepath.ToSlash(filepath.Join("adversaries", adversary.Slug))
+		for name, content := range runnableAdversaryFiles(adversary.Slug, adversary.Summary, renderStarterAdversary(adversary)) {
+			files[prefix+"/"+name] = content
+		}
 	}
 	readme.WriteString(readmeFooter)
 	files["adversarylabs.yaml"] = manifest.String()
 	files["README.md"] = readme.String()
 	return files
 }
+
+const catalogGitignore = `.adversary-train/
+node_modules/
+.adversary/
+`
 
 func renderStarterAdversary(adversary starterAdversary) string {
 	brief := strings.Builder{}
@@ -255,7 +269,7 @@ func RenderSuccess(w io.Writer, result Result, platform string) {
 	fmt.Fprintln(w, "Train from human review history")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  Edit adversary.train.yaml and add the source repositories to scan.")
-	fmt.Fprintln(w, "  adversary catalog train")
+	fmt.Fprintln(w, "  adversary catalog train --model codex/gpt-5.6-luna")
 	fmt.Fprintln(w, "  adversary catalog train review")
 }
 

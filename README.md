@@ -71,17 +71,53 @@ exits. Review is a separate command.
 ```sh
 adversary catalog init my-private-adversaries
 cd my-private-adversaries
-# Edit adversary.train.yaml, or select sources on the command line:
-adversary catalog train --source-repo acme/api --source-repo acme/web
+# Edit adversary.train.yaml, or select sources and a model on the command line:
+adversary catalog train --source-repo acme/api --source-repo acme/web \
+  --model-provider cloudflare --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
 adversary catalog train review
+adversary catalog train inspect
 adversary catalog train inspect <id>
 adversary catalog train accept <id>
 ```
 
+Catalogs initialized before runnable private starters were introduced can be
+updated in place while preserving their policies:
+
+```sh
+adversary catalog upgrade
+```
+
+For an exhaustive, resumable repository scan, set a date boundary and remove
+the normal candidate limits:
+
+```yaml
+sources:
+  discovery: repos
+  since: "2025-09-12"
+run:
+  all_history: true
+```
+
+The equivalent one-off flags are `--since 2025-09-12 --all-history`. Historical
+scans detect GitHub primary and secondary rate limits, wait for the advertised
+reset (or a conservative fallback), and continue unless interrupted.
+
+Bare `inspect` opens a localhost review queue with every candidate in a left
+nav grouped by source repository. Inline comments appear with their file, diff
+hunk, PR author, and reviewer identity. Context controls load adjacent lines
+from the exact reviewed GitHub revision. Reviewers can edit the proposed rule,
+route it to an existing or new private adversary, apply it to local catalog
+files immediately, approve it for a later batch, dismiss it, and reopen earlier
+decisions. Use `inspect --all` for the terminal wizard instead.
+
 Use repeatable `--author` and `--exclude-author` flags for one-off reviewer
 selection; the equivalent committed policy is `sources.authors_only` and
-`sources.authors_ignore`. Accepted results record a decision only. They do not
-modify tracked catalog files, upload private evidence, or open a pull request.
+`sources.authors_ignore`. Model configuration can also come from
+`ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Results approved for later
+record a decision only. Applying a result updates tracked local catalog files,
+but does not commit, push, upload private evidence to Adversary Labs, or open a
+pull request. The scan does send bounded comment, thread, review-summary, and
+diff evidence to the model provider you select.
 Interactive CLI commands display a one-line stderr reminder while registered
 catalogs still have unreviewed results; machine-readable and noninteractive
 commands remain quiet.

@@ -74,6 +74,8 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 		noIssues         bool
 		maxPRs           int
 		maxTurns         int
+		allHistory       bool
+		since            string
 		concurrency      int
 		resetDiscovery   bool
 		fixture          bool
@@ -83,6 +85,8 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 		authorsOnly      []string
 		authorsIgnore    []string
 		sourceRepos      []string
+		modelProvider    string
+		model            string
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -131,6 +135,12 @@ Use --no-issues for a local-only run.`,
 				cfg.Sources.Repos = append([]string{}, sourceRepos...)
 				cfg.Sources.Org = ""
 				cfg.Sources.Discovery = "repos"
+			}
+			if strings.TrimSpace(since) != "" {
+				cfg.Sources.Since = strings.TrimSpace(since)
+			}
+			if allHistory {
+				cfg.Run.AllHistory = true
 			}
 			if !fixture {
 				if err := cfg.Validate(); err != nil {
@@ -294,6 +304,19 @@ Use --no-issues for a local-only run.`,
 			if cfg.Sources.Org != "" {
 				authorOrgs = append(authorOrgs, cfg.Sources.Org)
 			}
+			var catalogTriageLLM func(string) ([]byte, error)
+			var catalogTriageModelName string
+			if catalogMode && !fixture {
+				modelRuntime, ok := app.Dependencies().Runtime.(application.ModelReviewRuntime)
+				if !ok {
+					return fmt.Errorf("catalog triage model runtime is unavailable")
+				}
+				catalogTriageLLM, catalogTriageModelName, err = newCatalogTriageModel(cmd.Context(), modelRuntime, modelProvider, model)
+				if err != nil {
+					return err
+				}
+			}
+
 			opts := pipeline.Options{
 				Context:             cmd.Context(),
 				DataRoot:            stateRoot,
@@ -321,12 +344,14 @@ Use --no-issues for a local-only run.`,
 				AuthorSince:         cfg.Sources.Since,
 				MaxPRs:              cfg.Run.MaxPRs,
 				MaxTurns:            cfg.Run.MaxTurns,
+				AllHistory:          cfg.Run.AllHistory,
 				Concurrency:         cfg.Run.Concurrency,
 				ResetDiscovery:      resetDiscovery,
 				PR:                  pr,
 				Owner:               owner,
 				Repo:                repo,
 				CollectOnly:         catalogMode,
+				CatalogTriageLLM:    catalogTriageLLM,
 			}
 			if catalogMode {
 				opts.DiscoveryNamespace = "private-catalog"
@@ -355,6 +380,9 @@ Use --no-issues for a local-only run.`,
 			} else {
 				fmt.Fprintln(stderr, "  mode:   live history")
 				fmt.Fprintf(stderr, "  discovery: %s\n", discoveryMode)
+				if cfg.Run.AllHistory {
+					fmt.Fprintf(stderr, "  history: all merged PRs since %s (no candidate limit; rate-limit backoff enabled)\n", cfg.Sources.Since)
+				}
 				if discoveryMode == "author_reviews" {
 					fmt.Fprintf(stderr, "  authors: %v roles: %v orgs: %v\n",
 						cfg.Sources.AuthorsOnly, cfg.Sources.AuthorRoles, authorOrgs)
@@ -375,6 +403,9 @@ Use --no-issues for a local-only run.`,
 			}
 			if catalogMode {
 				fmt.Fprintln(stderr, "  publishing: local candidates only; catalog changes require later review")
+				if catalogTriageModelName != "" {
+					fmt.Fprintf(stderr, "  triage model: %s\n", catalogTriageModelName)
+				}
 			} else if cfg.OfficialEnabled() && !fixture {
 				fmt.Fprintln(stderr, "  official jury: enabled (drafts for locals only)")
 			} else {
@@ -454,6 +485,8 @@ Use --no-issues for a local-only run.`,
 	cmd.Flags().BoolVar(&noIssues, "no-issues", false, "keep results local instead of creating GitHub issues")
 	cmd.Flags().IntVar(&maxPRs, "max-prs", 0, "override run.max_prs")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns (maximum PR attempts)")
+	cmd.Flags().BoolVar(&allHistory, "all-history", false, "process every merged PR back to sources.since; ignore PR and turn limits")
+	cmd.Flags().StringVar(&since, "since", "", "override sources.since (YYYY-MM-DD)")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 0, "override run.concurrency (parallel PR collect; default 2)")
 	cmd.Flags().BoolVar(&resetDiscovery, "reset-discovery", false, "forget seen PRs and restart catalog discovery before hunting")
 	cmd.Flags().BoolVar(&fixture, "fixture", false, "hermetic fixture run (for tests/gates; ignores empty sources)")
@@ -463,6 +496,8 @@ Use --no-issues for a local-only run.`,
 	cmd.Flags().StringSliceVar(&authorsOnly, "author", nil, "include review comments from this GitHub login (repeatable or comma-separated)")
 	cmd.Flags().StringSliceVar(&authorsIgnore, "exclude-author", nil, "exclude review comments from this GitHub login (repeatable or comma-separated)")
 	cmd.Flags().StringSliceVar(&sourceRepos, "source-repo", nil, "scan this owner/repository instead of configured repositories (repeatable or comma-separated)")
+	cmd.Flags().StringVar(&modelProvider, "model-provider", "", "triage model provider: openai, cloudflare, anthropic, fireworks, camel, or codex (overrides ADVERSARY_MODEL_PROVIDER)")
+	cmd.Flags().StringVar(&model, "model", "", "triage model identifier (overrides ADVERSARY_MODEL)")
 	return cmd
 }
 
@@ -681,9 +716,9 @@ func newTrainResetCommand(app *application.App) *cobra.Command {
 		Long: `By default clears discovery state (seen PRs and catalog position),
 so the next train run will re-examine the catalog repos.
 
-  adversary train reset           # discovery only
-  adversary train reset --results # clear results inbox only
-  adversary train reset --all     # discovery + results`,
+  adversary catalog train reset           # discovery only
+  adversary catalog train reset --results # clear results inbox only
+  adversary catalog train reset --all     # discovery + results`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			state, err := resolveStateDir(path)
 			if err != nil {

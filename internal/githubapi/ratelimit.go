@@ -2,6 +2,7 @@ package githubapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -96,6 +97,36 @@ func ActiveRateLimit() (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return rateHoldUntil, true
+}
+
+// WaitForRateLimit blocks until GitHub's reset (or a conservative fallback)
+// while allowing the caller to cancel a long historical scan.
+func WaitForRateLimit(ctx context.Context, err error) error {
+	until, active := ActiveRateLimit()
+	var typed *RateLimitError
+	if errors.As(err, &typed) && typed != nil && !typed.ResetAt.IsZero() {
+		if !active || typed.ResetAt.After(until) {
+			until = typed.ResetAt
+		}
+		active = true
+	}
+	now := time.Now()
+	if !active {
+		until = time.Now().Add(2 * time.Minute)
+	} else if until.Before(now) {
+		until = now
+	}
+	if ceiling := now.Add(time.Hour); until.After(ceiling) {
+		until = ceiling
+	}
+	timer := time.NewTimer(time.Until(until) + time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func rateLimitFromHeaders(h http.Header, body []byte) *RateLimitError {
