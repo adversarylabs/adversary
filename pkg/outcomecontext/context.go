@@ -5,6 +5,7 @@ package outcomecontext
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -23,9 +24,9 @@ type Context struct {
 }
 
 type Subject struct {
-	Provider    string `json:"provider,omitempty"`
-	Repository  string `json:"repository,omitempty"`
-	PullRequest int    `json:"pull_request,omitempty"`
+	Provider    string `json:"provider"`
+	Repository  string `json:"repository"`
+	PullRequest int    `json:"pull_request"`
 }
 
 type Source struct {
@@ -45,7 +46,7 @@ type Intent struct {
 // GitHubPullRequest creates context from metadata already fetched to resolve a
 // GitHub review. Empty source text is omitted.
 func GitHubPullRequest(repository string, number int, title, body string) *Context {
-	repository = strings.TrimSpace(repository)
+	repository = trimContextSpace(repository)
 	if repository == "" || number < 1 || runeLen(repository) > MaxRepositoryCharacters {
 		return nil
 	}
@@ -85,7 +86,7 @@ func (c Context) Validate() error {
 	if c.Subject.Provider != "github" {
 		return fmt.Errorf("outcome context subject provider must be %q", "github")
 	}
-	if strings.TrimSpace(c.Subject.Repository) == "" {
+	if !hasContextText(c.Subject.Repository) {
 		return fmt.Errorf("outcome context subject repository must not be empty")
 	}
 	if runeLen(c.Subject.Repository) > MaxRepositoryCharacters {
@@ -102,7 +103,7 @@ func (c Context) Validate() error {
 		if source.Kind != "pull_request_title" && source.Kind != "pull_request_body" {
 			return fmt.Errorf("outcome context source %d has unsupported kind %q", i, source.Kind)
 		}
-		if strings.TrimSpace(source.Text) == "" {
+		if !hasContextText(source.Text) {
 			return fmt.Errorf("outcome context source %d text must not be empty", i)
 		}
 		if runeLen(source.Text) > MaxSourceCharacters {
@@ -113,7 +114,7 @@ func (c Context) Validate() error {
 		}
 		seen[source.Kind] = true
 	}
-	if strings.TrimSpace(c.Intent.Objective) == "" {
+	if !hasContextText(c.Intent.Objective) {
 		return fmt.Errorf("outcome context intent objective must not be empty")
 	}
 	if runeLen(c.Intent.Objective) > MaxIntentTextCharacters {
@@ -135,7 +136,7 @@ func (c Context) Validate() error {
 			return fmt.Errorf("outcome context intent %s exceeds 12 items", name)
 		}
 		for _, value := range values {
-			if strings.TrimSpace(value) == "" {
+			if !hasContextText(value) {
 				return fmt.Errorf("outcome context intent %s contains empty text", name)
 			}
 			if runeLen(value) > MaxIntentTextCharacters {
@@ -147,7 +148,7 @@ func (c Context) Validate() error {
 }
 
 func ReviewedAs(c *Context) string {
-	if c == nil || strings.TrimSpace(c.Intent.Objective) == "" {
+	if c == nil || !hasContextText(c.Intent.Objective) {
 		return ""
 	}
 	return "Reviewed as: " + strings.Join(strings.Fields(c.Intent.Objective), " ")
@@ -155,7 +156,7 @@ func ReviewedAs(c *Context) string {
 
 func firstLine(value string) string {
 	for _, line := range strings.Split(value, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
+		if line = trimContextSpace(line); line != "" {
 			return line
 		}
 	}
@@ -167,7 +168,7 @@ func normalize(value string) string {
 }
 
 func normalizeTo(value string, maximum int) string {
-	value = strings.TrimSpace(value)
+	value = trimContextSpace(value)
 	if maximum <= 0 {
 		return ""
 	}
@@ -179,3 +180,13 @@ func normalizeTo(value string, maximum int) string {
 }
 
 func runeLen(value string) int { return len([]rune(value)) }
+
+// JSON Schema regular expressions treat U+FEFF as whitespace. Go's
+// strings.TrimSpace does not, so keep the runtime's non-empty checks aligned.
+func isContextSpace(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' }
+
+func trimContextSpace(value string) string { return strings.TrimFunc(value, isContextSpace) }
+
+func hasContextText(value string) bool {
+	return strings.IndexFunc(value, func(r rune) bool { return !isContextSpace(r) }) >= 0
+}

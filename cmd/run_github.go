@@ -164,7 +164,7 @@ func detectOutcomeIntent(ctx context.Context, app *application.App, opts *runOpt
 		}
 	}
 	if progress != nil {
-		fmt.Fprintln(progress, outcomecontext.ReviewedAs(opts.outcomeContext))
+		fmt.Fprintln(progress, review.SanitizeTerminalInline(outcomecontext.ReviewedAs(opts.outcomeContext)))
 	}
 }
 

@@ -596,6 +596,10 @@ func formatEvidenceLocation(evidence Evidence) string {
 
 func sanitizeTerminalInline(value string) string { return sanitizeTerminal(value, false) }
 
+// SanitizeTerminalInline removes control sequences from an untrusted value
+// before it is written as a single line of human-readable terminal output.
+func SanitizeTerminalInline(value string) string { return sanitizeTerminalInline(value) }
+
 func sanitizeTerminalBody(value string) string { return sanitizeTerminal(value, true) }
 
 // sanitizeTerminal removes terminal control sequences at the final human-output

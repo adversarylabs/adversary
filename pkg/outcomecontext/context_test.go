@@ -44,7 +44,7 @@ func TestGitHubPullRequestRejectsOverlongRepository(t *testing.T) {
 }
 
 func TestGitHubPullRequestRejectsEmptyRepository(t *testing.T) {
-	for _, repository := range []string{"", " \t\n"} {
+	for _, repository := range []string{"", " \t\n", "\uFEFF"} {
 		if got := GitHubPullRequest(repository, 1, "title", "body"); got != nil {
 			t.Fatalf("repository %q produced context %#v", repository, got)
 		}
@@ -72,11 +72,30 @@ func TestValidateMatchesSubjectAndUnicodeSchemaLimits(t *testing.T) {
 	if err := invalidSource.Validate(); err == nil {
 		t.Fatal("expected source character length error")
 	}
+	invalidSource.Sources = []Source{{Kind: "pull_request_title", Text: "\uFEFF"}}
+	if err := invalidSource.Validate(); err == nil {
+		t.Fatal("expected BOM-only source error")
+	}
 }
 
 func TestGitHubPullRequestOmitsEmptyContext(t *testing.T) {
 	if got := GitHubPullRequest("acme/app", 42, " ", "\n"); got != nil {
 		t.Fatalf("context = %#v", got)
+	}
+	if got := GitHubPullRequest("acme/app", 42, "\uFEFF", "\uFEFF"); got != nil {
+		t.Fatalf("BOM-only context = %#v", got)
+	}
+}
+
+func TestSubjectEncodingRetainsSchemaRequiredFields(t *testing.T) {
+	data, err := json.Marshal(Subject{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"provider"`, `"repository"`, `"pull_request"`} {
+		if !strings.Contains(string(data), field) {
+			t.Fatalf("encoded subject %s omits %s", data, field)
+		}
 	}
 }
 
@@ -168,6 +187,11 @@ func TestSchemaRejectsValuesRejectedByRuntimeValidation(t *testing.T) {
 		"whitespace source": `{
 			"schema_version":"adversary.outcome-context.v1","subject":{"provider":"github","repository":"acme/app","pull_request":42},
 			"sources":[{"kind":"pull_request_title","text":"   "}],
+			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
+		}`,
+		"BOM-only source": `{
+			"schema_version":"adversary.outcome-context.v1","subject":{"provider":"github","repository":"acme/app","pull_request":42},
+			"sources":[{"kind":"pull_request_title","text":"\uFEFF"}],
 			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
 		}`,
 		"whitespace objective": `{

@@ -13,7 +13,7 @@
       "required": ["provider", "repository", "pull_request"],
       "properties": {
         "provider": { "const": "github" },
-        "repository": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" },
+        "repository": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "[^\\s\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]" },
         "pull_request": { "type": "integer", "minimum": 1 }
       }
     },
@@ -49,7 +49,7 @@
         "required": ["kind", "text"],
         "properties": {
           "kind": { "enum": ["pull_request_title", "pull_request_body"] },
-          "text": { "type": "string", "minLength": 1, "maxLength": 32768, "pattern": "\\S" }
+          "text": { "type": "string", "minLength": 1, "maxLength": 32768, "pattern": "[^\\s\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]" }
         }
       }
     },
@@ -65,7 +65,7 @@
         "ambiguities"
       ],
       "properties": {
-        "objective": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" },
+        "objective": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "[^\\s\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]" },
         "confidence": { "enum": ["low", "medium", "high"] },
         "expected_effects": { "$ref": "#/$defs/stringList" },
         "must_preserve": { "$ref": "#/$defs/stringList" },
@@ -78,7 +78,7 @@
     "stringList": {
       "type": "array",
       "maxItems": 12,
-      "items": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" }
+      "items": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "[^\\s\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]" }
     }
   }
 }
