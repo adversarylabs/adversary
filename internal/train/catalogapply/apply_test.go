@@ -889,6 +889,25 @@ func TestInjectHostValidationContractsAddsSyncOnceCasesOnlyToValidationCopy(t *t
 	}
 }
 
+func TestAttachHostValidationContractExposesExactReadOnlyTestsToPlanner(t *testing.T) {
+	request := ChangeRequest{
+		ManagedRuntime:  1,
+		ProposedRule:    "Do not cache fallible initialization with sync.Once.Do.",
+		EvidenceFile:    "pkg/store/resolver.go",
+		EvidenceComment: "A transient failure cannot retry initialization.",
+	}
+	attachHostValidationContract(&request)
+	for _, want := range []string{
+		`const evidencePath = "pkg/store/resolver.go"`,
+		"rejects parameter shadowing and selector receivers",
+		"reports every matching function in one file",
+	} {
+		if !strings.Contains(request.ValidationContract, want) {
+			t.Fatalf("planner validation contract omitted %q", want)
+		}
+	}
+}
+
 func TestReadCatalogPoliciesIncludesEveryAdversaryAndLearnedRule(t *testing.T) {
 	root := t.TempDir()
 	adversaries := filepath.Join(root, "adversaries")

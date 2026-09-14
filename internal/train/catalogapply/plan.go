@@ -25,10 +25,10 @@ import (
 )
 
 const (
-	maxSourceFiles           = 40
-	maxSourceBytes           = 240 << 10
-	maxPlanFiles             = 16
-	maxPlanBytes             = 512 << 10
+	maxSourceFiles = 40
+	maxSourceBytes = 240 << 10
+	maxPlanFiles   = 16
+	maxPlanBytes   = 512 << 10
 	// Leave two attempts beyond the normal synthesis/quality-review cycle so a
 	// semantically accepted plan can still receive compiler or test feedback and
 	// be repaired without starting generation over from scratch.
@@ -70,6 +70,7 @@ type ChangeRequest struct {
 	GenerationAttempt  int              `json:"generation_attempt,omitempty"`
 	MaxGenerationTurns int              `json:"max_generation_attempts,omitempty"`
 	MaxQualityTurns    int              `json:"max_quality_review_attempts,omitempty"`
+	ValidationContract string           `json:"host_validation_contract,omitempty"`
 }
 
 type SourceFile struct {
@@ -195,6 +196,7 @@ func applyPlannedCandidateWithProgressOptionsAndRunner(ctx context.Context, work
 	request.ExistingAdversary = wasExisting
 	request.AllowOverlap = allowOverlap
 	request.Progress = report
+	attachHostValidationContract(&request)
 	baseline, err := captureCatalogTree(dir)
 	if err != nil {
 		return "", "", fmt.Errorf("snapshot adversary before generated validation: %w", err)
@@ -272,6 +274,12 @@ func applyPlannedCandidateWithProgressOptionsAndRunner(ctx context.Context, work
 		}
 	}
 	return target, pullRequestTitle, nil
+}
+
+func attachHostValidationContract(request *ChangeRequest) {
+	if request.ManagedRuntime == 1 && isSyncOnceCandidate(*request) {
+		request.ValidationContract = syncOnceValidationContract(request.EvidenceFile)
+	}
 }
 
 func rememberPreviousPlan(request *ChangeRequest, plan ChangePlan) {
