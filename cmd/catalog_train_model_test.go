@@ -355,6 +355,14 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 	}
 }
 
+func TestNormalizeCatalogSummaryAddsMissingAdversary(t *testing.T) {
+	got := normalizeCatalogSummary("Prevent poisoned one-shot initialization", "reliability-and-concurrency", 120)
+	want := "Prevent poisoned one-shot initialization in reliability-and-concurrency"
+	if got != want {
+		t.Fatalf("normalizeCatalogSummary() = %q, want %q", got, want)
+	}
+}
+
 func TestCatalogChangePlannerTreatsFinalCriticRevisionAsAdvisory(t *testing.T) {
 	provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{
 		json.RawMessage(`{"summary":"Prevent poisoned initialization in reliability","files":[{"path":"adversaries/reliability/README.md","content":"# Reliability\n"},{"path":"adversaries/reliability/src/deterministic.ts","content":"export function registerDeterministicRules() {}\n"},{"path":"adversaries/reliability/src/rules/lazy.ts","content":"export async function review(ctx) { const sources = await ctx.loadInScopeSources(); void sources; }\n"},{"path":"adversaries/reliability/test/lazy.test.ts","content":"import { createApp } from '../src/index.ts'; void createApp().run({});\n"}]}`),

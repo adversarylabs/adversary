@@ -563,10 +563,18 @@ Translate the review into executable changes. When it says predicates are not st
 
 func normalizeCatalogSummary(value, adversary string, limit int) string {
 	title := strings.Join(strings.Fields(value), " ")
+	adversary = strings.TrimSpace(adversary)
+	if adversary != "" && !strings.Contains(strings.ToLower(title), strings.ToLower(adversary)) {
+		suffix := " in " + adversary
+		budget := limit - utf8.RuneCountInString(suffix)
+		if head := truncateCatalogTitle(title, budget); head != "" {
+			title = head + suffix
+		}
+	}
 	if limit < 1 || utf8.RuneCountInString(title) <= limit {
 		return title
 	}
-	if adversary = strings.TrimSpace(adversary); adversary != "" {
+	if adversary != "" {
 		if index := strings.LastIndex(strings.ToLower(title), strings.ToLower(adversary)); index >= 0 {
 			tail := strings.TrimSpace(title[index:])
 			budget := limit - utf8.RuneCountInString(tail) - 1
