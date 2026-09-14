@@ -405,6 +405,22 @@ func TestRunInjectsOutcomeContextAsSeparateProtocolFile(t *testing.T) {
 	}
 }
 
+func TestRunClassifiesInvalidOutcomeContextAsProtocolFailure(t *testing.T) {
+	adversaryDir := t.TempDir()
+	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), "name: local/adversary\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writeFile(t, filepath.Join(adversaryDir, "dist", "index.js"), "")
+	outcome := outcomecontext.GitHubPullRequest("acme/app", 42, "Add delegated trust", "")
+	outcome.Subject.Provider = ""
+	err := (Runner{Stdout: &strings.Builder{}, Stderr: &strings.Builder{}, Executor: &recordingExecutor{}}).Run(
+		context.Background(),
+		RunOptions{AdversaryRef: adversaryDir, RepoPath: t.TempDir(), OutcomeContext: outcome},
+	)
+	var protocolErr *ProtocolError
+	if !errors.As(err, &protocolErr) || !strings.Contains(err.Error(), "validate outcome context") {
+		t.Fatalf("error = %T %v, want ProtocolError", err, err)
+	}
+}
+
 func TestHostRunTranslatesReviewContextToHostRepositoryPath(t *testing.T) {
 	adversaryDir := t.TempDir()
 	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), "name: local/adversary\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")

@@ -188,13 +188,11 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 			name := selection.Candidate.Name
 			runOpts.OnEnvelope = func(env review.RunEnvelope) { opts.OnEnvelope(name, env) }
 		}
-		if !opts.AllFiles {
-			ctxCopy := reviewContext
-			if len(selection.Result.RelevantFiles) > 0 {
-				ctxCopy = ReviewContextForFiles(reviewContext, selection.Result.RelevantFiles)
-			}
-			runOpts.ReviewContext = &ctxCopy
+		ctxCopy := reviewContext
+		if !opts.AllFiles && len(selection.Result.RelevantFiles) > 0 {
+			ctxCopy = ReviewContextForFiles(reviewContext, selection.Result.RelevantFiles)
 		}
+		runOpts.ReviewContext = &ctxCopy
 		err := a.Runner.Run(ctx, runOpts)
 		if opts.ReportRunFinish != nil {
 			if finishErr := opts.ReportRunFinish(selection.Candidate.Name, runIndex, selectedTotal, err); finishErr != nil {

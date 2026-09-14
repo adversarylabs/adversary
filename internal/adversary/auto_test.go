@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -81,6 +82,34 @@ func TestAutoSelectsAvailableAdversariesAndScopesEachContext(t *testing.T) {
 	}
 	if len(result.Selections) != 2 || !result.Selections[0].Selected || !result.Selections[1].Selected {
 		t.Fatalf("selections = %#v", result.Selections)
+	}
+}
+
+func TestAutoAllFilesPreservesResolvedReviewContext(t *testing.T) {
+	repo, resolver := autoRepository(t, map[string]string{
+		"lang/go:1.0.0": "name: lang/go\ndetection:\n  files: ['**/*.go']\n",
+	})
+	resolved := detection.Context{
+		SchemaVersion:  detection.SchemaVersion,
+		RepositoryRoot: t.TempDir(),
+		Mode:           detection.ModePullRequest,
+		BaseRef:        "main",
+		HeadRef:        "feature",
+		ChangedFiles:   []detection.ChangedFile{{Path: "cmd/main.go", Status: detection.StatusModified}},
+	}
+	changes := &fakeChangeResolver{context: resolved}
+	executor := &autoRecordingExecutor{}
+	runner := Runner{Resolver: &resolver, Repository: &repo, RequireInjectedResolver: true, Executor: executor}
+	_, err := (AutoRunner{Runner: runner, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{
+		All: true, AllFiles: true, MinimumConfidence: detection.ConfidenceMedium,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := resolved
+	want.RepositoryRoot = "/workspace"
+	if len(executor.contexts) != 1 || !reflect.DeepEqual(executor.contexts[0], want) {
+		t.Fatalf("all-files context = %#v, want %#v", executor.contexts, want)
 	}
 }
 

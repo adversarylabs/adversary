@@ -438,15 +438,15 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	}
 	if opts.OutcomeContext != nil {
 		if err := opts.OutcomeContext.Validate(); err != nil {
-			return fmt.Errorf("validate outcome context: %w", err)
+			return &ProtocolError{Err: fmt.Errorf("validate outcome context: %w", err)}
 		}
 		contextData, err := json.MarshalIndent(opts.OutcomeContext, "", "  ")
 		if err != nil {
-			return fmt.Errorf("marshal outcome context: %w", err)
+			return &ProtocolError{Err: fmt.Errorf("marshal outcome context: %w", err)}
 		}
 		outcomeContextPath := filepath.Join(runDir, "outcome-context.json")
 		if err := files.WriteFile(outcomeContextPath, contextData, runtimeProtocolFileMode); err != nil {
-			return err
+			return &ExecutionError{Err: fmt.Errorf("write outcome context: %w", err)}
 		}
 		config.Env["ADVERSARY_OUTCOME_CONTEXT"] = outcomeContextPath
 	}
