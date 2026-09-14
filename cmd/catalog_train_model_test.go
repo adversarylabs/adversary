@@ -336,6 +336,7 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 	_, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{
 		ManagedRuntime: 1, GenerationAttempt: 4, MaxGenerationTurns: 6, MaxQualityTurns: 3,
 		PreviousPlan: previous, RepairStage: "build_and_test",
+		ProposedRule: "Detect sync.Once.Do fallible initialization", EvidenceComment: "sync.Once initialization cannot retry",
 		ValidationFeedback: "old critic feedback", LatestFeedback: "expected a lazy-initialization finding",
 	})
 	if err != nil {
@@ -345,7 +346,7 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 		t.Fatalf("model calls=%d want generation and two critics", len(provider.requests))
 	}
 	prompt := provider.requests[0].Prompt
-	for _, want := range []string{"VALIDATION REPAIR MODE", "first guard, extraction, or predicate", "Do not weaken the assertion", "remove invented SDK options", "balanced-brace scanning", "shadowing parameter", "holder.once.Do", "small Go lexical scanner", "must not parse declarations", "generator-owned acceptance suite executes", "objectStore, objectStoreErr = NewStore(", "return exactly one finding", "adjacent colon and equals tokens", "earlier anonymous function", "every independent matching function", "stable, unique groupKey", "SDK deduplicates findings", "case-sensitive .go suffix", "callback-local variables", "once = sync.Once{}"} {
+	for _, want := range []string{"VALIDATION REPAIR MODE", "Do not weaken the assertion", "remove invented SDK options", "SDK SEMANTIC FACT OVERRIDE", "goFallibleOnceInitializations", "supersedes every earlier", "repoGraph is null", "listInScopePaths", "explicitResetAfterError", "stable groupKey", "inject a minimal RepoGraph double", "semantic fact filtering"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("repair prompt omitted %q:\n%s", want, prompt)
 		}

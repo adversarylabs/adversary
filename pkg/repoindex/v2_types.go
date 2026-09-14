@@ -17,7 +17,7 @@ import (
 
 const (
 	V2SchemaVersion   = "v2"
-	V2AdapterRevision = "go-ast-v1+ts-syntax-v1"
+	V2AdapterRevision = "go-semantic-v1+ts-syntax-v1"
 	EnvRepoGraph      = "ADVERSARY_REPO_GRAPH"
 	v2DatabaseFile    = "graph.sqlite"
 	v2MetaFile        = "meta.json"
@@ -34,6 +34,7 @@ type V2Meta struct {
 	SymbolCount     int            `json:"symbolCount"`
 	EdgeCount       int            `json:"edgeCount"`
 	TestLinkCount   int            `json:"testLinkCount"`
+	FactCount       int            `json:"factCount"`
 	ParseFailures   []V2Diagnostic `json:"parseFailures,omitempty"`
 	Rebuilt         bool           `json:"-"`
 }
@@ -96,6 +97,21 @@ type V2TestLink struct {
 	Reason         string  `json:"reason"`
 }
 
+type V2SemanticFact struct {
+	ID         int64           `json:"id"`
+	Kind       string          `json:"kind"`
+	Path       string          `json:"path"`
+	Module     string          `json:"module,omitempty"`
+	SymbolID   *int64          `json:"symbolId,omitempty"`
+	Line       int             `json:"line"`
+	Column     int             `json:"column"`
+	EndLine    int             `json:"endLine"`
+	EndColumn  int             `json:"endColumn"`
+	Confidence float64         `json:"confidence"`
+	Adapter    string          `json:"adapter"`
+	Data       json.RawMessage `json:"data"`
+}
+
 type V2Page[T any] struct {
 	Items      []T    `json:"items"`
 	NextCursor string `json:"nextCursor,omitempty"`
@@ -120,6 +136,14 @@ type V2RelationQuery struct {
 	SymbolID int64
 	Cursor   string
 	Limit    int
+}
+
+type V2FactQuery struct {
+	Kind   string
+	Path   string
+	Module string
+	Cursor string
+	Limit  int
 }
 
 type V2Graph struct {
@@ -369,6 +393,41 @@ ORDER BY tl.id LIMIT ?`, cursorID, path, filepath.ToSlash(path), symbolID, symbo
 		page.Items = append(page.Items, item.V2TestLink)
 	}
 	return page, nil
+}
+
+func (g *V2Graph) SemanticFacts(query V2FactQuery) (V2Page[V2SemanticFact], error) {
+	if query.Path != "" {
+		if err := validV2Path(query.Path); err != nil {
+			return V2Page[V2SemanticFact]{}, err
+		}
+	}
+	limit, cursor, err := v2Bounds(query.Limit, query.Cursor)
+	if err != nil {
+		return V2Page[V2SemanticFact]{}, err
+	}
+	rows, err := g.db.Query(`SELECT sf.id,sf.kind,f.path,f.module,sf.symbol_id,
+sf.line,sf.column,sf.end_line,sf.end_column,sf.confidence,sf.adapter,sf.data
+FROM semantic_facts sf JOIN files f ON f.id=sf.file_id
+WHERE sf.id>? AND (?='' OR sf.kind=?) AND (?='' OR f.path=?) AND (?='' OR f.module=?)
+ORDER BY sf.id LIMIT ?`, cursor, query.Kind, query.Kind, query.Path, filepath.ToSlash(query.Path), query.Module, query.Module, limit+1)
+	if err != nil {
+		return V2Page[V2SemanticFact]{}, err
+	}
+	defer rows.Close()
+	var items []V2SemanticFact
+	for rows.Next() {
+		var item V2SemanticFact
+		var data string
+		if err := rows.Scan(&item.ID, &item.Kind, &item.Path, &item.Module, &item.SymbolID, &item.Line, &item.Column, &item.EndLine, &item.EndColumn, &item.Confidence, &item.Adapter, &data); err != nil {
+			return V2Page[V2SemanticFact]{}, err
+		}
+		item.Data = json.RawMessage(data)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return V2Page[V2SemanticFact]{}, err
+	}
+	return v2Page(items, limit, func(item V2SemanticFact) int64 { return item.ID }), nil
 }
 
 type v2Scanner interface{ Scan(...any) error }

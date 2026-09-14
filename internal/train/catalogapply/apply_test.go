@@ -861,18 +861,12 @@ func TestInjectHostValidationContractsAddsSyncOnceCasesOnlyToValidationCopy(t *t
 	content := string(raw)
 	for _, want := range []string{
 		`const evidencePath = "pkg/store/resolver.go"`,
-		"detects multiline fallible sync.Once initialization with distinct bindings",
-		"ignores Go-shaped text outside Go source files",
-		"rejects callback-local short declarations",
-		"allows an explicit reset after failed initialization",
-		"custom Do receiver despite another sync.Once declaration",
-		"rejects an Err-named non-error binding",
-		"rejects parameter shadowing and selector receivers",
-		"rejects a fallible constructor outside the Do callback",
-		"rejects short-declaration shadowing",
-		"rejects an error declaration borrowed from another function",
-		"finds a candidate after an earlier anonymous function",
-		"reports every matching function in one file",
+		"goFallibleOnceInitializations",
+		"emits a finding from the CLI semantic fact",
+		"accepts explicit retry recovery",
+		"limits findings to files in the review scope",
+		"preserves independent semantic facts",
+		"degrades safely when the CLI semantic graph is unavailable",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("generator-owned validation contract omitted %q", want)
@@ -902,11 +896,11 @@ func TestAttachHostValidationContractExposesExactReadOnlyTestsToPlanner(t *testi
 	attachHostValidationContract(&request)
 	for _, want := range []string{
 		`const evidencePath = "pkg/store/resolver.go"`,
-		"ignores Go-shaped text outside Go source files",
-		"rejects callback-local short declarations",
-		"allows an explicit reset after failed initialization",
-		"rejects parameter shadowing and selector receivers",
-		"reports every matching function in one file",
+		"goFallibleOnceInitializations",
+		"emits a finding from the CLI semantic fact",
+		"accepts explicit retry recovery",
+		"limits findings to files in the review scope",
+		"preserves independent semantic facts",
 	} {
 		if !strings.Contains(request.ValidationContract, want) {
 			t.Fatalf("planner validation contract omitted %q", want)

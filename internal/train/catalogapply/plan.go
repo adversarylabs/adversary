@@ -278,7 +278,7 @@ func applyPlannedCandidateWithProgressOptionsAndRunner(ctx context.Context, work
 
 func attachHostValidationContract(request *ChangeRequest) {
 	if request.ManagedRuntime == 1 && isSyncOnceCandidate(*request) {
-		request.ValidationContract = syncOnceValidationContract(request.EvidenceFile)
+		request.ValidationContract = syncOnceSemanticValidationContract(request.EvidenceFile)
 	}
 }
 
@@ -481,6 +481,8 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	newImplementation, runtimeRegression := false, false
 	deterministicExtension := false
 	deterministicReadsSources := false
+	deterministicUsesSemanticFacts := false
+	deterministicReparsesGo := false
 	deterministicHardcodesEvidencePath := false
 	deterministicHardcodesEvidenceLine := false
 	deterministicTestProvidesSource := false
@@ -527,6 +529,8 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			}
 			if changed && strings.HasPrefix(relInAdversary, "src/rules/") {
 				deterministicReadsSources = deterministicReadsSources || strings.Contains(file.Content, "loadInScopeSources(")
+				deterministicUsesSemanticFacts = deterministicUsesSemanticFacts || strings.Contains(file.Content, "goFallibleOnceInitializations(")
+				deterministicReparsesGo = deterministicReparsesGo || strings.Contains(file.Content, "tokenize(") || strings.Contains(file.Content, "packageBindings(") || strings.Contains(file.Content, "new RegExp(")
 				deterministicHardcodesEvidencePath = deterministicHardcodesEvidencePath || strings.TrimSpace(request.EvidenceFile) != "" && strings.Contains(file.Content, request.EvidenceFile)
 				deterministicHardcodesEvidenceLine = deterministicHardcodesEvidenceLine || literalFindingLine.MatchString(file.Content)
 			}
@@ -606,6 +610,12 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	}
 	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && deterministicHardcodesEvidenceLine {
 		return "", fmt.Errorf("generated deterministic rule hard-codes an evidence line; derive the finding line from the matched source")
+	}
+	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && isSyncOnceCandidate(request) && !deterministicUsesSemanticFacts {
+		return "", fmt.Errorf("generated sync.Once rule must consume ctx.repoGraph.goFallibleOnceInitializations(); the CLI owns Go parsing, package grouping, and lexical binding resolution")
+	}
+	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && isSyncOnceCandidate(request) && (deterministicReadsSources || deterministicReparsesGo) {
+		return "", fmt.Errorf("generated sync.Once rule reimplements source analysis; consume typed CLI semantic facts and keep only policy filtering and finding emission in the adversary")
 	}
 	if request.Executable && !nativeRegression {
 		return "", fmt.Errorf("generated change did not add a focused native test file for the executable adversary")
@@ -923,7 +933,7 @@ func injectHostValidationContracts(dir string, request ChangeRequest, plan Chang
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("prepare generator-owned validation tests: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(syncOnceValidationContract(request.EvidenceFile)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(syncOnceSemanticValidationContract(request.EvidenceFile)), 0o644); err != nil {
 		return fmt.Errorf("write generator-owned sync.Once validation contract: %w", err)
 	}
 	return nil
@@ -932,6 +942,104 @@ func injectHostValidationContracts(dir string, request ChangeRequest, plan Chang
 func isSyncOnceCandidate(request ChangeRequest) bool {
 	haystack := strings.Join([]string{request.ProposedRule, request.EvidenceComment, request.EvidenceDiff, request.EvidenceContext}, "\n")
 	return strings.Contains(haystack, "sync.Once") && (strings.Contains(haystack, ".Do") || strings.Contains(strings.ToLower(haystack), "initializ"))
+}
+
+func syncOnceSemanticValidationContract(evidenceFile string) string {
+	evidenceFile = strings.TrimSpace(filepath.ToSlash(evidenceFile))
+	if evidenceFile == "" || evidenceFile == "." || strings.HasPrefix(evidenceFile, "../") {
+		evidenceFile = "fixture.go"
+	}
+	quotedPath, _ := json.Marshal(evidenceFile)
+	return fmt.Sprintf(`// Generator-owned acceptance contract. This file exists only in the isolated
+// validation copy and is never committed to the catalog.
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import type { GoFallibleOnceInitialization, RepoGraph } from "@adversarylabs/sdk";
+import { createApp } from "../src/index.ts";
+
+const evidencePath = %s;
+
+function semanticFact(overrides: Partial<GoFallibleOnceInitialization> = {}): GoFallibleOnceInitialization {
+  return {
+    id: 1,
+    path: evidencePath,
+    module: "fixture/package",
+    symbolId: 10,
+    line: 12,
+    column: 3,
+    endLine: 14,
+    endColumn: 5,
+    confidence: 1,
+    function: "runtimeObjectStore",
+    guard: "objectStoreOnce",
+    value: "objectStore",
+    error: "objectStoreErr",
+    explicitResetAfterError: false,
+    ...overrides,
+  };
+}
+
+function graphWith(facts: GoFallibleOnceInitialization[]): RepoGraph {
+  return {
+    goFallibleOnceInitializations: () => ({ items: facts }),
+  } as unknown as RepoGraph;
+}
+
+async function deterministicFindings(facts: GoFallibleOnceInitialization[], paths = [evidencePath]) {
+  const root = await mkdtemp(join(tmpdir(), "adversary-host-sync-once-"));
+  for (const path of paths) {
+    const target = join(root, path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, "package fixture\n");
+  }
+  const result = await createApp().run({
+    input: { source: { path: root } },
+    repoGraph: graphWith(facts),
+    includeRawObservations: true,
+  });
+  return result.findings.filter((finding) => finding.ruleId !== "private-policy");
+}
+
+test("host contract: emits a finding from the CLI semantic fact", async () => {
+  const findings = await deterministicFindings([semanticFact()]);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]?.evidence[0]?.location?.file, evidencePath);
+  assert.equal(findings[0]?.evidence[0]?.location?.line, 12);
+});
+
+test("host contract: accepts explicit retry recovery", async () => {
+  const findings = await deterministicFindings([semanticFact({ explicitResetAfterError: true })]);
+  assert.equal(findings.length, 0, "a CLI-resolved guard reset makes initialization retryable");
+});
+
+test("host contract: limits findings to files in the review scope", async () => {
+  const findings = await deterministicFindings([semanticFact({ path: "pkg/unrelated.go" })]);
+  assert.equal(findings.length, 0, "repository facts outside the requested source scope are ignored");
+});
+
+test("host contract: preserves independent semantic facts", async () => {
+  const secondPath = "pkg/second.go";
+  const findings = await deterministicFindings([
+    semanticFact(),
+    semanticFact({ id: 2, path: secondPath, symbolId: 11, line: 30, function: "secondStore" }),
+  ], [evidencePath, secondPath]);
+  assert.equal(findings.length, 2, "each independent poisoned initializer produces a finding");
+  assert.notEqual(findings[0]?.groupKey, findings[1]?.groupKey);
+});
+
+test("host contract: degrades safely when the CLI semantic graph is unavailable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adversary-host-sync-once-no-graph-"));
+  const result = await createApp().run({
+    input: { source: { path: root } },
+    repoGraph: null,
+    includeRawObservations: true,
+  });
+  assert.equal(result.findings.filter((finding) => finding.ruleId !== "private-policy").length, 0);
+});
+`, string(quotedPath))
 }
 
 func syncOnceValidationContract(evidenceFile string) string {

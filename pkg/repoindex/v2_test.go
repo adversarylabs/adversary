@@ -1,10 +1,82 @@
 package repoindex
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestV2GoSemanticFactsResolvePackagesAndLexicalBindings(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/app\n\ngo 1.22\n")
+	write(t, root, "store/state.go", `package store
+import "sync"
+type Store interface{}
+type customOnce struct{}
+func (customOnce) Do(func()) {}
+var once sync.Once
+var cached Store
+var cachedErr error
+var resetOnce sync.Once
+var resetCached Store
+var resetErr error
+`)
+	write(t, root, "store/load.go", `package store
+import "sync"
+func NewStore() (Store, error) { return nil, nil }
+func load() (Store, error) {
+	once.Do(func() { cached, cachedErr = NewStore() })
+	return cached, cachedErr
+}
+func shadow(_ int, once customOnce) (Store, error) {
+	once.Do(func() { cached, cachedErr = NewStore() })
+	return cached, cachedErr
+}
+func retryable() (Store, error) {
+	resetOnce.Do(func() { resetCached, resetErr = NewStore() })
+	if resetErr != nil { resetOnce = sync.Once{} }
+	return resetCached, resetErr
+}
+`)
+	fingerprint, err := V2Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "graph")
+	meta, err := BuildV2(root, dir, fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.FactCount != 2 {
+		t.Fatalf("fact count=%d, want 2", meta.FactCount)
+	}
+	graph, err := OpenV2(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer graph.Close()
+	facts, err := graph.SemanticFacts(V2FactQuery{Kind: goFallibleOnceFactKind, Limit: 10})
+	if err != nil || len(facts.Items) != 2 {
+		t.Fatalf("facts=%#v err=%v", facts, err)
+	}
+	if facts.Items[0].Path != "store/load.go" {
+		t.Fatalf("cross-file fact path=%q", facts.Items[0].Path)
+	}
+	var first, second goFallibleOnceFactData
+	if err := json.Unmarshal(facts.Items[0].Data, &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(facts.Items[1].Data, &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.Function != "load" || first.ExplicitResetAfterError {
+		t.Fatalf("unexpected positive fact: %#v", first)
+	}
+	if second.Function != "retryable" || !second.ExplicitResetAfterError {
+		t.Fatalf("unexpected retryable fact: %#v", second)
+	}
+}
 
 func TestV2GoAndTypeScriptGraphQueries(t *testing.T) {
 	root := t.TempDir()

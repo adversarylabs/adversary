@@ -46,12 +46,21 @@ CREATE TABLE test_links (
   source_symbol_id INTEGER REFERENCES symbols(id), test_file_id INTEGER NOT NULL REFERENCES files(id),
   test_symbol_id INTEGER REFERENCES symbols(id), confidence REAL NOT NULL, reason TEXT NOT NULL
 );
+CREATE TABLE semantic_facts (
+  id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id),
+  symbol_id INTEGER REFERENCES symbols(id), kind TEXT NOT NULL,
+  line INTEGER NOT NULL, column INTEGER NOT NULL,
+  end_line INTEGER NOT NULL, end_column INTEGER NOT NULL,
+  confidence REAL NOT NULL, adapter TEXT NOT NULL,
+  data TEXT NOT NULL DEFAULT '{}'
+);
 CREATE INDEX files_language_path ON files(language,path);
 CREATE INDEX symbols_file_name_kind ON symbols(file_id,name,kind);
 CREATE INDEX symbols_name_kind ON symbols(name,kind);
 CREATE INDEX edges_kind_source ON edges(kind,from_symbol_id,from_file_id);
 CREATE INDEX edges_kind_target ON edges(kind,to_symbol_id,to_file_id);
 CREATE INDEX test_links_source ON test_links(source_file_id,source_symbol_id);
+CREATE INDEX semantic_facts_kind_file ON semantic_facts(kind,file_id);
 `
 
 type v2FileRecord struct {
@@ -91,6 +100,7 @@ type v2BuildState struct {
 	byModuleName map[string][]*v2SymbolDraft
 	edges        int
 	testLinks    int
+	facts        int
 	diagnostics  []V2Diagnostic
 }
 
@@ -192,6 +202,7 @@ func BuildV2(absRepo, dir, fingerprint string) (V2Meta, error) {
 		Fingerprint: fingerprint, RepoPath: absRepo, BuiltAt: time.Now().UTC(),
 		DurationMS: time.Since(started).Milliseconds(), FileCount: len(state.files),
 		SymbolCount: len(state.symbols), EdgeCount: state.edges, TestLinkCount: state.testLinks,
+		FactCount:     state.facts,
 		ParseFailures: state.diagnostics,
 	}
 	raw, err := json.MarshalIndent(meta, "", "  ")
@@ -282,6 +293,9 @@ func (state *v2BuildState) index(absRepo string) error {
 		}
 	}
 	if err := state.insertSymbols(); err != nil {
+		return err
+	}
+	if err := state.insertSemanticFacts(); err != nil {
 		return err
 	}
 	if err := state.insertRelations(absRepo, goModule); err != nil {
