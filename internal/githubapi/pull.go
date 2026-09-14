@@ -11,6 +11,7 @@ import (
 type PullRequest struct {
 	Number  int    `json:"number"`
 	Title   string `json:"title"`
+	Body    string `json:"body"`
 	HTMLURL string `json:"html_url"`
 	State   string `json:"state"`
 	Merged  bool   `json:"merged"`

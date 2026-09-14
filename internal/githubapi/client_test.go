@@ -165,7 +165,7 @@ func TestGetPullRequestAndListFiles(t *testing.T) {
 	ResetRateGateForTest()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/o/r/pulls/1", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"number":1,"title":"t","html_url":"u","state":"open","base":{"ref":"main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"full_name":"o/r","clone_url":"https://github.com/o/r.git","owner":{"login":"o"},"name":"r"}},"head":{"ref":"feat","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"o/r","clone_url":"https://github.com/o/r.git","owner":{"login":"o"},"name":"r"}}}`))
+		_, _ = w.Write([]byte(`{"number":1,"title":"t","body":"intended outcome","html_url":"u","state":"open","base":{"ref":"main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"full_name":"o/r","clone_url":"https://github.com/o/r.git","owner":{"login":"o"},"name":"r"}},"head":{"ref":"feat","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"o/r","clone_url":"https://github.com/o/r.git","owner":{"login":"o"},"name":"r"}}}`))
 	})
 	mux.HandleFunc("/repos/o/r/pulls/1/files", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`[{"filename":"a.go","patch":"@@ -1,1 +1,2 @@\n line\n+new\n"}]`))
@@ -179,7 +179,7 @@ func TestGetPullRequestAndListFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pr.Number != 1 || pr.Head.SHA == "" {
+	if pr.Number != 1 || pr.Head.SHA == "" || pr.Body != "intended outcome" {
 		t.Fatalf("%#v", pr)
 	}
 	files, err := c.ListPullRequestFiles(context.Background(), "o", "r", 1)

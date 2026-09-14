@@ -1,6 +1,7 @@
 package githubreview
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"path"
@@ -19,8 +20,9 @@ type ProjectOptions struct {
 	OmitSummary bool // keep inline/body findings but omit aggregate assessment/opinion
 }
 
-// ProjectFindings builds a CommentPlan from one or more run envelopes.
-// Visible findings only; never observations/positives/suppressedFindings.
+// ProjectFindings builds a CommentPlan from visible findings and the reserved
+// review_basis observation. Other observations, positives, and suppressed
+// findings are never projected.
 func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan {
 	plan := CommentPlan{
 		SchemaVersion: 1,
@@ -43,6 +45,9 @@ func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan
 
 	for _, ne := range envelopes {
 		res := ne.Envelope.Result
+		if plan.ReviewBasis == "" {
+			plan.ReviewBasis = inferredReviewBasis(res.Observations)
+		}
 		ref := strings.TrimSpace(ne.Adversary)
 		pkg := strings.TrimSpace(res.Adversary.Name)
 		adv := ref
@@ -81,6 +86,21 @@ func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan
 		}
 	}
 	return plan
+}
+
+func inferredReviewBasis(notes []review.Note) string {
+	for _, note := range notes {
+		var metadata struct {
+			Role string `json:"role"`
+		}
+		if len(note.Metadata) == 0 || json.Unmarshal(note.Metadata, &metadata) != nil || metadata.Role != "review_basis" {
+			continue
+		}
+		if summary := strings.TrimSpace(note.Summary); summary != "" {
+			return summary
+		}
+	}
+	return ""
 }
 
 func containsString(values []string, value string) bool {

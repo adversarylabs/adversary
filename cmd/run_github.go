@@ -14,7 +14,9 @@ import (
 	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/githubreview"
 	"github.com/adversarylabs/adversary/internal/modelreview"
+	"github.com/adversarylabs/adversary/internal/outcomeinfer"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
 
@@ -105,6 +107,7 @@ func resolvePRRunContext(ctx context.Context, opts *runOptions, progress io.Writ
 		opts.tempPRDir = ws.TempDir
 		opts.worktreeRoot = ws.WorktreeRoot
 		opts.resolvedHeadSHA = ws.HeadSHA
+		opts.outcomeContext = outcomecontext.GitHubPullRequest(opts.githubRepo, opts.githubPR, ws.Title, ws.Body)
 		return nil
 	}
 
@@ -122,6 +125,7 @@ func resolvePRRunContext(ctx context.Context, opts *runOptions, progress io.Writ
 		opts.head = headSHA
 	}
 	opts.resolvedHeadSHA = headSHA
+	opts.outcomeContext = outcomecontext.GitHubPullRequest(opts.githubRepo, opts.githubPR, pr.Title, pr.Body)
 	if progress != nil {
 		fmt.Fprintf(progress, "Resolved PR %s/%s#%d → base %s… head %s…\n",
 			owner, repo, opts.githubPR, shortSHA(baseSHA), shortSHA(headSHA))
@@ -134,6 +138,37 @@ func shortSHA(s string) string {
 		return s[:7]
 	}
 	return s
+}
+
+// detectOutcomeIntent enriches the safe metadata fallback once, before any
+// adversary runs. Failure is deliberately non-fatal: intent is additive and
+// must never disable the existing review system.
+func detectOutcomeIntent(ctx context.Context, app *application.App, opts *runOptions, progress io.Writer) error {
+	if opts.outcomeContext == nil {
+		return nil
+	}
+	runtime, ok := app.Dependencies().Runtime.(application.ModelReviewRuntime)
+	if ok {
+		provider, err := runtime.ModelReviewProvider(application.ModelReviewConfig{
+			Provider: opts.modelProvider,
+			Model:    opts.model,
+		})
+		if err == nil {
+			if intent, inferErr := outcomeinfer.Infer(ctx, provider, opts.outcomeContext); inferErr == nil {
+				opts.outcomeContext.Intent = intent
+			} else if errors.Is(inferErr, context.Canceled) || errors.Is(inferErr, context.DeadlineExceeded) {
+				return inferErr
+			} else if opts.verbose && progress != nil {
+				fmt.Fprintf(progress, "warning: outcome inference failed; using PR metadata: %v\n", inferErr)
+			}
+		} else if opts.verbose && progress != nil {
+			fmt.Fprintf(progress, "warning: outcome inference unavailable; using PR metadata: %v\n", err)
+		}
+	}
+	if progress != nil {
+		fmt.Fprintln(progress, review.SanitizeTerminalInline(outcomecontext.ReviewedAs(opts.outcomeContext)))
+	}
+	return nil
 }
 
 func (o *runOptions) githubRepoOwner() (owner, repo string) {
@@ -186,6 +221,11 @@ func maybeGitHubReview(ctx context.Context, app *application.App, opts *runOptio
 		Voice:       voiceInfo,
 		OmitSummary: !opts.githubIncludeSummary,
 	})
+	// The host-detected intent applies to every adversary, including private or
+	// catalog packages that do not emit a review_basis observation themselves.
+	if basis := outcomecontext.ReviewedAs(opts.outcomeContext); basis != "" {
+		plan.ReviewBasis = basis
+	}
 
 	// Default voice rewrite: try model provider; template remains on failure/missing creds.
 	// BuildRewritePrompt (inside EnhanceBodies) wraps agent/voice.md so Example maintainer

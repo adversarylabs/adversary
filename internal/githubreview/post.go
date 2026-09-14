@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"os"
 	"strings"
 
@@ -47,7 +48,9 @@ func Post(ctx context.Context, plan CommentPlan, opts PostOptions) (*PostResult,
 	if opts.Owner == "" || opts.Repo == "" || opts.Number <= 0 {
 		return nil, &application.Error{Operation: "github-review", Kind: "usage", Err: fmt.Errorf("owner, repo, and pr number required")}
 	}
-	nothingToPost := len(plan.Comments) == 0 && strings.TrimSpace(plan.ReviewBody) == ""
+	nothingToPost := len(plan.Comments) == 0 &&
+		strings.TrimSpace(plan.ReviewBody) == "" &&
+		strings.TrimSpace(plan.ReviewBasis) == ""
 	if nothingToPost && !opts.ResolveAddressed {
 		if opts.Progress != nil {
 			opts.Progress("GitHub review: nothing to post")
@@ -90,16 +93,21 @@ query($owner:String!,$name:String!,$number:Int!){
 		return &PostResult{Resolved: resolved}, nil
 	}
 
-	// Fetch patches and place.
-	files, err := opts.Client.ListPullRequestFiles(ctx, opts.Owner, opts.Repo, opts.Number)
-	if err != nil {
-		return nil, mapGitHubErr("list pull request files", err)
+	// Body-only reviews do not need changed-file placement.
+	if len(plan.Comments) > 0 {
+		files, err := opts.Client.ListPullRequestFiles(ctx, opts.Owner, opts.Repo, opts.Number)
+		if err != nil {
+			return nil, mapGitHubErr("list pull request files", err)
+		}
+		ApplyPlacement(&plan, files, headOID)
 	}
-	ApplyPlacement(&plan, files, headOID)
 
 	// Cap inline threads.
 	var threads []map[string]any
 	var bodySections []string
+	if basis := strings.Join(strings.Fields(plan.ReviewBasis), " "); basis != "" {
+		bodySections = append(bodySections, "**"+escapeMarkdownText(basis)+"**")
+	}
 	if strings.TrimSpace(plan.ReviewBody) != "" {
 		bodySections = append(bodySections, strings.TrimSpace(plan.ReviewBody))
 	}
@@ -247,6 +255,24 @@ mutation($input:SubmitPullRequestReviewInput!){
 		}
 	}
 	return res, nil
+}
+
+func escapeMarkdownText(value string) string {
+	value = html.EscapeString(value)
+	return strings.NewReplacer(
+		"\\", "\\\\",
+		"`", "\\`",
+		"*", "\\*",
+		"_", "\\_",
+		"{", "\\{",
+		"}", "\\}",
+		"[", "\\[",
+		"]", "\\]",
+		"(", "\\(",
+		")", "\\)",
+		"!", "\\!",
+		"|", "\\|",
+	).Replace(value)
 }
 
 func mapGitHubErr(op string, err error) error {

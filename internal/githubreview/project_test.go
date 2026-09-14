@@ -92,6 +92,28 @@ func TestProjectFindingsCanOmitAggregateSummary(t *testing.T) {
 	}
 }
 
+func TestProjectFindingsCarriesReviewBasisWithoutTurningItIntoAComment(t *testing.T) {
+	line := 3
+	env := review.RunEnvelope{Result: review.ReviewResult{
+		Adversary: review.ReviewAdversary{Name: "code-review"},
+		Observations: []review.Note{{
+			Key: "code-review.inferred-outcome", Summary: "Reviewed as: permit repository-scoped pulls.",
+			Metadata: json.RawMessage(`{"role":"review_basis","confidence":"high"}`),
+		}},
+		Findings: []review.Finding{{
+			ID: "f", Title: "Finding", Severity: "high", Confidence: "high",
+			Summary: "inline detail", Evidence: []review.Evidence{{File: "a.go", Line: &line}},
+		}},
+	}}
+	plan := ProjectFindings([]NamedEnvelope{{Adversary: "review/code", Envelope: env}}, ProjectOptions{})
+	if plan.ReviewBasis != "Reviewed as: permit repository-scoped pulls." {
+		t.Fatalf("review basis = %q", plan.ReviewBasis)
+	}
+	if len(plan.Comments) != 1 {
+		t.Fatalf("comments = %#v", plan.Comments)
+	}
+}
+
 func TestProjectFindingsDoesNotSummarizeCleanAdversaries(t *testing.T) {
 	env := review.RunEnvelope{Result: review.ReviewResult{
 		Adversary:  review.ReviewAdversary{Name: "clean"},
