@@ -794,7 +794,7 @@ func TestRunnableValidationSynchronizesCompleteBuildOutput(t *testing.T) {
 		}
 		return []byte("ok"), nil
 	}
-	if err := validateRunnablePackageAndSync(context.Background(), dir, runner); err != nil {
+	if err := validateRunnablePackageAndSync(context.Background(), dir, runner, ChangeRequest{}, ChangePlan{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{"dist/index.js", "dist/deterministic.js", "dist/rules/lazy.js"} {
@@ -807,6 +807,47 @@ func TestRunnableValidationSynchronizesCompleteBuildOutput(t *testing.T) {
 	}
 	if err := validateCompiledRelativeImports(dir); err == nil || !strings.Contains(err.Error(), "missing module") {
 		t.Fatalf("incomplete committed runtime was accepted: %v", err)
+	}
+}
+
+func TestInjectHostValidationContractsAddsSyncOnceCasesOnlyToValidationCopy(t *testing.T) {
+	dir := t.TempDir()
+	request := ChangeRequest{
+		ManagedRuntime:  1,
+		ProposedRule:    "Do not cache fallible initialization with sync.Once.Do.",
+		EvidenceFile:    "pkg/store/resolver.go",
+		EvidenceComment: "A transient failure cannot retry initialization.",
+	}
+	plan := ChangePlan{Strategy: StrategyDeterministic}
+	if err := injectHostValidationContracts(dir, request, plan); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "test", "adversary-host-sync-once-contract.test.ts")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, want := range []string{
+		`const evidencePath = "pkg/store/resolver.go"`,
+		"detects multiline fallible sync.Once initialization with distinct bindings",
+		"custom Do receiver despite an unrelated local sync.Once declaration",
+		"rejects an Err-named non-error binding",
+		"rejects parameter shadowing and selector receivers",
+		"rejects a fallible constructor outside the Do callback",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("generator-owned validation contract omitted %q", want)
+		}
+	}
+
+	nonMatching := t.TempDir()
+	request.ProposedRule = "Reject unbounded retries."
+	if err := injectHostValidationContracts(nonMatching, request, plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(nonMatching, "test")); !os.IsNotExist(err) {
+		t.Fatalf("unrelated candidate unexpectedly received sync.Once contract: %v", err)
 	}
 }
 

@@ -228,7 +228,7 @@ func applyPlannedCandidateWithProgressOptionsAndRunner(ctx context.Context, work
 				break
 			}
 			emit("validate", "running", "Building and testing the generated adversary")
-			if validationErr := validateRunnablePackageAndSync(ctx, dir, run); validationErr == nil {
+			if validationErr := validateRunnablePackageAndSync(ctx, dir, run, request, plan); validationErr == nil {
 				emit("validate", "complete", "Build, tests, validation, and package checks passed")
 				break
 			} else {
@@ -871,12 +871,15 @@ func validateRunnablePackage(ctx context.Context, dir string, run commandRunner)
 	return validateRunnablePackageInPlace(ctx, isolated, run)
 }
 
-func validateRunnablePackageAndSync(ctx context.Context, dir string, run commandRunner) error {
+func validateRunnablePackageAndSync(ctx context.Context, dir string, run commandRunner, request ChangeRequest, plan ChangePlan) error {
 	isolated, cleanup, err := prepareIsolatedRunnablePackage(dir)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
+	if err := injectHostValidationContracts(isolated, request, plan); err != nil {
+		return err
+	}
 	if err := validateRunnablePackageInPlace(ctx, isolated, run); err != nil {
 		return err
 	}
@@ -893,6 +896,157 @@ func validateRunnablePackageAndSync(ctx context.Context, dir string, run command
 		}
 	}
 	return nil
+}
+
+// injectHostValidationContracts adds generator-owned behavioral checks only to
+// the disposable validation copy. Model-authored tests are useful evidence, but
+// they cannot be the sole acceptance boundary because a generated rule can
+// accidentally weaken or omit the exact cases that would expose its defects.
+func injectHostValidationContracts(dir string, request ChangeRequest, plan ChangePlan) error {
+	if request.ManagedRuntime != 1 || plan.Strategy != StrategyDeterministic || !isSyncOnceCandidate(request) {
+		return nil
+	}
+	path := filepath.Join(dir, "test", "adversary-host-sync-once-contract.test.ts")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("prepare generator-owned validation tests: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(syncOnceValidationContract(request.EvidenceFile)), 0o644); err != nil {
+		return fmt.Errorf("write generator-owned sync.Once validation contract: %w", err)
+	}
+	return nil
+}
+
+func isSyncOnceCandidate(request ChangeRequest) bool {
+	haystack := strings.Join([]string{request.ProposedRule, request.EvidenceComment, request.EvidenceDiff, request.EvidenceContext}, "\n")
+	return strings.Contains(haystack, "sync.Once") && (strings.Contains(haystack, ".Do") || strings.Contains(strings.ToLower(haystack), "initializ"))
+}
+
+func syncOnceValidationContract(evidenceFile string) string {
+	evidenceFile = strings.TrimSpace(filepath.ToSlash(evidenceFile))
+	if evidenceFile == "" || evidenceFile == "." || strings.HasPrefix(evidenceFile, "../") {
+		evidenceFile = "fixture.go"
+	}
+	quotedPath, _ := json.Marshal(evidenceFile)
+	return fmt.Sprintf(`// Generator-owned acceptance contract. This file exists only in the isolated
+// validation copy and is never committed to the catalog.
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { createApp } from "../src/index.ts";
+
+const evidencePath = %s;
+
+async function deterministicFindings(content: string) {
+  const root = await mkdtemp(join(tmpdir(), "adversary-host-sync-once-"));
+  const target = join(root, evidencePath);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, content);
+  const result = await createApp().run({ input: { source: { path: root } }, includeRawObservations: true });
+  return result.findings.filter((finding) => finding.ruleId !== "private-policy");
+}
+
+test("host contract: detects multiline fallible sync.Once initialization with distinct bindings", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+type Params struct{}
+func NewStore(Params) (Store, error) { return nil, nil }
+var param Params
+var (
+  objectStoreOnce sync.Once
+  objectStore Store
+  objectStoreErr error
+)
+func runtimeObjectStore() (Store, error) {
+  objectStoreOnce.Do(func() {
+    objectStore,
+      objectStoreErr = NewStore(
+        param,
+      )
+  })
+  return objectStore, objectStoreErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 1, "the evidence-shaped multiline initialization must be reported");
+  assert.equal(findings[0]?.evidence[0]?.location?.file, evidencePath);
+});
+
+test("host contract: rejects a custom Do receiver despite an unrelated local sync.Once declaration", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+type customOnce struct{}
+func (customOnce) Do(fn func()) { fn() }
+func NewStore() (Store, error) { return nil, nil }
+var objectStoreOnce customOnce
+var objectStore Store
+var objectStoreErr error
+func unrelated() { var objectStoreOnce sync.Once; _ = objectStoreOnce }
+func runtimeObjectStore() (Store, error) {
+  objectStoreOnce.Do(func() { objectStore, objectStoreErr = NewStore() })
+  return objectStore, objectStoreErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 0, "a same-named sync.Once in another lexical scope must not bless a custom receiver");
+});
+
+test("host contract: rejects an Err-named non-error binding", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+func NewStore() (Store, int) { return nil, 0 }
+var objectStoreOnce sync.Once
+var objectStore Store
+var objectStoreErr int
+func runtimeObjectStore() (Store, int) {
+  objectStoreOnce.Do(func() { objectStore, objectStoreErr = NewStore() })
+  return objectStore, objectStoreErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 0, "an identifier suffix is not proof that the binding has Go error type");
+});
+
+test("host contract: rejects parameter shadowing and selector receivers", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+type customOnce struct{}
+func (customOnce) Do(fn func()) { fn() }
+func NewStore() (Store, error) { return nil, nil }
+var objectStoreOnce sync.Once
+var objectStore Store
+var objectStoreErr error
+type holderType struct { objectStoreOnce customOnce }
+func parameter(objectStoreOnce customOnce) (Store, error) {
+  objectStoreOnce.Do(func() { objectStore, objectStoreErr = NewStore() })
+  return objectStore, objectStoreErr
+}
+func selector(holder holderType) (Store, error) {
+  holder.objectStoreOnce.Do(func() { objectStore, objectStoreErr = NewStore() })
+  return objectStore, objectStoreErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 0, "shadowed identifiers and selector fields are not the package sync.Once binding");
+});
+
+test("host contract: rejects a fallible constructor outside the Do callback", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+func NewStore() (Store, error) { return nil, nil }
+var objectStoreOnce sync.Once
+var ready bool
+func runtimeObjectStore() (Store, error) {
+  objectStoreOnce.Do(func() { ready = true })
+  objectStore, objectStoreErr := NewStore()
+  return objectStore, objectStoreErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 0, "the fallible assignment must occur inside the sync.Once callback");
+});
+`, string(quotedPath))
 }
 
 func prepareIsolatedRunnablePackage(dir string) (string, func(), error) {
