@@ -23,6 +23,9 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 		"adversarylabs.yaml",
 		"adversary.train.yaml",
 		".gitignore",
+		".github/workflows/adversary-review.yml",
+		".github/workflows/version-adversaries.yml",
+		".github/workflows/publish-adversary.yml",
 		"README.md",
 		"adversaries/data-integrity/README.md",
 		"adversaries/migrations-and-backfills/README.md",
@@ -35,6 +38,7 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 		"adversaries/tenant-and-access-boundaries/package.json",
 		"adversaries/tenant-and-access-boundaries/package-lock.json",
 		"adversaries/tenant-and-access-boundaries/src/index.ts",
+		"adversaries/tenant-and-access-boundaries/src/deterministic.ts",
 		"adversaries/tenant-and-access-boundaries/dist/index.js",
 		"adversaries/tenant-and-access-boundaries/test/index.test.ts",
 		"adversaries/tenant-and-access-boundaries/docs/scope.md",
@@ -82,7 +86,7 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 				t.Fatalf("%s brief missing %q", adversary.Slug, want)
 			}
 		}
-		for _, name := range []string{"adversary.yaml", "package.json", "package-lock.json", "src/index.ts", "dist/index.js", "test/index.test.ts", "docs/scope.md"} {
+		for _, name := range []string{"adversary.yaml", "package.json", "package-lock.json", "src/index.ts", "src/deterministic.ts", "dist/index.js", "dist/deterministic.js", "test/index.test.ts", "docs/scope.md"} {
 			if _, err := os.Stat(filepath.Join(destination, "adversaries", adversary.Slug, filepath.FromSlash(name))); err != nil {
 				t.Fatalf("%s is not runnable; missing %s: %v", adversary.Slug, name, err)
 			}
@@ -98,12 +102,31 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 		}
 	}
 	packageJSON, err := os.ReadFile(filepath.Join(destination, "adversaries", "operability", "package.json"))
-	if err != nil || !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 2`) {
+	if err != nil || !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 1`) {
 		t.Fatalf("managed runtime package=%q err=%v", packageJSON, err)
 	}
 	source, err := os.ReadFile(filepath.Join(destination, "adversaries", "operability", "src", "index.ts"))
-	if err != nil || !strings.Contains(string(source), "loadLearnedRules") || !strings.Contains(string(source), `../rules/`) {
+	if err != nil || !strings.Contains(string(source), "loadLearnedRules") || !strings.Contains(string(source), `../rules/`) || !strings.Contains(string(source), "registerDeterministicRules(app)") {
 		t.Fatalf("managed runtime source does not discover learned rules: %q err=%v", source, err)
+	}
+	for name, wants := range map[string][]string{
+		"adversary-review.yml":    {"paths:", "adversarylabs/actions/run@v1", "adversaries: adversarylabs/adversary", "matrix.adversary"},
+		"version-adversaries.yml": {"workflow_dispatch:", "Continue serial versioning", "adversarylabs/actions/version@v1", "[skip-ci]", "gh workflow run publish-adversary.yml", "actions: write"},
+		"publish-adversary.yml":   {"workflow_dispatch:", "id-token: write", "adversarylabs/actions/push@v1", "auth-mode: oidc", "ADVERSARY_REGISTRY_NAMESPACE", "inputs.commit"},
+	} {
+		raw, err := os.ReadFile(filepath.Join(destination, ".github", "workflows", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var workflow any
+		if err := yaml.Unmarshal(raw, &workflow); err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, want := range wants {
+			if !strings.Contains(string(raw), want) {
+				t.Fatalf("%s missing %q:\n%s", name, want, raw)
+			}
+		}
 	}
 }
 
@@ -141,7 +164,7 @@ func TestUpgradePreservesPoliciesAndMakesEntriesRunnable(t *testing.T) {
 	if err != nil || string(raw) != policy {
 		t.Fatalf("README changed: %q err=%v", raw, err)
 	}
-	for _, name := range []string{"adversary.yaml", "package.json", "src/index.ts", "dist/index.js", "test/index.test.ts"} {
+	for _, name := range []string{"adversary.yaml", "package.json", "src/index.ts", "src/deterministic.ts", "dist/index.js", "test/index.test.ts"} {
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(name))); err != nil {
 			t.Fatalf("missing %s: %v", name, err)
 		}
@@ -152,7 +175,7 @@ func TestUpgradePreservesPoliciesAndMakesEntriesRunnable(t *testing.T) {
 	}
 }
 
-func TestUpgradeReplacesOnlyManagedV1RuntimeFiles(t *testing.T) {
+func TestUpgradeSynchronizesManagedV1RuntimeFiles(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "adversaries", "operability")
 	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
@@ -183,11 +206,40 @@ func TestUpgradeReplacesOnlyManagedV1RuntimeFiles(t *testing.T) {
 	packageJSON, _ := os.ReadFile(filepath.Join(dir, "package.json"))
 	source, _ := os.ReadFile(filepath.Join(dir, "src", "index.ts"))
 	readme, _ := os.ReadFile(filepath.Join(dir, "README.md"))
-	if !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 2`) || !strings.Contains(string(source), "loadLearnedRules") {
-		t.Fatalf("runtime was not upgraded: package=%s source=%s", packageJSON, source)
+	if !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 1`) || !strings.Contains(string(source), "loadLearnedRules") {
+		t.Fatalf("runtime was not synchronized: package=%s source=%s", packageJSON, source)
 	}
 	if !strings.Contains(string(readme), "Keep failures actionable") {
 		t.Fatalf("policy changed: %s", readme)
+	}
+}
+
+func TestUpgradePreservesCatalogOwnedDeterministicRegistrations(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "adversaries", "operability")
+	custom := "export function registerDeterministicRules(app: unknown) { void app; }\n"
+	for path, content := range map[string]string{
+		"adversarylabs.yaml":                           "kind: AdversaryCatalog\n",
+		"adversaries/operability/README.md":            "# Operability\n",
+		"adversaries/operability/adversary.yaml":       "name: private/operability\n",
+		"adversaries/operability/package.json":         `{"adversarylabsCatalogRuntime": 1}`,
+		"adversaries/operability/src/index.ts":         "// managed v1\n",
+		"adversaries/operability/src/deterministic.ts": custom,
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Upgrade(root); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "src", "deterministic.ts"))
+	if err != nil || string(got) != custom {
+		t.Fatalf("deterministic registrations changed: %q err=%v", got, err)
 	}
 }
 

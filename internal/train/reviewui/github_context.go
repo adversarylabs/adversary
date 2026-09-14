@@ -19,21 +19,40 @@ var discussionIDPattern = regexp.MustCompile(`(?:discussion_r|pullrequestreview-
 // uses the exact commit attached to the review comment, not the repository's
 // current default branch.
 func LoadGitHubContext(ctx context.Context, request ContextRequest) (ContextResult, error) {
-	owner, repo, err := repositoryFromPRURL(request.PRURL)
+	fileLines, err := loadGitHubFileLines(ctx, request)
 	if err != nil {
 		return ContextResult{}, err
+	}
+	return contextWindow(fileLines, request)
+}
+
+// LoadGitHubEvidenceSource returns a bounded, numbered window from the exact
+// reviewed file revision. Generation uses a larger window than the interactive
+// UI so a compact review hunk cannot force it to invent the surrounding body.
+func LoadGitHubEvidenceSource(ctx context.Context, request ContextRequest, maxLines int) (string, error) {
+	fileLines, err := loadGitHubFileLines(ctx, request)
+	if err != nil {
+		return "", err
+	}
+	return evidenceSourceWindow(fileLines, request, maxLines)
+}
+
+func loadGitHubFileLines(ctx context.Context, request ContextRequest) ([]string, error) {
+	owner, repo, err := repositoryFromPRURL(request.PRURL)
+	if err != nil {
+		return nil, err
 	}
 	match := discussionIDPattern.FindStringSubmatch(request.CommentURL)
 	if len(match) != 2 {
-		return ContextResult{}, fmt.Errorf("this finding has no inline GitHub review comment to expand")
+		return nil, fmt.Errorf("this finding has no inline GitHub review comment to expand")
 	}
 	commentID, err := strconv.ParseInt(match[1], 10, 64)
 	if err != nil {
-		return ContextResult{}, fmt.Errorf("parse review comment id: %w", err)
+		return nil, fmt.Errorf("parse review comment id: %w", err)
 	}
 	token, err := githubauth.RequireToken()
 	if err != nil {
-		return ContextResult{}, err
+		return nil, err
 	}
 	client := githubapi.NewClient(token)
 	var comment struct {
@@ -42,7 +61,7 @@ func LoadGitHubContext(ctx context.Context, request ContextRequest) (ContextResu
 		OriginalCommitID string `json:"original_commit_id"`
 	}
 	if err := client.RESTGetJSON(ctx, fmt.Sprintf("/repos/%s/%s/pulls/comments/%d", url.PathEscape(owner), url.PathEscape(repo), commentID), &comment); err != nil {
-		return ContextResult{}, fmt.Errorf("load review comment: %w", err)
+		return nil, fmt.Errorf("load review comment: %w", err)
 	}
 	ref := strings.TrimSpace(comment.OriginalCommitID)
 	if ref == "" {
@@ -53,7 +72,7 @@ func LoadGitHubContext(ctx context.Context, request ContextRequest) (ContextResu
 		path = strings.TrimSpace(request.File)
 	}
 	if ref == "" || path == "" {
-		return ContextResult{}, fmt.Errorf("the review comment does not identify a file revision")
+		return nil, fmt.Errorf("the review comment does not identify a file revision")
 	}
 	var content struct {
 		Encoding string `json:"encoding"`
@@ -61,16 +80,42 @@ func LoadGitHubContext(ctx context.Context, request ContextRequest) (ContextResu
 	}
 	endpoint := fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), escapePath(path), url.QueryEscape(ref))
 	if err := client.RESTGetJSON(ctx, endpoint, &content); err != nil {
-		return ContextResult{}, fmt.Errorf("load source context: %w", err)
+		return nil, fmt.Errorf("load source context: %w", err)
 	}
 	if content.Encoding != "base64" {
-		return ContextResult{}, fmt.Errorf("GitHub returned unsupported source encoding %q", content.Encoding)
+		return nil, fmt.Errorf("GitHub returned unsupported source encoding %q", content.Encoding)
 	}
 	raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(content.Content, "\n", ""))
 	if err != nil {
-		return ContextResult{}, fmt.Errorf("decode source context: %w", err)
+		return nil, fmt.Errorf("decode source context: %w", err)
 	}
-	return contextWindow(strings.Split(string(raw), "\n"), request)
+	return strings.Split(string(raw), "\n"), nil
+}
+
+func evidenceSourceWindow(fileLines []string, request ContextRequest, maxLines int) (string, error) {
+	_, _, start, count, err := hunkRange(request.DiffHunk)
+	if err != nil {
+		return "", err
+	}
+	if maxLines < 1 || maxLines > 400 {
+		maxLines = 240
+	}
+	first := start - 20
+	if first < 1 {
+		first = 1
+	}
+	last := first + maxLines - 1
+	if minimum := start + count + 20; last < minimum {
+		last = minimum
+	}
+	if last > len(fileLines) {
+		last = len(fileLines)
+	}
+	var result strings.Builder
+	for number := first; number <= last; number++ {
+		fmt.Fprintf(&result, "%d: %s\n", number, fileLines[number-1])
+	}
+	return strings.TrimSpace(result.String()), nil
 }
 
 func repositoryFromPRURL(raw string) (string, string, error) {

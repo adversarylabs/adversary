@@ -27,6 +27,7 @@ const (
 	StatusApplied   = "applied"   // user wrote draft into package
 	StatusProposed  = "proposed"  // user opened a catalog pull request
 	StatusDismissed = "dismissed" // user rejected
+	StatusCovered   = "covered"   // catalog already enforces the same concern
 	StatusCaught    = "caught"    // package matched the human concern (success)
 
 	// Kind is what kind of evaluation signal this row is.
@@ -487,11 +488,11 @@ func WriteGradedCase(stateRoot, runID string, c *cases.Case, fails []judge.Failu
 				DraftBody: body,
 				CreatedAt: now,
 			}
-			// Preserve user lifecycle (applied/dismissed) across re-grades so
+			// Preserve terminal lifecycle across re-grades so
 			// results ls does not flip applied rows back to new.
 			if prev, err := getResultDB(db, id); err == nil {
 				r.CreatedAt = prev.CreatedAt
-				if prev.Status == StatusApplied || prev.Status == StatusDismissed {
+				if prev.Status == StatusApplied || prev.Status == StatusDismissed || prev.Status == StatusCovered {
 					r.Status = prev.Status
 					r.AppliedAt = prev.AppliedAt
 					r.AppliedPath = prev.AppliedPath
@@ -526,7 +527,7 @@ func WriteGradedCase(stateRoot, runID string, c *cases.Case, fails []judge.Failu
 		if err != nil {
 			return n, err
 		}
-		if status == StatusApplied || status == StatusDismissed {
+		if status == StatusApplied || status == StatusDismissed || status == StatusCovered {
 			continue
 		}
 		_, err = db.Exec(`UPDATE results SET kind = ?, status = ?, summary = ? WHERE id = ?`,

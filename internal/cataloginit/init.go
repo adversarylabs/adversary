@@ -128,6 +128,16 @@ generic best-practice comments without a concrete failure path or violated
 contract.
 
 Connect this private repository from the Private library in AdversaryLabs.
+
+## Repository automation
+
+The generated GitHub Actions setup reviews only changed adversary packages, bumps each
+merged package's patch version in a serialized [skip-ci] commit, and dispatches
+an OIDC publish for that exact commit. Configure these repository settings:
+
+- Secret CAMEL_API_KEY for the adversary-authoring review on pull requests.
+- Variable ADVERSARY_REGISTRY_NAMESPACE with your AdversaryLabs team slug.
+- An OIDC trust for this GitHub repository in that team.
 `
 
 const trainConfig = `# Local training policy. Review evidence remains in .adversary-train/.
@@ -170,10 +180,13 @@ func catalogFiles() map[string]string {
 	readme := strings.Builder{}
 	readme.WriteString(readmeHeader)
 	files := map[string]string{
-		".gitignore":           catalogGitignore,
-		"adversary.train.yaml": trainConfig,
-		"evaluations/.gitkeep": "",
-		"exceptions/.gitkeep":  "",
+		".gitignore":                                catalogGitignore,
+		".github/workflows/adversary-review.yml":    catalogReviewWorkflow,
+		".github/workflows/version-adversaries.yml": catalogVersionWorkflow,
+		".github/workflows/publish-adversary.yml":   catalogPublishWorkflow,
+		"adversary.train.yaml":                      trainConfig,
+		"evaluations/.gitkeep":                      "",
+		"exceptions/.gitkeep":                       "",
 	}
 	for _, adversary := range starterAdversaries {
 		fmt.Fprintf(&manifest, "    - id: %s\n      path: adversaries/%s\n      summary: %s\n", adversary.Slug, adversary.Slug, adversary.Summary)
@@ -192,6 +205,271 @@ func catalogFiles() map[string]string {
 const catalogGitignore = `.adversary-train/
 node_modules/
 .adversary/
+`
+
+const catalogReviewWorkflow = `name: Adversary review
+
+on:
+  pull_request:
+    paths:
+      - "adversaries/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adversary-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Find changed adversaries
+    runs-on: ubuntu-24.04
+    outputs:
+      adversaries: ${{ steps.changes.outputs.adversaries }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build changed-adversary matrix
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const fs = require("node:fs");
+          const changed = execFileSync("git", ["diff", "--name-only", process.env.BASE_SHA, process.env.HEAD_SHA], {encoding: "utf8"});
+          const adversaries = [...new Set(changed.split("\n").map((path) => path.match(/^adversaries\/([^/]+)\//)?.[1]).filter(Boolean))].sort();
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "adversaries=" + JSON.stringify(adversaries) + "\n");
+          NODE
+
+  review:
+    name: Review ${{ matrix.adversary }}
+    needs: changes
+    if: needs.changes.outputs.adversaries != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        adversary: ${{ fromJSON(needs.changes.outputs.adversaries) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Review adversary package
+        uses: adversarylabs/actions/run@v1
+        with:
+          adversaries: adversarylabs/adversary
+          path: adversaries/${{ matrix.adversary }}
+          force: true
+          model-provider: camel
+          model: auto
+          model-api-key: ${{ secrets.CAMEL_API_KEY }}
+          include-summary: false
+`
+
+const catalogVersionWorkflow = `name: Version changed adversaries
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "adversaries/**"
+      - "!adversaries/**/adversary.yaml"
+      - "!adversaries/**/package.json"
+      - "!adversaries/**/package-lock.json"
+      - "!adversaries/**/dist/**"
+  workflow_dispatch:
+    inputs:
+      adversaries:
+        description: JSON array of adversary directory names still to version
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: version-adversaries
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version next changed adversary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select next changed adversary
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SUPPLIED_ADVERSARIES: ${{ inputs.adversaries }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const fs = require("node:fs");
+          let adversaries;
+          if (process.env.EVENT_NAME === "workflow_dispatch") {
+            adversaries = JSON.parse(process.env.SUPPLIED_ADVERSARIES);
+          } else {
+            const before = !process.env.BEFORE_SHA || /^0+$/.test(process.env.BEFORE_SHA) ? process.env.HEAD_SHA + "^" : process.env.BEFORE_SHA;
+            const changed = execFileSync("git", ["diff", "--name-only", before, process.env.HEAD_SHA], {encoding: "utf8"});
+            adversaries = [...new Set(changed.split("\n").map((path) => path.match(/^adversaries\/([^/]+)\//)?.[1]).filter(Boolean))].sort();
+          }
+          if (!Array.isArray(adversaries) || adversaries.some((name) => typeof name !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(name))) {
+            throw new Error("adversaries must be a JSON array of lowercase directory names");
+          }
+          const [adversary, ...remaining] = [...new Set(adversaries)];
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "empty=" + String(!adversary) + "\n");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "adversary=" + (adversary || "") + "\n");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "path=" + (adversary ? "adversaries/" + adversary : "") + "\n");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "remaining=" + JSON.stringify(remaining) + "\n");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "has-more=" + String(remaining.length > 0) + "\n");
+          NODE
+
+      - name: Set up Node.js
+        if: steps.select.outputs.empty == 'false'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ steps.select.outputs.path }}/package-lock.json
+
+      - name: Select next patch version
+        if: steps.select.outputs.empty == 'false'
+        id: next
+        env:
+          MANIFEST: ${{ steps.select.outputs.path }}/adversary.yaml
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const manifest = fs.readFileSync(process.env.MANIFEST, "utf8");
+          const current = manifest.match(/^version:\s*(\d+)\.(\d+)\.(\d+)\s*$/m);
+          if (!current) throw new Error("No stable semantic version found in " + process.env.MANIFEST);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "tag=v" + current[1] + "." + current[2] + "." + (Number(current[3]) + 1) + "\n");
+          NODE
+
+      - name: Synchronize release metadata
+        if: steps.select.outputs.empty == 'false'
+        id: version
+        # The v1 action commits synchronized metadata with [skip-ci].
+        uses: adversarylabs/actions/version@v1
+        with:
+          tag: ${{ steps.next.outputs.tag }}
+          path: ${{ steps.select.outputs.path }}
+          branch: main
+          token: ${{ github.token }}
+          sync-npm: auto
+
+      - name: Dispatch OIDC publish
+        if: steps.select.outputs.empty == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ADVERSARY_PATH: ${{ steps.select.outputs.path }}
+          VERSION_COMMIT: ${{ steps.version.outputs.commit }}
+        run: gh workflow run publish-adversary.yml --ref main -f path="$ADVERSARY_PATH" -f commit="$VERSION_COMMIT"
+
+      - name: Continue serial versioning
+        if: steps.select.outputs.has-more == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REMAINING: ${{ steps.select.outputs.remaining }}
+        run: gh workflow run version-adversaries.yml --ref main -f adversaries="$REMAINING"
+`
+
+const catalogPublishWorkflow = `name: Publish adversary
+
+on:
+  workflow_dispatch:
+    inputs:
+      path:
+        description: Catalog-relative adversary directory
+        required: true
+        type: string
+      commit:
+        description: Exact version commit to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-${{ inputs.path }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.path }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out versioned source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify publish target
+        env:
+          ADVERSARY_PATH: ${{ inputs.path }}
+          VERSION_COMMIT: ${{ inputs.commit }}
+        run: |
+          if [[ ! "$ADVERSARY_PATH" =~ ^adversaries/[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "Invalid adversary path: $ADVERSARY_PATH" >&2
+            exit 1
+          fi
+          if [[ ! "$VERSION_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Publish commit must be a full Git SHA" >&2
+            exit 1
+          fi
+          git merge-base --is-ancestor "$VERSION_COMMIT" origin/main
+          test -f "$ADVERSARY_PATH/adversary.yaml"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ inputs.path }}/package-lock.json
+
+      - name: Publish adversary
+        id: publish
+        uses: adversarylabs/actions/push@v1
+        with:
+          path: ${{ inputs.path }}
+          auth-mode: oidc
+          registry-namespace: ${{ vars.ADVERSARY_REGISTRY_NAMESPACE }}
+          push-latest: true
+
+      - name: Report published digest
+        env:
+          PUBLISHED_REFERENCE: ${{ steps.publish.outputs.reference }}
+          PUBLISHED_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: echo "Published $PUBLISHED_REFERENCE at $PUBLISHED_DIGEST"
 `
 
 func renderStarterAdversary(adversary starterAdversary) string {
