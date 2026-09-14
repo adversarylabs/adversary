@@ -286,7 +286,9 @@ func rememberPreviousPlan(request *ChangeRequest, plan ChangePlan) {
 
 func isRetryablePlanError(err error) bool {
 	message := err.Error()
-	return strings.HasPrefix(message, "generated change") || strings.HasPrefix(message, "validate generated regression")
+	return strings.HasPrefix(message, "generated change") ||
+		strings.HasPrefix(message, "decode generated catalog change") ||
+		strings.HasPrefix(message, "validate generated regression")
 }
 
 func buildChangeRequest(workspaceRoot string, cfg workspace.Config, row results.Result) (ChangeRequest, string, string, error) {

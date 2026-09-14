@@ -709,6 +709,13 @@ func TestCommandFailureMessageKeepsEarlyTAPFailuresAndDropsPassingTail(t *testin
 	}
 }
 
+func TestDecodeFailureCanBeRepaired(t *testing.T) {
+	err := fmt.Errorf("decode generated catalog change: merged file count 1 is outside 2..16")
+	if !isRetryablePlanError(err) {
+		t.Fatal("structurally incomplete model output should stay in the bounded repair loop")
+	}
+}
+
 func TestCatalogRollbackRestoresManifestSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink behavior requires elevated privileges on some Windows hosts")
