@@ -131,8 +131,12 @@ func newCatalogTrainInspectCommand(app *application.App) *cobra.Command {
 					Apply: func(ctx context.Context, id string) error {
 						return catalogapply.ApplyPlanned(ctx, state, filepath.Dir(configPath), cfg, id, planner)
 					},
-					CreatePR: func(ctx context.Context, id string, report func(application.CatalogProgress)) error {
-						return catalogapply.CreatePullRequestPlannedWithProgress(ctx, state, filepath.Dir(configPath), cfg, id, planner, func(update catalogapply.Progress) {
+					CreatePR: func(ctx context.Context, id string, allowOverlap bool, report func(application.CatalogProgress)) error {
+						create := catalogapply.CreatePullRequestPlannedWithProgress
+						if allowOverlap {
+							create = catalogapply.CreatePullRequestPlannedWithProgressAllowOverlap
+						}
+						return create(ctx, state, filepath.Dir(configPath), cfg, id, planner, func(update catalogapply.Progress) {
 							report(application.CatalogProgress{Stage: update.Stage, State: update.State, Detail: update.Detail})
 						})
 					},

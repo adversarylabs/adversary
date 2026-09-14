@@ -32,6 +32,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/score"
 	"github.com/adversarylabs/adversary/internal/train/securefs"
 	"github.com/adversarylabs/adversary/internal/train/state"
+	"gopkg.in/yaml.v3"
 )
 
 // Options for the first-slice end-to-end path.
@@ -1210,11 +1211,58 @@ func routerCandidates(pkgs []adversaries.Package) []scope.Candidate {
 			ID:            pkg.ID,
 			AdversaryName: pkg.ID,
 			Mission:       pkg.ScopeMarkdown,
+			LearnedRules:  learnedRuleSummaries(pkg.Dir),
 			Languages:     pkg.Languages,
 			FileGlobs:     pkg.FileGlobs,
 		})
 	}
 	return candidates
+}
+
+func learnedRuleSummaries(packageDir string) string {
+	paths, err := filepath.Glob(filepath.Join(packageDir, "rules", "*", "rule.yaml"))
+	if err != nil || len(paths) == 0 {
+		return ""
+	}
+	sort.Strings(paths)
+	type learnedRuleEvidence struct {
+		Path     string `json:"path"`
+		ID       string `json:"id"`
+		Summary  string `json:"summary"`
+		Guidance string `json:"guidance"`
+	}
+	var summaries []learnedRuleEvidence
+	total := 0
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(packageDir, path)
+		if err != nil {
+			continue
+		}
+		var rule struct {
+			ID       string `yaml:"id"`
+			Summary  string `yaml:"summary"`
+			Guidance string `yaml:"guidance"`
+		}
+		if yaml.Unmarshal(raw, &rule) != nil {
+			continue
+		}
+		item := learnedRuleEvidence{
+			Path: filepath.ToSlash(rel), ID: truncate(rule.ID, 200),
+			Summary: truncate(rule.Summary, 800), Guidance: truncate(rule.Guidance, 2_000),
+		}
+		encoded, _ := json.Marshal(item)
+		if total+len(encoded) > 8_000 {
+			break
+		}
+		total += len(encoded)
+		summaries = append(summaries, item)
+	}
+	encoded, _ := json.Marshal(summaries)
+	return string(encoded)
 }
 
 func gradeOwners(c *cases.Case, primaryID string) map[string][]cases.ExpectedConcern {
@@ -1280,7 +1328,7 @@ func loadPriorMissEvidence(stateRoot string) []report.MissEvidence {
 }
 
 func eligiblePriorMiss(row results.Result) bool {
-	if row.Kind != results.KindMiss || row.Status == results.StatusDismissed || strings.TrimSpace(row.PRURL) == "" {
+	if row.Kind != results.KindMiss || row.Status == results.StatusDismissed || row.Status == results.StatusCovered || strings.TrimSpace(row.PRURL) == "" {
 		return false
 	}
 	// Legacy inboxes may predate the collection-time conversation filter. Do

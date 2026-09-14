@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adversarylabs/adversary/internal/train/catalogapply"
 	"github.com/adversarylabs/adversary/internal/train/results"
 )
 
@@ -29,12 +30,12 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
 	}
-	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Repositories ·", "Show all", "Hide all", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "job-tray", "job-dismiss", "Dismiss finished task", "JOB_RETENTION_MS", "/api/jobs/"} {
+	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Filter review evidence", "Repositories", "PR authors", "Commenters", "Clear all", "facetSelections", "facetSelections[key].add(value)", "activeFacetCount", "!details.contains(event.target)", "event.key==='Escape'", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "Check existing catalog coverage", "Generate and refine the adversary rule", "update.stage==='quality'?'generate'", "Evaluate finding and no-finding cases", "No new rule needed", "already covered by", "Add rule anyway", "allow-overlap=true", "querySelectorAll('.build-step.running')", "Generated adversary did not pass validation", "Generated rule still needs refinement", "Automatic repair could not satisfy", "Technical details", "showBuildFailure", "job-tray", "job-dismiss", "Dismiss finished task", "JOB_RETENTION_MS", "/api/jobs/"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted %q", want)
 		}
 	}
-	for _, want := range []string{"aside{border-right:1px solid var(--line);overflow:hidden", "#list{padding:0 8px 8px;overflow:auto", ".repo-menu{position:static", ".repo-head{position:sticky;top:0;z-index:3", "background:var(--panel)"} {
+	for _, want := range []string{"aside{border-right:1px solid var(--line);overflow:hidden", "#list{padding:0 8px 8px;overflow:auto", ".search-row{display:grid", ".filter-popover{position:absolute", ".repo-head{position:sticky;top:0;z-index:3", "background:var(--panel)"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted contained repository navigation style %q", want)
 		}
@@ -49,6 +50,95 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	handler.ServeHTTP(api, req)
 	if api.Code != http.StatusOK || !strings.Contains(api.Body.String(), "candidate-1") {
 		t.Fatalf("API status=%d body=%q", api.Code, api.Body.String())
+	}
+}
+
+func TestHandlerTreatsAlreadyCoveredAsSuccessfulTerminalOutcome(t *testing.T) {
+	state := t.TempDir()
+	saveCandidate(t, state)
+	var overrideRequested bool
+	handler := NewHandler(state, []string{"operability"}, "secret", nil, nil, nil, func(_ context.Context, id string, allowOverlap bool, report func(Progress)) error {
+		report(Progress{Stage: "bootstrap", State: "complete", Detail: "ready"})
+		if allowOverlap {
+			overrideRequested = true
+			row, err := results.Get(state, id)
+			if err != nil {
+				return err
+			}
+			row.Status = results.StatusProposed
+			return results.SaveResult(state, row)
+		}
+		report(Progress{Stage: "generate", State: "running", Detail: "writing"})
+		report(Progress{Stage: "overlap", State: "complete", Detail: "covered"})
+		return &catalogapply.AlreadyCoveredError{
+			CandidateRule: "Log operation failures.", Adversary: "operability", RuleID: "actionable-errors",
+			Detail: "The existing rule requires actionable failure details.",
+		}
+	}, nil)
+
+	start := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/candidates/candidate-1/pull-request", nil)
+	req.Header.Set(tokenHeader, "secret")
+	handler.ServeHTTP(start, req)
+	if start.Code != http.StatusAccepted {
+		t.Fatalf("start status=%d body=%q", start.Code, start.Body.String())
+	}
+	var job progressJob
+	if err := json.Unmarshal(start.Body.Bytes(), &job); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 100; attempt++ {
+		status := httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/jobs/"+job.ID, nil)
+		req.Header.Set(tokenHeader, "secret")
+		handler.ServeHTTP(status, req)
+		if err := json.Unmarshal(status.Body.Bytes(), &job); err != nil {
+			t.Fatal(err)
+		}
+		if job.Done {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !job.Done || job.Error != "" || job.Resolution == nil || job.Resolution.Kind != "already_covered" || job.Resolution.CoveringRule != "actionable-errors" {
+		t.Fatalf("job=%+v", job)
+	}
+	for _, update := range job.Updates {
+		if update.State == "running" || update.State == "failed" || update.Stage == "generate" {
+			t.Fatalf("covered job retained active/error progress: %+v", job.Updates)
+		}
+	}
+	row, err := results.Get(state, "candidate-1")
+	if err != nil || row.Status != results.StatusCovered {
+		t.Fatalf("row=%+v err=%v", row, err)
+	}
+
+	override := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/candidates/candidate-1/pull-request?allow-overlap=true", nil)
+	req.Header.Set(tokenHeader, "secret")
+	handler.ServeHTTP(override, req)
+	if override.Code != http.StatusAccepted {
+		t.Fatalf("override status=%d body=%q", override.Code, override.Body.String())
+	}
+	var overrideJob progressJob
+	if err := json.Unmarshal(override.Body.Bytes(), &overrideJob); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 100; attempt++ {
+		status := httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/jobs/"+overrideJob.ID, nil)
+		req.Header.Set(tokenHeader, "secret")
+		handler.ServeHTTP(status, req)
+		if err := json.Unmarshal(status.Body.Bytes(), &overrideJob); err != nil {
+			t.Fatal(err)
+		}
+		if overrideJob.Done {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !overrideRequested || overrideJob.Error != "" || overrideJob.Resolution != nil || overrideJob.Candidate == nil || overrideJob.Candidate.Status != results.StatusProposed {
+		t.Fatalf("override requested=%v job=%+v", overrideRequested, overrideJob)
 	}
 }
 
@@ -67,7 +157,7 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 		row.Status = results.StatusApplied
 		row.AppliedPath = "/catalog/adversaries/release-contracts/README.md"
 		return results.SaveResult(state, row)
-	}, func(_ context.Context, id string, report func(Progress)) error {
+	}, func(_ context.Context, id string, _ bool, report func(Progress)) error {
 		report(Progress{Stage: "bootstrap", State: "complete", Detail: "ready"})
 		row, err := results.Get(state, id)
 		if err != nil {
