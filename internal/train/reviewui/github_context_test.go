@@ -1,6 +1,10 @@
 package reviewui
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestContextWindowExpandsOutsideDiffHunk(t *testing.T) {
 	file := make([]string, 30)
@@ -41,5 +45,24 @@ func TestRepositoryFromPRURL(t *testing.T) {
 	}
 	if _, _, err := repositoryFromPRURL("https://github.com/acme/widgets"); err == nil {
 		t.Fatal("expected invalid PR URL error")
+	}
+}
+
+func TestEvidenceSourceWindowIncludesFullReviewedBody(t *testing.T) {
+	file := make([]string, 320)
+	for i := range file {
+		file[i] = fmt.Sprintf("source line %d", i+1)
+	}
+	got, err := evidenceSourceWindow(file, ContextRequest{DiffHunk: "@@ -100,2 +100,2 @@ func runtimeObjectStore()"}, 240)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"80: source line 80", "100: source line 100", "319: source line 319"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("source window omitted %q", want)
+		}
+	}
+	if strings.Contains(got, "79: source line 79") || strings.Contains(got, "320: source line 320") {
+		t.Fatalf("source window exceeded its bound:\n%s", got)
 	}
 }

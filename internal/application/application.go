@@ -180,7 +180,7 @@ type CatalogReviewOptions struct {
 	Output      io.Writer
 	Assist      func(context.Context, CatalogAssistRequest) (CatalogAssistResult, error)
 	Apply       func(context.Context, string) error
-	CreatePR    func(context.Context, string, func(CatalogProgress)) error
+	CreatePR    func(context.Context, string, bool, func(CatalogProgress)) error
 }
 
 type CatalogProgress struct {

@@ -102,8 +102,8 @@ func ensureIgnorePatterns(path string, patterns []string) (bool, error) {
 	return true, os.WriteFile(path, []byte(content), 0o644)
 }
 
-// EnsureRunnableAdversary adds or upgrades the trusted policy-driven runtime.
-// Only files owned by this managed runtime are replaced during an upgrade.
+// EnsureRunnableAdversary creates or synchronizes the v1 policy-driven runtime.
+// Only files owned by the managed runtime are synchronized.
 func EnsureRunnableAdversary(dir, slug string) (bool, error) {
 	readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
 	if err != nil {
@@ -117,21 +117,48 @@ func EnsureRunnableAdversary(dir, slug string) (bool, error) {
 			}
 			return false, readErr
 		}
-		if !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 1`) &&
-			!strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 2`) {
+		var metadata struct {
+			Runtime int `json:"adversarylabsCatalogRuntime"`
+		}
+		if json.Unmarshal(packageJSON, &metadata) != nil || metadata.Runtime != 1 {
 			return false, nil
 		}
 		files := runnableAdversaryFiles(slug, purposeFromREADME(string(readme)), string(readme))
+		updated := false
 		for _, name := range []string{"package.json", "package-lock.json", "tsconfig.json", "src/index.ts", "dist/index.js", "dist/index.d.ts", "test/index.test.ts"} {
 			path := filepath.Join(dir, filepath.FromSlash(name))
+			if current, err := os.ReadFile(path); err == nil && string(current) == files[name] {
+				continue
+			} else if err != nil && !os.IsNotExist(err) {
+				return false, err
+			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return false, err
 			}
 			if err := os.WriteFile(path, []byte(files[name]), 0o644); err != nil {
 				return false, err
 			}
+			updated = true
 		}
-		return true, nil
+		extension := filepath.Join(dir, "src", "deterministic.ts")
+		if _, err := os.Stat(extension); os.IsNotExist(err) {
+			if err := os.WriteFile(extension, []byte(runnableDeterministic), 0o644); err != nil {
+				return false, err
+			}
+			updated = true
+		} else if err != nil {
+			return false, err
+		}
+		distExtension := filepath.Join(dir, "dist", "deterministic.js")
+		if _, err := os.Stat(distExtension); os.IsNotExist(err) {
+			if err := os.WriteFile(distExtension, []byte(runnableDeterministicDist), 0o644); err != nil {
+				return false, err
+			}
+			updated = true
+		} else if err != nil {
+			return false, err
+		}
+		return updated, nil
 	} else if !os.IsNotExist(err) {
 		return false, err
 	}
@@ -161,18 +188,20 @@ func runnableAdversaryFiles(slug, summary, policy string) map[string]string {
 		return value
 	}
 	return map[string]string{
-		"README.md":          policy,
-		"adversary.yaml":     render(runnableManifest),
-		"package.json":       render(runnablePackageJSON),
-		"package-lock.json":  lockText,
-		"tsconfig.json":      runnableTSConfig,
-		"src/index.ts":       render(runnableSource),
-		"dist/index.js":      render(runnableDist),
-		"dist/index.d.ts":    runnableTypes,
-		"test/index.test.ts": render(runnableTest),
-		"docs/scope.md":      policy,
-		"agent/voice.md":     runnableVoice,
-		".gitignore":         "node_modules/\n.adversary/\n",
+		"README.md":             policy,
+		"adversary.yaml":        render(runnableManifest),
+		"package.json":          render(runnablePackageJSON),
+		"package-lock.json":     lockText,
+		"tsconfig.json":         runnableTSConfig,
+		"src/index.ts":          render(runnableSource),
+		"src/deterministic.ts":  runnableDeterministic,
+		"dist/index.js":         render(runnableDist),
+		"dist/deterministic.js": runnableDeterministicDist,
+		"dist/index.d.ts":       runnableTypes,
+		"test/index.test.ts":    render(runnableTest),
+		"docs/scope.md":         policy,
+		"agent/voice.md":        runnableVoice,
+		".gitignore":            "node_modules/\n.adversary/\n",
 	}
 }
 
@@ -241,7 +270,7 @@ const runnablePackageJSON = `{
   "version": "0.0.1",
   "type": "module",
   "private": true,
-  "adversarylabsCatalogRuntime": 3,
+  "adversarylabsCatalogRuntime": 1,
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && tsx --test test/*.test.ts"
@@ -266,26 +295,59 @@ import { readFileSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parse } from "yaml";
 import { Adversary, ModelReviewError, ModelUnavailableError, Severity, type RuleContext } from "@adversarylabs/sdk";
+import { registerDeterministicRules } from "./deterministic.js";
 
 const POLICY = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 export type LearnedRule = {version:number; id:string; summary:string; guidance:string; severity:"low"|"medium"|"high"|"critical"; confidence:"medium"|"high"; evidence:string};
 
+const RULE_KEYS = new Set(["version", "id", "summary", "guidance", "severity", "confidence", "evidence"]);
+const RULE_SEVERITIES = new Set(["low", "medium", "high", "critical"]);
+const RULE_CONFIDENCES = new Set(["medium", "high"]);
+
+export function parseLearnedRule(value: unknown, directory: string): LearnedRule {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("rule must be a mapping");
+  const rule = value as Record<string, unknown>;
+  const unknown = Object.keys(rule).filter((key)=>!RULE_KEYS.has(key));
+  if (unknown.length) throw new Error("unknown rule fields: "+unknown.sort().join(", "));
+  if (rule.version!==1) throw new Error("version must be 1");
+  if (typeof rule.id!=="string" || !/^[a-z0-9][a-z0-9-]*$/.test(rule.id)) throw new Error("id must be lowercase hyphenated text");
+  if (rule.id!==directory) throw new Error("id must match its directory name");
+  for (const field of ["summary", "guidance", "evidence"] as const) {
+    if (typeof rule[field]!=="string" || !rule[field].trim()) throw new Error(field+" must be a non-empty string");
+  }
+  if (typeof rule.severity!=="string" || !RULE_SEVERITIES.has(rule.severity)) throw new Error("severity must be low, medium, high, or critical");
+  if (typeof rule.confidence!=="string" || !RULE_CONFIDENCES.has(rule.confidence)) throw new Error("confidence must be medium or high");
+  return rule as LearnedRule;
+}
+
 export function loadLearnedRules(): LearnedRule[] {
   const root = new URL("../rules/", import.meta.url);
+  let entries;
   try {
-    return readdirSync(root, {withFileTypes:true}).filter((entry)=>entry.isDirectory()).flatMap((entry)=>{
-      try {
-        const rule = parse(readFileSync(new URL(entry.name+"/rule.yaml", root), "utf8")) as LearnedRule;
-        if (rule.version!==1 || !/^[a-z0-9][a-z0-9-]*$/.test(rule.id) || !rule.summary || !rule.guidance || !rule.evidence) return [];
-        return [rule];
-      } catch { return []; }
-    });
-  } catch { return []; }
+    entries = readdirSync(root, {withFileTypes:true});
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code==="ENOENT") return [];
+    throw error;
+  }
+  const rules: LearnedRule[] = [];
+  const ids = new Set<string>();
+  for (const entry of entries.filter((item)=>item.isDirectory()).sort((a,b)=>a.name.localeCompare(b.name))) {
+    try {
+      const rule = parseLearnedRule(parse(readFileSync(new URL(entry.name+"/rule.yaml", root), "utf8")), entry.name);
+      if (ids.has(rule.id)) throw new Error("duplicate rule id "+rule.id);
+      ids.add(rule.id);
+      rules.push(rule);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error("invalid learned rule "+entry.name+"/rule.yaml: "+message, {cause:error});
+    }
+  }
+  return rules;
 }
 
 export function buildPolicy(policy: string, rules: LearnedRule[]): string {
   if (!rules.length) return policy;
-  return policy+"\n\n## Learned rules\n"+rules.map((rule)=>"### "+rule.id+"\n"+rule.summary+"\n\n"+rule.guidance+"\n\nDefault severity: "+rule.severity+"; minimum confidence: "+rule.confidence).join("\n\n");
+  return policy+"\n\n## Learned rules\n"+rules.slice().sort((a,b)=>a.id.localeCompare(b.id)).map((rule)=>"### "+rule.id+"\n"+rule.summary+"\n\n"+rule.guidance+"\n\nDefault severity: "+rule.severity+"; minimum confidence: "+rule.confidence).join("\n\n");
 }
 
 export function confidenceAtLeast(actual: "medium"|"high", minimum: "medium"|"high"): boolean {
@@ -339,6 +401,7 @@ export async function reviewPolicy(ctx: RuleContext): Promise<void> {
 
 export function createApp(): Adversary {
   const app = new Adversary({name: "private/{{slug}}", version: "0.0.1", review: {minimumConfidence: "medium", maximumFindings: 8}});
+  registerDeterministicRules(app);
   app.rule("private-policy", reviewPolicy);
   return app;
 }
@@ -353,26 +416,66 @@ import { readFileSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parse } from "yaml";
 import { Adversary, ModelReviewError, ModelUnavailableError } from "@adversarylabs/sdk";
+import { registerDeterministicRules } from "./deterministic.js";
 const POLICY = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+const RULE_KEYS = new Set(["version", "id", "summary", "guidance", "severity", "confidence", "evidence"]);
+const RULE_SEVERITIES = new Set(["low", "medium", "high", "critical"]);
+const RULE_CONFIDENCES = new Set(["medium", "high"]);
+export function parseLearnedRule(value, directory) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        throw new Error("rule must be a mapping");
+    const rule = value;
+    const unknown = Object.keys(rule).filter((key) => !RULE_KEYS.has(key));
+    if (unknown.length)
+        throw new Error("unknown rule fields: " + unknown.sort().join(", "));
+    if (rule.version !== 1)
+        throw new Error("version must be 1");
+    if (typeof rule.id !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(rule.id))
+        throw new Error("id must be lowercase hyphenated text");
+    if (rule.id !== directory)
+        throw new Error("id must match its directory name");
+    for (const field of ["summary", "guidance", "evidence"]) {
+        if (typeof rule[field] !== "string" || !rule[field].trim())
+            throw new Error(field + " must be a non-empty string");
+    }
+    if (typeof rule.severity !== "string" || !RULE_SEVERITIES.has(rule.severity))
+        throw new Error("severity must be low, medium, high, or critical");
+    if (typeof rule.confidence !== "string" || !RULE_CONFIDENCES.has(rule.confidence))
+        throw new Error("confidence must be medium or high");
+    return rule;
+}
 export function loadLearnedRules() {
     const root = new URL("../rules/", import.meta.url);
+    let entries;
     try {
-        return readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).flatMap((entry) => {
-            try {
-                const rule = parse(readFileSync(new URL(entry.name + "/rule.yaml", root), "utf8"));
-                if (rule.version !== 1 || !/^[a-z0-9][a-z0-9-]*$/.test(rule.id) || !rule.summary || !rule.guidance || !rule.evidence)
-                    return [];
-                return [rule];
-            }
-            catch { return []; }
-        });
+        entries = readdirSync(root, { withFileTypes: true });
     }
-    catch { return []; }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return [];
+        throw error;
+    }
+    const rules = [];
+    const ids = new Set();
+    for (const entry of entries.filter((item) => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
+        try {
+            const rule = parseLearnedRule(parse(readFileSync(new URL(entry.name + "/rule.yaml", root), "utf8")), entry.name);
+            if (ids.has(rule.id))
+                throw new Error("duplicate rule id " + rule.id);
+            ids.add(rule.id);
+            rules.push(rule);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error("invalid learned rule " + entry.name + "/rule.yaml: " + message, { cause: error });
+        }
+    }
+    return rules;
 }
 export function buildPolicy(policy, rules) {
     if (!rules.length)
         return policy;
-    return policy + "\n\n## Learned rules\n" + rules.map((rule) => "### " + rule.id + "\n" + rule.summary + "\n\n" + rule.guidance + "\n\nDefault severity: " + rule.severity + "; minimum confidence: " + rule.confidence).join("\n\n");
+    return policy + "\n\n## Learned rules\n" + rules.slice().sort((a, b) => a.id.localeCompare(b.id)).map((rule) => "### " + rule.id + "\n" + rule.summary + "\n\n" + rule.guidance + "\n\nDefault severity: " + rule.severity + "; minimum confidence: " + rule.confidence).join("\n\n");
 }
 export function confidenceAtLeast(actual, minimum) {
     return minimum === "medium" || actual === "high";
@@ -426,6 +529,7 @@ export async function reviewPolicy(ctx) {
 }
 export function createApp() {
     const app = new Adversary({ name: "private/{{slug}}", version: "0.0.1", review: { minimumConfidence: "medium", maximumFindings: 8 } });
+    registerDeterministicRules(app);
     app.rule("private-policy", reviewPolicy);
     return app;
 }
@@ -435,9 +539,22 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
     await app.runFromEnvironment();
 `
 
+const runnableDeterministic = `import type { Adversary } from "@adversarylabs/sdk";
+
+// This file is catalog-owned. Deterministic rules generated from accepted
+// review evidence register here; catalog runtime upgrades preserve it.
+export function registerDeterministicRules(_app: Adversary): void {}
+`
+
+const runnableDeterministicDist = `// This file is catalog-owned. Deterministic rules generated from accepted
+// review evidence register here; catalog runtime upgrades preserve it.
+export function registerDeterministicRules(_app) { }
+`
+
 const runnableTypes = `#!/usr/bin/env node
 import { Adversary, type RuleContext } from "@adversarylabs/sdk";
 export type LearnedRule = {version:number; id:string; summary:string; guidance:string; severity:"low"|"medium"|"high"|"critical"; confidence:"medium"|"high"; evidence:string};
+export declare function parseLearnedRule(value: unknown, directory: string): LearnedRule;
 export declare function loadLearnedRules(): LearnedRule[];
 export declare function buildPolicy(policy: string, rules: LearnedRule[]): string;
 export declare function confidenceAtLeast(actual: "medium" | "high", minimum: "medium" | "high"): boolean;
@@ -452,7 +569,23 @@ import test from "node:test";
 import { readdir, readFile } from "node:fs/promises";
 import type { RuleContext } from "@adversarylabs/sdk";
 import { parse } from "yaml";
-import { buildPolicy, confidenceAtLeast, reviewPolicy } from "../src/index.ts";
+import { buildPolicy, confidenceAtLeast, loadLearnedRules, parseLearnedRule, reviewPolicy } from "../src/index.ts";
+
+const validRule = {version:1, id:"z-rule", summary:"Summary", guidance:"Guidance", severity:"medium", confidence:"high", evidence:"https://example.test/evidence"} as const;
+
+test("validates learned-rule files strictly", () => {
+  assert.equal(parseLearnedRule(validRule,"z-rule").id,"z-rule");
+  assert.throws(()=>parseLearnedRule({...validRule,confidence:"low"},"z-rule"),/confidence must be medium or high/);
+  assert.throws(()=>parseLearnedRule({...validRule,severity:"urgent"},"z-rule"),/severity must be/);
+  assert.throws(()=>parseLearnedRule({...validRule,id:"other"},"z-rule"),/match its directory/);
+  assert.throws(()=>parseLearnedRule({...validRule,unexpected:true},"z-rule"),/unknown rule fields/);
+});
+
+test("builds learned-rule policy in deterministic id order", () => {
+  const first = {...validRule,id:"a-rule"};
+  const policy = buildPolicy("base",[validRule,first]);
+  assert.ok(policy.indexOf("### a-rule") < policy.indexOf("### z-rule"));
+});
 
 test("enforces learned-rule confidence floors", () => {
   assert.equal(confidenceAtLeast("medium","medium"),true);
@@ -475,20 +608,29 @@ test("drops findings that are not grounded in an in-scope file", async () => {
   assert.equal(findings.length,0);
 });
 
-test("learned rule bundles are executable policy with finding and no-finding cases", async () => {
+test("validates learned-rule bundle structure and case boundaries", async () => {
   const directory = new URL("../rules/", import.meta.url);
   let names: string[] = [];
   try { names = await readdir(directory); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   for (const name of names) {
-    const rule = parse(await readFile(new URL(name+"/rule.yaml", directory), "utf8")) as {version?:number;id?:string;summary?:string;guidance?:string;evidence?:string};
+    const rule = parseLearnedRule(parse(await readFile(new URL(name+"/rule.yaml", directory), "utf8")),name);
     const cases = parse(await readFile(new URL(name+"/cases.yaml", directory), "utf8")) as {version?:number;rule_id?:string;cases?:Array<{expected?:string;review_input?:string}>};
-    assert.equal(rule.version,1,name); assert.equal(rule.id,name); assert.ok(rule.summary&&rule.guidance&&rule.evidence,name);
     assert.equal(cases.version,1,name); assert.equal(cases.rule_id,name);
     assert.ok(cases.cases?.some((item)=>item.expected==="finding"&&item.review_input),name+" needs a finding case");
     assert.ok(cases.cases?.some((item)=>item.expected==="no_finding"&&item.review_input),name+" needs a no_finding case");
-    assert.match(buildPolicy("base",[rule as never]),new RegExp(rule.id||"missing"));
+    assert.match(buildPolicy("base",[rule]),new RegExp(rule.id));
   }
+});
+
+test("routes loaded learned-rule findings through the production review path", async () => {
+  const [rule] = loadLearnedRules();
+  if (!rule) return;
+  const findings: unknown[] = [];
+  const finding = {rule_id:rule.id,title:"Concrete violation",summary:"The changed code violates the learned rule.",recommendation:"Apply the documented allowed pattern.",severity:rule.severity,confidence:rule.confidence,file:"service.ts",line:4,evidence:"The changed expression demonstrates the prohibited condition."};
+  const ctx = {change:{scanMode:"changed",changedFiles:["service.ts"]},summary:{},listInScopePaths:async()=>["service.ts"],model:{review:async()=>({output:{findings:[finding,{...finding,rule_id:"unknown-rule"}]}})},finding:(value:unknown)=>findings.push(value),review:{observe:()=>{}}} as unknown as RuleContext;
+  await reviewPolicy(ctx);
+  assert.equal(findings.length,1);
 });
 `
 

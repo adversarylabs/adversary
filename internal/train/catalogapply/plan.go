@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/adversarylabs/adversary/internal/cataloginit"
 	"github.com/adversarylabs/adversary/internal/train/results"
@@ -24,13 +25,14 @@ import (
 )
 
 const (
-	maxSourceFiles  = 40
-	maxSourceBytes  = 240 << 10
-	maxPlanFiles    = 16
-	maxPlanBytes    = 512 << 10
-	maxPlanAttempts = 3
-	maxPolicyFiles  = 500
-	maxPolicyBytes  = 1 << 20
+	maxSourceFiles           = 40
+	maxSourceBytes           = 240 << 10
+	maxPlanFiles             = 16
+	maxPlanBytes             = 512 << 10
+	maxPlanAttempts          = 6
+	maxQualityReviewAttempts = 2
+	maxPolicyFiles           = 500
+	maxPolicyBytes           = 1 << 20
 )
 
 // ChangePlanner turns reviewed evidence plus the current adversary source into
@@ -43,18 +45,28 @@ type ChangeRequest struct {
 	AdversaryMission   string           `json:"adversary_mission,omitempty"`
 	ProposedRule       string           `json:"proposed_rule"`
 	Evidence           string           `json:"evidence"`
+	EvidencePRURL      string           `json:"evidence_pr_url,omitempty"`
+	EvidenceCommentURL string           `json:"evidence_comment_url,omitempty"`
 	EvidenceComment    string           `json:"evidence_comment"`
 	EvidenceFile       string           `json:"evidence_file,omitempty"`
 	EvidenceDiff       string           `json:"evidence_diff,omitempty"`
+	EvidenceContext    string           `json:"evidence_source_context,omitempty"`
 	ExistingAdversary  bool             `json:"existing_adversary"`
 	Executable         bool             `json:"executable"`
 	PolicyDriven       bool             `json:"policy_driven"`
 	ManagedRuntime     int              `json:"managed_runtime,omitempty"`
+	AllowOverlap       bool             `json:"allow_overlap,omitempty"`
 	Files              []SourceFile     `json:"files"`
 	CatalogPolicies    []SourceFile     `json:"catalog_policies,omitempty"`
 	Progress           ProgressReporter `json:"-"`
 	ValidationFeedback string           `json:"validation_feedback,omitempty"`
+	LatestFeedback     string           `json:"latest_validation_feedback,omitempty"`
+	RepairStage        string           `json:"repair_stage,omitempty"`
 	PreviousPlanFiles  []string         `json:"previous_plan_files,omitempty"`
+	PreviousPlan       *ChangePlan      `json:"previous_generated_plan,omitempty"`
+	GenerationAttempt  int              `json:"generation_attempt,omitempty"`
+	MaxGenerationTurns int              `json:"max_generation_attempts,omitempty"`
+	MaxQualityTurns    int              `json:"max_quality_review_attempts,omitempty"`
 }
 
 type SourceFile struct {
@@ -63,13 +75,37 @@ type SourceFile struct {
 }
 
 type ChangePlan struct {
-	Summary string       `json:"summary"`
-	Files   []ChangeFile `json:"files"`
+	Summary  string       `json:"summary"`
+	Files    []ChangeFile `json:"files"`
+	Strategy string       `json:"-"`
 }
+
+const (
+	StrategyModelBacked   = "model"
+	StrategyDeterministic = "deterministic"
+)
 
 type ChangeFile struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+}
+
+// AlreadyCoveredError is a successful catalog deduplication outcome. Callers
+// should remove the candidate from the active queue instead of presenting it
+// as a failed generation attempt.
+type AlreadyCoveredError struct {
+	CandidateRule string
+	Adversary     string
+	RuleID        string
+	Detail        string
+}
+
+func (e *AlreadyCoveredError) Error() string {
+	owner := strings.Trim(strings.TrimSpace(e.Adversary+"/"+e.RuleID), "/")
+	if owner == "" {
+		owner = "the current catalog"
+	}
+	return fmt.Sprintf("%s is already covered by %s: %s", strings.TrimSpace(e.CandidateRule), owner, strings.TrimSpace(e.Detail))
 }
 
 // ApplyPlanned updates the current checkout with a substantive model-planned
@@ -93,11 +129,8 @@ func ApplyPlanned(ctx context.Context, stateRoot, workspaceRoot string, cfg work
 			returnErr = errors.Join(returnErr, rollback())
 		}
 	}()
-	target, err := applyPlannedCandidate(ctx, workspaceRoot, cfg, row, planner)
+	target, _, err := applyPlannedCandidateWithProgressOptionsAndRunner(ctx, workspaceRoot, cfg, row, planner, nil, false, execCommand)
 	if err != nil {
-		return err
-	}
-	if err := validateRunnablePackage(ctx, filepath.Join(root, row.Package), execCommand); err != nil {
 		return err
 	}
 	row.Status = results.StatusApplied
@@ -116,6 +149,14 @@ func applyPlannedCandidate(ctx context.Context, workspaceRoot string, cfg worksp
 }
 
 func applyPlannedCandidateWithProgress(ctx context.Context, workspaceRoot string, cfg workspace.Config, row results.Result, planner ChangePlanner, report ProgressReporter) (string, string, error) {
+	return applyPlannedCandidateWithProgressOptions(ctx, workspaceRoot, cfg, row, planner, report, false)
+}
+
+func applyPlannedCandidateWithProgressOptions(ctx context.Context, workspaceRoot string, cfg workspace.Config, row results.Result, planner ChangePlanner, report ProgressReporter, allowOverlap bool) (string, string, error) {
+	return applyPlannedCandidateWithProgressOptionsAndRunner(ctx, workspaceRoot, cfg, row, planner, report, allowOverlap, nil)
+}
+
+func applyPlannedCandidateWithProgressOptionsAndRunner(ctx context.Context, workspaceRoot string, cfg workspace.Config, row results.Result, planner ChangePlanner, report ProgressReporter, allowOverlap bool, run commandRunner) (string, string, error) {
 	emit := func(stage, state, detail string) {
 		if report != nil {
 			report(Progress{Stage: stage, State: state, Detail: detail})
@@ -149,38 +190,78 @@ func applyPlannedCandidateWithProgress(ctx context.Context, workspaceRoot string
 		return "", "", err
 	}
 	request.ExistingAdversary = wasExisting
+	request.AllowOverlap = allowOverlap
 	request.Progress = report
+	baseline, err := captureCatalogTree(dir)
+	if err != nil {
+		return "", "", fmt.Errorf("snapshot adversary before generated validation: %w", err)
+	}
+	restoreBaseline := func() error {
+		if err := restoreCatalogTree(dir, baseline); err != nil {
+			return fmt.Errorf("restore adversary before regeneration: %w", err)
+		}
+		return nil
+	}
 	var target, pullRequestTitle string
 	for attempt := 0; attempt < maxPlanAttempts; attempt++ {
-		detail := "Writing a scoped rule bundle from the accepted evidence"
-		if attempt > 0 {
-			detail = fmt.Sprintf("Repairing generated output (attempt %d of %d)", attempt+1, maxPlanAttempts)
-		}
-		emit("generate", "running", detail)
+		request.GenerationAttempt = attempt + 1
+		request.MaxGenerationTurns = maxPlanAttempts
+		request.MaxQualityTurns = maxQualityReviewAttempts
+		runtimeValidationFailed := false
 		plan, err := planner(ctx, request)
 		if err != nil {
 			if attempt < maxPlanAttempts-1 && isRetryablePlanError(err) {
-				request.ValidationFeedback = strings.TrimSpace(request.ValidationFeedback + " " + err.Error() + ". Regenerate the complete change and correct this problem.")
+				request.LatestFeedback = err.Error()
+				request.RepairStage = "plan_review"
+				request.ValidationFeedback = err.Error() + ". Correct the rejected plan while preserving unaffected files and behavior."
+				rememberPreviousPlan(&request, plan)
 				continue
 			}
 			return "", "", fmt.Errorf("generate substantive adversary change: %w", err)
 		}
-		emit("generate", "complete", "Rule implementation generated")
 		emit("test", "running", "Writing and checking regression cases")
 		target, err = writeChangePlan(workspaceRoot, root, dir, row, request, plan)
 		if err == nil {
 			pullRequestTitle = strings.TrimSpace(plan.Summary)
 			emit("test", "complete", "Regression cases added from the original review evidence")
-			break
+			if run == nil {
+				break
+			}
+			emit("validate", "running", "Building and testing the generated adversary")
+			if validationErr := validateRunnablePackageAndSync(ctx, dir, run); validationErr == nil {
+				emit("validate", "complete", "Build, tests, validation, and package checks passed")
+				break
+			} else {
+				err = validationErr
+				runtimeValidationFailed = true
+			}
 		}
-		if attempt == maxPlanAttempts-1 || !isRetryablePlanError(err) {
+		retryable := isRetryablePlanError(err) || runtimeValidationFailed
+		if attempt == maxPlanAttempts-1 || !retryable {
+			if runtimeValidationFailed {
+				emit("validate", "failed", commandFailureMessage(err.Error()))
+				if restoreErr := restoreBaseline(); restoreErr != nil {
+					return "", "", errors.Join(err, restoreErr)
+				}
+			}
 			return "", "", err
 		}
-		request.ValidationFeedback = strings.TrimSpace(request.ValidationFeedback + " " + err.Error() + ". Regenerate the complete change and correct this problem.")
-		request.PreviousPlanFiles = request.PreviousPlanFiles[:0]
-		for _, file := range plan.Files {
-			request.PreviousPlanFiles = append(request.PreviousPlanFiles, file.Path)
+		if runtimeValidationFailed {
+			emit("validate", "pending", commandFailureMessage(err.Error())+"; repairing and testing again")
+		} else {
+			emit("test", "pending", "Generated output needs repair; regenerating")
 		}
+		if err := restoreBaseline(); err != nil {
+			return "", "", err
+		}
+		request.ValidationFeedback = err.Error() + ". Correct the rejected plan while preserving unaffected files and behavior."
+		request.LatestFeedback = err.Error()
+		if runtimeValidationFailed {
+			request.RepairStage = "build_and_test"
+		} else {
+			request.RepairStage = "plan_validation"
+		}
+		rememberPreviousPlan(&request, plan)
 	}
 	if !request.ExistingAdversary {
 		if err := addManifestEntry(filepath.Join(workspaceRoot, "adversarylabs.yaml"), row.Package, row.AdversaryMission); err != nil {
@@ -188,6 +269,19 @@ func applyPlannedCandidateWithProgress(ctx context.Context, workspaceRoot string
 		}
 	}
 	return target, pullRequestTitle, nil
+}
+
+func rememberPreviousPlan(request *ChangeRequest, plan ChangePlan) {
+	if len(plan.Files) == 0 {
+		return
+	}
+	request.PreviousPlanFiles = request.PreviousPlanFiles[:0]
+	for _, file := range plan.Files {
+		request.PreviousPlanFiles = append(request.PreviousPlanFiles, file.Path)
+	}
+	previousPlan := plan
+	previousPlan.Files = append([]ChangeFile(nil), plan.Files...)
+	request.PreviousPlan = &previousPlan
 }
 
 func isRetryablePlanError(err error) bool {
@@ -223,7 +317,7 @@ func buildChangeRequest(workspaceRoot string, cfg workspace.Config, row results.
 	}
 	return ChangeRequest{
 		CandidateID: row.ID, Adversary: row.Package, AdversaryMission: row.AdversaryMission,
-		ProposedRule: row.ProposedRule, Evidence: evidenceURL(row), EvidenceComment: row.Summary,
+		ProposedRule: row.ProposedRule, Evidence: evidenceURL(row), EvidencePRURL: row.PRURL, EvidenceCommentURL: row.CommentURL, EvidenceComment: row.Summary,
 		EvidenceFile: row.File, EvidenceDiff: row.DiffHunk, ExistingAdversary: exists,
 		Executable: executable, PolicyDriven: policyDriven, ManagedRuntime: managedRuntime, Files: files, CatalogPolicies: catalogPolicies,
 	}, root, dir, nil
@@ -351,7 +445,7 @@ type regressionSpec struct {
 
 func writeChangePlan(workspaceRoot, root, dir string, row results.Result, request ChangeRequest, plan ChangePlan) (string, error) {
 	title := strings.Join(strings.Fields(plan.Summary), " ")
-	if title == "" || len(title) > 120 || !strings.Contains(strings.ToLower(title), strings.ToLower(row.Package)) || strings.Contains(strings.ToLower(title), "review evidence") {
+	if title == "" || utf8.RuneCountInString(title) > 120 || !strings.Contains(strings.ToLower(title), strings.ToLower(row.Package)) || strings.Contains(strings.ToLower(title), "review evidence") {
 		return "", fmt.Errorf("generated change must include a specific pull-request title of at most 120 characters that names %s and does not say review evidence", row.Package)
 	}
 	if len(plan.Files) < 2 || len(plan.Files) > maxPlanFiles {
@@ -362,7 +456,7 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 		return "", err
 	}
 	adversaryPrefix := filepath.ToSlash(adversaryRel) + "/"
-	if request.ManagedRuntime >= 2 {
+	if request.ManagedRuntime == 1 && plan.Strategy != StrategyDeterministic {
 		return writeManagedRulePlan(workspaceRoot, adversaryPrefix, row, plan)
 	}
 	existing := make(map[string]string, len(request.Files))
@@ -372,6 +466,11 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	total, operative, regression := 0, "", ""
 	implementation, nativeRegression := false, false
 	newImplementation, runtimeRegression := false, false
+	deterministicExtension := false
+	deterministicReadsSources := false
+	deterministicHardcodesEvidencePath := false
+	deterministicHardcodesEvidenceLine := false
+	deterministicTestProvidesSource := false
 	evidencePathRegression := strings.TrimSpace(request.EvidenceFile) == ""
 	var newSourcePaths []string
 	finalSources := make(map[string]string)
@@ -399,11 +498,30 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			return "", fmt.Errorf("generated change exceeds %d bytes", maxPlanBytes)
 		}
 		relInAdversary := strings.TrimPrefix(clean, adversaryPrefix)
+		changed := existing[clean] != file.Content
+		if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic {
+			if changed && relInAdversary == "src/index.ts" {
+				return "", fmt.Errorf("generated deterministic change may not edit the managed src/index.ts runtime shell")
+			}
+			if strings.HasPrefix(relInAdversary, "rules/") {
+				return "", fmt.Errorf("generated deterministic change may not add a model-backed rule bundle (%s)", clean)
+			}
+			if changed && strings.HasPrefix(relInAdversary, "src/") && (strings.Contains(file.Content, "ctx.model") || strings.Contains(file.Content, ".model.review")) {
+				return "", fmt.Errorf("generated deterministic implementation may not call the model (%s)", clean)
+			}
+			if changed && relInAdversary == "src/deterministic.ts" {
+				deterministicExtension = true
+			}
+			if changed && strings.HasPrefix(relInAdversary, "src/rules/") {
+				deterministicReadsSources = deterministicReadsSources || strings.Contains(file.Content, "loadInScopeSources(")
+				deterministicHardcodesEvidencePath = deterministicHardcodesEvidencePath || strings.TrimSpace(request.EvidenceFile) != "" && strings.Contains(file.Content, request.EvidenceFile)
+				deterministicHardcodesEvidenceLine = deterministicHardcodesEvidenceLine || literalFindingLine.MatchString(file.Content)
+			}
+		}
 		if request.PolicyDriven && (strings.HasPrefix(relInAdversary, "dist/") || relInAdversary == "adversary.yaml" || relInAdversary == "package.json" || relInAdversary == "package-lock.json") {
 			return "", fmt.Errorf("policy-driven catalog training may not rewrite generated output or package metadata (%s)", clean)
 		}
 		base := filepath.Base(clean)
-		changed := existing[clean] != file.Content
 		operativePolicy := base == "README.md" || relInAdversary == "agent/scope.md" || relInAdversary == "docs/scope.md"
 		if request.PolicyDriven {
 			operativePolicy = relInAdversary == "README.md"
@@ -436,10 +554,19 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			if _, existed := existing[clean]; existed {
 				return "", fmt.Errorf("generated change replaced existing native test %s; add a new focused test file instead", clean)
 			}
+			if mutatesNodeFilesystemAPI(file.Content) {
+				return "", fmt.Errorf("generated change native test %s attempts to replace read-only node:fs exports; use real temporary repository fixtures or an explicitly injected dependency", clean)
+			}
+			if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && strings.Contains(file.Content, "/src/rules/") {
+				return "", fmt.Errorf("generated deterministic native test %s bypasses rule registration by importing the helper directly; exercise it through createApp().run", clean)
+			}
 			regression = clean
 			nativeRegression = true
-			if strings.Contains(file.Content, "/src/index") {
+			if strings.Contains(file.Content, "/src/index") && (request.ManagedRuntime != 1 || plan.Strategy != StrategyDeterministic || strings.Contains(file.Content, ".run(")) {
 				runtimeRegression = true
+			}
+			if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && managedRunSourceInput.MatchString(file.Content) {
+				deterministicTestProvidesSource = true
 			}
 			if strings.Contains(file.Content, request.EvidenceFile) {
 				evidencePathRegression = true
@@ -458,6 +585,15 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	if request.Executable && !implementation {
 		return "", fmt.Errorf("generated change did not update the executable adversary implementation")
 	}
+	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && !deterministicExtension {
+		return "", fmt.Errorf("generated deterministic change did not register through src/deterministic.ts")
+	}
+	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && deterministicHardcodesEvidencePath && !deterministicReadsSources {
+		return "", fmt.Errorf("generated deterministic rule is an evidence-path tripwire; inspect source content with loadInScopeSources before emitting a finding")
+	}
+	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && deterministicHardcodesEvidenceLine {
+		return "", fmt.Errorf("generated deterministic rule hard-codes an evidence line; derive the finding line from the matched source")
+	}
 	if request.Executable && !nativeRegression {
 		return "", fmt.Errorf("generated change did not add a focused native test file for the executable adversary")
 	}
@@ -465,7 +601,10 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 		return "", fmt.Errorf("generated change native test does not exercise the exact evidence path %q", request.EvidenceFile)
 	}
 	if request.Executable && request.PolicyDriven && !runtimeRegression {
-		return "", fmt.Errorf("generated change for policy-driven adversary did not add a native test through src/index")
+		return "", fmt.Errorf("generated change for policy-driven adversary did not add a native test that executes createApp().run through src/index")
+	}
+	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && runtimeRegression && !deterministicTestProvidesSource {
+		return "", fmt.Errorf("generated deterministic native test calls createApp().run without the required input.source.path repository fixture")
 	}
 	if request.Executable && newImplementation {
 		entrypoint := adversaryPrefix + "src/index.ts"
@@ -496,6 +635,14 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	}
 	_ = root // retained in the signature to make the trust boundary explicit.
 	return filepath.Join(workspaceRoot, filepath.FromSlash(operative)), nil
+}
+
+var nodeFilesystemMutation = regexp.MustCompile(`(?m)\.\s*(?:readFileSync|readFile|readdirSync|readdir|statSync|lstatSync|existsSync)\s*=`)
+var literalFindingLine = regexp.MustCompile(`(?m)\bline\s*:\s*[1-9][0-9]*\b`)
+var managedRunSourceInput = regexp.MustCompile(`(?s)input\s*:\s*\{.*source\s*:\s*\{.*path\s*:`)
+
+func mutatesNodeFilesystemAPI(content string) bool {
+	return nodeFilesystemMutation.MatchString(content)
 }
 
 type managedRule struct {
@@ -716,22 +863,94 @@ func quoteRegressionScalars(raw []byte) []byte {
 var nowUTC = func() time.Time { return time.Now().UTC() }
 
 func validateRunnablePackage(ctx context.Context, dir string, run commandRunner) error {
+	isolated, cleanup, err := prepareIsolatedRunnablePackage(dir)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	return validateRunnablePackageInPlace(ctx, isolated, run)
+}
+
+func validateRunnablePackageAndSync(ctx context.Context, dir string, run commandRunner) error {
+	isolated, cleanup, err := prepareIsolatedRunnablePackage(dir)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := validateRunnablePackageInPlace(ctx, isolated, run); err != nil {
+		return err
+	}
+	distSnapshot, err := captureCatalogTree(filepath.Join(isolated, "dist"))
+	if err != nil {
+		return fmt.Errorf("capture validated adversary build output: %w", err)
+	}
+	if distSnapshot.existed {
+		if err := restoreCatalogTree(filepath.Join(dir, "dist"), distSnapshot); err != nil {
+			return fmt.Errorf("synchronize validated adversary build output: %w", err)
+		}
+		if err := validateCompiledRelativeImports(dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func prepareIsolatedRunnablePackage(dir string) (string, func(), error) {
 	snapshot, err := captureCatalogTreeSkipping(dir, func(name string) bool {
 		return name == "node_modules" || name == ".adversary" || name == ".git"
 	})
 	if err != nil {
-		return fmt.Errorf("prepare isolated adversary validation: %w", err)
+		return "", nil, fmt.Errorf("prepare isolated adversary validation: %w", err)
 	}
 	tempRoot, err := os.MkdirTemp("", "adversary-catalog-validate-")
 	if err != nil {
-		return fmt.Errorf("prepare isolated adversary validation: %w", err)
+		return "", nil, fmt.Errorf("prepare isolated adversary validation: %w", err)
 	}
-	defer os.RemoveAll(tempRoot)
 	isolated := filepath.Join(tempRoot, "package")
 	if err := restoreCatalogTree(isolated, snapshot); err != nil {
-		return fmt.Errorf("prepare isolated adversary validation: %w", err)
+		_ = os.RemoveAll(tempRoot)
+		return "", nil, fmt.Errorf("prepare isolated adversary validation: %w", err)
 	}
-	return validateRunnablePackageInPlace(ctx, isolated, run)
+	return isolated, func() { _ = os.RemoveAll(tempRoot) }, nil
+}
+
+func validateCompiledRelativeImports(packageDir string) error {
+	dist := filepath.Join(packageDir, "dist")
+	return filepath.WalkDir(dist, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".js") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, match := range sourceImportPattern.FindAllStringSubmatch(string(raw), -1) {
+			base := filepath.Clean(filepath.Join(filepath.Dir(path), filepath.FromSlash(match[1])))
+			candidates := []string{base}
+			if filepath.Ext(base) == "" {
+				candidates = append(candidates, base+".js", filepath.Join(base, "index.js"))
+			}
+			found := false
+			for _, candidate := range candidates {
+				rel, relErr := filepath.Rel(packageDir, candidate)
+				if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					continue
+				}
+				if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+					found = true
+					break
+				}
+			}
+			if !found {
+				rel, _ := filepath.Rel(packageDir, path)
+				return fmt.Errorf("generated committed runtime %s imports missing module %q", filepath.ToSlash(rel), match[1])
+			}
+		}
+		return nil
+	})
 }
 
 func validateRunnablePackageInPlace(ctx context.Context, dir string, run commandRunner) error {

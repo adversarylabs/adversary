@@ -1328,7 +1328,7 @@ func loadPriorMissEvidence(stateRoot string) []report.MissEvidence {
 }
 
 func eligiblePriorMiss(row results.Result) bool {
-	if row.Kind != results.KindMiss || row.Status == results.StatusDismissed || strings.TrimSpace(row.PRURL) == "" {
+	if row.Kind != results.KindMiss || row.Status == results.StatusDismissed || row.Status == results.StatusCovered || strings.TrimSpace(row.PRURL) == "" {
 		return false
 	}
 	// Legacy inboxes may predate the collection-time conversation filter. Do

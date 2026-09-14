@@ -214,10 +214,10 @@ func (p processRuntime) ReviewCatalog(ctx context.Context, opts application.Cata
 			}, err
 		}
 	}
-	var createPR func(context.Context, string, func(trainreviewui.Progress)) error
+	var createPR func(context.Context, string, bool, func(trainreviewui.Progress)) error
 	if opts.CreatePR != nil {
-		createPR = func(ctx context.Context, id string, report func(trainreviewui.Progress)) error {
-			return opts.CreatePR(ctx, id, func(update application.CatalogProgress) {
+		createPR = func(ctx context.Context, id string, allowOverlap bool, report func(trainreviewui.Progress)) error {
+			return opts.CreatePR(ctx, id, allowOverlap, func(update application.CatalogProgress) {
 				report(trainreviewui.Progress{Stage: update.Stage, State: update.State, Detail: update.Detail})
 			})
 		}

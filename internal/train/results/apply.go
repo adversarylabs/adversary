@@ -18,6 +18,9 @@ import (
 // dismissal after the result was selected for automatic issue creation.
 var ErrResultDismissed = errors.New("train result is dismissed")
 
+// ErrResultCovered prevents a deduplicated result from being applied later.
+var ErrResultCovered = errors.New("train result is already covered")
+
 // ApplyOptions controls writing a result into a local package repo.
 type ApplyOptions struct {
 	// PackagePath is the absolute path to the local adversary package.
@@ -77,6 +80,9 @@ func Apply(stateRoot, id string, opts ApplyOptions) (ApplyResult, error) {
 	}
 	if r.Status == StatusDismissed {
 		return ApplyResult{}, fmt.Errorf("%w: %s", ErrResultDismissed, r.ID)
+	}
+	if r.Status == StatusCovered {
+		return ApplyResult{}, fmt.Errorf("%w: %s", ErrResultCovered, r.ID)
 	}
 	if opts.PackagePath == "" {
 		return ApplyResult{}, fmt.Errorf("package path required for apply")
@@ -414,6 +420,16 @@ func Dismiss(stateRoot, id string) error {
 		return err
 	}
 	r.Status = StatusDismissed
+	return SaveResult(stateRoot, r)
+}
+
+// MarkCovered removes a deduplicated candidate from the active review queue.
+func MarkCovered(stateRoot, id string) error {
+	r, err := Get(stateRoot, id)
+	if err != nil {
+		return err
+	}
+	r.Status = StatusCovered
 	return SaveResult(stateRoot, r)
 }
 

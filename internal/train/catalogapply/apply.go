@@ -63,6 +63,12 @@ func CreatePullRequestPlannedWithProgress(ctx context.Context, stateRoot, worksp
 	return createPullRequest(ctx, stateRoot, workspaceRoot, cfg, id, planner, execCommand, report)
 }
 
+// CreatePullRequestPlannedWithProgressAllowOverlap creates a catalog proposal
+// after the user explicitly chooses to add a rule despite existing coverage.
+func CreatePullRequestPlannedWithProgressAllowOverlap(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner, report ProgressReporter) error {
+	return createPullRequestWithOptions(ctx, stateRoot, workspaceRoot, cfg, id, planner, execCommand, report, true)
+}
+
 type commandRunner func(context.Context, string, string, ...string) ([]byte, error)
 
 func execCommand(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
@@ -91,6 +97,10 @@ func prependPath(environment []string, directory string) []string {
 }
 
 func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner, run commandRunner, report ProgressReporter) error {
+	return createPullRequestWithOptions(ctx, stateRoot, workspaceRoot, cfg, id, planner, run, report, false)
+}
+
+func createPullRequestWithOptions(ctx context.Context, stateRoot, workspaceRoot string, cfg workspace.Config, id string, planner ChangePlanner, run commandRunner, report ProgressReporter, allowOverlap bool) error {
 	emit := func(stage, state, detail string) {
 		if report != nil {
 			report(Progress{Stage: stage, State: state, Detail: detail})
@@ -173,21 +183,10 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	if planner == nil {
 		target, err = applyCandidate(targetWorkspace, worktreeConfig, row)
 	} else {
-		target, generatedTitle, err = applyPlannedCandidateWithProgress(ctx, targetWorkspace, worktreeConfig, row, planner, report)
+		target, generatedTitle, err = applyPlannedCandidateWithProgressOptionsAndRunner(ctx, targetWorkspace, worktreeConfig, row, planner, report, allowOverlap, run)
 	}
 	if err != nil {
 		return err
-	}
-	if planner != nil {
-		emit("validate", "running", "Building and testing the generated adversary")
-		packageRoot, rootErr := adversaryRoot(targetWorkspace, worktreeConfig)
-		if rootErr != nil {
-			return rootErr
-		}
-		if err := validateRunnablePackage(ctx, filepath.Join(packageRoot, row.Package), run); err != nil {
-			return err
-		}
-		emit("validate", "complete", "Build, tests, validation, and package checks passed")
 	}
 	emit("commit", "running", "Committing the reviewed catalog change")
 	if _, err := requireCommand(ctx, run, worktree, "git", "add", "-A", "--", ".", ":(glob,exclude)**/node_modules/**", ":(glob,exclude)**/.adversary/**"); err != nil {
@@ -211,7 +210,7 @@ func createPullRequest(ctx context.Context, stateRoot, workspaceRoot string, cfg
 	}
 	emit("push", "complete", "Catalog branch pushed")
 	emit("pull_request", "running", "Opening the catalog pull request")
-	body := pullRequestBody(row)
+	body := pullRequestBody(row, target, planner != nil, strings.Contains(filepath.ToSlash(string(changed)), "/package.json"))
 	created, err := requireCommand(ctx, run, worktree, "gh", "pr", "create", "--base", baseBranch, "--head", branch, "--title", commitTitle, "--body", body)
 	if err != nil {
 		return fmt.Errorf("catalog branch %s was pushed, but opening its pull request failed: %w", branch, err)
@@ -312,6 +311,9 @@ func validateCandidate(row results.Result) error {
 	if row.Status == results.StatusDismissed {
 		return fmt.Errorf("candidate %s is dismissed", row.ID)
 	}
+	if row.Status == results.StatusCovered {
+		return fmt.Errorf("candidate %s is already covered", row.ID)
+	}
 	owner := strings.TrimSpace(row.Package)
 	if owner == "" || owner == "unassigned" {
 		return fmt.Errorf("choose an adversary before applying this candidate")
@@ -328,16 +330,30 @@ func validateCandidate(row results.Result) error {
 func requireCommand(ctx context.Context, run commandRunner, dir, name string, args ...string) ([]byte, error) {
 	out, err := run(ctx, dir, name, args...)
 	if err != nil {
-		message := strings.TrimSpace(string(out))
-		if len(message) > 600 {
-			message = message[:600] + "…"
-		}
+		message := commandFailureMessage(string(out))
 		if message != "" {
 			return nil, fmt.Errorf("%s: %w", message, err)
 		}
 		return nil, err
 	}
 	return out, nil
+}
+
+func commandFailureMessage(output string) string {
+	message := strings.TrimSpace(output)
+	if marker := strings.LastIndex(message, "\nnot ok "); marker >= 0 {
+		start := strings.LastIndex(message[:marker], "\n# Subtest:")
+		if start < 0 {
+			start = marker
+		}
+		message = strings.TrimSpace(message[start:])
+	}
+	const maxRunes = 2400
+	runes := []rune(message)
+	if len(runes) > maxRunes {
+		message = "…\n" + string(runes[len(runes)-maxRunes:])
+	}
+	return message
 }
 
 func remoteDefaultBranch(ctx context.Context, run commandRunner, root string) (string, string, error) {
@@ -368,13 +384,34 @@ func pullRequestBranch(row results.Result) string {
 	return fmt.Sprintf("adversary/train-%s-%s-%d", owner, id, time.Now().UTC().UnixMilli())
 }
 
-func pullRequestBody(row results.Result) string {
+func pullRequestBody(row results.Result, generatedTarget string, validated, runtimeSynchronized bool) string {
 	var body strings.Builder
 	fmt.Fprintf(&body, "## Catalog training proposal\n\n- Adversary: `%s`\n- Candidate: `%s`\n", row.Package, row.ID)
 	if evidence := evidenceURL(row); evidence != "" {
 		fmt.Fprintf(&body, "- Evidence: %s\n", evidence)
 	}
-	fmt.Fprintf(&body, "\n## Proposed rule\n\n%s\n\nGenerated locally by `adversary catalog train inspect`; review and edit before merging.\n", strings.TrimSpace(row.ProposedRule))
+	if runtimeSynchronized {
+		fmt.Fprintln(&body, "- Managed runtime template: synchronized")
+	}
+	rule := managedRule{}
+	if filepath.Base(generatedTarget) == "rule.yaml" {
+		if raw, err := os.ReadFile(generatedTarget); err == nil {
+			_ = yaml.Unmarshal(raw, &rule)
+		}
+	}
+	if rule.ID != "" && rule.Summary != "" && rule.Guidance != "" {
+		fmt.Fprintf(&body, "\n## Generated rule\n\n**%s** (`%s`)\n\n%s\n\n- Default severity: `%s`\n- Minimum confidence: `%s`\n", strings.TrimSpace(rule.Summary), rule.ID, strings.TrimSpace(rule.Guidance), rule.Severity, rule.Confidence)
+	} else {
+		fmt.Fprintf(&body, "\n## Proposed rule\n\n%s\n", strings.TrimSpace(row.ProposedRule))
+	}
+	if validated {
+		if rule.ID != "" {
+			fmt.Fprintln(&body, "\n## Validation\n\n- Generated finding and no-finding cases passed semantic evaluation.\n- The isolated adversary package built, tested, validated, and packed successfully.")
+		} else {
+			fmt.Fprintln(&body, "\n## Validation\n\n- Deterministic finding and close non-finding cases passed through the production runtime.\n- The isolated adversary package built, tested, validated, and packed successfully.")
+		}
+	}
+	fmt.Fprintln(&body, "\nGenerated locally by `adversary catalog train inspect`; review and edit before merging.")
 	return body.String()
 }
 

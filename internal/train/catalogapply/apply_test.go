@@ -182,7 +182,155 @@ func managedRulePlan(request ChangeRequest, id string) ChangePlan {
 	rule := fmt.Sprintf("version: 1\nid: %s\nsummary: Return actionable recovery details to users.\nguidance: Report changed code that hides a concrete failure; allow code that preserves actionable detail.\nseverity: medium\nconfidence: high\nevidence: %s\n", id, request.Evidence)
 	cases := fmt.Sprintf("version: 1\nrule_id: %s\ncandidate_id: %s\nevidence: %s\ncases:\n  - name: hidden failure\n    review_input: The exact changed path hides the failure.\n    expected: finding\n    reason: The user cannot recover.\n  - name: actionable failure\n    review_input: The change displays the cause and recovery step.\n    expected: no_finding\n    reason: The error is actionable.\n", id, request.CandidateID, request.Evidence)
 	base := "adversaries/" + request.Adversary + "/rules/" + id + "/"
-	return ChangePlan{Summary: "Add actionable error checks to " + request.Adversary, Files: []ChangeFile{{Path: base + "rule.yaml", Content: rule}, {Path: base + "cases.yaml", Content: cases}}}
+	return ChangePlan{Summary: "Add actionable error checks to " + request.Adversary, Strategy: StrategyModelBacked, Files: []ChangeFile{{Path: base + "rule.yaml", Content: rule}, {Path: base + "cases.yaml", Content: cases}}}
+}
+
+func TestApplyPlannedRetriesQualityReviewWithRejectedPlan(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "adversaries"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "adversarylabs.yaml"), []byte("apiVersion: adversarylabs.dev/v1alpha1\nkind: AdversaryCatalog\nspec:\n  adversaries: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	row := results.Result{
+		ID: "candidate-quality", Package: "reliability", ProposedRule: "Retry failed initialization.",
+		AdversaryMission: "Catch reliability regressions.", CommentURL: "https://example.test/evidence",
+	}
+	calls := 0
+	planner := func(_ context.Context, request ChangeRequest) (ChangePlan, error) {
+		calls++
+		if calls == 1 {
+			if request.GenerationAttempt != 1 || request.MaxGenerationTurns != 6 || request.MaxQualityTurns != 2 {
+				t.Fatalf("initial generation attempt metadata=%d/%d", request.GenerationAttempt, request.MaxGenerationTurns)
+			}
+			return ChangePlan{Summary: "Reject brittle initialization in reliability", Strategy: StrategyDeterministic, Files: []ChangeFile{
+				{Path: "adversaries/reliability/README.md", Content: "# Reliability\n"},
+				{Path: "adversaries/reliability/src/rules/lazy.ts", Content: "// brittle regex implementation\n"},
+				{Path: "adversaries/reliability/test/lazy.test.ts", Content: "// weak fixture\n"},
+			}}, fmt.Errorf("generated change deterministic quality review requested revision: inspect source structure")
+		}
+		if request.PreviousPlan == nil || len(request.PreviousPlan.Files) != 3 || !strings.Contains(request.PreviousPlan.Files[1].Content, "brittle regex") {
+			t.Fatalf("quality repair omitted rejected generated plan: %+v", request.PreviousPlan)
+		}
+		if !strings.Contains(request.ValidationFeedback, "inspect source structure") {
+			t.Fatalf("quality repair omitted critic feedback: %q", request.ValidationFeedback)
+		}
+		if request.GenerationAttempt != 2 || request.MaxGenerationTurns != 6 || request.MaxQualityTurns != 2 {
+			t.Fatalf("repair generation attempt metadata=%d/%d", request.GenerationAttempt, request.MaxGenerationTurns)
+		}
+		return managedRulePlan(request, "retry-initialization"), nil
+	}
+	cfg := workspace.Config{Adversaries: workspace.AdversariesConfig{Root: filepath.Join(root, "adversaries")}}
+	if _, err := applyPlannedCandidate(context.Background(), root, cfg, row, planner); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("planner calls=%d want 2", calls)
+	}
+}
+
+func TestWriteManagedDeterministicPlanUsesCatalogExtensionPoint(t *testing.T) {
+	root := t.TempDir()
+	prefix := "adversaries/operability/"
+	dir := filepath.Join(root, "adversaries", "operability")
+	request := ChangeRequest{
+		Adversary: "operability", Executable: true, PolicyDriven: true, ManagedRuntime: 1,
+		EvidenceFile: "src/restore.ts",
+		Files: []SourceFile{
+			{Path: prefix + "README.md", Content: "# Operability\n"},
+			{Path: prefix + "src/index.ts", Content: "import { registerDeterministicRules } from \"./deterministic.js\";\nregisterDeterministicRules(app);\n"},
+			{Path: prefix + "src/deterministic.ts", Content: "export function registerDeterministicRules() {}\n"},
+		},
+	}
+	plan := ChangePlan{Summary: "Enforce restore error paths in operability", Strategy: StrategyDeterministic, Files: []ChangeFile{
+		{Path: prefix + "README.md", Content: "# Operability\n\n- Restore failures include recovery details.\n"},
+		{Path: prefix + "src/deterministic.ts", Content: "import { registerRestoreRule } from \"./rules/restore-errors.js\";\nexport function registerDeterministicRules(app: unknown) { registerRestoreRule(app); }\n"},
+		{Path: prefix + "src/rules/restore-errors.ts", Content: "export function registerRestoreRule(app: unknown) { void app; }\n"},
+		{Path: prefix + "test/restore-errors.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nconst evidencePath = \"src/restore.ts\"; const fixtureDirectory = \"/tmp/fixture\";\nvoid createApp().run({input:{source:{path:fixtureDirectory}}}); void evidencePath;\n"},
+	}}
+	for name, mutate := range map[string]func(*ChangePlan){
+		"managed entrypoint": func(value *ChangePlan) {
+			value.Files[1] = ChangeFile{Path: prefix + "src/index.ts", Content: "// replaced\n"}
+		},
+		"model call": func(value *ChangePlan) {
+			value.Files[2].Content = "export function registerRestoreRule(ctx: any) { return ctx.model.review({}); }\n"
+		},
+		"read-only node fs mutation": func(value *ChangePlan) {
+			value.Files[3].Content = "import * as fs from \"node:fs\";\nimport { createApp } from \"../src/index.ts\";\nconst evidencePath = \"src/restore.ts\";\n(fs as any).readFileSync = () => evidencePath;\nvoid createApp().run({});\n"
+		},
+		"evidence path tripwire": func(value *ChangePlan) {
+			value.Files[2].Content = "export function registerRestoreRule(ctx: any) { if (ctx.change.changedFiles.includes(\"src/restore.ts\")) ctx.finding({}); }\n"
+		},
+		"literal evidence line": func(value *ChangePlan) {
+			value.Files[2].Content = "export async function registerRestoreRule(ctx: any) { await ctx.loadInScopeSources(); ctx.finding({evidence: [{line: 257}]}); }\n"
+		},
+		"direct helper test": func(value *ChangePlan) {
+			value.Files[3].Content = "import { createApp } from \"../src/index.ts\";\nimport { registerRestoreRule } from \"../src/rules/restore-errors.ts\";\nconst evidencePath = \"src/restore.ts\";\nvoid registerRestoreRule; void createApp().run({}); void evidencePath;\n"
+		},
+		"missing repository source input": func(value *ChangePlan) {
+			value.Files[3].Content = "import { createApp } from \"../src/index.ts\";\nconst evidencePath = \"src/restore.ts\";\nvoid createApp().run({}); void evidencePath;\n"
+		},
+	} {
+		t.Run("rejects "+name, func(t *testing.T) {
+			invalid := plan
+			invalid.Files = append([]ChangeFile(nil), plan.Files...)
+			mutate(&invalid)
+			if _, err := writeChangePlan(root, filepath.Join(root, "adversaries"), dir, results.Result{Package: "operability"}, request, invalid); err == nil {
+				t.Fatalf("accepted deterministic plan with %s", name)
+			}
+		})
+	}
+	target, err := writeChangePlan(root, filepath.Join(root, "adversaries"), dir, results.Result{Package: "operability"}, request, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(target) != "README.md" {
+		t.Fatalf("target=%q", target)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src", "rules", "restore-errors.ts")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPlannedProgressHasOnlyOneRunningStage(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "adversaries", "operability")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Operability\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	row := results.Result{ID: "candidate-progress", Package: "operability", ProposedRule: "Show actionable failures."}
+	cfg := workspace.Config{Adversaries: workspace.AdversariesConfig{Root: filepath.Join(root, "adversaries")}}
+	active := map[string]bool{}
+	maxRunning := 0
+	report := func(update Progress) {
+		if update.State == "running" {
+			active[update.Stage] = true
+		} else {
+			delete(active, update.Stage)
+		}
+		if len(active) > maxRunning {
+			maxRunning = len(active)
+		}
+	}
+	planner := func(_ context.Context, request ChangeRequest) (ChangePlan, error) {
+		request.Progress(Progress{Stage: "overlap", State: "running"})
+		request.Progress(Progress{Stage: "overlap", State: "complete"})
+		request.Progress(Progress{Stage: "strategy", State: "running"})
+		request.Progress(Progress{Stage: "strategy", State: "complete"})
+		request.Progress(Progress{Stage: "generate", State: "running"})
+		request.Progress(Progress{Stage: "generate", State: "complete"})
+		return managedRulePlan(request, "actionable-failures"), nil
+	}
+	if _, _, err := applyPlannedCandidateWithProgress(context.Background(), root, cfg, row, planner, report); err != nil {
+		t.Fatal(err)
+	}
+	if maxRunning != 1 || len(active) != 0 {
+		t.Fatalf("max running stages=%d active=%v", maxRunning, active)
+	}
 }
 
 func TestCatalogPullRequestTitleFallsBackToSpecificRule(t *testing.T) {
@@ -347,13 +495,99 @@ func TestApplyPlannedRetriesDisconnectedImplementation(t *testing.T) {
 	}
 }
 
+func TestApplyPlannedRetriesPackageValidationFromCleanBaseline(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "adversaries", "reliability")
+	for path, content := range map[string]string{
+		"README.md":          "# Reliability\n",
+		"adversary.yaml":     "name: private/reliability\nruntime:\n  name: node\n  command: [dist/index.js]\n",
+		"package.json":       `{"name":"reliability","scripts":{"test":"npm run build"}}`,
+		"src/index.ts":       "export function createApp() { return {}; }\n",
+		"test/index.test.ts": "import { createApp } from \"../src/index.ts\";\nvoid createApp();\n",
+	} {
+		target := filepath.Join(dir, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	row := results.Result{ID: "candidate-compile", Package: "reliability", ProposedRule: "Reject poisoned lazy initialization."}
+	cfg := workspace.Config{Adversaries: workspace.AdversariesConfig{Root: filepath.Join(root, "adversaries")}}
+	plannerCalls := 0
+	planner := func(_ context.Context, request ChangeRequest) (ChangePlan, error) {
+		plannerCalls++
+		if plannerCalls == 4 {
+			if !strings.Contains(request.ValidationFeedback, "error TS1005") || len(request.PreviousPlanFiles) != 3 || request.PreviousPlan == nil || len(request.PreviousPlan.Files) != 3 {
+				t.Fatalf("compiler feedback was not supplied to repair attempt: %+v", request)
+			}
+			if !strings.Contains(request.PreviousPlan.Files[1].Content, "broken") {
+				t.Fatalf("repair request omitted failed generated source: %+v", request.PreviousPlan)
+			}
+			baseline, err := os.ReadFile(filepath.Join(dir, "src", "index.ts"))
+			if err != nil || strings.Contains(string(baseline), "broken") {
+				t.Fatalf("repair did not start from clean baseline: %q err=%v", baseline, err)
+			}
+		}
+		source := "export function createApp() { return { repaired: true }; }\n"
+		if plannerCalls == 3 {
+			source = "export function createApp( { // broken\n"
+		}
+		plan := ChangePlan{Summary: "Reject poisoned initialization in reliability", Files: []ChangeFile{
+			{Path: "adversaries/reliability/README.md", Content: "# Reliability\n\n- Reject poisoned lazy initialization.\n"},
+			{Path: "adversaries/reliability/src/index.ts", Content: source},
+			{Path: "adversaries/reliability/test/poisoned-lazy-initialization.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nvoid createApp();\n"},
+		}}
+		if plannerCalls <= 2 {
+			return plan, fmt.Errorf("generated change deterministic quality review requested revision: correction %d", plannerCalls)
+		}
+		return plan, nil
+	}
+	testRuns := 0
+	runner := func(_ context.Context, validationDir, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "test" {
+			testRuns++
+			source, err := os.ReadFile(filepath.Join(validationDir, "src", "index.ts"))
+			if err != nil {
+				return nil, err
+			}
+			if strings.Contains(string(source), "broken") {
+				return []byte("src/index.ts(1,28): error TS1005: ')' expected.\n"), errors.New("exit status 2")
+			}
+		}
+		return []byte("ok\n"), nil
+	}
+	var updates []Progress
+	_, _, err := applyPlannedCandidateWithProgressOptionsAndRunner(context.Background(), root, cfg, row, planner, func(update Progress) {
+		updates = append(updates, update)
+	}, false, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plannerCalls != 4 || testRuns != 2 {
+		t.Fatalf("planner calls=%d test runs=%d", plannerCalls, testRuns)
+	}
+	if source, err := os.ReadFile(filepath.Join(dir, "src", "index.ts")); err != nil || !strings.Contains(string(source), "repaired") {
+		t.Fatalf("repaired source=%q err=%v", source, err)
+	}
+	foundRepair, foundSuccess := false, false
+	for _, update := range updates {
+		foundRepair = foundRepair || update.Stage == "validate" && update.State == "pending"
+		foundSuccess = foundSuccess || update.Stage == "validate" && update.State == "complete"
+	}
+	if !foundRepair || !foundSuccess {
+		t.Fatalf("validation progress did not report repair and success: %+v", updates)
+	}
+}
+
 func TestApplyPlannedCorrectsReplacedTestAndEvidencePath(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "adversaries", "conventions")
 	for path, content := range map[string]string{
 		"README.md":          "# Conventions\n",
 		"adversary.yaml":     "name: private/conventions\nruntime:\n  name: node\n  command: [dist/index.js]\n",
-		"package.json":       `{"name":"conventions","adversarylabsCatalogRuntime":1}`,
+		"package.json":       `{"name":"conventions"}`,
 		"src/index.ts":       "export function createApp() { return { run() {} }; }\n",
 		"test/index.test.ts": "import { createApp } from \"../src/index.ts\";\nvoid createApp();\n",
 	} {
@@ -384,8 +618,8 @@ func TestApplyPlannedCorrectsReplacedTestAndEvidencePath(t *testing.T) {
 			}
 			files = append(files, ChangeFile{Path: "adversaries/conventions/test/app-spec-metadata.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nconst evidencePath = \"gen/app-specs/LICENSE\";\nif (!evidencePath || !createApp().learnedRule) throw new Error(\"rule is not executable\");\n"})
 		case 3:
-			if !strings.Contains(request.ValidationFeedback, "replaced existing native test") || !strings.Contains(request.ValidationFeedback, "exact evidence path") {
-				t.Fatalf("retry request did not retain validation feedback: %+v", request)
+			if strings.Contains(request.ValidationFeedback, "replaced existing native test") || !strings.Contains(request.ValidationFeedback, "exact evidence path") {
+				t.Fatalf("retry request did not focus on latest validation feedback: %+v", request)
 			}
 			files = append(files, ChangeFile{Path: "adversaries/conventions/test/app-spec-metadata.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nconst evidencePath = \"gen/gen/kots_default_specs/LICENSE\";\nif (!evidencePath || !createApp().learnedRule) throw new Error(\"rule is not executable\");\n"})
 		}
@@ -440,6 +674,14 @@ func TestExecCommandKeepsAbsoluteLaunchersSiblingRuntimeOnPATH(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if output, err := execCommand(context.Background(), t.TempDir(), npm, "--version"); err != nil {
 		t.Fatalf("absolute npm launcher could not find sibling node: %v\n%s", err, output)
+	}
+}
+
+func TestCommandFailureMessageKeepsFailingTAPAssertion(t *testing.T) {
+	output := strings.Repeat("ok 1 - passing test\n", 200) + "# Subtest: rejects invalid migration\nnot ok 9 - rejects invalid migration\n  ---\n  error: expected one finding, received zero\n  stack: test/rule.test.ts:42:3\n  ...\n1..9\n# fail 1\n"
+	message := commandFailureMessage(output)
+	if strings.Contains(message, "ok 1 - passing test") || !strings.Contains(message, "not ok 9") || !strings.Contains(message, "expected one finding, received zero") {
+		t.Fatalf("message did not isolate the TAP failure:\n%s", message)
 	}
 }
 
@@ -513,6 +755,58 @@ func TestRunnableValidationDoesNotMutatePackageDependencies(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "node_modules")); !os.IsNotExist(err) {
 		t.Fatalf("validation mutated source package: %v", err)
+	}
+}
+
+func TestRunnableValidationSynchronizesCompleteBuildOutput(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "adversary")
+	for name, content := range map[string]string{
+		"package.json":      `{"scripts":{"test":"build"}}`,
+		"package-lock.json": `{"lockfileVersion":3}`,
+		"adversary.yaml":    "name: private/test\n",
+		"dist/index.js":     "export {};\n",
+	} {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := func(_ context.Context, commandDir, name string, args ...string) ([]byte, error) {
+		if name == "npm" && len(args) > 0 && args[0] == "test" {
+			for path, content := range map[string]string{
+				"dist/index.js":                `import "./deterministic.js";`,
+				"dist/deterministic.js":        `import "./rules/lazy.js";`,
+				"dist/rules/lazy.js":           `export const rule = true;`,
+				"dist/rules/lazy.js.map":       `{}`,
+				"dist/rules/lazy-definition.d": `export declare const rule = true;`,
+			} {
+				target := filepath.Join(commandDir, filepath.FromSlash(path))
+				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+					return nil, err
+				}
+				if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return []byte("ok"), nil
+	}
+	if err := validateRunnablePackageAndSync(context.Background(), dir, runner); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"dist/index.js", "dist/deterministic.js", "dist/rules/lazy.js"} {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(path))); err != nil {
+			t.Fatalf("validated build output omitted %s: %v", path, err)
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, "dist", "rules", "lazy.js")); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCompiledRelativeImports(dir); err == nil || !strings.Contains(err.Error(), "missing module") {
+		t.Fatalf("incomplete committed runtime was accepted: %v", err)
 	}
 }
 
@@ -616,5 +910,25 @@ func saveResult(t *testing.T, state string, row results.Result) {
 	row.CreatedAt = time.Now().UTC()
 	if err := results.SaveResult(state, row); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPullRequestBodyUsesCanonicalGeneratedRule(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "rule.yaml")
+	raw := []byte("version: 1\nid: request-field-propagation\nsummary: Propagate accepted request fields\nguidance: Report a request selector that is validated but not used by the downstream operation.\nseverity: medium\nconfidence: medium\nevidence: https://example.test/evidence\n")
+	if err := os.WriteFile(target, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := pullRequestBody(results.Result{
+		ID: "candidate", Package: "compatibility", ProposedRule: "use themand do everything", CommentURL: "https://example.test/evidence",
+	}, target, true, true)
+	for _, want := range []string{"## Generated rule", "Propagate accepted request fields", "Minimum confidence: `medium`", "semantic evaluation", "Managed runtime template: synchronized"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "themand") {
+		t.Fatalf("body used the stale proposed rule instead of canonical generated content:\n%s", body)
 	}
 }
