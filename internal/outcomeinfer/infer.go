@@ -2,10 +2,12 @@
 package outcomeinfer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/pkg/outcomecontext"
@@ -53,8 +55,13 @@ func Infer(ctx context.Context, provider application.ModelReviewProvider, source
 		return outcomecontext.Intent{}, fmt.Errorf("infer outcome: %w", err)
 	}
 	var intent outcomecontext.Intent
-	if err := json.Unmarshal(raw, &intent); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&intent); err != nil {
 		return outcomecontext.Intent{}, fmt.Errorf("decode inferred outcome: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return outcomecontext.Intent{}, fmt.Errorf("decode inferred outcome: trailing JSON")
 	}
 	candidate := *source
 	candidate.Intent = intent
