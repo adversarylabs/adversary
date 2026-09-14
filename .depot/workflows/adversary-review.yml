@@ -41,3 +41,4 @@ jobs:
           model: auto
           auth-mode: oidc
           registry-namespace: adversarylabs
+          timeout-minutes: 18
