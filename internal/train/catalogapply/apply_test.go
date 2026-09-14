@@ -685,6 +685,30 @@ func TestCommandFailureMessageKeepsFailingTAPAssertion(t *testing.T) {
 	}
 }
 
+func TestCommandFailureMessageKeepsEarlyTAPFailuresAndDropsPassingTail(t *testing.T) {
+	output := "# Subtest: host contract finds the accepted condition\n" +
+		"not ok 1 - host contract finds the accepted condition\n" +
+		"  ---\n  error: expected one finding, received zero\n  ...\n" +
+		"# Subtest: host contract rejects shadowed bindings\n" +
+		"not ok 2 - host contract rejects shadowed bindings\n" +
+		"  ---\n  error: expected zero findings, received one\n  ...\n" +
+		strings.Repeat("# Subtest: passing generated test\nok 9 - passing generated test\n", 200)
+	message := commandFailureMessage(output)
+	for _, expected := range []string{
+		"not ok 1 - host contract finds the accepted condition",
+		"expected one finding, received zero",
+		"not ok 2 - host contract rejects shadowed bindings",
+		"expected zero findings, received one",
+	} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("message omitted %q:\n%s", expected, message)
+		}
+	}
+	if strings.Contains(message, "passing generated test") {
+		t.Fatalf("message retained the passing TAP tail:\n%s", message)
+	}
+}
+
 func TestCatalogRollbackRestoresManifestSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink behavior requires elevated privileges on some Windows hosts")

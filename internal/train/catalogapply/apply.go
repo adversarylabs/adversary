@@ -341,19 +341,60 @@ func requireCommand(ctx context.Context, run commandRunner, dir, name string, ar
 
 func commandFailureMessage(output string) string {
 	message := strings.TrimSpace(output)
-	if marker := strings.LastIndex(message, "\nnot ok "); marker >= 0 {
-		start := strings.LastIndex(message[:marker], "\n# Subtest:")
-		if start < 0 {
-			start = marker
-		}
-		message = strings.TrimSpace(message[start:])
+	if failures := failingTAPBlocks(message); failures != "" {
+		message = failures
 	}
-	const maxRunes = 2400
+	const maxRunes = 6000
 	runes := []rune(message)
 	if len(runes) > maxRunes {
-		message = "…\n" + string(runes[len(runes)-maxRunes:])
+		const tailRunes = 1200
+		message = string(runes[:maxRunes-tailRunes]) + "\n…\n" + string(runes[len(runes)-tailRunes:])
 	}
 	return message
+}
+
+// failingTAPBlocks keeps every failed subtest and its diagnostic block. A test
+// runner normally prints failures in execution order followed by a potentially
+// very long list of passing tests. Keeping only the tail can therefore hide the
+// exact failures from both the UI and the model that repairs generated rules.
+func failingTAPBlocks(output string) string {
+	lines := strings.Split(output, "\n")
+	blocks := make([]string, 0)
+	lastStart := -1
+	for index, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "not ok ") {
+			continue
+		}
+		start := index
+		for candidate := index - 1; candidate >= 0; candidate-- {
+			trimmed := strings.TrimSpace(lines[candidate])
+			if strings.HasPrefix(trimmed, "# Subtest:") {
+				start = candidate
+				break
+			}
+			if strings.HasPrefix(trimmed, "ok ") || strings.HasPrefix(trimmed, "not ok ") {
+				break
+			}
+		}
+		if start == lastStart {
+			continue
+		}
+		end := len(lines)
+		for candidate := index + 1; candidate < len(lines); candidate++ {
+			trimmed := strings.TrimSpace(lines[candidate])
+			if strings.HasPrefix(trimmed, "# Subtest:") || strings.HasPrefix(trimmed, "ok ") || strings.HasPrefix(trimmed, "not ok ") {
+				end = candidate
+				break
+			}
+			if strings.HasPrefix(trimmed, "1..") || strings.HasPrefix(trimmed, "# tests ") {
+				end = candidate
+				break
+			}
+		}
+		blocks = append(blocks, strings.TrimSpace(strings.Join(lines[start:end], "\n")))
+		lastStart = start
+	}
+	return strings.Join(blocks, "\n\n")
 }
 
 func remoteDefaultBranch(ctx context.Context, run commandRunner, root string) (string, string, error) {
