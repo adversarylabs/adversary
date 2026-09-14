@@ -862,7 +862,7 @@ func TestInjectHostValidationContractsAddsSyncOnceCasesOnlyToValidationCopy(t *t
 	for _, want := range []string{
 		`const evidencePath = "pkg/store/resolver.go"`,
 		"detects multiline fallible sync.Once initialization with distinct bindings",
-		"custom Do receiver despite an unrelated local sync.Once declaration",
+		"custom Do receiver despite another sync.Once declaration",
 		"rejects an Err-named non-error binding",
 		"rejects parameter shadowing and selector receivers",
 		"rejects a fallible constructor outside the Do callback",

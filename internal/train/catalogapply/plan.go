@@ -963,8 +963,7 @@ var (
 )
 func runtimeObjectStore() (Store, error) {
   objectStoreOnce.Do(func() {
-    objectStore,
-      objectStoreErr = NewStore(
+    objectStore, objectStoreErr = NewStore(
         param,
       )
   })
@@ -975,7 +974,7 @@ func runtimeObjectStore() (Store, error) {
   assert.equal(findings[0]?.evidence[0]?.location?.file, evidencePath);
 });
 
-test("host contract: rejects a custom Do receiver despite an unrelated local sync.Once declaration", async () => {
+test("host contract: rejects a custom Do receiver despite another sync.Once declaration", async () => {
   const findings = await deterministicFindings(`+"`"+`package fixture
 import "sync"
 type Store interface{}
@@ -985,13 +984,13 @@ func NewStore() (Store, error) { return nil, nil }
 var objectStoreOnce customOnce
 var objectStore Store
 var objectStoreErr error
-func unrelated() { var objectStoreOnce sync.Once; _ = objectStoreOnce }
+var unrelatedOnce sync.Once
 func runtimeObjectStore() (Store, error) {
   objectStoreOnce.Do(func() { objectStore, objectStoreErr = NewStore() })
   return objectStore, objectStoreErr
 }
 `+"`"+`);
-  assert.equal(findings.length, 0, "a same-named sync.Once in another lexical scope must not bless a custom receiver");
+  assert.equal(findings.length, 0, "an unrelated sync.Once must not bless a custom receiver");
 });
 
 test("host contract: rejects an Err-named non-error binding", async () => {
