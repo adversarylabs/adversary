@@ -10,9 +10,9 @@
     "subject": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repository", "pull_request"],
+      "required": ["provider", "repository", "pull_request"],
       "properties": {
-        "provider": { "type": "string", "maxLength": 100 },
+        "provider": { "const": "github" },
         "repository": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" },
         "pull_request": { "type": "integer", "minimum": 1 }
       }

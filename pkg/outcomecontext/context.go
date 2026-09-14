@@ -82,8 +82,8 @@ func (c Context) Validate() error {
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("outcome context schema_version must be %q", SchemaVersion)
 	}
-	if runeLen(c.Subject.Provider) > MaxProviderCharacters {
-		return fmt.Errorf("outcome context subject provider exceeds %d characters", MaxProviderCharacters)
+	if c.Subject.Provider != "github" {
+		return fmt.Errorf("outcome context subject provider must be %q", "github")
 	}
 	if strings.TrimSpace(c.Subject.Repository) == "" {
 		return fmt.Errorf("outcome context subject repository must not be empty")
