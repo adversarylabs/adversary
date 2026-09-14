@@ -866,6 +866,10 @@ func TestInjectHostValidationContractsAddsSyncOnceCasesOnlyToValidationCopy(t *t
 		"rejects an Err-named non-error binding",
 		"rejects parameter shadowing and selector receivers",
 		"rejects a fallible constructor outside the Do callback",
+		"rejects short-declaration shadowing",
+		"rejects an error declaration borrowed from another function",
+		"finds a candidate after an earlier anonymous function",
+		"reports every matching function in one file",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("generator-owned validation contract omitted %q", want)

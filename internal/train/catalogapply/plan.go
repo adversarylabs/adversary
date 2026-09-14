@@ -1104,6 +1104,82 @@ func runtimeObjectStore() (Store, error) {
 `+"`"+`);
   assert.equal(findings.length, 0, "an unrelated call must not make a value assignment look fallible");
 });
+
+test("host contract: rejects short-declaration shadowing", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+type customOnce struct{}
+func (customOnce) Do(fn func()) { fn() }
+func NewStore() (Store, error) { return nil, nil }
+var once sync.Once
+var cached Store
+var cachedErr error
+func runtimeObjectStore() (Store, error) {
+  once := customOnce{}
+  once.Do(func() { cached, cachedErr = NewStore() })
+  return cached, cachedErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 0, "a short declaration shadows the package sync.Once");
+});
+
+test("host contract: rejects an error declaration borrowed from another function", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+func NewStore() (Store, int) { return nil, 0 }
+func unrelated() { var cachedErr error; _ = cachedErr }
+var once sync.Once
+var cached Store
+var cachedErr int
+func runtimeObjectStore() (Store, int) {
+  once.Do(func() { cached, cachedErr = NewStore() })
+  return cached, cachedErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 0, "an error binding in another function is outside the applicable scope");
+});
+
+test("host contract: finds a candidate after an earlier anonymous function", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+func NewStore() (Store, error) { return nil, nil }
+var once sync.Once
+var cached Store
+var cachedErr error
+func runtimeObjectStore() (Store, error) {
+  _ = func() bool { return true }
+  once.Do(func() { cached, cachedErr = NewStore() })
+  return cached, cachedErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 1, "an earlier anonymous function must not replace the enclosing function");
+});
+
+test("host contract: reports every matching function in one file", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+func NewStore() (Store, error) { return nil, nil }
+var firstOnce sync.Once
+var first Store
+var firstErr error
+var secondOnce sync.Once
+var second Store
+var secondErr error
+func firstStore() (Store, error) {
+  firstOnce.Do(func() { first, firstErr = NewStore() })
+  return first, firstErr
+}
+func secondStore() (Store, error) {
+  secondOnce.Do(func() { second, secondErr = NewStore() })
+  return second, secondErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 2, "each independent poisoned initializer must produce a finding");
+});
 `, string(quotedPath))
 }
 
