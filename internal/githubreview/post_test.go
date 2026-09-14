@@ -108,7 +108,7 @@ func TestPostEscapesReviewBasisMarkdown(t *testing.T) {
 	client.RESTBase = srv.URL
 	client.GQLURL = srv.URL + "/"
 	_, err := Post(context.Background(), CommentPlan{
-		ReviewBasis: "Reviewed as: [click](https://evil.example) <img src=x> **trusted**",
+		ReviewBasis: "Reviewed as: [click](https://evil.example) <img src=x> **trusted**\n\n> quote\n# heading\n---",
 	}, PostOptions{Client: client, Owner: "o", Repo: "r", Number: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -119,6 +119,11 @@ func TestPostEscapesReviewBasisMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(body, `\[click\]\(https://evil.example\) &lt;img src=x&gt; \*\*trusted\*\*`) {
 		t.Fatalf("review body did not preserve escaped text: %q", body)
+	}
+	for _, marker := range []string{"\n> quote", "\n# heading", "\n---"} {
+		if strings.Contains(body, marker) {
+			t.Fatalf("review body contains injected block marker %q: %q", marker, body)
+		}
 	}
 }
 

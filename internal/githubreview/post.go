@@ -105,8 +105,8 @@ query($owner:String!,$name:String!,$number:Int!){
 	// Cap inline threads.
 	var threads []map[string]any
 	var bodySections []string
-	if strings.TrimSpace(plan.ReviewBasis) != "" {
-		bodySections = append(bodySections, "**"+escapeMarkdownText(strings.TrimSpace(plan.ReviewBasis))+"**")
+	if basis := strings.Join(strings.Fields(plan.ReviewBasis), " "); basis != "" {
+		bodySections = append(bodySections, "**"+escapeMarkdownText(basis)+"**")
 	}
 	if strings.TrimSpace(plan.ReviewBody) != "" {
 		bodySections = append(bodySections, strings.TrimSpace(plan.ReviewBody))
