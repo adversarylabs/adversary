@@ -875,6 +875,9 @@ func TestInjectHostValidationContractsAddsSyncOnceCasesOnlyToValidationCopy(t *t
 			t.Fatalf("generator-owned validation contract omitted %q", want)
 		}
 	}
+	if strings.Contains(content, "rejects grouped local shadowing") {
+		t.Fatal("uncommon grouped local shadowing should remain advisory, not block generation")
+	}
 
 	nonMatching := t.TempDir()
 	request.ProposedRule = "Reject unbounded retries."

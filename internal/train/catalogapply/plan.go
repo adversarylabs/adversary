@@ -1070,25 +1070,6 @@ func runtimeObjectStore() (Store, error) {
   assert.equal(findings.length, 0, "a declaration inside another function is not a package binding");
 });
 
-test("host contract: rejects grouped local shadowing", async () => {
-  const findings = await deterministicFindings(`+"`"+`package fixture
-import "sync"
-type Store interface{}
-type customOnce struct{}
-func (customOnce) Do(fn func()) { fn() }
-func NewStore() (Store, error) { return nil, nil }
-var once sync.Once
-var cached Store
-var cachedErr error
-func runtimeObjectStore() (Store, error) {
-  var ( once customOnce )
-  once.Do(func() { cached, cachedErr = NewStore() })
-  return cached, cachedErr
-}
-`+"`"+`);
-  assert.equal(findings.length, 0, "a grouped local declaration shadows the package sync.Once");
-});
-
 test("host contract: requires the tuple assignment RHS itself to be a call", async () => {
   const findings = await deterministicFindings(`+"`"+`package fixture
 import "sync"
