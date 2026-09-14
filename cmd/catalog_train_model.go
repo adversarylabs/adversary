@@ -436,6 +436,8 @@ The generator-owned acceptance suite executes the following source shape through
 
 Do not claim this contract passes merely because a simpler invented fixture passes. In particular, verify that the scanner recognizes a parenthesized package var block, finds the enclosing named function body, balances the multiline Do callback and constructor call, accepts ordinary '=' tuple assignment to two predeclared package bindings, resolves the second binding's declared type as error, and finds the same two identifiers in the later return statement. If any one of those operations is not implemented, repair it before returning files.
 
+The generator also executes adversarial negatives for three tempting shortcuts. Declaration lookup must be restricted to actual package scope: a matching sync.Once declaration inside an earlier function cannot bless a later package-level custom Do receiver. Local shadow detection must recognize parenthesized var blocks, not only single var declarations and short declarations. Finally, the tuple assignment's own right-hand side must be a call expression; a plain cached-pair assignment followed by an unrelated constructor call in the callback is not fallible initialization. Preserve these boundaries in native tests and implementation.
+
 For that sync.Once case, prefer this conservative lexical algorithm over inventing a type system: first recognize both single declarations (var once sync.Once) and parenthesized var blocks containing once sync.Once. Match only a bare identifier receiver; if the captured token is immediately preceded by a dot, as in holder.once.Do, it is a selector/field and must be rejected rather than resolved to a package-level declaration with the same spelling. For each enclosing function, inspect the entire function header through its opening body brace—not merely the func prefix or optional method-receiver prefix—and reject a candidate when its parameter list or method receiver declares the receiver name. Also reject a local declaration or short declaration with that name before the .Do call. Then bound the .Do callback, assignment, and later return as described above. The evidence fixture's sync.Once, dependency, and error bindings are package-level entries in a parenthesized var block, so this valid shape must remain detectable. The custom-Do negatives should cover both parameter shadowing and a field selector with the same spelling as a real package-level sync.Once in separately identifiable assertions; neither may match.
 
 Never emit a finding merely because the original evidence path is present or changed, never hard-code an evidence line number, and generalize beyond the original filename unless the accepted policy is intrinsically path-specific. Build the positive fixture from the relevant supplied evidence_diff plus evidence_source_context; do not replace it with an easier invented example. Add at least three production-entry-point cases at the exact same repository-relative path: the evidence-grounded positive; a close allowed case differing only in policy-relevant behavior; and an adversarial decoy that retains the individual trigger tokens or constructs in unrelated regions and must produce no finding. For multi-signal rules, the decoy must fail if the implementation merely searches the whole file for each signal independently. Also exercise one ordinary whitespace, line-break, identifier, or equivalent-source variation when relevant. Put each materially different fixture in its own named native test, or give every finding-count assertion a fixture-specific message, so compiler feedback identifies the exact positive or negative that failed. In tests, assert the finding count before reading findings[0] or its properties so a missing match produces an actionable assertion rather than a TypeError. Do not import or invoke the new rule helper directly from its test. Preserve all existing deterministic registrations in src/deterministic.ts. Do not emit rules/*/rule.yaml or cases.yaml for this strategy. During repair, retain the prior plan and make the smallest coherent correction that satisfies the critic; do not regenerate unrelated files or redesign already-accepted portions.
@@ -482,6 +484,9 @@ Translate the review into executable changes. When it says predicates are not st
 			return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: %w", err)
 		}
 		plan.Summary = normalizeCatalogSummary(plan.Summary, request.Adversary, 120)
+		if isSyncOnceCatalogRequest(request) {
+			plan.Summary = normalizeCatalogSummary("Detect poisoned sync.Once initialization", request.Adversary, 120)
+		}
 		if count := utf8.RuneCountInString(plan.Summary); count < 12 {
 			return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: summary length %d is below 12", count)
 		}
@@ -559,6 +564,11 @@ Translate the review into executable changes. When it says predicates are not st
 		}
 		return plan, nil
 	}
+}
+
+func isSyncOnceCatalogRequest(request catalogapply.ChangeRequest) bool {
+	haystack := strings.Join([]string{request.ProposedRule, request.EvidenceComment, request.EvidenceDiff, request.EvidenceContext}, "\n")
+	return strings.Contains(haystack, "sync.Once") && (strings.Contains(haystack, ".Do") || strings.Contains(strings.ToLower(haystack), "initializ"))
 }
 
 func normalizeCatalogSummary(value, adversary string, limit int) string {

@@ -363,6 +363,26 @@ func TestNormalizeCatalogSummaryAddsMissingAdversary(t *testing.T) {
 	}
 }
 
+func TestCatalogChangePlannerOwnsSyncOnceTitle(t *testing.T) {
+	provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{
+		json.RawMessage(`{"summary":"Reject shadowed receivers","files":[{"path":"adversaries/reliability-and-concurrency/README.md","content":"# Reliability\n"},{"path":"adversaries/reliability-and-concurrency/src/deterministic.ts","content":"export function registerDeterministicRules() {}\n"},{"path":"adversaries/reliability-and-concurrency/src/rules/lazy.ts","content":"export async function review(ctx) { const sources = await ctx.loadInScopeSources(); void sources; }\n"},{"path":"adversaries/reliability-and-concurrency/test/lazy.test.ts","content":"import { createApp } from '../src/index.ts'; void createApp().run({ input: { source: { path: fixtureDirectory } } });\n"}]}`),
+		json.RawMessage(`{"disposition":"accept","reason":"The matcher is aligned."}`),
+		json.RawMessage(`{"disposition":"accept","reason":"No counterexample found."}`),
+	}}
+	plan, err := catalogChangePlanner(&catalogModelRuntimeStub{provider: provider}, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{
+		ManagedRuntime: 1, Adversary: "reliability-and-concurrency", EvidenceComment: "sync.Once.Do permanently caches initialization failure",
+		PreviousPlan: &catalogapply.ChangePlan{Strategy: catalogapply.StrategyDeterministic, Files: []catalogapply.ChangeFile{
+			{Path: "adversaries/reliability-and-concurrency/src/rules/previous.ts", Content: "// previous\n"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Detect poisoned sync.Once initialization in reliability-and-concurrency"; plan.Summary != want {
+		t.Fatalf("summary = %q, want %q", plan.Summary, want)
+	}
+}
+
 func TestCatalogChangePlannerTreatsFinalCriticRevisionAsAdvisory(t *testing.T) {
 	provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{
 		json.RawMessage(`{"summary":"Prevent poisoned initialization in reliability","files":[{"path":"adversaries/reliability/README.md","content":"# Reliability\n"},{"path":"adversaries/reliability/src/deterministic.ts","content":"export function registerDeterministicRules() {}\n"},{"path":"adversaries/reliability/src/rules/lazy.ts","content":"export async function review(ctx) { const sources = await ctx.loadInScopeSources(); void sources; }\n"},{"path":"adversaries/reliability/test/lazy.test.ts","content":"import { createApp } from '../src/index.ts'; void createApp().run({});\n"}]}`),
