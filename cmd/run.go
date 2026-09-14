@@ -23,6 +23,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/telemetry"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/spf13/cobra"
 )
 
@@ -78,6 +79,7 @@ type runOptions struct {
 	noTelemetry              bool
 	reviewContext            *detection.Context
 	reviewAssignment         *detection.ReviewAssignment
+	outcomeContext           *outcomecontext.Context
 
 	// GitHub review (opt-in posting / plan).
 	githubReview           bool
@@ -488,6 +490,7 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
 		ModelProvider: opts.modelProvider, Model: opts.model,
 		ReviewFeedbackPrompt: opts.reviewFeedbackPrompt,
+		OutcomeContext:       opts.outcomeContext,
 		MinimumConfidence:    minimum,
 		Includes:             opts.includes, Excludes: opts.excludes,
 		All: opts.all, DryRun: opts.dryRun, Explain: opts.explain, Format: opts.format,
@@ -986,6 +989,7 @@ func runOneAdversary(
 		RepoIndexMode:            opts.repoIndex,
 		ReviewContext:            opts.reviewContext,
 		ReviewAssignment:         opts.reviewAssignment,
+		OutcomeContext:           opts.outcomeContext,
 		Stdout:                   stdout,
 		Stderr:                   stderr,
 		OnEnvelope:               collectEnvelope(&opts.envelopes, ref),

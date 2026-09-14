@@ -15,6 +15,7 @@ type CommentPlan struct {
 	Comments            []PlannedComment `json:"comments"`
 	Skipped             []SkippedFinding `json:"skipped,omitempty"`
 	ReviewBody          string           `json:"reviewBody,omitempty"`
+	ReviewBasis         string           `json:"reviewBasis,omitempty"`
 	Summary             PlanSummary      `json:"summary"`
 }
 

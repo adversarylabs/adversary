@@ -11,6 +11,7 @@ import (
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
 
@@ -35,6 +36,7 @@ type AutoOptions struct {
 	Model                    string
 	IncludeSuppressed        bool
 	RepoIndexMode            string
+	OutcomeContext           *outcomecontext.Context
 	ReportSelections         func(AutoResult) error
 	// ReportRunStart is called before each selected adversary runs (1-based index
 	// among selected adversaries). Used for terminal progress when results go elsewhere.
@@ -177,6 +179,7 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 			RunTimeout:               opts.RunTimeout,
 			AllFiles:                 opts.AllFiles,
 			RepoIndexMode:            opts.RepoIndexMode,
+			OutcomeContext:           opts.OutcomeContext,
 			// Multi automatic selection keeps a clean progress stream; use
 			// --verbose on explicit single-ref run for identity banners.
 			Verbose: false,

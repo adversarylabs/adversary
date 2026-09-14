@@ -15,6 +15,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/githubreview"
 	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
 
@@ -105,6 +106,7 @@ func resolvePRRunContext(ctx context.Context, opts *runOptions, progress io.Writ
 		opts.tempPRDir = ws.TempDir
 		opts.worktreeRoot = ws.WorktreeRoot
 		opts.resolvedHeadSHA = ws.HeadSHA
+		opts.outcomeContext = outcomecontext.GitHubPullRequest(opts.githubRepo, opts.githubPR, ws.Title, ws.Body)
 		return nil
 	}
 
@@ -122,6 +124,7 @@ func resolvePRRunContext(ctx context.Context, opts *runOptions, progress io.Writ
 		opts.head = headSHA
 	}
 	opts.resolvedHeadSHA = headSHA
+	opts.outcomeContext = outcomecontext.GitHubPullRequest(opts.githubRepo, opts.githubPR, pr.Title, pr.Body)
 	if progress != nil {
 		fmt.Fprintf(progress, "Resolved PR %s/%s#%d → base %s… head %s…\n",
 			owner, repo, opts.githubPR, shortSHA(baseSHA), shortSHA(headSHA))

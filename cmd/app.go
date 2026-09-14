@@ -332,6 +332,7 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 		Stdout: opts.Stdout, Stderr: opts.Stderr,
 		ModelProvider: opts.ModelProvider, Model: opts.Model,
 		ReviewFeedbackPrompt: opts.ReviewFeedbackPrompt,
+		OutcomeContext:       opts.OutcomeContext,
 		MuteChildStderr:      true,
 	})
 	internalOptions := internaladversary.AutoOptions{
@@ -345,6 +346,7 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 		RunTimeout:               opts.RunTimeout, DetectionTimeout: opts.DetectionTimeout,
 		IncludeSuppressed: opts.IncludeSuppressed,
 		RepoIndexMode:     opts.RepoIndexMode,
+		OutcomeContext:    opts.OutcomeContext,
 	}
 	if opts.ReportSelections != nil {
 		internalOptions.ReportSelections = func(result internaladversary.AutoResult) error {
@@ -433,7 +435,7 @@ func toInternalRunOptions(opts application.AdversaryRunOptions) internaladversar
 	if opts.OnEnvelope != nil {
 		onEnvelope = func(env review.RunEnvelope) { opts.OnEnvelope(env) }
 	}
-	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, ModelProvider: opts.ModelProvider, Model: opts.Model, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout, ReviewContext: opts.ReviewContext, ReviewAssignment: opts.ReviewAssignment, RepoIndexMode: opts.RepoIndexMode, OnEnvelope: onEnvelope}
+	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, ModelProvider: opts.ModelProvider, Model: opts.Model, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout, ReviewContext: opts.ReviewContext, ReviewAssignment: opts.ReviewAssignment, OutcomeContext: opts.OutcomeContext, RepoIndexMode: opts.RepoIndexMode, OnEnvelope: onEnvelope}
 }
 
 type processTTY struct{}

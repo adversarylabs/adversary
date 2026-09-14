@@ -17,6 +17,7 @@ import (
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/namespacesig"
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
@@ -245,6 +246,7 @@ type AdversaryRunOptions struct {
 	Stdout, Stderr       io.Writer
 	ReviewContext        *detection.Context
 	ReviewAssignment     *detection.ReviewAssignment
+	OutcomeContext       *outcomecontext.Context
 	ReviewFeedbackPrompt string
 	// OnEnvelope captures the decoded review protocol result for post-run steps.
 	OnEnvelope func(any)
@@ -265,6 +267,7 @@ type AdversaryAutoOptions struct {
 	RunTimeout, DetectionTimeout                   time.Duration
 	RepoIndexMode                                  string
 	ReviewFeedbackPrompt                           string
+	OutcomeContext                                 *outcomecontext.Context
 	Stdout, Stderr                                 io.Writer
 	ReportSelections                               func(AdversaryAutoResult) error
 	// ReportRunStart reports progress before each selected adversary executes

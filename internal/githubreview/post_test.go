@@ -20,7 +20,7 @@ func TestPostDryRunNoop(t *testing.T) {
 
 func TestPostNothingToPost(t *testing.T) {
 	var msgs []string
-	res, err := Post(context.Background(), CommentPlan{}, PostOptions{
+	res, err := Post(context.Background(), CommentPlan{ReviewBasis: "Reviewed as: inferred outcome."}, PostOptions{
 		Client: githubapi.NewClient("t"),
 		Owner:  "o", Repo: "r", Number: 1,
 		Progress: func(s string) { msgs = append(msgs, s) },
@@ -38,6 +38,7 @@ func TestPostNothingToPost(t *testing.T) {
 
 func TestPostCreatesPendingReview(t *testing.T) {
 	var gqlBodies []string
+	var addInput map[string]any
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// GraphQL endpoint is absolute URL set on client
@@ -51,6 +52,8 @@ func TestPostCreatesPendingReview(t *testing.T) {
 				return
 			}
 			if strings.Contains(q, "addPullRequestReview") {
+				variables, _ := body["variables"].(map[string]any)
+				addInput, _ = variables["input"].(map[string]any)
 				_, _ = w.Write([]byte(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"RV_1","url":"https://github.com/o/r/pull/1#pullrequestreview-1","state":"PENDING"}}}}`))
 				return
 			}
@@ -75,7 +78,8 @@ func TestPostCreatesPendingReview(t *testing.T) {
 
 	line := 2
 	plan := CommentPlan{
-		ReviewBody: "overall",
+		ReviewBody:  "overall",
+		ReviewBasis: "Reviewed as: preserve pull-only registry access.",
 		Comments: []PlannedComment{{
 			FindingID: "f1", Title: "T", Severity: "high", Body: "body text", BodySource: "template",
 			Placement: "inline", Anchor: Anchor{Path: "a.go", Line: &line},
@@ -92,6 +96,10 @@ func TestPostCreatesPendingReview(t *testing.T) {
 	}
 	if res.Posted != 1 || len(res.PostedComments) != 1 || res.PostedComments[0].FindingID != "f1" {
 		t.Fatalf("posted comments = %#v", res.PostedComments)
+	}
+	body, _ := addInput["body"].(string)
+	if !strings.Contains(body, "Reviewed as: preserve pull-only registry access.") {
+		t.Fatalf("review body = %q", body)
 	}
 }
 

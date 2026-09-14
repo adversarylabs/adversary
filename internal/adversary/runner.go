@@ -15,6 +15,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/internal/repopolicy"
 	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repoindex"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -43,6 +44,7 @@ type RunOptions struct {
 	BuildTimeout             time.Duration
 	ReviewContext            *detection.Context
 	ReviewAssignment         *detection.ReviewAssignment
+	OutcomeContext           *outcomecontext.Context
 	ReferenceIdentity        string
 	// RepoIndexMode controls local repo index ensure. Empty retains the runtime's
 	// compatibility default; the CLI product default is graph.
@@ -434,6 +436,20 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		}
 		config.Env["ADVERSARY_CHANGE_CONTEXT"] = reviewContextPath
 	}
+	if opts.OutcomeContext != nil {
+		if err := opts.OutcomeContext.Validate(); err != nil {
+			return fmt.Errorf("validate outcome context: %w", err)
+		}
+		contextData, err := json.MarshalIndent(opts.OutcomeContext, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal outcome context: %w", err)
+		}
+		outcomeContextPath := filepath.Join(runDir, "outcome-context.json")
+		if err := files.WriteFile(outcomeContextPath, contextData, runtimeProtocolFileMode); err != nil {
+			return err
+		}
+		config.Env["ADVERSARY_OUTCOME_CONTEXT"] = outcomeContextPath
+	}
 
 	outputPath := filepath.Join(runDir, "output.json")
 	if err := files.WriteFile(outputPath, nil, runtimeProtocolFileMode); err != nil {
@@ -762,6 +778,7 @@ func NewRunConfig(resolved ResolvedAdversary, repoPath, runDir string, opts RunO
 		"ADVERSARY_INPUT":              inputPath,
 		"ADVERSARY_OUTPUT":             outputPath,
 		"ADVERSARY_CHANGE_CONTEXT":     "",
+		"ADVERSARY_OUTCOME_CONTEXT":    "",
 		"ADVERSARY_VERBOSE":            boolEnv(opts.Verbose),
 		"ADVERSARY_INCLUDE_SUPPRESSED": boolEnv(opts.IncludeSuppressed),
 	}

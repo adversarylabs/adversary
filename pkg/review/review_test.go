@@ -463,7 +463,7 @@ func TestDecodeRunEnvelopeRejectsSharedInvalidFixtures(t *testing.T) {
 }
 
 func TestProtocolSchemasAreValidJSON(t *testing.T) {
-	for _, name := range []string{"adversary.input.v1.schema.json", "adversary.review.v1.schema.json"} {
+	for _, name := range []string{"adversary.input.v1.schema.json", "adversary.outcome-context.v1.schema.json", "adversary.review.v1.schema.json"} {
 		canonical, err := os.ReadFile(filepath.Join("..", "..", "schema", name))
 		if err != nil {
 			t.Fatal(err)
