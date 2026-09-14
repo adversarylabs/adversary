@@ -47,7 +47,9 @@ func Post(ctx context.Context, plan CommentPlan, opts PostOptions) (*PostResult,
 	if opts.Owner == "" || opts.Repo == "" || opts.Number <= 0 {
 		return nil, &application.Error{Operation: "github-review", Kind: "usage", Err: fmt.Errorf("owner, repo, and pr number required")}
 	}
-	nothingToPost := len(plan.Comments) == 0 && strings.TrimSpace(plan.ReviewBody) == ""
+	nothingToPost := len(plan.Comments) == 0 &&
+		strings.TrimSpace(plan.ReviewBody) == "" &&
+		strings.TrimSpace(plan.ReviewBasis) == ""
 	if nothingToPost && !opts.ResolveAddressed {
 		if opts.Progress != nil {
 			opts.Progress("GitHub review: nothing to post")

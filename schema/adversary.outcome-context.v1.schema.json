@@ -10,6 +10,7 @@
     "subject": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["pull_request"],
       "properties": {
         "provider": { "type": "string", "maxLength": 100 },
         "repository": { "type": "string", "maxLength": 500 },
@@ -20,13 +21,35 @@
       "type": "array",
       "minItems": 1,
       "maxItems": 2,
+      "allOf": [
+        {
+          "not": {
+            "contains": {
+              "type": "object",
+              "required": ["kind"],
+              "properties": { "kind": { "const": "pull_request_title" } }
+            },
+            "minContains": 2
+          }
+        },
+        {
+          "not": {
+            "contains": {
+              "type": "object",
+              "required": ["kind"],
+              "properties": { "kind": { "const": "pull_request_body" } }
+            },
+            "minContains": 2
+          }
+        }
+      ],
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["kind", "text"],
         "properties": {
           "kind": { "enum": ["pull_request_title", "pull_request_body"] },
-          "text": { "type": "string", "minLength": 1, "maxLength": 32768 }
+          "text": { "type": "string", "minLength": 1, "maxLength": 32768, "pattern": "\\S" }
         }
       }
     },
@@ -42,7 +65,7 @@
         "ambiguities"
       ],
       "properties": {
-        "objective": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "objective": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" },
         "confidence": { "enum": ["low", "medium", "high"] },
         "expected_effects": { "$ref": "#/$defs/stringList" },
         "must_preserve": { "$ref": "#/$defs/stringList" },
@@ -55,7 +78,7 @@
     "stringList": {
       "type": "array",
       "maxItems": 12,
-      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+      "items": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" }
     }
   }
 }

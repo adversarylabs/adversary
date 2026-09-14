@@ -19,12 +19,12 @@ var schema = json.RawMessage(`{
   "additionalProperties":false,
   "required":["objective","confidence","expected_effects","must_preserve","affected_boundaries","ambiguities"],
   "properties":{
-    "objective":{"type":"string","minLength":1,"maxLength":500},
+    "objective":{"type":"string","minLength":1,"maxLength":500,"pattern":"\\S"},
     "confidence":{"enum":["low","medium","high"]},
-    "expected_effects":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":500}},
-    "must_preserve":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":500}},
-    "affected_boundaries":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":500}},
-    "ambiguities":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":500}}
+    "expected_effects":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":500,"pattern":"\\S"}},
+    "must_preserve":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":500,"pattern":"\\S"}},
+    "affected_boundaries":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":500,"pattern":"\\S"}},
+    "ambiguities":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":500,"pattern":"\\S"}}
   }
 }`)
 

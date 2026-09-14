@@ -125,6 +125,9 @@ func (c Context) Validate() error {
 		"affected_boundaries": c.Intent.AffectedBoundaries,
 		"ambiguities":         c.Intent.Ambiguities,
 	} {
+		if values == nil {
+			return fmt.Errorf("outcome context intent %s is required", name)
+		}
 		if len(values) > 12 {
 			return fmt.Errorf("outcome context intent %s exceeds 12 items", name)
 		}

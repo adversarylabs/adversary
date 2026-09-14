@@ -11,13 +11,17 @@ import (
 )
 
 type fakeProvider struct {
-	request application.ModelReviewRequest
+	request  application.ModelReviewRequest
+	response json.RawMessage
 }
 
 func (f *fakeProvider) Name() string  { return "fake" }
 func (f *fakeProvider) Model() string { return "intent" }
 func (f *fakeProvider) Review(_ context.Context, request application.ModelReviewRequest) (json.RawMessage, error) {
 	f.request = request
+	if f.response != nil {
+		return f.response, nil
+	}
 	return json.RawMessage(`{
 		"objective":"Permit repository-scoped pulls.",
 		"confidence":"high",
@@ -26,6 +30,17 @@ func (f *fakeProvider) Review(_ context.Context, request application.ModelReview
 		"affected_boundaries":["registry authorization"],
 		"ambiguities":[]
 	}`), nil
+}
+
+func TestInferRejectsMissingRequiredArrays(t *testing.T) {
+	source := outcomecontext.GitHubPullRequest("acme/app", 42, "Permit pulls", "")
+	provider := &fakeProvider{response: json.RawMessage(`{
+		"objective":"Permit repository-scoped pulls.",
+		"confidence":"high"
+	}`)}
+	if _, err := Infer(context.Background(), provider, source); err == nil || !strings.Contains(err.Error(), "is required") {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func TestInferProducesSharedIntentWithoutFollowingPRInstructions(t *testing.T) {

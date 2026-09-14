@@ -1,8 +1,13 @@
 package outcomecontext
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestGitHubPullRequestBuildsBoundedAttributedSources(t *testing.T) {
@@ -74,5 +79,84 @@ func TestValidateRejectsDuplicateSources(t *testing.T) {
 	}
 	if err := context.Validate(); err == nil {
 		t.Fatal("expected duplicate source validation error")
+	}
+}
+
+func TestSchemaRejectsValuesRejectedByRuntimeValidation(t *testing.T) {
+	schemaData, err := os.ReadFile(filepath.Join("..", "..", "schema", "adversary.outcome-context.v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document any
+	if err := json.Unmarshal(schemaData, &document); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	const schemaURL = "https://adversarylabs.ai/schemas/adversary.outcome-context.v1.schema.json"
+	if err := compiler.AddResource(schemaURL, document); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := compiler.Compile(schemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	valid := `{
+		"schema_version":"adversary.outcome-context.v1",
+		"subject":{"provider":"github","repository":"acme/app","pull_request":42},
+		"sources":[{"kind":"pull_request_title","text":"Permit pulls"}],
+		"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
+	}`
+	var value any
+	if err := json.Unmarshal([]byte(valid), &value); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiled.Validate(value); err != nil {
+		t.Fatalf("valid fixture rejected: %v", err)
+	}
+
+	invalid := map[string]string{
+		"empty subject": `{
+			"schema_version":"adversary.outcome-context.v1","subject":{},
+			"sources":[{"kind":"pull_request_title","text":"Permit pulls"}],
+			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
+		}`,
+		"subject without pull request": `{
+			"schema_version":"adversary.outcome-context.v1","subject":{"provider":"github","repository":"acme/app"},
+			"sources":[{"kind":"pull_request_title","text":"Permit pulls"}],
+			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
+		}`,
+		"duplicate source kinds": `{
+			"schema_version":"adversary.outcome-context.v1","subject":{"pull_request":42},
+			"sources":[{"kind":"pull_request_title","text":"one"},{"kind":"pull_request_title","text":"two"}],
+			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
+		}`,
+		"whitespace source": `{
+			"schema_version":"adversary.outcome-context.v1","subject":{"pull_request":42},
+			"sources":[{"kind":"pull_request_title","text":"   "}],
+			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
+		}`,
+		"whitespace objective": `{
+			"schema_version":"adversary.outcome-context.v1","subject":{"pull_request":42},
+			"sources":[{"kind":"pull_request_title","text":"Permit pulls"}],
+			"intent":{"objective":"   ","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
+		}`,
+		"whitespace list item": `{
+			"schema_version":"adversary.outcome-context.v1","subject":{"pull_request":42},
+			"sources":[{"kind":"pull_request_title","text":"Permit pulls"}],
+			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":["   "],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
+		}`,
+	}
+	for name, fixture := range invalid {
+		t.Run(name, func(t *testing.T) {
+			var value any
+			if err := json.Unmarshal([]byte(fixture), &value); err != nil {
+				t.Fatal(err)
+			}
+			if err := compiled.Validate(value); err == nil {
+				t.Fatal("schema accepted invalid fixture")
+			}
+		})
 	}
 }
