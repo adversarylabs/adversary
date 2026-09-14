@@ -29,7 +29,10 @@ const (
 	maxSourceBytes           = 240 << 10
 	maxPlanFiles             = 16
 	maxPlanBytes             = 512 << 10
-	maxPlanAttempts          = 6
+	// Leave two attempts beyond the normal synthesis/quality-review cycle so a
+	// semantically accepted plan can still receive compiler or test feedback and
+	// be repaired without starting generation over from scratch.
+	maxPlanAttempts          = 8
 	maxQualityReviewAttempts = 2
 	maxPolicyFiles           = 500
 	maxPolicyBytes           = 1 << 20

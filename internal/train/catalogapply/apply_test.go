@@ -201,7 +201,7 @@ func TestApplyPlannedRetriesQualityReviewWithRejectedPlan(t *testing.T) {
 	planner := func(_ context.Context, request ChangeRequest) (ChangePlan, error) {
 		calls++
 		if calls == 1 {
-			if request.GenerationAttempt != 1 || request.MaxGenerationTurns != 6 || request.MaxQualityTurns != 2 {
+			if request.GenerationAttempt != 1 || request.MaxGenerationTurns != 8 || request.MaxQualityTurns != 2 {
 				t.Fatalf("initial generation attempt metadata=%d/%d", request.GenerationAttempt, request.MaxGenerationTurns)
 			}
 			return ChangePlan{Summary: "Reject brittle initialization in reliability", Strategy: StrategyDeterministic, Files: []ChangeFile{
@@ -216,7 +216,7 @@ func TestApplyPlannedRetriesQualityReviewWithRejectedPlan(t *testing.T) {
 		if !strings.Contains(request.ValidationFeedback, "inspect source structure") {
 			t.Fatalf("quality repair omitted critic feedback: %q", request.ValidationFeedback)
 		}
-		if request.GenerationAttempt != 2 || request.MaxGenerationTurns != 6 || request.MaxQualityTurns != 2 {
+		if request.GenerationAttempt != 2 || request.MaxGenerationTurns != 8 || request.MaxQualityTurns != 2 {
 			t.Fatalf("repair generation attempt metadata=%d/%d", request.GenerationAttempt, request.MaxGenerationTurns)
 		}
 		return managedRulePlan(request, "retry-initialization"), nil
@@ -495,7 +495,7 @@ func TestApplyPlannedRetriesDisconnectedImplementation(t *testing.T) {
 	}
 }
 
-func TestApplyPlannedRetriesPackageValidationFromCleanBaseline(t *testing.T) {
+func TestApplyPlannedReservesLatePackageValidationRepairFromCleanBaseline(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "adversaries", "reliability")
 	for path, content := range map[string]string{
@@ -518,7 +518,7 @@ func TestApplyPlannedRetriesPackageValidationFromCleanBaseline(t *testing.T) {
 	plannerCalls := 0
 	planner := func(_ context.Context, request ChangeRequest) (ChangePlan, error) {
 		plannerCalls++
-		if plannerCalls == 4 {
+		if plannerCalls == 8 {
 			if !strings.Contains(request.ValidationFeedback, "error TS1005") || len(request.PreviousPlanFiles) != 3 || request.PreviousPlan == nil || len(request.PreviousPlan.Files) != 3 {
 				t.Fatalf("compiler feedback was not supplied to repair attempt: %+v", request)
 			}
@@ -531,7 +531,7 @@ func TestApplyPlannedRetriesPackageValidationFromCleanBaseline(t *testing.T) {
 			}
 		}
 		source := "export function createApp() { return { repaired: true }; }\n"
-		if plannerCalls == 3 {
+		if plannerCalls == 7 {
 			source = "export function createApp( { // broken\n"
 		}
 		plan := ChangePlan{Summary: "Reject poisoned initialization in reliability", Files: []ChangeFile{
@@ -539,7 +539,7 @@ func TestApplyPlannedRetriesPackageValidationFromCleanBaseline(t *testing.T) {
 			{Path: "adversaries/reliability/src/index.ts", Content: source},
 			{Path: "adversaries/reliability/test/poisoned-lazy-initialization.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nvoid createApp();\n"},
 		}}
-		if plannerCalls <= 2 {
+		if plannerCalls <= 6 {
 			return plan, fmt.Errorf("generated change deterministic quality review requested revision: correction %d", plannerCalls)
 		}
 		return plan, nil
@@ -565,7 +565,7 @@ func TestApplyPlannedRetriesPackageValidationFromCleanBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plannerCalls != 4 || testRuns != 2 {
+	if plannerCalls != 8 || testRuns != 2 {
 		t.Fatalf("planner calls=%d test runs=%d", plannerCalls, testRuns)
 	}
 	if source, err := os.ReadFile(filepath.Join(dir, "src", "index.ts")); err != nil || !strings.Contains(string(source), "repaired") {
