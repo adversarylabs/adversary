@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://adversarylabs.ai/schemas/adversary.outcome-context.v1.schema.json",
-  "title": "Adversary outcome context v1",
+  "$id": "https://adversary.dev/schemas/adversary.outcome-context.v1.schema.json",
+  "title": "Adversary Outcome Context v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "subject", "sources", "intent"],

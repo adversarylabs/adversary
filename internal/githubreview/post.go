@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"os"
 	"strings"
 
@@ -103,7 +104,7 @@ query($owner:String!,$name:String!,$number:Int!){
 	var threads []map[string]any
 	var bodySections []string
 	if strings.TrimSpace(plan.ReviewBasis) != "" {
-		bodySections = append(bodySections, "**"+strings.TrimSpace(plan.ReviewBasis)+"**")
+		bodySections = append(bodySections, "**"+escapeMarkdownText(strings.TrimSpace(plan.ReviewBasis))+"**")
 	}
 	if strings.TrimSpace(plan.ReviewBody) != "" {
 		bodySections = append(bodySections, strings.TrimSpace(plan.ReviewBody))
@@ -252,6 +253,24 @@ mutation($input:SubmitPullRequestReviewInput!){
 		}
 	}
 	return res, nil
+}
+
+func escapeMarkdownText(value string) string {
+	value = html.EscapeString(value)
+	return strings.NewReplacer(
+		"\\", "\\\\",
+		"`", "\\`",
+		"*", "\\*",
+		"_", "\\_",
+		"{", "\\{",
+		"}", "\\}",
+		"[", "\\[",
+		"]", "\\]",
+		"(", "\\(",
+		")", "\\)",
+		"!", "\\!",
+		"|", "\\|",
+	).Replace(value)
 }
 
 func mapGitHubErr(op string, err error) error {

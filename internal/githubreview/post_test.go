@@ -72,6 +72,51 @@ func TestPostReviewBasisOnly(t *testing.T) {
 	}
 }
 
+func TestPostEscapesReviewBasisMarkdown(t *testing.T) {
+	var addInput map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/files") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		switch {
+		case strings.Contains(payload.Query, "pullRequest(number"):
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"id":"PR_1","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","url":"https://github.com/o/r/pull/1"}}}}`))
+		case strings.Contains(payload.Query, "addPullRequestReview"):
+			addInput, _ = payload.Variables["input"].(map[string]any)
+			_, _ = w.Write([]byte(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"RV_1","url":"https://github.com/o/r/pull/1#pullrequestreview-1","state":"PENDING"}}}}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := githubapi.NewClient("t")
+	client.HTTP = srv.Client()
+	client.RESTBase = srv.URL
+	client.GQLURL = srv.URL + "/"
+	_, err := Post(context.Background(), CommentPlan{
+		ReviewBasis: "Reviewed as: [click](https://evil.example) <img src=x> **trusted**",
+	}, PostOptions{Client: client, Owner: "o", Repo: "r", Number: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := addInput["body"].(string)
+	if strings.Contains(body, "[click](https://evil.example)") || strings.Contains(body, "<img") {
+		t.Fatalf("review body contains active markdown: %q", body)
+	}
+	if !strings.Contains(body, `\[click\]\(https://evil.example\) &lt;img src=x&gt; \*\*trusted\*\*`) {
+		t.Fatalf("review body did not preserve escaped text: %q", body)
+	}
+}
+
 func TestPostCreatesPendingReview(t *testing.T) {
 	var gqlBodies []string
 	var addInput map[string]any

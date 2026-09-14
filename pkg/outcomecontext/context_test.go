@@ -93,7 +93,7 @@ func TestSchemaRejectsValuesRejectedByRuntimeValidation(t *testing.T) {
 	}
 	compiler := jsonschema.NewCompiler()
 	compiler.DefaultDraft(jsonschema.Draft2020)
-	const schemaURL = "https://adversarylabs.ai/schemas/adversary.outcome-context.v1.schema.json"
+	const schemaURL = "https://adversary.dev/schemas/adversary.outcome-context.v1.schema.json"
 	if err := compiler.AddResource(schemaURL, document); err != nil {
 		t.Fatal(err)
 	}
@@ -158,5 +158,30 @@ func TestSchemaRejectsValuesRejectedByRuntimeValidation(t *testing.T) {
 				t.Fatal("schema accepted invalid fixture")
 			}
 		})
+	}
+
+	overlongSource := Context{
+		SchemaVersion: SchemaVersion,
+		Subject:       Subject{PullRequest: 42},
+		Sources:       []Source{{Kind: "pull_request_title", Text: strings.Repeat("x", MaxSourceCharacters+1)}},
+		Intent: Intent{
+			Objective:          "Permit pulls",
+			Confidence:         "high",
+			ExpectedEffects:    []string{},
+			MustPreserve:       []string{},
+			AffectedBoundaries: []string{},
+			Ambiguities:        []string{},
+		},
+	}
+	encoded, err := json.Marshal(overlongSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overlongValue any
+	if err := json.Unmarshal(encoded, &overlongValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiled.Validate(overlongValue); err == nil {
+		t.Fatalf("schema accepted source over %d characters", MaxSourceCharacters)
 	}
 }
