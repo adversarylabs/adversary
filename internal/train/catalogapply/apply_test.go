@@ -862,6 +862,9 @@ func TestInjectHostValidationContractsAddsSyncOnceCasesOnlyToValidationCopy(t *t
 	for _, want := range []string{
 		`const evidencePath = "pkg/store/resolver.go"`,
 		"detects multiline fallible sync.Once initialization with distinct bindings",
+		"ignores Go-shaped text outside Go source files",
+		"rejects callback-local short declarations",
+		"allows an explicit reset after failed initialization",
 		"custom Do receiver despite another sync.Once declaration",
 		"rejects an Err-named non-error binding",
 		"rejects parameter shadowing and selector receivers",
@@ -899,6 +902,9 @@ func TestAttachHostValidationContractExposesExactReadOnlyTestsToPlanner(t *testi
 	attachHostValidationContract(&request)
 	for _, want := range []string{
 		`const evidencePath = "pkg/store/resolver.go"`,
+		"ignores Go-shaped text outside Go source files",
+		"rejects callback-local short declarations",
+		"allows an explicit reset after failed initialization",
 		"rejects parameter shadowing and selector receivers",
 		"reports every matching function in one file",
 	} {

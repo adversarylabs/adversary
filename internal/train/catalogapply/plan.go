@@ -951,9 +951,9 @@ import { createApp } from "../src/index.ts";
 
 const evidencePath = %s;
 
-async function deterministicFindings(content: string) {
+async function deterministicFindings(content: string, path = evidencePath) {
   const root = await mkdtemp(join(tmpdir(), "adversary-host-sync-once-"));
-  const target = join(root, evidencePath);
+  const target = join(root, path);
   await mkdir(dirname(target), { recursive: true });
   await writeFile(target, content);
   const result = await createApp().run({ input: { source: { path: root } }, includeRawObservations: true });
@@ -983,6 +983,60 @@ func runtimeObjectStore() (Store, error) {
 `+"`"+`);
   assert.equal(findings.length, 1, "the evidence-shaped multiline initialization must be reported");
   assert.equal(findings[0]?.evidence[0]?.location?.file, evidencePath);
+});
+
+test("host contract: ignores Go-shaped text outside Go source files", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+func NewStore() (Store, error) { return nil, nil }
+var once sync.Once
+var cached Store
+var cachedErr error
+func get() (Store, error) {
+  once.Do(func() { cached, cachedErr = NewStore() })
+  return cached, cachedErr
+}
+`+"`"+`, "docs/example.md");
+  assert.equal(findings.length, 0, "documentation and other non-Go files are not executable Go source");
+});
+
+test("host contract: rejects callback-local short declarations", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+func NewStore() (Store, error) { return nil, nil }
+var once sync.Once
+var cached Store
+var cachedErr error
+func get() (Store, error) {
+  once.Do(func() {
+    cached, cachedErr := NewStore()
+    _, _ = cached, cachedErr
+  })
+  return cached, cachedErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 0, "short declarations inside the callback do not update package cache state");
+});
+
+test("host contract: allows an explicit reset after failed initialization", async () => {
+  const findings = await deterministicFindings(`+"`"+`package fixture
+import "sync"
+type Store interface{}
+func NewStore() (Store, error) { return nil, nil }
+var once sync.Once
+var cached Store
+var cachedErr error
+func get() (Store, error) {
+  once.Do(func() { cached, cachedErr = NewStore() })
+  if cachedErr != nil {
+    once = sync.Once{}
+  }
+  return cached, cachedErr
+}
+`+"`"+`);
+  assert.equal(findings.length, 0, "resetting the guard after failure makes initialization retryable");
 });
 
 test("host contract: rejects a custom Do receiver despite another sync.Once declaration", async () => {
