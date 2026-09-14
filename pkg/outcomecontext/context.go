@@ -5,12 +5,14 @@ package outcomecontext
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 )
 
 const (
-	SchemaVersion = "adversary.outcome-context.v1"
-	MaxTextBytes  = 64 << 10
+	SchemaVersion           = "adversary.outcome-context.v1"
+	MaxSourceCharacters     = 32 << 10
+	MaxProviderCharacters   = 100
+	MaxRepositoryCharacters = 500
+	MaxIntentTextCharacters = 500
 )
 
 type Context struct {
@@ -43,12 +45,15 @@ type Intent struct {
 // GitHubPullRequest creates context from metadata already fetched to resolve a
 // GitHub review. Empty source text is omitted.
 func GitHubPullRequest(repository string, number int, title, body string) *Context {
+	repository = strings.TrimSpace(repository)
+	if number < 1 || runeLen(repository) > MaxRepositoryCharacters {
+		return nil
+	}
 	sources := make([]Source, 0, 2)
 	if title = normalize(title); title != "" {
 		sources = append(sources, Source{Kind: "pull_request_title", Text: title})
 	}
-	remaining := MaxTextBytes - len(title)
-	if body = normalizeTo(body, remaining); body != "" {
+	if body = normalize(body); body != "" {
 		sources = append(sources, Source{Kind: "pull_request_body", Text: body})
 	}
 	if len(sources) == 0 {
@@ -60,7 +65,7 @@ func GitHubPullRequest(repository string, number int, title, body string) *Conte
 	}
 	return &Context{
 		SchemaVersion: SchemaVersion,
-		Subject:       Subject{Provider: "github", Repository: strings.TrimSpace(repository), PullRequest: number},
+		Subject:       Subject{Provider: "github", Repository: repository, PullRequest: number},
 		Sources:       sources,
 		Intent: Intent{
 			Objective:          normalizeTo(objective, 500),
@@ -77,10 +82,18 @@ func (c Context) Validate() error {
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("outcome context schema_version must be %q", SchemaVersion)
 	}
+	if runeLen(c.Subject.Provider) > MaxProviderCharacters {
+		return fmt.Errorf("outcome context subject provider exceeds %d characters", MaxProviderCharacters)
+	}
+	if runeLen(c.Subject.Repository) > MaxRepositoryCharacters {
+		return fmt.Errorf("outcome context subject repository exceeds %d characters", MaxRepositoryCharacters)
+	}
+	if c.Subject.PullRequest < 1 {
+		return fmt.Errorf("outcome context subject pull_request must be positive")
+	}
 	if len(c.Sources) == 0 || len(c.Sources) > 2 {
 		return fmt.Errorf("outcome context requires between one and two sources")
 	}
-	total := 0
 	seen := map[string]bool{}
 	for i, source := range c.Sources {
 		if source.Kind != "pull_request_title" && source.Kind != "pull_request_body" {
@@ -89,17 +102,19 @@ func (c Context) Validate() error {
 		if strings.TrimSpace(source.Text) == "" {
 			return fmt.Errorf("outcome context source %d text must not be empty", i)
 		}
+		if runeLen(source.Text) > MaxSourceCharacters {
+			return fmt.Errorf("outcome context source %d exceeds %d characters", i, MaxSourceCharacters)
+		}
 		if seen[source.Kind] {
 			return fmt.Errorf("outcome context source kind %q is duplicated", source.Kind)
 		}
 		seen[source.Kind] = true
-		total += len(source.Text)
-	}
-	if total > MaxTextBytes {
-		return fmt.Errorf("outcome context source text exceeds %d bytes", MaxTextBytes)
 	}
 	if strings.TrimSpace(c.Intent.Objective) == "" {
 		return fmt.Errorf("outcome context intent objective must not be empty")
+	}
+	if runeLen(c.Intent.Objective) > MaxIntentTextCharacters {
+		return fmt.Errorf("outcome context intent objective exceeds %d characters", MaxIntentTextCharacters)
 	}
 	if c.Intent.Confidence != "low" && c.Intent.Confidence != "medium" && c.Intent.Confidence != "high" {
 		return fmt.Errorf("outcome context intent confidence %q is invalid", c.Intent.Confidence)
@@ -116,6 +131,9 @@ func (c Context) Validate() error {
 		for _, value := range values {
 			if strings.TrimSpace(value) == "" {
 				return fmt.Errorf("outcome context intent %s contains empty text", name)
+			}
+			if runeLen(value) > MaxIntentTextCharacters {
+				return fmt.Errorf("outcome context intent %s text exceeds %d characters", name, MaxIntentTextCharacters)
 			}
 		}
 	}
@@ -139,7 +157,7 @@ func firstLine(value string) string {
 }
 
 func normalize(value string) string {
-	return normalizeTo(value, MaxTextBytes)
+	return normalizeTo(value, MaxSourceCharacters)
 }
 
 func normalizeTo(value string, maximum int) string {
@@ -147,11 +165,11 @@ func normalizeTo(value string, maximum int) string {
 	if maximum <= 0 {
 		return ""
 	}
-	if len(value) > maximum {
-		value = value[:maximum]
-		for !utf8.ValidString(value) {
-			value = value[:len(value)-1]
-		}
+	runes := []rune(value)
+	if len(runes) > maximum {
+		value = string(runes[:maximum])
 	}
 	return value
 }
+
+func runeLen(value string) int { return len([]rune(value)) }

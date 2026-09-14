@@ -26,7 +26,7 @@
         "required": ["kind", "text"],
         "properties": {
           "kind": { "enum": ["pull_request_title", "pull_request_body"] },
-          "text": { "type": "string", "minLength": 1, "maxLength": 65536 }
+          "text": { "type": "string", "minLength": 1, "maxLength": 32768 }
         }
       }
     },
