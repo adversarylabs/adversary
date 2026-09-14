@@ -143,9 +143,9 @@ func shortSHA(s string) string {
 // detectOutcomeIntent enriches the safe metadata fallback once, before any
 // adversary runs. Failure is deliberately non-fatal: intent is additive and
 // must never disable the existing review system.
-func detectOutcomeIntent(ctx context.Context, app *application.App, opts *runOptions, progress io.Writer) {
+func detectOutcomeIntent(ctx context.Context, app *application.App, opts *runOptions, progress io.Writer) error {
 	if opts.outcomeContext == nil {
-		return
+		return nil
 	}
 	runtime, ok := app.Dependencies().Runtime.(application.ModelReviewRuntime)
 	if ok {
@@ -156,6 +156,8 @@ func detectOutcomeIntent(ctx context.Context, app *application.App, opts *runOpt
 		if err == nil {
 			if intent, inferErr := outcomeinfer.Infer(ctx, provider, opts.outcomeContext); inferErr == nil {
 				opts.outcomeContext.Intent = intent
+			} else if errors.Is(inferErr, context.Canceled) || errors.Is(inferErr, context.DeadlineExceeded) {
+				return inferErr
 			} else if opts.verbose && progress != nil {
 				fmt.Fprintf(progress, "warning: outcome inference failed; using PR metadata: %v\n", inferErr)
 			}
@@ -166,6 +168,7 @@ func detectOutcomeIntent(ctx context.Context, app *application.App, opts *runOpt
 	if progress != nil {
 		fmt.Fprintln(progress, review.SanitizeTerminalInline(outcomecontext.ReviewedAs(opts.outcomeContext)))
 	}
+	return nil
 }
 
 func (o *runOptions) githubRepoOwner() (owner, repo string) {
