@@ -412,6 +412,30 @@ When the accepted evidence specifically concerns Go sync.Once caching a fallible
 
 Implement that sync.Once check with a small Go lexical scanner, not dynamically assembled regular expressions. Tokenize identifiers and punctuation while skipping comments and quoted/raw string contents, and track parentheses and braces so declarations, function parameters, callbacks, assignments, and returns are correlated by token positions and lexical bounds. Regex may prefilter candidate files, but it must not parse declarations or balanced Go regions, and do not use new RegExp with captured identifiers for structural matching. This token approach is required because the positive assignment and constructor call may span lines and because identifier text in unrelated scopes must not affect receiver or error-binding resolution.
 
+The generator-owned acceptance suite executes the following source shape through the production createApp().run path. Treat it as an executable contract, not illustrative prose: the completed rule must return exactly one finding for it. Preserve this exact fixture in a native positive test and trace every matcher predicate against its tokens before returning the plan:
+
+    package fixture
+    import "sync"
+    type Store interface{}
+    type Params struct{}
+    func NewStore(Params) (Store, error) { return nil, nil }
+    var param Params
+    var (
+      objectStoreOnce sync.Once
+      objectStore Store
+      objectStoreErr error
+    )
+    func runtimeObjectStore() (Store, error) {
+      objectStoreOnce.Do(func() {
+        objectStore, objectStoreErr = NewStore(
+            param,
+          )
+      })
+      return objectStore, objectStoreErr
+    }
+
+Do not claim this contract passes merely because a simpler invented fixture passes. In particular, verify that the scanner recognizes a parenthesized package var block, finds the enclosing named function body, balances the multiline Do callback and constructor call, accepts ordinary '=' tuple assignment to two predeclared package bindings, resolves the second binding's declared type as error, and finds the same two identifiers in the later return statement. If any one of those operations is not implemented, repair it before returning files.
+
 For that sync.Once case, prefer this conservative lexical algorithm over inventing a type system: first recognize both single declarations (var once sync.Once) and parenthesized var blocks containing once sync.Once. Match only a bare identifier receiver; if the captured token is immediately preceded by a dot, as in holder.once.Do, it is a selector/field and must be rejected rather than resolved to a package-level declaration with the same spelling. For each enclosing function, inspect the entire function header through its opening body brace—not merely the func prefix or optional method-receiver prefix—and reject a candidate when its parameter list or method receiver declares the receiver name. Also reject a local declaration or short declaration with that name before the .Do call. Then bound the .Do callback, assignment, and later return as described above. The evidence fixture's sync.Once, dependency, and error bindings are package-level entries in a parenthesized var block, so this valid shape must remain detectable. The custom-Do negatives should cover both parameter shadowing and a field selector with the same spelling as a real package-level sync.Once in separately identifiable assertions; neither may match.
 
 Never emit a finding merely because the original evidence path is present or changed, never hard-code an evidence line number, and generalize beyond the original filename unless the accepted policy is intrinsically path-specific. Build the positive fixture from the relevant supplied evidence_diff plus evidence_source_context; do not replace it with an easier invented example. Add at least three production-entry-point cases at the exact same repository-relative path: the evidence-grounded positive; a close allowed case differing only in policy-relevant behavior; and an adversarial decoy that retains the individual trigger tokens or constructs in unrelated regions and must produce no finding. For multi-signal rules, the decoy must fail if the implementation merely searches the whole file for each signal independently. Also exercise one ordinary whitespace, line-break, identifier, or equivalent-source variation when relevant. Put each materially different fixture in its own named native test, or give every finding-count assertion a fixture-specific message, so compiler feedback identifies the exact positive or negative that failed. In tests, assert the finding count before reading findings[0] or its properties so a missing match produces an actionable assertion rather than a TypeError. Do not import or invoke the new rule helper directly from its test. Preserve all existing deterministic registrations in src/deterministic.ts. Do not emit rules/*/rule.yaml or cases.yaml for this strategy. During repair, retain the prior plan and make the smallest coherent correction that satisfies the critic; do not regenerate unrelated files or redesign already-accepted portions.
