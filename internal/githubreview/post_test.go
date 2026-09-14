@@ -20,9 +20,11 @@ func TestPostDryRunNoop(t *testing.T) {
 
 func TestPostReviewBasisOnly(t *testing.T) {
 	var addInput map[string]any
+	filesCalls := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/files") {
+			filesCalls++
 			_, _ = w.Write([]byte(`[]`))
 			return
 		}
@@ -69,6 +71,9 @@ func TestPostReviewBasisOnly(t *testing.T) {
 	}
 	if len(msgs) == 0 || strings.Contains(msgs[0], "nothing to post") {
 		t.Fatalf("progress = %v", msgs)
+	}
+	if filesCalls != 0 {
+		t.Fatalf("basis-only review fetched pull request files %d time(s)", filesCalls)
 	}
 }
 

@@ -93,12 +93,14 @@ query($owner:String!,$name:String!,$number:Int!){
 		return &PostResult{Resolved: resolved}, nil
 	}
 
-	// Fetch patches and place.
-	files, err := opts.Client.ListPullRequestFiles(ctx, opts.Owner, opts.Repo, opts.Number)
-	if err != nil {
-		return nil, mapGitHubErr("list pull request files", err)
+	// Body-only reviews do not need changed-file placement.
+	if len(plan.Comments) > 0 {
+		files, err := opts.Client.ListPullRequestFiles(ctx, opts.Owner, opts.Repo, opts.Number)
+		if err != nil {
+			return nil, mapGitHubErr("list pull request files", err)
+		}
+		ApplyPlacement(&plan, files, headOID)
 	}
-	ApplyPlacement(&plan, files, headOID)
 
 	// Cap inline threads.
 	var threads []map[string]any
