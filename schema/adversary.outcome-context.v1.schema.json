@@ -4,7 +4,7 @@
   "title": "Adversary outcome context v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "subject", "sources"],
+  "required": ["schema_version", "subject", "sources", "intent"],
   "properties": {
     "schema_version": { "const": "adversary.outcome-context.v1" },
     "subject": {
@@ -29,6 +29,33 @@
           "text": { "type": "string", "minLength": 1, "maxLength": 65536 }
         }
       }
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objective",
+        "confidence",
+        "expected_effects",
+        "must_preserve",
+        "affected_boundaries",
+        "ambiguities"
+      ],
+      "properties": {
+        "objective": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "confidence": { "enum": ["low", "medium", "high"] },
+        "expected_effects": { "$ref": "#/$defs/stringList" },
+        "must_preserve": { "$ref": "#/$defs/stringList" },
+        "affected_boundaries": { "$ref": "#/$defs/stringList" },
+        "ambiguities": { "$ref": "#/$defs/stringList" }
+      }
+    }
+  },
+  "$defs": {
+    "stringList": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
     }
   }
 }

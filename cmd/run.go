@@ -272,6 +272,7 @@ review base/head and optional posting context. Posting still requires
 			if err := resolvePRRunContext(cmd.Context(), opts, progressOut); err != nil {
 				return err
 			}
+			detectOutcomeIntent(cmd.Context(), app, opts, progressOut)
 			loadGitHubReviewFeedback(cmd.Context(), app, opts, valueOf(apiURL), valueOf(profile), progressOut)
 			// Register cleanup only after resolve may set tempPRDir / worktree root.
 			if opts.tempPRDir != "" || (opts.worktreeRoot != "" && opts.githubPR > 0) {

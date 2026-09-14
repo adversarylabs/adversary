@@ -17,6 +17,7 @@ type Context struct {
 	SchemaVersion string   `json:"schema_version"`
 	Subject       Subject  `json:"subject"`
 	Sources       []Source `json:"sources"`
+	Intent        Intent   `json:"intent"`
 }
 
 type Subject struct {
@@ -28,6 +29,15 @@ type Subject struct {
 type Source struct {
 	Kind string `json:"kind"`
 	Text string `json:"text"`
+}
+
+type Intent struct {
+	Objective          string   `json:"objective"`
+	Confidence         string   `json:"confidence"`
+	ExpectedEffects    []string `json:"expected_effects"`
+	MustPreserve       []string `json:"must_preserve"`
+	AffectedBoundaries []string `json:"affected_boundaries"`
+	Ambiguities        []string `json:"ambiguities"`
 }
 
 // GitHubPullRequest creates context from metadata already fetched to resolve a
@@ -44,10 +54,22 @@ func GitHubPullRequest(repository string, number int, title, body string) *Conte
 	if len(sources) == 0 {
 		return nil
 	}
+	objective := title
+	if objective == "" {
+		objective = firstLine(body)
+	}
 	return &Context{
 		SchemaVersion: SchemaVersion,
 		Subject:       Subject{Provider: "github", Repository: strings.TrimSpace(repository), PullRequest: number},
 		Sources:       sources,
+		Intent: Intent{
+			Objective:          normalizeTo(objective, 500),
+			Confidence:         "low",
+			ExpectedEffects:    []string{},
+			MustPreserve:       []string{},
+			AffectedBoundaries: []string{},
+			Ambiguities:        []string{"Intent has not been model-inferred; objective is derived from PR metadata."},
+		},
 	}
 }
 
@@ -76,7 +98,44 @@ func (c Context) Validate() error {
 	if total > MaxTextBytes {
 		return fmt.Errorf("outcome context source text exceeds %d bytes", MaxTextBytes)
 	}
+	if strings.TrimSpace(c.Intent.Objective) == "" {
+		return fmt.Errorf("outcome context intent objective must not be empty")
+	}
+	if c.Intent.Confidence != "low" && c.Intent.Confidence != "medium" && c.Intent.Confidence != "high" {
+		return fmt.Errorf("outcome context intent confidence %q is invalid", c.Intent.Confidence)
+	}
+	for name, values := range map[string][]string{
+		"expected_effects":    c.Intent.ExpectedEffects,
+		"must_preserve":       c.Intent.MustPreserve,
+		"affected_boundaries": c.Intent.AffectedBoundaries,
+		"ambiguities":         c.Intent.Ambiguities,
+	} {
+		if len(values) > 12 {
+			return fmt.Errorf("outcome context intent %s exceeds 12 items", name)
+		}
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("outcome context intent %s contains empty text", name)
+			}
+		}
+	}
 	return nil
+}
+
+func ReviewedAs(c *Context) string {
+	if c == nil || strings.TrimSpace(c.Intent.Objective) == "" {
+		return ""
+	}
+	return "Reviewed as: " + strings.Join(strings.Fields(c.Intent.Objective), " ")
+}
+
+func firstLine(value string) string {
+	for _, line := range strings.Split(value, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func normalize(value string) string {

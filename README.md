@@ -255,10 +255,11 @@ adversary run review/code --model codex/gpt-5.6-luna
 adversary run review/code --model-provider codex --model gpt-5.6-luna
 ```
 
-GitHub review runs automatically pass the pull request title and body to compatible
-adversaries as bounded, source-attributed outcome context. PR prose is untrusted
-input, not instructions. Local runs without GitHub metadata continue normally and
-receive no inferred outcome context.
+GitHub review runs infer one structured intent from the pull request title and body,
+then pass that bounded, source-attributed outcome context to every adversary. If
+inference is unavailable, the title is used as a low-confidence fallback and the
+existing review still runs. PR prose is untrusted input, not instructions. Local
+runs without GitHub metadata continue normally and receive no inferred intent.
 
 The `codex/` prefix selects Codex before API-key inference. An explicitly
 configured different provider conflicts with this prefix. The model ID must be

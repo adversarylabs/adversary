@@ -14,6 +14,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/githubreview"
 	"github.com/adversarylabs/adversary/internal/modelreview"
+	"github.com/adversarylabs/adversary/internal/outcomeinfer"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/review"
@@ -139,6 +140,34 @@ func shortSHA(s string) string {
 	return s
 }
 
+// detectOutcomeIntent enriches the safe metadata fallback once, before any
+// adversary runs. Failure is deliberately non-fatal: intent is additive and
+// must never disable the existing review system.
+func detectOutcomeIntent(ctx context.Context, app *application.App, opts *runOptions, progress io.Writer) {
+	if opts.outcomeContext == nil {
+		return
+	}
+	runtime, ok := app.Dependencies().Runtime.(application.ModelReviewRuntime)
+	if ok {
+		provider, err := runtime.ModelReviewProvider(application.ModelReviewConfig{
+			Provider: opts.modelProvider,
+			Model:    opts.model,
+		})
+		if err == nil {
+			if intent, inferErr := outcomeinfer.Infer(ctx, provider, opts.outcomeContext); inferErr == nil {
+				opts.outcomeContext.Intent = intent
+			} else if opts.verbose && progress != nil {
+				fmt.Fprintf(progress, "warning: outcome inference failed; using PR metadata: %v\n", inferErr)
+			}
+		} else if opts.verbose && progress != nil {
+			fmt.Fprintf(progress, "warning: outcome inference unavailable; using PR metadata: %v\n", err)
+		}
+	}
+	if progress != nil {
+		fmt.Fprintln(progress, outcomecontext.ReviewedAs(opts.outcomeContext))
+	}
+}
+
 func (o *runOptions) githubRepoOwner() (owner, repo string) {
 	parts := strings.SplitN(strings.TrimSpace(o.githubRepo), "/", 2)
 	if len(parts) != 2 {
@@ -189,6 +218,11 @@ func maybeGitHubReview(ctx context.Context, app *application.App, opts *runOptio
 		Voice:       voiceInfo,
 		OmitSummary: !opts.githubIncludeSummary,
 	})
+	// The host-detected intent applies to every adversary, including private or
+	// catalog packages that do not emit a review_basis observation themselves.
+	if basis := outcomecontext.ReviewedAs(opts.outcomeContext); basis != "" {
+		plan.ReviewBasis = basis
+	}
 
 	// Default voice rewrite: try model provider; template remains on failure/missing creds.
 	// BuildRewritePrompt (inside EnhanceBodies) wraps agent/voice.md so Example maintainer

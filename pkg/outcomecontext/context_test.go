@@ -16,6 +16,9 @@ func TestGitHubPullRequestBuildsBoundedAttributedSources(t *testing.T) {
 	if len(context.Sources) != 2 || context.Sources[0].Text != "Add delegated trust" {
 		t.Fatalf("sources = %#v", context.Sources)
 	}
+	if context.Intent.Objective != "Add delegated trust" || context.Intent.Confidence != "low" {
+		t.Fatalf("intent = %#v", context.Intent)
+	}
 	if err := context.Validate(); err != nil {
 		t.Fatal(err)
 	}

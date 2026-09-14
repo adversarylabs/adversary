@@ -400,7 +400,7 @@ func TestRunInjectsOutcomeContextAsSeparateProtocolFile(t *testing.T) {
 	if err := (Runner{Stdout: &strings.Builder{}, Stderr: &strings.Builder{}, Executor: executor}).Run(context.Background(), RunOptions{AdversaryRef: adversaryDir, RepoPath: t.TempDir(), OutcomeContext: outcome}); err != nil {
 		t.Fatal(err)
 	}
-	if executor.outcome.SchemaVersion != outcomecontext.SchemaVersion || len(executor.outcome.Sources) != 2 {
+	if executor.outcome.SchemaVersion != outcomecontext.SchemaVersion || len(executor.outcome.Sources) != 2 || executor.outcome.Intent.Objective != "Add delegated trust" {
 		t.Fatalf("outcome context = %#v", executor.outcome)
 	}
 }
