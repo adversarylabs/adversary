@@ -10,10 +10,10 @@
     "subject": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pull_request"],
+      "required": ["repository", "pull_request"],
       "properties": {
         "provider": { "type": "string", "maxLength": 100 },
-        "repository": { "type": "string", "maxLength": 500 },
+        "repository": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" },
         "pull_request": { "type": "integer", "minimum": 1 }
       }
     },

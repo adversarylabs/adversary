@@ -43,6 +43,14 @@ func TestGitHubPullRequestRejectsOverlongRepository(t *testing.T) {
 	}
 }
 
+func TestGitHubPullRequestRejectsEmptyRepository(t *testing.T) {
+	for _, repository := range []string{"", " \t\n"} {
+		if got := GitHubPullRequest(repository, 1, "title", "body"); got != nil {
+			t.Fatalf("repository %q produced context %#v", repository, got)
+		}
+	}
+}
+
 func TestValidateMatchesSubjectAndUnicodeSchemaLimits(t *testing.T) {
 	valid := GitHubPullRequest(strings.Repeat("r", MaxRepositoryCharacters), 1, strings.Repeat("🙂", MaxSourceCharacters), "body")
 	if valid == nil || valid.Validate() != nil {
@@ -127,23 +135,33 @@ func TestSchemaRejectsValuesRejectedByRuntimeValidation(t *testing.T) {
 			"sources":[{"kind":"pull_request_title","text":"Permit pulls"}],
 			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
 		}`,
-		"duplicate source kinds": `{
+		"subject without repository": `{
 			"schema_version":"adversary.outcome-context.v1","subject":{"pull_request":42},
+			"sources":[{"kind":"pull_request_title","text":"Permit pulls"}],
+			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
+		}`,
+		"whitespace repository": `{
+			"schema_version":"adversary.outcome-context.v1","subject":{"repository":"   ","pull_request":42},
+			"sources":[{"kind":"pull_request_title","text":"Permit pulls"}],
+			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
+		}`,
+		"duplicate source kinds": `{
+			"schema_version":"adversary.outcome-context.v1","subject":{"repository":"acme/app","pull_request":42},
 			"sources":[{"kind":"pull_request_title","text":"one"},{"kind":"pull_request_title","text":"two"}],
 			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
 		}`,
 		"whitespace source": `{
-			"schema_version":"adversary.outcome-context.v1","subject":{"pull_request":42},
+			"schema_version":"adversary.outcome-context.v1","subject":{"repository":"acme/app","pull_request":42},
 			"sources":[{"kind":"pull_request_title","text":"   "}],
 			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
 		}`,
 		"whitespace objective": `{
-			"schema_version":"adversary.outcome-context.v1","subject":{"pull_request":42},
+			"schema_version":"adversary.outcome-context.v1","subject":{"repository":"acme/app","pull_request":42},
 			"sources":[{"kind":"pull_request_title","text":"Permit pulls"}],
 			"intent":{"objective":"   ","confidence":"high","expected_effects":[],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
 		}`,
 		"whitespace list item": `{
-			"schema_version":"adversary.outcome-context.v1","subject":{"pull_request":42},
+			"schema_version":"adversary.outcome-context.v1","subject":{"repository":"acme/app","pull_request":42},
 			"sources":[{"kind":"pull_request_title","text":"Permit pulls"}],
 			"intent":{"objective":"Permit pulls","confidence":"high","expected_effects":["   "],"must_preserve":[],"affected_boundaries":[],"ambiguities":[]}
 		}`,
@@ -162,7 +180,7 @@ func TestSchemaRejectsValuesRejectedByRuntimeValidation(t *testing.T) {
 
 	overlongSource := Context{
 		SchemaVersion: SchemaVersion,
-		Subject:       Subject{PullRequest: 42},
+		Subject:       Subject{Repository: "acme/app", PullRequest: 42},
 		Sources:       []Source{{Kind: "pull_request_title", Text: strings.Repeat("x", MaxSourceCharacters+1)}},
 		Intent: Intent{
 			Objective:          "Permit pulls",

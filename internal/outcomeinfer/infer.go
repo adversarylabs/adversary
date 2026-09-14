@@ -4,6 +4,7 @@ package outcomeinfer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/adversarylabs/adversary/internal/application"
@@ -43,6 +44,12 @@ func Infer(ctx context.Context, provider application.ModelReviewProvider, source
 		Prompt: prompt, Input: input, Schema: schema, MaximumOutputTokens: 2048, TimeoutMS: 120000,
 	})
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return outcomecontext.Intent{}, ctxErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return outcomecontext.Intent{}, err
+		}
 		return outcomecontext.Intent{}, fmt.Errorf("infer outcome: %w", err)
 	}
 	var intent outcomecontext.Intent

@@ -46,7 +46,7 @@ type Intent struct {
 // GitHub review. Empty source text is omitted.
 func GitHubPullRequest(repository string, number int, title, body string) *Context {
 	repository = strings.TrimSpace(repository)
-	if number < 1 || runeLen(repository) > MaxRepositoryCharacters {
+	if repository == "" || number < 1 || runeLen(repository) > MaxRepositoryCharacters {
 		return nil
 	}
 	sources := make([]Source, 0, 2)
@@ -84,6 +84,9 @@ func (c Context) Validate() error {
 	}
 	if runeLen(c.Subject.Provider) > MaxProviderCharacters {
 		return fmt.Errorf("outcome context subject provider exceeds %d characters", MaxProviderCharacters)
+	}
+	if strings.TrimSpace(c.Subject.Repository) == "" {
+		return fmt.Errorf("outcome context subject repository must not be empty")
 	}
 	if runeLen(c.Subject.Repository) > MaxRepositoryCharacters {
 		return fmt.Errorf("outcome context subject repository exceeds %d characters", MaxRepositoryCharacters)

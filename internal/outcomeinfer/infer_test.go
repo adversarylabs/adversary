@@ -3,6 +3,7 @@ package outcomeinfer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -13,12 +14,16 @@ import (
 type fakeProvider struct {
 	request  application.ModelReviewRequest
 	response json.RawMessage
+	err      error
 }
 
 func (f *fakeProvider) Name() string  { return "fake" }
 func (f *fakeProvider) Model() string { return "intent" }
 func (f *fakeProvider) Review(_ context.Context, request application.ModelReviewRequest) (json.RawMessage, error) {
 	f.request = request
+	if f.err != nil {
+		return nil, f.err
+	}
 	if f.response != nil {
 		return f.response, nil
 	}
@@ -30,6 +35,24 @@ func (f *fakeProvider) Review(_ context.Context, request application.ModelReview
 		"affected_boundaries":["registry authorization"],
 		"ambiguities":[]
 	}`), nil
+}
+
+func TestInferPreservesContextCancellation(t *testing.T) {
+	source := outcomecontext.GitHubPullRequest("acme/app", 42, "Permit pulls", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := Infer(ctx, &fakeProvider{err: errors.New("provider stopped")}, source)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestInferPreservesProviderDeadline(t *testing.T) {
+	source := outcomecontext.GitHubPullRequest("acme/app", 42, "Permit pulls", "")
+	_, err := Infer(context.Background(), &fakeProvider{err: context.DeadlineExceeded}, source)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context.DeadlineExceeded", err)
+	}
 }
 
 func TestInferRejectsMissingRequiredArrays(t *testing.T) {
