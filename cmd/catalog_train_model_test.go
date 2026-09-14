@@ -345,7 +345,7 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 		t.Fatalf("model calls=%d want generation and two critics", len(provider.requests))
 	}
 	prompt := provider.requests[0].Prompt
-	for _, want := range []string{"VALIDATION REPAIR MODE", "first guard, extraction, or predicate", "Do not weaken the assertion", "remove invented SDK options", "balanced-brace scanning", "shadowing parameter", "holder.once.Do"} {
+	for _, want := range []string{"VALIDATION REPAIR MODE", "first guard, extraction, or predicate", "Do not weaken the assertion", "remove invented SDK options", "balanced-brace scanning", "shadowing parameter", "holder.once.Do", "small Go lexical scanner", "must not parse declarations"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("repair prompt omitted %q:\n%s", want, prompt)
 		}
