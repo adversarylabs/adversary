@@ -474,6 +474,7 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	deterministicExtension := false
 	deterministicReadsSources := false
 	deterministicUsesSemanticQuery := false
+	deterministicDefinesSemanticQuery := false
 	deterministicHardcodesEvidencePath := false
 	deterministicHardcodesEvidenceLine := false
 	deterministicTestProvidesSource := false
@@ -523,6 +524,7 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			if changed && strings.HasPrefix(relInAdversary, "src/rules/") {
 				deterministicReadsSources = deterministicReadsSources || strings.Contains(file.Content, "loadInScopeSources(")
 				deterministicUsesSemanticQuery = deterministicUsesSemanticQuery || strings.Contains(file.Content, ".semanticMatches(")
+				deterministicDefinesSemanticQuery = deterministicDefinesSemanticQuery || strings.Contains(file.Content, "defineSemanticQuery(")
 				deterministicHardcodesEvidencePath = deterministicHardcodesEvidencePath || strings.TrimSpace(request.EvidenceFile) != "" && strings.Contains(file.Content, request.EvidenceFile)
 				deterministicHardcodesEvidenceLine = deterministicHardcodesEvidenceLine || literalFindingLine.MatchString(file.Content)
 			}
@@ -605,6 +607,9 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	}
 	if semanticQueryRequired && !deterministicUsesSemanticQuery {
 		return "", fmt.Errorf("generated deterministic Go rule did not use ctx.repoGraph.semanticMatches")
+	}
+	if semanticQueryRequired && !deterministicDefinesSemanticQuery {
+		return "", fmt.Errorf("generated deterministic Go rule did not validate its capture contract with defineSemanticQuery")
 	}
 	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && deterministicHardcodesEvidencePath && !deterministicReadsSources && !deterministicUsesSemanticQuery {
 		return "", fmt.Errorf("generated deterministic rule is an evidence-path tripwire; inspect repository facts before emitting a finding")
