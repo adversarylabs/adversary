@@ -170,7 +170,7 @@ func (state *v2BuildState) insertGoSemanticFunction(statement *sql.Stmt, record 
 	})
 	for _, call := range calls {
 		position, end := fset.Position(call.Pos()), fset.Position(call.End())
-		op := semanticOperation{Kind: "call", Line: position.Line, Column: position.Column, EndLine: end.Line, EndColumn: end.Column, pos: call.Pos(), end: call.End()}
+		op := semanticOperation{Kind: "call", Line: position.Line, Column: position.Column, EndLine: end.Line, EndColumn: end.Column, Ancestors: []int{}, pos: call.Pos(), end: call.End()}
 		switch callee := call.Fun.(type) {
 		case *ast.Ident:
 			op.Name = callee.Name
@@ -187,7 +187,7 @@ func (state *v2BuildState) insertGoSemanticFunction(statement *sql.Stmt, record 
 		switch typed := node.(type) {
 		case *ast.AssignStmt:
 			position, end := fset.Position(typed.Pos()), fset.Position(typed.End())
-			op := semanticOperation{Kind: "assignment", Line: position.Line, Column: position.Column, EndLine: end.Line, EndColumn: end.Column, Operator: typed.Tok.String(), SourceKind: "expression", pos: typed.Pos(), end: typed.End()}
+			op := semanticOperation{Kind: "assignment", Line: position.Line, Column: position.Column, EndLine: end.Line, EndColumn: end.Column, Ancestors: []int{}, Operator: typed.Tok.String(), SourceKind: "expression", pos: typed.Pos(), end: typed.End()}
 			if len(typed.Rhs) == 1 {
 				if source, ok := typed.Rhs[0].(*ast.CallExpr); ok {
 					op.SourceKind = "call"
@@ -206,7 +206,7 @@ func (state *v2BuildState) insertGoSemanticFunction(statement *sql.Stmt, record 
 			operations = append(operations, op)
 		case *ast.ReturnStmt:
 			position, end := fset.Position(typed.Pos()), fset.Position(typed.End())
-			op := semanticOperation{Kind: "return", Line: position.Line, Column: position.Column, EndLine: end.Line, EndColumn: end.Column, pos: typed.Pos(), end: typed.End()}
+			op := semanticOperation{Kind: "return", Line: position.Line, Column: position.Column, EndLine: end.Line, EndColumn: end.Column, Ancestors: []int{}, pos: typed.Pos(), end: typed.End()}
 			ast.Inspect(typed, func(child ast.Node) bool {
 				if identifier, ok := child.(*ast.Ident); ok {
 					if id := addBinding(info.Uses[identifier]); id != "" {
@@ -218,7 +218,7 @@ func (state *v2BuildState) insertGoSemanticFunction(statement *sql.Stmt, record 
 			operations = append(operations, op)
 		case *ast.IfStmt:
 			position, end := fset.Position(typed.Cond.Pos()), fset.Position(typed.Cond.End())
-			op := semanticOperation{Kind: "condition", Line: position.Line, Column: position.Column, EndLine: end.Line, EndColumn: end.Column, pos: typed.Cond.Pos(), end: typed.Cond.End()}
+			op := semanticOperation{Kind: "condition", Line: position.Line, Column: position.Column, EndLine: end.Line, EndColumn: end.Column, Ancestors: []int{}, pos: typed.Cond.Pos(), end: typed.Cond.End()}
 			ast.Inspect(typed.Cond, func(child ast.Node) bool {
 				if identifier, ok := child.(*ast.Ident); ok {
 					if id := addBinding(info.Uses[identifier]); id != "" {

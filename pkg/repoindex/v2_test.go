@@ -77,6 +77,9 @@ func shadow(once fakeOnce) (Store, error) {
 	if guard.ReceiverType != "sync.Once" {
 		t.Fatalf("guard=%#v", guard)
 	}
+	if guard.Ancestors == nil {
+		t.Fatalf("top-level operation ancestors must encode as an empty array: %#v", guard)
+	}
 	if assignment.SourceKind != "call" || assignment.SourceOperation != constructor.ID || len(assignment.Ancestors) == 0 || assignment.Ancestors[0] != guard.ID {
 		t.Fatalf("assignment=%#v guard=%#v constructor=%#v", assignment, guard, constructor)
 	}
