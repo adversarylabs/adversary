@@ -442,6 +442,11 @@ QUALITY REPAIR MODE: Treat latest_validation_feedback as the active review and o
 
 Translate the review into executable changes. When it says predicates are not structurally associated, use the documented within, outside, after, source, sourceKind, targets, and references relationships to correlate the same captured identifiers through assignment and return. Every assignment step containing source MUST also contain sourceKind: "call"; fix the implementation file immediately if it does not. When it says a decoy is absent or wrongly expected, preserve the adversary test boundary: assert the corrected query contract and use empty supplied results for the no-finding mapping case rather than implementing matcher logic locally. Do not alter a valid evidence-grounded positive to make matching easier. Before returning, compare each sentence of latest_validation_feedback with the corrected implementation and native tests and ensure none remains merely discussed rather than fixed.`
 			}
+			if repairingPlan && request.RepairStage == "plan_validation" {
+				prompt += `
+
+PLAN REPAIR MODE: Apply latest_validation_feedback as a concrete edit to previous_generated_plan and return the complete corrected plan. If validation says a deterministic native test bypasses rule registration, remove every import from src/rules/ in that test. Import createApp only from src/index, invoke createApp().run with the required fixture input and RepoGraph double, and assert the literal expected query against the query recorded by semanticMatches. Do not import a query constant or helper from the implementation, and do not compare the recorded query with an implementation-owned value.`
+			}
 		}
 		if request.Progress != nil {
 			detail := "Writing a scoped rule bundle from the accepted evidence"

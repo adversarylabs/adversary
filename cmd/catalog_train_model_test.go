@@ -383,6 +383,30 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 	}
 }
 
+func TestCatalogChangePlannerMakesRegistrationBypassRepairExplicit(t *testing.T) {
+	provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{
+		json.RawMessage(`{"summary":"Prevent poisoned initialization in reliability","files":[{"path":"adversaries/reliability/README.md","content":"# Reliability\n"},{"path":"adversaries/reliability/src/deterministic.ts","content":"export function registerDeterministicRules() {}\n"},{"path":"adversaries/reliability/src/rules/lazy.ts","content":"export async function review(ctx) { void ctx; }\n"},{"path":"adversaries/reliability/test/lazy.test.ts","content":"import { createApp } from '../src/index.ts'; void createApp().run({ input: { source: { path: fixtureDirectory } }, repoGraph });\n"}]}`),
+		json.RawMessage(`{"disposition":"accept","reason":"The deterministic rule is appropriately scoped."}`),
+		json.RawMessage(`{"disposition":"accept","reason":"The red-team pass found no material counterexample."}`),
+	}}
+	planner := catalogChangePlanner(&catalogModelRuntimeStub{provider: provider}, "camel", "auto")
+	previous := catalogapply.ChangePlan{Strategy: catalogapply.StrategyDeterministic, Files: []catalogapply.ChangeFile{{Path: "adversaries/reliability/test/lazy.test.ts", Content: "import { query } from '../src/rules/lazy.ts';\n"}}}
+	_, err := planner(context.Background(), catalogapply.ChangeRequest{
+		Adversary: "reliability", ManagedRuntime: 1, ExistingAdversary: true,
+		RepairStage: "plan_validation", ValidationFeedback: "bypasses rule registration", LatestFeedback: "bypasses rule registration",
+		PreviousPlan: &previous, PreviousPlanFiles: []string{"adversaries/reliability/test/lazy.test.ts"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := provider.requests[0].Prompt
+	for _, want := range []string{"PLAN REPAIR MODE", "remove every import from src/rules/", "Import createApp only from src/index", "literal expected query", "Do not import a query constant"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("plan repair prompt omitted %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestNormalizeCatalogSummaryAddsMissingAdversary(t *testing.T) {
 	got := normalizeCatalogSummary("Prevent poisoned one-shot initialization", "reliability-and-concurrency", 120)
 	want := "Prevent poisoned one-shot initialization in reliability-and-concurrency"
