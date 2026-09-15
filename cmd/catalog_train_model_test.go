@@ -346,7 +346,7 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 		t.Fatalf("model calls=%d want generation and two critics", len(provider.requests))
 	}
 	prompt := provider.requests[0].Prompt
-	for _, want := range []string{"VALIDATION REPAIR MODE", "Do not weaken the assertion", "remove invented SDK options", "registered rule dispatch", "review-scope filtering", "semanticMatches-based design", "without interpreting the query"} {
+	for _, want := range []string{"VALIDATION REPAIR MODE", "Do not weaken the assertion", "remove invented SDK options", "registered rule dispatch", "review-scope filtering", "semanticMatches-based design", "without interpreting the query", "repair the stale test assertion"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("repair prompt omitted %q:\n%s", want, prompt)
 		}
