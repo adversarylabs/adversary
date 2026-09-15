@@ -431,13 +431,16 @@ If a positive test reports no finding, preserve its evidence-grounded SemanticMa
 Before returning files, mentally execute the generated native cases through createApp().run, registered rule dispatch, review-scope filtering, and finding emission. Confirm each exact finding-count assertion. For compiler errors, use only APIs and option fields already demonstrated by the existing package source; remove invented SDK options rather than guessing replacements. Preserve a semanticMatches-based design during repair; do not replace it with source parsing.
 
 If validation shows the recorded query's actual value uses the documented SDK shape but the test expected a different shape, repair the stale test assertion. within and after are capture-name strings. references is either one capture-name string or a non-empty array requiring the same operation to reference every named binding; use the array only when joint observation is part of the rule's finding condition.`
+			prompt += `
+
+If validation reports that .source requires sourceKind "call", edit the generated rule implementation—not only its test—and add sourceKind: "call" to that exact assignment step beside source. Preserve the captured source relationship and return the complete corrected rule file. Never repeat a plan containing source without sourceKind: "call".`
 			}
 			if repairingPlan && request.RepairStage == "plan_review" {
 				prompt += `
 
 QUALITY REPAIR MODE: Treat latest_validation_feedback as the active review and older validation_feedback only as constraints already learned. Preserve previous_generated_plan byte-for-byte except for the smallest files and regions needed to resolve every concrete defect in the latest review. Do not restart the design.
 
-Translate the review into executable changes. When it says predicates are not structurally associated, use the documented within, outside, after, source, targets, and references relationships to correlate the same captured identifiers through assignment and return. When it says a decoy is absent or wrongly expected, preserve the adversary test boundary: assert the corrected query contract and use empty supplied results for the no-finding mapping case rather than implementing matcher logic locally. Do not alter a valid evidence-grounded positive to make matching easier. Before returning, compare each sentence of latest_validation_feedback with the corrected implementation and native tests and ensure none remains merely discussed rather than fixed.`
+Translate the review into executable changes. When it says predicates are not structurally associated, use the documented within, outside, after, source, sourceKind, targets, and references relationships to correlate the same captured identifiers through assignment and return. Every assignment step containing source MUST also contain sourceKind: "call"; fix the implementation file immediately if it does not. When it says a decoy is absent or wrongly expected, preserve the adversary test boundary: assert the corrected query contract and use empty supplied results for the no-finding mapping case rather than implementing matcher logic locally. Do not alter a valid evidence-grounded positive to make matching easier. Before returning, compare each sentence of latest_validation_feedback with the corrected implementation and native tests and ensure none remains merely discussed rather than fixed.`
 			}
 		}
 		if request.Progress != nil {
