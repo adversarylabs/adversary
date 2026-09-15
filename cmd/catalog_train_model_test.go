@@ -444,7 +444,7 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 		t.Fatalf("model calls=%d want generation and two critics", len(provider.requests))
 	}
 	prompt := provider.requests[0].Prompt
-	for _, want := range []string{"VALIDATION REPAIR MODE", "Do not weaken the assertion", "remove invented SDK options", "registered rule dispatch", "review-scope filtering", "semanticMatches-based design", "without interpreting the query", "repair the stale test assertion", "fixtureDirectory contains a real file", "non-empty array requiring the same operation", "joint observation", "exact direct right-hand-side call", `trait: "error"`, "concrete error implementations", `outside: "guardCapture"`, "after alone", `sourceKind: "call"`, "edit the generated rule implementation", `NEVER put "Do" in name`} {
+	for _, want := range []string{"VALIDATION REPAIR MODE", "Do not weaken the assertion", "remove invented SDK options", "registered rule dispatch", "review-scope filtering", "semanticMatches-based design", "without interpreting the query", "repair the stale test assertion", "fixtureDirectory contains a real file", "non-empty array requiring the same operation", "joint observation", "exact direct right-hand-side call", `trait: "error"`, "concrete error implementations", `outside: "guardCapture"`, "after alone", `sourceKind: "call"`, "edit the generated rule implementation", `NEVER put "Do" in name`, "ONE assignment step", "exact target arity", "Never split a tuple"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("repair prompt omitted %q:\n%s", want, prompt)
 		}
@@ -452,7 +452,7 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 	if !strings.Contains(string(provider.requests[0].Input), `"latest_validation_feedback":"expected a lazy-initialization finding"`) {
 		t.Fatalf("repair input omitted latest failure: %s", provider.requests[0].Input)
 	}
-	for _, want := range []string{"exact reviewed file revision", "authoritative for source facts", "scan it through its final numbered line", "never stop at the last line of evidence_diff", "absent from both evidence_diff and evidence_source_context", `within: "guard"`, `outside: "guard"`, "named factory call", "operative README", "synthetic line numbers", "acceptance criteria are exhaustive", "receiverType is present"} {
+	for _, want := range []string{"exact reviewed file revision", "authoritative for source facts", "scan it through its final numbered line", "never stop at the last line of evidence_diff", "absent from both evidence_diff and evidence_source_context", `within: "guard"`, `outside: "guard"`, "named factory call", "operative README", "synthetic line numbers", "acceptance criteria are exhaustive", "receiverType is present", "one assignment step", "exact target arity", "Reject two assignment steps"} {
 		if !strings.Contains(provider.requests[1].Prompt, want) {
 			t.Fatalf("quality prompt omitted %q:\n%s", want, provider.requests[1].Prompt)
 		}
