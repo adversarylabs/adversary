@@ -364,7 +364,7 @@ func TestNormalizeCatalogSummaryAddsMissingAdversary(t *testing.T) {
 	}
 }
 
-func TestCatalogChangePlannerTreatsFinalCriticRevisionAsAdvisory(t *testing.T) {
+func TestCatalogChangePlannerKeepsFinalCriticRevisionBlocking(t *testing.T) {
 	provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{
 		json.RawMessage(`{"summary":"Prevent poisoned initialization in reliability","files":[{"path":"adversaries/reliability/README.md","content":"# Reliability\n"},{"path":"adversaries/reliability/src/deterministic.ts","content":"export function registerDeterministicRules() {}\n"},{"path":"adversaries/reliability/src/rules/lazy.ts","content":"export async function review(ctx) { const sources = await ctx.loadInScopeSources(); void sources; }\n"},{"path":"adversaries/reliability/test/lazy.test.ts","content":"import { createApp } from '../src/index.ts'; void createApp().run({});\n"}]}`),
 		json.RawMessage(`{"disposition":"revise","reason":"A hypothetical uncommon syntax could be missed."}`),
@@ -372,19 +372,17 @@ func TestCatalogChangePlannerTreatsFinalCriticRevisionAsAdvisory(t *testing.T) {
 	runtime := &catalogModelRuntimeStub{provider: provider}
 	var updates []catalogapply.Progress
 	previous := &catalogapply.ChangePlan{Strategy: catalogapply.StrategyDeterministic, Files: []catalogapply.ChangeFile{{Path: "adversaries/reliability/src/rules/lazy.ts", Content: "// second attempt"}}}
-	plan, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{
+	_, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{
 		ManagedRuntime: 1, GenerationAttempt: 2, MaxGenerationTurns: 5, MaxQualityTurns: 2, PreviousPlan: previous,
 		ValidationFeedback: "One final correction.", Progress: func(update catalogapply.Progress) { updates = append(updates, update) },
 	})
-	if err != nil || plan.Strategy != catalogapply.StrategyDeterministic {
-		t.Fatalf("plan=%+v err=%v", plan, err)
+	if err == nil || !strings.Contains(err.Error(), "requested revision") {
+		t.Fatalf("final critic revision became advisory: %v", err)
 	}
-	found := false
 	for _, update := range updates {
-		found = found || strings.Contains(update.Detail, "proceeding to compiler and runtime validation")
-	}
-	if !found {
-		t.Fatalf("progress did not explain final critic disposition: %+v", updates)
+		if strings.Contains(update.Detail, "proceeding to compiler and runtime validation") {
+			t.Fatalf("unresolved critic revision proceeded to validation: %+v", updates)
+		}
 	}
 }
 
