@@ -334,6 +334,37 @@ func TestCatalogChangePlannerMergesQualityRepairDelta(t *testing.T) {
 	}
 }
 
+func TestCatalogChangePlannerMergesStructuralRepairDelta(t *testing.T) {
+	provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{
+		json.RawMessage(`{"summary":"Fix production-path coverage","files":[{"path":"adversaries/reliability/test/lazy.test.ts","content":"import { createApp } from '../src/index.ts'; void createApp().run({ input: { source: { path: fixtureDirectory } }, repoGraph });"}]}`),
+		json.RawMessage(`{"disposition":"accept","reason":"The corrected test exercises registration."}`),
+		json.RawMessage(`{"disposition":"accept","reason":"The red-team pass found no material counterexample."}`),
+	}}
+	runtime := &catalogModelRuntimeStub{provider: provider}
+	previous := &catalogapply.ChangePlan{Summary: "Detect fallible cached initialization", Strategy: catalogapply.StrategyDeterministic, Files: []catalogapply.ChangeFile{
+		{Path: "adversaries/reliability/README.md", Content: "# Reliability\n"},
+		{Path: "adversaries/reliability/src/rules/lazy.ts", Content: "// retained"},
+		{Path: "adversaries/reliability/test/lazy.test.ts", Content: "import { query } from '../src/rules/lazy.ts';"},
+	}}
+
+	plan, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{
+		ManagedRuntime: 1, GenerationAttempt: 2, MaxGenerationTurns: 3,
+		PreviousPlan: previous, RepairStage: "plan_validation", ValidationFeedback: "The test bypasses rule registration.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Summary != previous.Summary || len(plan.Files) != 3 {
+		t.Fatalf("plan=%+v want merged structural-repair delta", plan)
+	}
+	if plan.Files[0].Content != previous.Files[0].Content || plan.Files[1].Content != previous.Files[1].Content || strings.Contains(plan.Files[2].Content, "/src/rules/") {
+		t.Fatalf("structural repair did not retain unchanged files or replace the test: %+v", plan.Files)
+	}
+	if !strings.Contains(provider.requests[0].Prompt, "Return only the complete replacement contents of files that actually changed") {
+		t.Fatalf("structural repair prompt did not request a delta: %s", provider.requests[0].Prompt)
+	}
+}
+
 func TestNormalizeCatalogPlanFilesDropsModelBundlesFromDeterministicPlans(t *testing.T) {
 	files := []catalogapply.ChangeFile{
 		{Path: "adversaries/reliability/rules/lazy/rule.yaml"},
