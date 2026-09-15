@@ -995,8 +995,14 @@ func validateRunnablePackageInPlace(ctx context.Context, dir string, run command
 			}
 			npm = resolved
 		}
+		installArgs := []string{"ci", "--ignore-scripts"}
+		if strings.TrimSpace(os.Getenv("ADVERSARY_CATALOG_SDK_DEPENDENCY")) != "" {
+			// A premerge SDK Git pin needs its package prepare step to produce dist/.
+			// This is opt-in; published dependencies keep lifecycle scripts disabled.
+			installArgs = []string{"ci"}
+		}
 		steps = append(steps,
-			step{name: npm, args: []string{"ci", "--ignore-scripts"}, what: "install locked adversary dependencies"},
+			step{name: npm, args: installArgs, what: "install locked adversary dependencies"},
 			step{name: npm, args: []string{"test"}, what: "build and test generated adversary"},
 		)
 	} else if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
