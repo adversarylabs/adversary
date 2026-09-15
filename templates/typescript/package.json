@@ -8,7 +8,7 @@
     "test": "npm run build && tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@adversarylabs/sdk": "^0.1.31"
+    "@adversarylabs/sdk": "^0.1.32"
   },
   "devDependencies": {
     "@types/node": "^26.5.0",

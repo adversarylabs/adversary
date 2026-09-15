@@ -15,7 +15,7 @@ import (
 )
 
 const runtimeVersion = "0.0.1"
-const minimumSDKVersion = "0.1.31"
+const minimumSDKVersion = "0.1.32"
 const sdkDependencyOverrideEnv = "ADVERSARY_CATALOG_SDK_DEPENDENCY"
 const sdkLockOverrideEnv = "ADVERSARY_CATALOG_SDK_LOCK_TEMPLATE"
 
@@ -502,7 +502,7 @@ const runnablePackageJSON = `{
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && tsx --test test/*.test.ts"
   },
-	"dependencies": {"@adversarylabs/sdk": "^0.1.31", "yaml": "^2.8.1"},
+	"dependencies": {"@adversarylabs/sdk": "^0.1.32", "yaml": "^2.8.1"},
   "devDependencies": {"@types/node": "^26.5.0", "tsx": "^4.23.13", "typescript": "^7.0.2"}
 }
 `
