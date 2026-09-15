@@ -133,7 +133,7 @@ cross_build() {
 }
 
 generated_template_tests() {
-  local tmp binary project
+  local tmp binary project actions_root
   need npm
   tmp="$(make_temp_dir)"
   trap 'rm -rf -- "$tmp"' RETURN
@@ -150,6 +150,10 @@ generated_template_tests() {
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm test
     HOME="$tmp/home" "$binary" pack . --name adversarylabs/generated-template
   )
+  actions_root="${ADVERSARY_ACTIONS_PATH:-}"
+  [[ -n "$actions_root" ]] || fail "ADVERSARY_ACTIONS_PATH must point to an adversarylabs/actions@v1 checkout"
+  log "generated catalog patch bump with adversarylabs/actions/version@v1"
+  scripts/test-generated-version-action.sh "$binary" "$actions_root"
   rm -rf -- "$tmp"
   trap - RETURN
 }

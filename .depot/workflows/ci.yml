@@ -139,6 +139,13 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Check out adversarylabs/actions v1 fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: adversarylabs/actions
+          ref: v1
+          path: .test-actions-version-v1
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
@@ -151,6 +158,8 @@ jobs:
           cache: npm
           cache-dependency-path: templates/typescript/package-lock.json
       - name: Test a freshly generated project
+        env:
+          ADVERSARY_ACTIONS_PATH: ${{ github.workspace }}/.test-actions-version-v1
         run: scripts/ci-verify.sh template
 
   smoke:
