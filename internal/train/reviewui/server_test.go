@@ -30,10 +30,13 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
 	}
-	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Filter review evidence", "Repositories", "PR authors", "Commenters", "Clear all", "facetSelections", "facetSelections[key].add(value)", "activeFacetCount", "!details.contains(event.target)", "event.key==='Escape'", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "Check existing catalog coverage", "Generate and refine the adversary rule", "update.stage==='quality'?'generate'", "Evaluate finding and no-finding cases", "No new rule needed", "already covered by", "Add rule anyway", "allow-overlap=true", "querySelectorAll('.build-step.running')", "Generated adversary did not pass validation", "Generated rule still needs refinement", "Automatic repair could not satisfy", "Technical details", "showBuildFailure", "job-tray", "job-dismiss", "Dismiss finished task", "JOB_RETENTION_MS", "/api/jobs/"} {
+	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Filter review evidence", "Repositories", "PR authors", "Commenters", "Clear all", "facetSelections", "facetSelections[key].add(value)", "activeFacetCount", "!details.contains(event.target)", "event.key==='Escape'", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "Check existing catalog coverage", "Generate and refine the adversary rule", "update.stage==='quality'?'generate'", "Evaluate finding and no-finding cases", "No new rule needed", "already covered by", "Add rule anyway", "allow-overlap=true", "querySelectorAll('.build-step.running')", "We could not create this rule yet", "Choose how to continue", "Try again", "Review finding", "Technical details for troubleshooting", "showBuildFailure", "job-tray", "job-dismiss", "Dismiss finished task", "JOB_RETENTION_MS", "/api/jobs/"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted %q", want)
 		}
+	}
+	if strings.Contains(page.Body.String(), "updating the generator") {
+		t.Fatal("review page exposes developer-only generator recovery advice")
 	}
 	for _, want := range []string{"aside{border-right:1px solid var(--line);overflow:hidden", "#list{padding:0 8px 8px;overflow:auto", ".search-row{display:grid", ".filter-popover{position:absolute", ".repo-head{position:sticky;top:0;z-index:3", "background:var(--panel)"} {
 		if !strings.Contains(page.Body.String(), want) {
