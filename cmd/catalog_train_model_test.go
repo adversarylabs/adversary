@@ -284,6 +284,28 @@ func TestCatalogChangePlannerRetainsDecisionsDuringQualityRepair(t *testing.T) {
 	}
 }
 
+func TestMergeCatalogBuildRepairPreservesOriginalSummary(t *testing.T) {
+	previous := catalogapply.ChangePlan{
+		Summary:  "Prevent poisoned initialization in reliability",
+		Strategy: catalogapply.StrategyDeterministic,
+		Files:    []catalogapply.ChangeFile{{Path: "adversaries/reliability/test/lazy.test.ts", Content: "// broken"}},
+	}
+	patch := catalogapply.ChangePlan{
+		Summary: "Fix missing fixture directory in reliability",
+		Files:   []catalogapply.ChangeFile{{Path: "adversaries/reliability/test/lazy.test.ts", Content: "// repaired"}},
+	}
+	merged, err := mergeCatalogRepairPlan(previous, patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.Summary != previous.Summary {
+		t.Fatalf("summary=%q want original %q", merged.Summary, previous.Summary)
+	}
+	if len(merged.Files) != 1 || merged.Files[0].Content != "// repaired" {
+		t.Fatalf("files=%+v", merged.Files)
+	}
+}
+
 func TestNormalizeCatalogPlanFilesDropsModelBundlesFromDeterministicPlans(t *testing.T) {
 	files := []catalogapply.ChangeFile{
 		{Path: "adversaries/reliability/rules/lazy/rule.yaml"},
@@ -346,13 +368,42 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 		t.Fatalf("model calls=%d want generation and two critics", len(provider.requests))
 	}
 	prompt := provider.requests[0].Prompt
-	for _, want := range []string{"VALIDATION REPAIR MODE", "Do not weaken the assertion", "remove invented SDK options", "registered rule dispatch", "review-scope filtering"} {
+	for _, want := range []string{"VALIDATION REPAIR MODE", "Do not weaken the assertion", "remove invented SDK options", "registered rule dispatch", "review-scope filtering", "semanticMatches-based design", "without interpreting the query", "repair the stale test assertion", "fixtureDirectory contains a real file", "non-empty array requiring the same operation", "joint observation", "exact direct right-hand-side call", `trait: "error"`, "concrete error implementations", `outside: "guardCapture"`, "after alone", `sourceKind: "call"`, "edit the generated rule implementation", `NEVER put "Do" in name`} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("repair prompt omitted %q:\n%s", want, prompt)
 		}
 	}
 	if !strings.Contains(string(provider.requests[0].Input), `"latest_validation_feedback":"expected a lazy-initialization finding"`) {
 		t.Fatalf("repair input omitted latest failure: %s", provider.requests[0].Input)
+	}
+	for _, want := range []string{"exact reviewed file revision", "authoritative for source facts", "absent from both evidence_diff and evidence_source_context", `within: "guard"`, `outside: "guard"`, "named factory call", "operative README", "synthetic line numbers", "acceptance criteria are exhaustive", "receiverType is present"} {
+		if !strings.Contains(provider.requests[1].Prompt, want) {
+			t.Fatalf("quality prompt omitted %q:\n%s", want, provider.requests[1].Prompt)
+		}
+	}
+}
+
+func TestCatalogChangePlannerMakesRegistrationBypassRepairExplicit(t *testing.T) {
+	provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{
+		json.RawMessage(`{"summary":"Prevent poisoned initialization in reliability","files":[{"path":"adversaries/reliability/README.md","content":"# Reliability\n"},{"path":"adversaries/reliability/src/deterministic.ts","content":"export function registerDeterministicRules() {}\n"},{"path":"adversaries/reliability/src/rules/lazy.ts","content":"export async function review(ctx) { void ctx; }\n"},{"path":"adversaries/reliability/test/lazy.test.ts","content":"import { createApp } from '../src/index.ts'; void createApp().run({ input: { source: { path: fixtureDirectory } }, repoGraph });\n"}]}`),
+		json.RawMessage(`{"disposition":"accept","reason":"The deterministic rule is appropriately scoped."}`),
+		json.RawMessage(`{"disposition":"accept","reason":"The red-team pass found no material counterexample."}`),
+	}}
+	planner := catalogChangePlanner(&catalogModelRuntimeStub{provider: provider}, "camel", "auto")
+	previous := catalogapply.ChangePlan{Strategy: catalogapply.StrategyDeterministic, Files: []catalogapply.ChangeFile{{Path: "adversaries/reliability/test/lazy.test.ts", Content: "import { query } from '../src/rules/lazy.ts';\n"}}}
+	_, err := planner(context.Background(), catalogapply.ChangeRequest{
+		Adversary: "reliability", ManagedRuntime: 1, ExistingAdversary: true,
+		RepairStage: "plan_validation", ValidationFeedback: "bypasses rule registration", LatestFeedback: "bypasses rule registration",
+		PreviousPlan: &previous, PreviousPlanFiles: []string{"adversaries/reliability/test/lazy.test.ts"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := provider.requests[0].Prompt
+	for _, want := range []string{"PLAN REPAIR MODE", "remove every import from src/rules/", "Import createApp only from src/index", "literal expected query", "Do not import a query constant"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("plan repair prompt omitted %q:\n%s", want, prompt)
+		}
 	}
 }
 
@@ -364,7 +415,7 @@ func TestNormalizeCatalogSummaryAddsMissingAdversary(t *testing.T) {
 	}
 }
 
-func TestCatalogChangePlannerTreatsFinalCriticRevisionAsAdvisory(t *testing.T) {
+func TestCatalogChangePlannerKeepsFinalCriticRevisionBlocking(t *testing.T) {
 	provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{
 		json.RawMessage(`{"summary":"Prevent poisoned initialization in reliability","files":[{"path":"adversaries/reliability/README.md","content":"# Reliability\n"},{"path":"adversaries/reliability/src/deterministic.ts","content":"export function registerDeterministicRules() {}\n"},{"path":"adversaries/reliability/src/rules/lazy.ts","content":"export async function review(ctx) { const sources = await ctx.loadInScopeSources(); void sources; }\n"},{"path":"adversaries/reliability/test/lazy.test.ts","content":"import { createApp } from '../src/index.ts'; void createApp().run({});\n"}]}`),
 		json.RawMessage(`{"disposition":"revise","reason":"A hypothetical uncommon syntax could be missed."}`),
@@ -372,19 +423,17 @@ func TestCatalogChangePlannerTreatsFinalCriticRevisionAsAdvisory(t *testing.T) {
 	runtime := &catalogModelRuntimeStub{provider: provider}
 	var updates []catalogapply.Progress
 	previous := &catalogapply.ChangePlan{Strategy: catalogapply.StrategyDeterministic, Files: []catalogapply.ChangeFile{{Path: "adversaries/reliability/src/rules/lazy.ts", Content: "// second attempt"}}}
-	plan, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{
+	_, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{
 		ManagedRuntime: 1, GenerationAttempt: 2, MaxGenerationTurns: 5, MaxQualityTurns: 2, PreviousPlan: previous,
 		ValidationFeedback: "One final correction.", Progress: func(update catalogapply.Progress) { updates = append(updates, update) },
 	})
-	if err != nil || plan.Strategy != catalogapply.StrategyDeterministic {
-		t.Fatalf("plan=%+v err=%v", plan, err)
+	if err == nil || !strings.Contains(err.Error(), "requested revision") {
+		t.Fatalf("final critic revision became advisory: %v", err)
 	}
-	found := false
 	for _, update := range updates {
-		found = found || strings.Contains(update.Detail, "proceeding to compiler and runtime validation")
-	}
-	if !found {
-		t.Fatalf("progress did not explain final critic disposition: %+v", updates)
+		if strings.Contains(update.Detail, "proceeding to compiler and runtime validation") {
+			t.Fatalf("unresolved critic revision proceeded to validation: %+v", updates)
+		}
 	}
 }
 
@@ -419,8 +468,8 @@ func TestCatalogChangePlannerKeepsRedTeamRejectionBlocking(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "rejected unsafe plan") {
 		t.Fatalf("red-team rejection became advisory: %v", err)
 	}
-	if len(provider.requests) != 3 || !strings.Contains(provider.requests[2].Prompt, "A decoy split across separate functions is inadequate") {
-		t.Fatalf("red-team review was not executed with the narrow-scope contract: %+v", provider.requests)
+	if len(provider.requests) != 3 || !strings.Contains(provider.requests[2].Prompt, "concrete semantic result") {
+		t.Fatalf("red-team review was not executed with the semantic-query contract: %+v", provider.requests)
 	}
 }
 

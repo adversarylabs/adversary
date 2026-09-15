@@ -473,9 +473,13 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	newImplementation, runtimeRegression := false, false
 	deterministicExtension := false
 	deterministicReadsSources := false
+	deterministicUsesSemanticQuery := false
+	deterministicDefinesSemanticQuery := false
 	deterministicHardcodesEvidencePath := false
 	deterministicHardcodesEvidenceLine := false
 	deterministicTestProvidesSource := false
+	deterministicTestProvidesRepoGraph := false
+	semanticQueryRequired := request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && strings.EqualFold(filepath.Ext(request.EvidenceFile), ".go")
 	evidencePathRegression := strings.TrimSpace(request.EvidenceFile) == ""
 	var newSourcePaths []string
 	finalSources := make(map[string]string)
@@ -519,6 +523,8 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			}
 			if changed && strings.HasPrefix(relInAdversary, "src/rules/") {
 				deterministicReadsSources = deterministicReadsSources || strings.Contains(file.Content, "loadInScopeSources(")
+				deterministicUsesSemanticQuery = deterministicUsesSemanticQuery || strings.Contains(file.Content, ".semanticMatches(")
+				deterministicDefinesSemanticQuery = deterministicDefinesSemanticQuery || strings.Contains(file.Content, "defineSemanticQuery(")
 				deterministicHardcodesEvidencePath = deterministicHardcodesEvidencePath || strings.TrimSpace(request.EvidenceFile) != "" && strings.Contains(file.Content, request.EvidenceFile)
 				deterministicHardcodesEvidenceLine = deterministicHardcodesEvidenceLine || literalFindingLine.MatchString(file.Content)
 			}
@@ -573,6 +579,9 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 			if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && managedRunSourceInput.MatchString(file.Content) {
 				deterministicTestProvidesSource = true
 			}
+			if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && strings.Contains(file.Content, "repoGraph") && strings.Contains(file.Content, "semanticMatches") {
+				deterministicTestProvidesRepoGraph = true
+			}
 			if strings.Contains(file.Content, request.EvidenceFile) {
 				evidencePathRegression = true
 			}
@@ -593,8 +602,17 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && !deterministicExtension {
 		return "", fmt.Errorf("generated deterministic change did not register through src/deterministic.ts")
 	}
-	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && deterministicHardcodesEvidencePath && !deterministicReadsSources {
-		return "", fmt.Errorf("generated deterministic rule is an evidence-path tripwire; inspect source content with loadInScopeSources before emitting a finding")
+	if semanticQueryRequired && deterministicReadsSources {
+		return "", fmt.Errorf("generated deterministic Go rule may not parse source text; use ctx.repoGraph.semanticMatches for typed and scoped facts")
+	}
+	if semanticQueryRequired && !deterministicUsesSemanticQuery {
+		return "", fmt.Errorf("generated deterministic Go rule did not use ctx.repoGraph.semanticMatches")
+	}
+	if semanticQueryRequired && !deterministicDefinesSemanticQuery {
+		return "", fmt.Errorf("generated deterministic Go rule did not validate its capture contract with defineSemanticQuery")
+	}
+	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && deterministicHardcodesEvidencePath && !deterministicReadsSources && !deterministicUsesSemanticQuery {
+		return "", fmt.Errorf("generated deterministic rule is an evidence-path tripwire; inspect repository facts before emitting a finding")
 	}
 	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && deterministicHardcodesEvidenceLine {
 		return "", fmt.Errorf("generated deterministic rule hard-codes an evidence line; derive the finding line from the matched source")
@@ -610,6 +628,9 @@ func writeChangePlan(workspaceRoot, root, dir string, row results.Result, reques
 	}
 	if request.ManagedRuntime == 1 && plan.Strategy == StrategyDeterministic && runtimeRegression && !deterministicTestProvidesSource {
 		return "", fmt.Errorf("generated deterministic native test calls createApp().run without the required input.source.path repository fixture")
+	}
+	if semanticQueryRequired && runtimeRegression && !deterministicTestProvidesRepoGraph {
+		return "", fmt.Errorf("generated deterministic Go rule test must inject semantic RepoGraph results through createApp().run")
 	}
 	if request.Executable && newImplementation {
 		entrypoint := adversaryPrefix + "src/index.ts"
@@ -974,8 +995,14 @@ func validateRunnablePackageInPlace(ctx context.Context, dir string, run command
 			}
 			npm = resolved
 		}
+		installArgs := []string{"ci", "--ignore-scripts"}
+		if strings.TrimSpace(os.Getenv("ADVERSARY_CATALOG_SDK_DEPENDENCY")) != "" {
+			// A premerge SDK Git pin needs its package prepare step to produce dist/.
+			// This is opt-in; published dependencies keep lifecycle scripts disabled.
+			installArgs = []string{"ci"}
+		}
 		steps = append(steps,
-			step{name: npm, args: []string{"ci", "--ignore-scripts"}, what: "install locked adversary dependencies"},
+			step{name: npm, args: installArgs, what: "install locked adversary dependencies"},
 			step{name: npm, args: []string{"test"}, what: "build and test generated adversary"},
 		)
 	} else if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {

@@ -293,6 +293,51 @@ func TestWriteManagedDeterministicPlanUsesCatalogExtensionPoint(t *testing.T) {
 	}
 }
 
+func TestWriteManagedGoDeterministicPlanRequiresSemanticQuery(t *testing.T) {
+	root := t.TempDir()
+	prefix := "adversaries/reliability/"
+	dir := filepath.Join(root, "adversaries", "reliability")
+	request := ChangeRequest{
+		Adversary: "reliability", Executable: true, PolicyDriven: true, ManagedRuntime: 1,
+		EvidenceFile: "pkg/store/resolver.go",
+		Files: []SourceFile{
+			{Path: prefix + "README.md", Content: "# Reliability\n"},
+			{Path: prefix + "src/index.ts", Content: "import { registerDeterministicRules } from \"./deterministic.js\";\nregisterDeterministicRules(app);\n"},
+			{Path: prefix + "src/deterministic.ts", Content: "export function registerDeterministicRules() {}\n"},
+		},
+	}
+	semanticPlan := ChangePlan{Summary: "Reject poisoned lazy initialization in reliability", Strategy: StrategyDeterministic, Files: []ChangeFile{
+		{Path: prefix + "README.md", Content: "# Reliability\n\n- Retry failed lazy initialization.\n"},
+		{Path: prefix + "src/deterministic.ts", Content: "import { registerRule } from \"./rules/lazy.js\";\nexport function registerDeterministicRules(app: unknown) { registerRule(app); }\n"},
+		{Path: prefix + "src/rules/lazy.ts", Content: "import { defineSemanticQuery } from \"@adversarylabs/sdk\";\nconst query = defineSemanticQuery({language:\"go\",within:\"function\",steps:[{kind:\"call\",capture:\"call\"}]});\nexport function registerRule(app: any) { app.rule(\"lazy\", (ctx: any) => ctx.repoGraph?.semanticMatches(query)); }\n"},
+		{Path: prefix + "test/lazy.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nconst fixtureDirectory = \"/tmp/fixture\"; const evidencePath = \"pkg/store/resolver.go\";\nconst repoGraph = { semanticMatches: () => [] };\nvoid createApp().run({input:{source:{path:fixtureDirectory}},repoGraph:repoGraph as any}); void evidencePath;\n"},
+	}}
+	if _, err := writeChangePlan(root, filepath.Join(root, "adversaries"), dir, results.Result{Package: "reliability"}, request, semanticPlan); err != nil {
+		t.Fatal(err)
+	}
+
+	textPlan := semanticPlan
+	textPlan.Files = append([]ChangeFile(nil), semanticPlan.Files...)
+	textPlan.Files[2].Content = "export async function registerRule(app: any) { app.rule(\"lazy\", async (ctx: any) => ctx.loadInScopeSources()); }\n"
+	if _, err := writeChangePlan(root, filepath.Join(root, "adversaries"), dir, results.Result{Package: "reliability"}, request, textPlan); err == nil || !strings.Contains(err.Error(), "may not parse source text") {
+		t.Fatalf("expected source parsing rejection, got %v", err)
+	}
+
+	missingGraphTest := semanticPlan
+	missingGraphTest.Files = append([]ChangeFile(nil), semanticPlan.Files...)
+	missingGraphTest.Files[3].Content = "import { createApp } from \"../src/index.ts\";\nconst evidencePath = \"pkg/store/resolver.go\"; const fixtureDirectory = \"/tmp/fixture\";\nvoid createApp().run({input:{source:{path:fixtureDirectory}}}); void evidencePath;\n"
+	if _, err := writeChangePlan(root, filepath.Join(root, "adversaries"), dir, results.Result{Package: "reliability"}, request, missingGraphTest); err == nil || !strings.Contains(err.Error(), "must inject semantic RepoGraph") {
+		t.Fatalf("expected RepoGraph test rejection, got %v", err)
+	}
+
+	uncheckedQuery := semanticPlan
+	uncheckedQuery.Files = append([]ChangeFile(nil), semanticPlan.Files...)
+	uncheckedQuery.Files[2].Content = "export function registerRule(app: any) { app.rule(\"lazy\", (ctx: any) => ctx.repoGraph?.semanticMatches({language:\"go\",within:\"function\",steps:[]})); }\n"
+	if _, err := writeChangePlan(root, filepath.Join(root, "adversaries"), dir, results.Result{Package: "reliability"}, request, uncheckedQuery); err == nil || !strings.Contains(err.Error(), "defineSemanticQuery") {
+		t.Fatalf("expected unchecked query rejection, got %v", err)
+	}
+}
+
 func TestPlannedProgressHasOnlyOneRunningStage(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "adversaries", "operability")
@@ -953,7 +998,7 @@ func TestPullRequestBodyUsesCanonicalGeneratedRule(t *testing.T) {
 	}
 	body := pullRequestBody(results.Result{
 		ID: "candidate", Package: "compatibility", ProposedRule: "use themand do everything", CommentURL: "https://example.test/evidence",
-	}, target, true, true)
+	}, target, "Generated semantic rule", true, true)
 	for _, want := range []string{"## Generated rule", "Propagate accepted request fields", "Minimum confidence: `medium`", "semantic evaluation", "Managed runtime template: synchronized"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
@@ -961,5 +1006,19 @@ func TestPullRequestBodyUsesCanonicalGeneratedRule(t *testing.T) {
 	}
 	if strings.Contains(body, "themand") {
 		t.Fatalf("body used the stale proposed rule instead of canonical generated content:\n%s", body)
+	}
+}
+
+func TestPullRequestBodyUsesReviewedSummaryForDeterministicChange(t *testing.T) {
+	body := pullRequestBody(results.Result{
+		ID: "candidate", Package: "reliability", ProposedRule: "Claim an unproven permanent failure.", CommentURL: "https://example.test/evidence",
+	}, "/tmp/adversaries/reliability/src/rules/fallible-once.ts", "Detect correlated fallible results cached by sync.Once", true, true)
+	for _, want := range []string{"## Generated change", "Detect correlated fallible results cached by sync.Once", "Managed runtime template: synchronized"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "unproven permanent failure") {
+		t.Fatalf("body reused unreviewed candidate wording:\n%s", body)
 	}
 }
