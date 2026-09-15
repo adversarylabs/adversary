@@ -447,7 +447,7 @@ Translate the review into executable changes. When it says predicates are not st
 			if repairingPlan && request.RepairStage == "plan_validation" {
 				prompt += `
 
-PLAN REPAIR MODE: Apply latest_validation_feedback as a concrete edit to previous_generated_plan and return the complete corrected plan. If validation says a deterministic native test bypasses rule registration, remove every import from src/rules/ in that test. Import createApp only from src/index, invoke createApp().run with the required fixture input and RepoGraph double, and assert the literal expected query against the query recorded by semanticMatches. Do not import a query constant or helper from the implementation, and do not compare the recorded query with an implementation-owned value.`
+PLAN REPAIR MODE: Apply latest_validation_feedback as a concrete edit to previous_generated_plan. Return only the complete replacement contents of files that actually changed; omitted previous files are retained and merged locally. If validation says a deterministic native test bypasses rule registration, return the corrected test file, remove every import from src/rules/ in that test, and remove or inline every use of those imports. Import createApp only from src/index, invoke createApp().run with the required fixture input and RepoGraph double, and assert the literal expected query against the query recorded by semanticMatches. Do not import a query constant or helper from the implementation, and do not compare the recorded query with an implementation-owned value.`
 			}
 		}
 		if request.Progress != nil {
@@ -483,7 +483,7 @@ PLAN REPAIR MODE: Apply latest_validation_feedback as a concrete edit to previou
 				return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: file %d has no path", index+1)
 			}
 		}
-		if repairingPlan && (request.RepairStage == "build_and_test" || request.RepairStage == "plan_review") {
+		if repairingPlan {
 			plan, err = mergeCatalogRepairPlan(*request.PreviousPlan, plan)
 			if err != nil {
 				return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: %w", err)
