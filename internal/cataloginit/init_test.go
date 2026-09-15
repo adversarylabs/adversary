@@ -277,6 +277,41 @@ func TestUpgradeRaisesOlderSDKWithoutReplacingPackageMetadata(t *testing.T) {
 	}
 }
 
+func TestUpgradeCanPinSDKCommitForPremergeValidation(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "adversaries", "operability")
+	dependency := "https://github.com/adversarylabs/adversary-sdk-typescript/archive/abc123.tar.gz"
+	lockTemplate := filepath.Join(t.TempDir(), "package-lock.json")
+	if err := os.WriteFile(lockTemplate, []byte(`{"packages":{"":{"dependencies":{"@adversarylabs/sdk":"`+dependency+`"}},"node_modules/@adversarylabs/sdk":{"version":"0.1.31","resolved":"`+dependency+`","integrity":"sha512-test"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(sdkDependencyOverrideEnv, dependency)
+	t.Setenv(sdkLockOverrideEnv, lockTemplate)
+	for path, content := range map[string]string{
+		"README.md":         "# Operability\n",
+		"adversary.yaml":    "name: private/operability\n",
+		"package.json":      `{"adversarylabsCatalogRuntime":1,"dependencies":{"@adversarylabs/sdk":"^0.1.31"}}`,
+		"package-lock.json": `{"packages":{"":{"dependencies":{"@adversarylabs/sdk":"^0.1.31"}},"node_modules/@adversarylabs/sdk":{"version":"0.1.31","resolved":"registry","integrity":"old"}}}`,
+	} {
+		full := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	updated, err := EnsureRunnableAdversary(dir, "operability")
+	if err != nil || !updated {
+		t.Fatalf("updated=%v err=%v", updated, err)
+	}
+	packageJSON, _ := os.ReadFile(filepath.Join(dir, "package.json"))
+	packageLock, _ := os.ReadFile(filepath.Join(dir, "package-lock.json"))
+	if !strings.Contains(string(packageJSON), dependency) || !strings.Contains(string(packageLock), dependency) || !strings.Contains(string(packageLock), "sha512-test") {
+		t.Fatalf("SDK commit pin was not synchronized: package=%s lock=%s", packageJSON, packageLock)
+	}
+}
+
 func TestUpgradePreservesCatalogOwnedDeterministicRegistrations(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "adversaries", "operability")

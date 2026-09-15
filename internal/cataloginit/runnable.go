@@ -16,6 +16,8 @@ import (
 
 const runtimeVersion = "0.0.1"
 const minimumSDKVersion = "0.1.31"
+const sdkDependencyOverrideEnv = "ADVERSARY_CATALOG_SDK_DEPENDENCY"
+const sdkLockOverrideEnv = "ADVERSARY_CATALOG_SDK_LOCK_TEMPLATE"
 
 type UpgradeResult struct {
 	Location      string
@@ -196,11 +198,29 @@ func ensureMinimumSDKDependency(dir string) (bool, error) {
 		return false, nil
 	}
 	current, ok := dependencies["@adversarylabs/sdk"].(string)
-	if !ok || !versionIsOlder(current, minimumSDKVersion) {
+	if !ok {
+		return false, nil
+	}
+	desired := "^" + minimumSDKVersion
+	lockTemplate, _ := projecttemplates.FS.ReadFile("typescript/package-lock.json")
+	if override := strings.TrimSpace(os.Getenv(sdkDependencyOverrideEnv)); override != "" {
+		desired = override
+		lockPath := strings.TrimSpace(os.Getenv(sdkLockOverrideEnv))
+		if lockPath == "" {
+			return false, fmt.Errorf("%s requires %s", sdkDependencyOverrideEnv, sdkLockOverrideEnv)
+		}
+		lockTemplate, err = os.ReadFile(lockPath)
+		if err != nil {
+			return false, fmt.Errorf("read SDK lock template: %w", err)
+		}
+	} else if !versionIsOlder(current, minimumSDKVersion) {
+		return false, nil
+	}
+	if current == desired {
 		return false, nil
 	}
 
-	packageUpdated, replaced := replaceJSONStringValue(packageRaw, "@adversarylabs/sdk", current, "^"+minimumSDKVersion)
+	packageUpdated, replaced := replaceJSONStringValue(packageRaw, "@adversarylabs/sdk", current, desired)
 	if !replaced {
 		return false, fmt.Errorf("package.json SDK dependency could not be updated in place")
 	}
@@ -215,8 +235,7 @@ func ensureMinimumSDKDependency(dir string) (bool, error) {
 		return false, fmt.Errorf("parse package-lock.json: %w", err)
 	}
 	var templateDocument map[string]any
-	templateRaw, _ := projecttemplates.FS.ReadFile("typescript/package-lock.json")
-	if err := json.Unmarshal(templateRaw, &templateDocument); err != nil {
+	if err := json.Unmarshal(lockTemplate, &templateDocument); err != nil {
 		return false, fmt.Errorf("parse embedded package-lock.json: %w", err)
 	}
 	lockPackages, lockOK := lockDocument["packages"].(map[string]any)
@@ -237,11 +256,11 @@ func ensureMinimumSDKDependency(dir string) (bool, error) {
 	if !ok {
 		return false, fmt.Errorf("package-lock.json is missing root SDK dependency")
 	}
-	lockUpdated, replaced := replaceJSONStringValue(lockRaw, "@adversarylabs/sdk", lockCurrent, "^"+minimumSDKVersion)
+	lockUpdated, replaced := replaceJSONStringValue(lockRaw, "@adversarylabs/sdk", lockCurrent, desired)
 	if !replaced {
 		return false, fmt.Errorf("package-lock.json root SDK dependency could not be updated in place")
 	}
-	lockUpdated, err = replaceJSONObjectValue(lockUpdated, templateRaw, "node_modules/@adversarylabs/sdk")
+	lockUpdated, err = replaceJSONObjectValue(lockUpdated, lockTemplate, "node_modules/@adversarylabs/sdk")
 	if err != nil {
 		return false, err
 	}
