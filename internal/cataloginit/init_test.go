@@ -218,6 +218,55 @@ func TestUpgradeSynchronizesManagedV1RuntimeFiles(t *testing.T) {
 	}
 }
 
+func TestUpgradeRaisesOlderSDKWithoutReplacingPackageMetadata(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "adversaries", "operability")
+	templateLock, err := os.ReadFile(filepath.Join("..", "..", "templates", "typescript", "package-lock.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldLock := strings.ReplaceAll(string(templateLock), "{{name}}", "operability")
+	oldLock = strings.ReplaceAll(oldLock, `"version": "something"`, `"version": "0.0.1"`)
+	oldLock = strings.ReplaceAll(oldLock, "0.1.24", "0.1.23")
+	oldLock = strings.ReplaceAll(oldLock, "PPtuShTwa2lXvdw0yCl1UZ0KffeelNztPFweljoLgVIp3fJrdeyPoJvuDYOxnMIuggKbKFw9qBgQk0RnuU41kQ==", "old-integrity")
+	for path, content := range map[string]string{
+		"adversarylabs.yaml":                     "kind: AdversaryCatalog\n",
+		"adversaries/operability/README.md":      "# Operability\n",
+		"adversaries/operability/adversary.yaml": "name: private/operability\n",
+		"adversaries/operability/package.json": `{
+  "name": "operability",
+  "adversarylabsCatalogRuntime": 1,
+  "catalogOwned": true,
+  "dependencies": {"@adversarylabs/sdk": "^0.1.23", "other": "1.2.3"}
+}`,
+		"adversaries/operability/package-lock.json": oldLock,
+		"adversaries/operability/src/index.ts":      "// managed v1\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Upgrade(root); err != nil {
+		t.Fatal(err)
+	}
+	packageJSON, _ := os.ReadFile(filepath.Join(dir, "package.json"))
+	packageLock, _ := os.ReadFile(filepath.Join(dir, "package-lock.json"))
+	for _, required := range []string{`"catalogOwned": true`, `"other": "1.2.3"`, `"@adversarylabs/sdk": "^0.1.24"`} {
+		if !strings.Contains(string(packageJSON), required) {
+			t.Fatalf("package.json missing %s: %s", required, packageJSON)
+		}
+	}
+	for _, required := range []string{`"@adversarylabs/sdk": "^0.1.24"`, `"version": "0.1.24"`, "PPtuShTwa2lXvdw0yCl1UZ0KffeelNztPFweljoLgVIp3fJrdeyPoJvuDYOxnMIuggKbKFw9qBgQk0RnuU41kQ=="} {
+		if !strings.Contains(string(packageLock), required) {
+			t.Fatalf("package-lock.json missing %s", required)
+		}
+	}
+}
+
 func TestUpgradePreservesCatalogOwnedDeterministicRegistrations(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "adversaries", "operability")

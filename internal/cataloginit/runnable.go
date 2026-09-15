@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	projecttemplates "github.com/adversarylabs/adversary/templates"
 )
 
 const runtimeVersion = "0.0.1"
+const minimumSDKVersion = "0.1.24"
 
 type UpgradeResult struct {
 	Location      string
@@ -103,8 +105,9 @@ func ensureIgnorePatterns(path string, patterns []string) (bool, error) {
 }
 
 // EnsureRunnableAdversary creates or synchronizes the v1 policy-driven runtime.
-// Package metadata belongs to the catalog after initialization and is never
-// rewritten during generation or runtime synchronization.
+// Package metadata belongs to the catalog after initialization. Runtime sync
+// only raises an older SDK dependency to the minimum required by the managed
+// runtime; it never downgrades newer catalog-owned metadata.
 func EnsureRunnableAdversary(dir, slug string) (bool, error) {
 	readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
 	if err != nil {
@@ -124,8 +127,12 @@ func EnsureRunnableAdversary(dir, slug string) (bool, error) {
 		if json.Unmarshal(packageJSON, &metadata) != nil || metadata.Runtime != 1 {
 			return false, nil
 		}
+		dependencyUpdated, err := ensureMinimumSDKDependency(dir)
+		if err != nil {
+			return false, err
+		}
 		files := runnableAdversaryFiles(slug, purposeFromREADME(string(readme)), string(readme))
-		updated := false
+		updated := dependencyUpdated
 		for _, name := range []string{"tsconfig.json", "src/index.ts", "dist/index.js", "dist/index.d.ts", "test/index.test.ts"} {
 			path := filepath.Join(dir, filepath.FromSlash(name))
 			if current, err := os.ReadFile(path); err == nil && string(current) == files[name] {
@@ -171,6 +178,112 @@ func EnsureRunnableAdversary(dir, slug string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func ensureMinimumSDKDependency(dir string) (bool, error) {
+	packagePath := filepath.Join(dir, "package.json")
+	packageRaw, err := os.ReadFile(packagePath)
+	if err != nil {
+		return false, err
+	}
+	var packageDocument map[string]any
+	if err := json.Unmarshal(packageRaw, &packageDocument); err != nil {
+		return false, fmt.Errorf("parse package.json: %w", err)
+	}
+	dependencies, ok := packageDocument["dependencies"].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	current, ok := dependencies["@adversarylabs/sdk"].(string)
+	if !ok || !versionIsOlder(current, minimumSDKVersion) {
+		return false, nil
+	}
+
+	dependencies["@adversarylabs/sdk"] = "^" + minimumSDKVersion
+	packageUpdated, err := json.MarshalIndent(packageDocument, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("encode package.json: %w", err)
+	}
+	packageUpdated = append(packageUpdated, '\n')
+
+	lockPath := filepath.Join(dir, "package-lock.json")
+	lockRaw, err := os.ReadFile(lockPath)
+	if err != nil {
+		return false, err
+	}
+	var lockDocument map[string]any
+	if err := json.Unmarshal(lockRaw, &lockDocument); err != nil {
+		return false, fmt.Errorf("parse package-lock.json: %w", err)
+	}
+	var templateDocument map[string]any
+	templateRaw, _ := projecttemplates.FS.ReadFile("typescript/package-lock.json")
+	if err := json.Unmarshal(templateRaw, &templateDocument); err != nil {
+		return false, fmt.Errorf("parse embedded package-lock.json: %w", err)
+	}
+	lockPackages, lockOK := lockDocument["packages"].(map[string]any)
+	templatePackages, templateOK := templateDocument["packages"].(map[string]any)
+	if !lockOK || !templateOK {
+		return false, fmt.Errorf("package-lock.json is missing package metadata")
+	}
+	root, rootOK := lockPackages[""].(map[string]any)
+	sdkEntry, sdkOK := templatePackages["node_modules/@adversarylabs/sdk"]
+	if !rootOK || !sdkOK {
+		return false, fmt.Errorf("package-lock.json is missing SDK metadata")
+	}
+	rootDependencies, rootOK := root["dependencies"].(map[string]any)
+	if !rootOK {
+		return false, fmt.Errorf("package-lock.json is missing root dependencies")
+	}
+	rootDependencies["@adversarylabs/sdk"] = "^" + minimumSDKVersion
+	lockPackages["node_modules/@adversarylabs/sdk"] = sdkEntry
+	lockUpdated, err := json.MarshalIndent(lockDocument, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("encode package-lock.json: %w", err)
+	}
+	lockUpdated = append(lockUpdated, '\n')
+
+	if err := os.WriteFile(packagePath, packageUpdated, 0o644); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(lockPath, lockUpdated, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func versionIsOlder(current, minimum string) bool {
+	parse := func(value string) ([3]int, bool) {
+		value = strings.TrimLeft(strings.TrimSpace(value), "^~<>=v ")
+		parts := strings.SplitN(value, ".", 3)
+		if len(parts) != 3 {
+			return [3]int{}, false
+		}
+		var parsed [3]int
+		for i, part := range parts {
+			digits := strings.FieldsFunc(part, func(r rune) bool { return r < '0' || r > '9' })
+			if len(digits) == 0 {
+				return [3]int{}, false
+			}
+			part = digits[0]
+			n, err := strconv.Atoi(part)
+			if err != nil {
+				return [3]int{}, false
+			}
+			parsed[i] = n
+		}
+		return parsed, true
+	}
+	currentVersion, currentOK := parse(current)
+	minimumVersion, minimumOK := parse(minimum)
+	if !currentOK || !minimumOK {
+		return false
+	}
+	for i := range currentVersion {
+		if currentVersion[i] != minimumVersion[i] {
+			return currentVersion[i] < minimumVersion[i]
+		}
+	}
+	return false
 }
 
 func runnableAdversaryFiles(slug, summary, policy string) map[string]string {
