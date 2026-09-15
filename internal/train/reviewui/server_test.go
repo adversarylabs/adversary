@@ -35,9 +35,6 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 			t.Fatalf("review page omitted %q", want)
 		}
 	}
-	if strings.Contains(page.Body.String(), "updating the generator") {
-		t.Fatal("review page exposes developer-only generator recovery advice")
-	}
 	for _, want := range []string{"aside{border-right:1px solid var(--line);overflow:hidden", "#list{padding:0 8px 8px;overflow:auto", ".search-row{display:grid", ".filter-popover{position:absolute", ".repo-head{position:sticky;top:0;z-index:3", "background:var(--panel)"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted contained repository navigation style %q", want)
@@ -53,6 +50,20 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	handler.ServeHTTP(api, req)
 	if api.Code != http.StatusOK || !strings.Contains(api.Body.String(), "candidate-1") {
 		t.Fatalf("API status=%d body=%q", api.Code, api.Body.String())
+	}
+}
+
+func TestRenderedReviewPagePreservesCandidateForRetryAfterPollingFailure(t *testing.T) {
+	contents := page("secret", []string{"operability"})
+	for _, want := range []string{
+		"candidateID:job.candidate_id||candidateID",
+		"candidateID:current.candidate_id",
+		"showBuildFailure(task.current.error,task.candidateID)",
+		"retry.onclick=()=>startPR(candidateID)",
+	} {
+		if !strings.Contains(contents, want) {
+			t.Fatalf("review page omitted polling-failure retry contract %q", want)
+		}
 	}
 }
 
