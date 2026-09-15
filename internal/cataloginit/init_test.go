@@ -227,8 +227,8 @@ func TestUpgradeRaisesOlderSDKWithoutReplacingPackageMetadata(t *testing.T) {
 	}
 	oldLock := strings.ReplaceAll(string(templateLock), "{{name}}", "operability")
 	oldLock = strings.ReplaceAll(oldLock, `"version": "something"`, `"version": "0.0.1"`)
-	oldLock = strings.ReplaceAll(oldLock, "0.1.27", "0.1.23")
-	oldLock = strings.ReplaceAll(oldLock, "Qx5xbIPG8H3pq5arzCOAGg1Veb4PCPbtaEXJnYymm2OOGux2ox+tlKKKjIP7XmguTeBPJuanNUJSzVzn2yyivQ==", "old-integrity")
+	oldLock = strings.ReplaceAll(oldLock, "0.1.28", "0.1.23")
+	oldLock = strings.ReplaceAll(oldLock, "Oyx1frRVVoqSAcxh9NCiooAFGukOtxS8uAhielelJ95U8xXKYpSK1KGjvOTxIyQVk8wP/P512katl6V1g6Rtww==", "old-integrity")
 	oldPackage := `{
   "name": "operability",
   "adversarylabsCatalogRuntime": 1,
@@ -256,21 +256,21 @@ func TestUpgradeRaisesOlderSDKWithoutReplacingPackageMetadata(t *testing.T) {
 	}
 	packageJSON, _ := os.ReadFile(filepath.Join(dir, "package.json"))
 	packageLock, _ := os.ReadFile(filepath.Join(dir, "package-lock.json"))
-	expectedPackage := strings.Replace(oldPackage, "^0.1.23", "^0.1.27", 1)
+	expectedPackage := strings.Replace(oldPackage, "^0.1.23", "^0.1.28", 1)
 	if string(packageJSON) != expectedPackage {
 		t.Fatalf("package.json formatting changed:\n%s", packageJSON)
 	}
-	expectedLock := strings.ReplaceAll(oldLock, "0.1.23", "0.1.27")
-	expectedLock = strings.Replace(expectedLock, "old-integrity", "Qx5xbIPG8H3pq5arzCOAGg1Veb4PCPbtaEXJnYymm2OOGux2ox+tlKKKjIP7XmguTeBPJuanNUJSzVzn2yyivQ==", 1)
+	expectedLock := strings.ReplaceAll(oldLock, "0.1.23", "0.1.28")
+	expectedLock = strings.Replace(expectedLock, "old-integrity", "Oyx1frRVVoqSAcxh9NCiooAFGukOtxS8uAhielelJ95U8xXKYpSK1KGjvOTxIyQVk8wP/P512katl6V1g6Rtww==", 1)
 	if string(packageLock) != expectedLock {
 		t.Fatal("package-lock.json formatting or unrelated metadata changed")
 	}
-	for _, required := range []string{`"catalogOwned": true`, `"other": "1.2.3"`, `"@adversarylabs/sdk": "^0.1.27"`} {
+	for _, required := range []string{`"catalogOwned": true`, `"other": "1.2.3"`, `"@adversarylabs/sdk": "^0.1.28"`} {
 		if !strings.Contains(string(packageJSON), required) {
 			t.Fatalf("package.json missing %s: %s", required, packageJSON)
 		}
 	}
-	for _, required := range []string{`"@adversarylabs/sdk": "^0.1.27"`, `"version": "0.1.27"`, "Qx5xbIPG8H3pq5arzCOAGg1Veb4PCPbtaEXJnYymm2OOGux2ox+tlKKKjIP7XmguTeBPJuanNUJSzVzn2yyivQ=="} {
+	for _, required := range []string{`"@adversarylabs/sdk": "^0.1.28"`, `"version": "0.1.28"`, "Oyx1frRVVoqSAcxh9NCiooAFGukOtxS8uAhielelJ95U8xXKYpSK1KGjvOTxIyQVk8wP/P512katl6V1g6Rtww=="} {
 		if !strings.Contains(string(packageLock), required) {
 			t.Fatalf("package-lock.json missing %s", required)
 		}

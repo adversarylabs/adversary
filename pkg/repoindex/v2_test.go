@@ -75,6 +75,9 @@ func shadow(once fakeOnce) (Store, error) {
 	if assignment.SourceKind != "call" || assignment.SourceOperation != constructor.ID || len(assignment.Ancestors) == 0 || assignment.Ancestors[0] != guard.ID {
 		t.Fatalf("assignment=%#v guard=%#v constructor=%#v", assignment, guard, constructor)
 	}
+	if assignment.ID >= constructor.ID {
+		t.Fatalf("assignment must start before its nested RHS call: assignment=%#v constructor=%#v", assignment, constructor)
+	}
 	bindings := map[string]semanticBinding{}
 	for _, binding := range load.Bindings {
 		bindings[binding.ID] = binding
