@@ -130,6 +130,45 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 	}
 }
 
+func TestCreateGeneratesVersionActionCompatibleNodeRuntimes(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "private-adversaries")
+	if _, err := Create(Options{Destination: destination}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, adversary := range starterAdversaries {
+		dir := filepath.Join(destination, "adversaries", adversary.Slug)
+		manifest, err := os.ReadFile(filepath.Join(dir, "adversary.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(manifest), "  command:\n    - dist/index.js\n") {
+			t.Fatalf("%s runtime command is not a block-style string list:\n%s", adversary.Slug, manifest)
+		}
+		if strings.Contains(string(manifest), "command: [") {
+			t.Fatalf("%s runtime command uses unsupported inline YAML:\n%s", adversary.Slug, manifest)
+		}
+
+		for _, name := range []string{"src/index.ts", "dist/index.js"} {
+			source, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(name)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{
+				`readFileSync(new URL("../package.json", import.meta.url), "utf8")`,
+				"version: packageVersion",
+			} {
+				if !strings.Contains(string(source), want) {
+					t.Fatalf("%s/%s missing %q:\n%s", adversary.Slug, name, want, source)
+				}
+			}
+			if strings.Contains(string(source), `version: "0.0.1"`) {
+				t.Fatalf("%s/%s hard-codes the runtime version:\n%s", adversary.Slug, name, source)
+			}
+		}
+	}
+}
+
 func TestUpgradePreservesPoliciesAndMakesEntriesRunnable(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "adversarylabs.yaml"), []byte("kind: AdversaryCatalog\n"), 0o644); err != nil {

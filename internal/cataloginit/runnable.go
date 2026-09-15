@@ -476,7 +476,8 @@ triggers:
 runtime:
   name: node
   version: "22"
-  command: [dist/index.js]
+  command:
+    - dist/index.js
 
 permissions:
   enforcement: advisory
@@ -525,6 +526,9 @@ import { Adversary, ModelReviewError, ModelUnavailableError, Severity, type Rule
 import { registerDeterministicRules } from "./deterministic.js";
 
 const POLICY = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+const packageVersion = (
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
+).version;
 export type LearnedRule = {version:number; id:string; summary:string; guidance:string; severity:"low"|"medium"|"high"|"critical"; confidence:"medium"|"high"; evidence:string};
 
 const RULE_KEYS = new Set(["version", "id", "summary", "guidance", "severity", "confidence", "evidence"]);
@@ -627,7 +631,7 @@ export async function reviewPolicy(ctx: RuleContext): Promise<void> {
 }
 
 export function createApp(): Adversary {
-  const app = new Adversary({name: "private/{{slug}}", version: "0.0.1", review: {minimumConfidence: "medium", maximumFindings: 8}});
+  const app = new Adversary({name: "private/{{slug}}", version: packageVersion, review: {minimumConfidence: "medium", maximumFindings: 8}});
   registerDeterministicRules(app);
   app.rule("private-policy", reviewPolicy);
   return app;
@@ -645,6 +649,7 @@ import { parse } from "yaml";
 import { Adversary, ModelReviewError, ModelUnavailableError } from "@adversarylabs/sdk";
 import { registerDeterministicRules } from "./deterministic.js";
 const POLICY = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+const packageVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const RULE_KEYS = new Set(["version", "id", "summary", "guidance", "severity", "confidence", "evidence"]);
 const RULE_SEVERITIES = new Set(["low", "medium", "high", "critical"]);
 const RULE_CONFIDENCES = new Set(["medium", "high"]);
@@ -755,7 +760,7 @@ export async function reviewPolicy(ctx) {
     }
 }
 export function createApp() {
-    const app = new Adversary({ name: "private/{{slug}}", version: "0.0.1", review: { minimumConfidence: "medium", maximumFindings: 8 } });
+    const app = new Adversary({ name: "private/{{slug}}", version: packageVersion, review: { minimumConfidence: "medium", maximumFindings: 8 } });
     registerDeterministicRules(app);
     app.rule("private-policy", reviewPolicy);
     return app;
@@ -780,7 +785,15 @@ export function registerDeterministicRules(_app) { }
 
 const runnableTypes = `#!/usr/bin/env node
 import { Adversary, type RuleContext } from "@adversarylabs/sdk";
-export type LearnedRule = {version:number; id:string; summary:string; guidance:string; severity:"low"|"medium"|"high"|"critical"; confidence:"medium"|"high"; evidence:string};
+export type LearnedRule = {
+    version: number;
+    id: string;
+    summary: string;
+    guidance: string;
+    severity: "low" | "medium" | "high" | "critical";
+    confidence: "medium" | "high";
+    evidence: string;
+};
 export declare function parseLearnedRule(value: unknown, directory: string): LearnedRule;
 export declare function loadLearnedRules(): LearnedRule[];
 export declare function buildPolicy(policy: string, rules: LearnedRule[]): string;
