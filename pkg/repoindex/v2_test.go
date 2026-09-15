@@ -57,10 +57,13 @@ func shadow(once fakeOnce) (Store, error) {
 		return data
 	}
 	load := read("load")
-	var guard, assignment semanticOperation
+	var guard, constructor, assignment semanticOperation
 	for _, operation := range load.Operations {
 		if operation.Kind == "call" && operation.Method == "Do" {
 			guard = operation
+		}
+		if operation.Kind == "call" && operation.Name == "NewStore" {
+			constructor = operation
 		}
 		if operation.Kind == "assignment" {
 			assignment = operation
@@ -69,8 +72,8 @@ func shadow(once fakeOnce) (Store, error) {
 	if guard.ReceiverType != "sync.Once" {
 		t.Fatalf("guard=%#v", guard)
 	}
-	if assignment.SourceKind != "call" || len(assignment.Ancestors) == 0 || assignment.Ancestors[0] != guard.ID {
-		t.Fatalf("assignment=%#v guard=%#v", assignment, guard)
+	if assignment.SourceKind != "call" || assignment.SourceOperation != constructor.ID || len(assignment.Ancestors) == 0 || assignment.Ancestors[0] != guard.ID {
+		t.Fatalf("assignment=%#v guard=%#v constructor=%#v", assignment, guard, constructor)
 	}
 	bindings := map[string]semanticBinding{}
 	for _, binding := range load.Bindings {

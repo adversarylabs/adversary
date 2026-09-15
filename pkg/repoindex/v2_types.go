@@ -17,7 +17,7 @@ import (
 
 const (
 	V2SchemaVersion   = "v2"
-	V2AdapterRevision = "go-semantic-operations-v1+ts-syntax-v1"
+	V2AdapterRevision = "go-semantic-operations-v2+ts-syntax-v1"
 	EnvRepoGraph      = "ADVERSARY_REPO_GRAPH"
 	v2DatabaseFile    = "graph.sqlite"
 	v2MetaFile        = "meta.json"

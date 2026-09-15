@@ -35,10 +35,12 @@ type semanticOperation struct {
 	ReceiverBinding string   `json:"receiverBinding,omitempty"`
 	Operator        string   `json:"operator,omitempty"`
 	SourceKind      string   `json:"sourceKind,omitempty"`
+	SourceOperation int      `json:"sourceOperation,omitempty"`
 	Targets         []string `json:"targets,omitempty"`
 	References      []string `json:"references,omitempty"`
 	pos             token.Pos
 	end             token.Pos
+	sourcePos       token.Pos
 }
 
 type semanticUnitData struct {
@@ -186,8 +188,9 @@ func (state *v2BuildState) insertGoSemanticFunction(statement *sql.Stmt, record 
 			position, end := fset.Position(typed.Pos()), fset.Position(typed.End())
 			op := semanticOperation{Kind: "assignment", Line: position.Line, Column: position.Column, EndLine: end.Line, EndColumn: end.Column, Operator: typed.Tok.String(), SourceKind: "expression", pos: typed.Pos(), end: typed.End()}
 			if len(typed.Rhs) == 1 {
-				if _, ok := typed.Rhs[0].(*ast.CallExpr); ok {
+				if source, ok := typed.Rhs[0].(*ast.CallExpr); ok {
 					op.SourceKind = "call"
+					op.sourcePos = source.Pos()
 				}
 			}
 			for _, expression := range typed.Lhs {
@@ -236,7 +239,16 @@ func (state *v2BuildState) insertGoSemanticFunction(statement *sql.Stmt, record 
 	for index := range operations {
 		operations[index].ID = index + 1
 	}
+	callIDsByPosition := make(map[token.Pos]int)
+	for _, operation := range operations {
+		if operation.Kind == "call" {
+			callIDsByPosition[operation.pos] = operation.ID
+		}
+	}
 	for index := range operations {
+		if operations[index].sourcePos.IsValid() {
+			operations[index].SourceOperation = callIDsByPosition[operations[index].sourcePos]
+		}
 		for _, parent := range operations {
 			if parent.Kind == "call" && parent.ID != operations[index].ID && parent.pos < operations[index].pos && parent.end >= operations[index].end {
 				operations[index].Ancestors = append(operations[index].Ancestors, parent.ID)

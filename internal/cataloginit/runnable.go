@@ -1,6 +1,7 @@
 package cataloginit
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,7 +15,7 @@ import (
 )
 
 const runtimeVersion = "0.0.1"
-const minimumSDKVersion = "0.1.24"
+const minimumSDKVersion = "0.1.26"
 
 type UpgradeResult struct {
 	Location      string
@@ -199,12 +200,10 @@ func ensureMinimumSDKDependency(dir string) (bool, error) {
 		return false, nil
 	}
 
-	dependencies["@adversarylabs/sdk"] = "^" + minimumSDKVersion
-	packageUpdated, err := json.MarshalIndent(packageDocument, "", "  ")
-	if err != nil {
-		return false, fmt.Errorf("encode package.json: %w", err)
+	packageUpdated, replaced := replaceJSONStringValue(packageRaw, "@adversarylabs/sdk", current, "^"+minimumSDKVersion)
+	if !replaced {
+		return false, fmt.Errorf("package.json SDK dependency could not be updated in place")
 	}
-	packageUpdated = append(packageUpdated, '\n')
 
 	lockPath := filepath.Join(dir, "package-lock.json")
 	lockRaw, err := os.ReadFile(lockPath)
@@ -226,7 +225,7 @@ func ensureMinimumSDKDependency(dir string) (bool, error) {
 		return false, fmt.Errorf("package-lock.json is missing package metadata")
 	}
 	root, rootOK := lockPackages[""].(map[string]any)
-	sdkEntry, sdkOK := templatePackages["node_modules/@adversarylabs/sdk"]
+	_, sdkOK := templatePackages["node_modules/@adversarylabs/sdk"]
 	if !rootOK || !sdkOK {
 		return false, fmt.Errorf("package-lock.json is missing SDK metadata")
 	}
@@ -234,13 +233,18 @@ func ensureMinimumSDKDependency(dir string) (bool, error) {
 	if !rootOK {
 		return false, fmt.Errorf("package-lock.json is missing root dependencies")
 	}
-	rootDependencies["@adversarylabs/sdk"] = "^" + minimumSDKVersion
-	lockPackages["node_modules/@adversarylabs/sdk"] = sdkEntry
-	lockUpdated, err := json.MarshalIndent(lockDocument, "", "  ")
-	if err != nil {
-		return false, fmt.Errorf("encode package-lock.json: %w", err)
+	lockCurrent, ok := rootDependencies["@adversarylabs/sdk"].(string)
+	if !ok {
+		return false, fmt.Errorf("package-lock.json is missing root SDK dependency")
 	}
-	lockUpdated = append(lockUpdated, '\n')
+	lockUpdated, replaced := replaceJSONStringValue(lockRaw, "@adversarylabs/sdk", lockCurrent, "^"+minimumSDKVersion)
+	if !replaced {
+		return false, fmt.Errorf("package-lock.json root SDK dependency could not be updated in place")
+	}
+	lockUpdated, err = replaceJSONObjectValue(lockUpdated, templateRaw, "node_modules/@adversarylabs/sdk")
+	if err != nil {
+		return false, err
+	}
 
 	if err := os.WriteFile(packagePath, packageUpdated, 0o644); err != nil {
 		return false, err
@@ -249,6 +253,96 @@ func ensureMinimumSDKDependency(dir string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func replaceJSONStringValue(document []byte, key, current, replacement string) ([]byte, bool) {
+	needle := []byte(`"` + key + `"`)
+	for offset := 0; offset < len(document); {
+		index := bytes.Index(document[offset:], needle)
+		if index < 0 {
+			return document, false
+		}
+		index += offset + len(needle)
+		for index < len(document) && (document[index] == ' ' || document[index] == '\t' || document[index] == '\r' || document[index] == '\n') {
+			index++
+		}
+		if index >= len(document) || document[index] != ':' {
+			offset = index
+			continue
+		}
+		index++
+		for index < len(document) && (document[index] == ' ' || document[index] == '\t' || document[index] == '\r' || document[index] == '\n') {
+			index++
+		}
+		quotedCurrent := []byte(`"` + current + `"`)
+		if !bytes.HasPrefix(document[index:], quotedCurrent) {
+			offset = index
+			continue
+		}
+		updated := make([]byte, 0, len(document)+len(replacement)-len(current))
+		updated = append(updated, document[:index]...)
+		updated = append(updated, '"')
+		updated = append(updated, replacement...)
+		updated = append(updated, '"')
+		updated = append(updated, document[index+len(quotedCurrent):]...)
+		return updated, true
+	}
+	return document, false
+}
+
+func replaceJSONObjectValue(document, template []byte, key string) ([]byte, error) {
+	start, end, err := jsonObjectValueBounds(document, key)
+	if err != nil {
+		return nil, fmt.Errorf("package-lock.json SDK metadata: %w", err)
+	}
+	templateStart, templateEnd, err := jsonObjectValueBounds(template, key)
+	if err != nil {
+		return nil, fmt.Errorf("embedded package-lock.json SDK metadata: %w", err)
+	}
+	updated := make([]byte, 0, len(document)-(end-start)+(templateEnd-templateStart))
+	updated = append(updated, document[:start]...)
+	updated = append(updated, template[templateStart:templateEnd]...)
+	updated = append(updated, document[end:]...)
+	return updated, nil
+}
+
+func jsonObjectValueBounds(document []byte, key string) (int, int, error) {
+	marker := []byte(`"` + key + `"`)
+	keyIndex := bytes.Index(document, marker)
+	if keyIndex < 0 {
+		return 0, 0, fmt.Errorf("missing %q", key)
+	}
+	start := bytes.IndexByte(document[keyIndex+len(marker):], '{')
+	if start < 0 {
+		return 0, 0, fmt.Errorf("%q is not an object", key)
+	}
+	start += keyIndex + len(marker)
+	depth, inString, escaped := 0, false, false
+	for index := start; index < len(document); index++ {
+		character := document[index]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if character == '\\' {
+				escaped = true
+			} else if character == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch character {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return start, index + 1, nil
+			}
+		}
+	}
+	return 0, 0, fmt.Errorf("unterminated object for %q", key)
 }
 
 func versionIsOlder(current, minimum string) bool {
@@ -389,7 +483,7 @@ const runnablePackageJSON = `{
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && tsx --test test/*.test.ts"
   },
-	"dependencies": {"@adversarylabs/sdk": "^0.1.24", "yaml": "^2.8.1"},
+	"dependencies": {"@adversarylabs/sdk": "^0.1.26", "yaml": "^2.8.1"},
   "devDependencies": {"@types/node": "^26.5.0", "tsx": "^4.23.13", "typescript": "^7.0.2"}
 }
 `
