@@ -998,7 +998,7 @@ func TestPullRequestBodyUsesCanonicalGeneratedRule(t *testing.T) {
 	}
 	body := pullRequestBody(results.Result{
 		ID: "candidate", Package: "compatibility", ProposedRule: "use themand do everything", CommentURL: "https://example.test/evidence",
-	}, target, true, true)
+	}, target, "Generated semantic rule", true, true)
 	for _, want := range []string{"## Generated rule", "Propagate accepted request fields", "Minimum confidence: `medium`", "semantic evaluation", "Managed runtime template: synchronized"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
@@ -1006,5 +1006,19 @@ func TestPullRequestBodyUsesCanonicalGeneratedRule(t *testing.T) {
 	}
 	if strings.Contains(body, "themand") {
 		t.Fatalf("body used the stale proposed rule instead of canonical generated content:\n%s", body)
+	}
+}
+
+func TestPullRequestBodyUsesReviewedSummaryForDeterministicChange(t *testing.T) {
+	body := pullRequestBody(results.Result{
+		ID: "candidate", Package: "reliability", ProposedRule: "Claim an unproven permanent failure.", CommentURL: "https://example.test/evidence",
+	}, "/tmp/adversaries/reliability/src/rules/fallible-once.ts", "Detect correlated fallible results cached by sync.Once", true, true)
+	for _, want := range []string{"## Generated change", "Detect correlated fallible results cached by sync.Once", "Managed runtime template: synchronized"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "unproven permanent failure") {
+		t.Fatalf("body reused unreviewed candidate wording:\n%s", body)
 	}
 }

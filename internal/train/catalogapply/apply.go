@@ -210,7 +210,7 @@ func createPullRequestWithOptions(ctx context.Context, stateRoot, workspaceRoot 
 	}
 	emit("push", "complete", "Catalog branch pushed")
 	emit("pull_request", "running", "Opening the catalog pull request")
-	body := pullRequestBody(row, target, planner != nil, strings.Contains(filepath.ToSlash(string(changed)), "/package.json"))
+	body := pullRequestBody(row, target, generatedTitle, planner != nil, strings.Contains(filepath.ToSlash(string(changed)), "/package.json"))
 	created, err := requireCommand(ctx, run, worktree, "gh", "pr", "create", "--base", baseBranch, "--head", branch, "--title", commitTitle, "--body", body)
 	if err != nil {
 		return fmt.Errorf("catalog branch %s was pushed, but opening its pull request failed: %w", branch, err)
@@ -425,7 +425,7 @@ func pullRequestBranch(row results.Result) string {
 	return fmt.Sprintf("adversary/train-%s-%s-%d", owner, id, time.Now().UTC().UnixMilli())
 }
 
-func pullRequestBody(row results.Result, generatedTarget string, validated, runtimeSynchronized bool) string {
+func pullRequestBody(row results.Result, generatedTarget, generatedSummary string, validated, runtimeSynchronized bool) string {
 	var body strings.Builder
 	fmt.Fprintf(&body, "## Catalog training proposal\n\n- Adversary: `%s`\n- Candidate: `%s`\n", row.Package, row.ID)
 	if evidence := evidenceURL(row); evidence != "" {
@@ -443,7 +443,11 @@ func pullRequestBody(row results.Result, generatedTarget string, validated, runt
 	if rule.ID != "" && rule.Summary != "" && rule.Guidance != "" {
 		fmt.Fprintf(&body, "\n## Generated rule\n\n**%s** (`%s`)\n\n%s\n\n- Default severity: `%s`\n- Minimum confidence: `%s`\n", strings.TrimSpace(rule.Summary), rule.ID, strings.TrimSpace(rule.Guidance), rule.Severity, rule.Confidence)
 	} else {
-		fmt.Fprintf(&body, "\n## Proposed rule\n\n%s\n", strings.TrimSpace(row.ProposedRule))
+		summary := strings.TrimSpace(generatedSummary)
+		if summary == "" {
+			summary = strings.TrimSpace(row.ProposedRule)
+		}
+		fmt.Fprintf(&body, "\n## Generated change\n\n%s\n", summary)
 	}
 	if validated {
 		if rule.ID != "" {
