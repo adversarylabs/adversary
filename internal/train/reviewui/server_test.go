@@ -30,7 +30,7 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Adversary training workspace") {
 		t.Fatalf("page status=%d body=%q", page.Code, page.Body.String())
 	}
-	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Filter review evidence", "Repositories", "PR authors", "Commenters", "Clear all", "facetSelections", "facetSelections[key].add(value)", "activeFacetCount", "!details.contains(event.target)", "event.key==='Escape'", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "Check existing catalog coverage", "Generate and refine the adversary rule", "update.stage==='quality'?'generate'", "Evaluate finding and no-finding cases", "No new rule needed", "already covered by", "Add rule anyway", "allow-overlap=true", "querySelectorAll('.build-step.running')", "Generated adversary did not pass validation", "Generated rule still needs refinement", "Automatic repair could not satisfy", "Technical details", "showBuildFailure", "job-tray", "job-dismiss", "Dismiss finished task", "JOB_RETENTION_MS", "/api/jobs/"} {
+	for _, want := range []string{"5 earlier lines", "5 later lines", "repo-group", "repo-chevron", "Filter review evidence", "Repositories", "PR authors", "Commenters", "Clear all", "facetSelections", "facetSelections[key].add(value)", "activeFacetCount", "!details.contains(event.target)", "event.key==='Escape'", "New adversary", "AI assist", "Create catalog PR", "Apply to working tree", "Approve for later", "View GitHub evidence", "findingFromURL", "pushState", "Run in background", "Check existing catalog coverage", "Generate and refine the adversary rule", "update.stage==='quality'?'generate'", "Evaluate finding and no-finding cases", "No new rule needed", "already covered by", "Add rule anyway", "allow-overlap=true", "querySelectorAll('.build-step.running')", "We could not create this rule yet", "Choose how to continue", "Try again", "Review finding", "Technical details for troubleshooting", "showBuildFailure", "job-tray", "job-dismiss", "Dismiss finished task", "JOB_RETENTION_MS", "/api/jobs/"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("review page omitted %q", want)
 		}
@@ -50,6 +50,20 @@ func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {
 	handler.ServeHTTP(api, req)
 	if api.Code != http.StatusOK || !strings.Contains(api.Body.String(), "candidate-1") {
 		t.Fatalf("API status=%d body=%q", api.Code, api.Body.String())
+	}
+}
+
+func TestRenderedReviewPagePreservesCandidateForRetryAfterPollingFailure(t *testing.T) {
+	contents := page("secret", []string{"operability"})
+	for _, want := range []string{
+		"candidateID:job.candidate_id||candidateID",
+		"candidateID:current.candidate_id",
+		"showBuildFailure(task.current.error,task.candidateID)",
+		"retry.onclick=()=>startPR(candidateID)",
+	} {
+		if !strings.Contains(contents, want) {
+			t.Fatalf("review page omitted polling-failure retry contract %q", want)
+		}
 	}
 }
 
@@ -87,19 +101,7 @@ func TestHandlerTreatsAlreadyCoveredAsSuccessfulTerminalOutcome(t *testing.T) {
 	if err := json.Unmarshal(start.Body.Bytes(), &job); err != nil {
 		t.Fatal(err)
 	}
-	for attempt := 0; attempt < 100; attempt++ {
-		status := httptest.NewRecorder()
-		req = httptest.NewRequest(http.MethodGet, "/api/jobs/"+job.ID, nil)
-		req.Header.Set(tokenHeader, "secret")
-		handler.ServeHTTP(status, req)
-		if err := json.Unmarshal(status.Body.Bytes(), &job); err != nil {
-			t.Fatal(err)
-		}
-		if job.Done {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	job = waitForProgressJob(t, handler, "secret", job)
 	if !job.Done || job.Error != "" || job.Resolution == nil || job.Resolution.Kind != "already_covered" || job.Resolution.CoveringRule != "actionable-errors" {
 		t.Fatalf("job=%+v", job)
 	}
@@ -124,19 +126,7 @@ func TestHandlerTreatsAlreadyCoveredAsSuccessfulTerminalOutcome(t *testing.T) {
 	if err := json.Unmarshal(override.Body.Bytes(), &overrideJob); err != nil {
 		t.Fatal(err)
 	}
-	for attempt := 0; attempt < 100; attempt++ {
-		status := httptest.NewRecorder()
-		req = httptest.NewRequest(http.MethodGet, "/api/jobs/"+overrideJob.ID, nil)
-		req.Header.Set(tokenHeader, "secret")
-		handler.ServeHTTP(status, req)
-		if err := json.Unmarshal(status.Body.Bytes(), &overrideJob); err != nil {
-			t.Fatal(err)
-		}
-		if overrideJob.Done {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	overrideJob = waitForProgressJob(t, handler, "secret", overrideJob)
 	if !overrideRequested || overrideJob.Error != "" || overrideJob.Resolution != nil || overrideJob.Candidate == nil || overrideJob.Candidate.Status != results.StatusProposed {
 		t.Fatalf("override requested=%v job=%+v", overrideRequested, overrideJob)
 	}
@@ -217,19 +207,7 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 	if err := json.Unmarshal(pullRequest.Body.Bytes(), &job); err != nil {
 		t.Fatal(err)
 	}
-	for attempt := 0; attempt < 100; attempt++ {
-		status := httptest.NewRecorder()
-		req = httptest.NewRequest(http.MethodGet, "/api/jobs/"+job.ID, nil)
-		req.Header.Set(tokenHeader, "secret")
-		handler.ServeHTTP(status, req)
-		if err := json.Unmarshal(status.Body.Bytes(), &job); err != nil {
-			t.Fatal(err)
-		}
-		if job.Done {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	job = waitForProgressJob(t, handler, "secret", job)
 	if !job.Done || job.Error != "" || job.Candidate == nil || job.Candidate.CatalogPRURL != "https://github.com/acme/catalog/pull/7" {
 		t.Fatalf("pull request job=%+v", job)
 	}
@@ -271,6 +249,27 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 			t.Fatalf("%s row=%+v err=%v", action, row, err)
 		}
 	}
+}
+
+func waitForProgressJob(t *testing.T, handler http.Handler, token string, job progressJob) progressJob {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !job.Done && time.Now().Before(deadline) {
+		status := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/jobs/"+job.ID, nil)
+		req.Header.Set(tokenHeader, token)
+		handler.ServeHTTP(status, req)
+		if status.Code != http.StatusOK {
+			t.Fatalf("job status=%d body=%q", status.Code, status.Body.String())
+		}
+		if err := json.Unmarshal(status.Body.Bytes(), &job); err != nil {
+			t.Fatal(err)
+		}
+		if !job.Done {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	return job
 }
 
 func saveCandidate(t *testing.T, state string) {
