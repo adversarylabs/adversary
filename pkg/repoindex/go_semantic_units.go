@@ -15,10 +15,11 @@ import (
 )
 
 type semanticBinding struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Type  string `json:"type,omitempty"`
-	Scope string `json:"scope"`
+	ID     string   `json:"id"`
+	Name   string   `json:"name"`
+	Type   string   `json:"type,omitempty"`
+	Traits []string `json:"traits,omitempty"`
+	Scope  string   `json:"scope"`
 }
 
 type semanticOperation struct {
@@ -155,7 +156,7 @@ func (state *v2BuildState) insertGoSemanticFunction(statement *sql.Stmt, record 
 				scope = "local"
 			}
 		}
-		binding := semanticBinding{ID: id, Name: object.Name(), Type: semanticType(object.Type()), Scope: scope}
+		binding := semanticBinding{ID: id, Name: object.Name(), Type: semanticType(object.Type()), Traits: semanticTraits(object.Type()), Scope: scope}
 		objects[object] = binding
 		return id
 	}
@@ -284,6 +285,21 @@ func (state *v2BuildState) insertGoSemanticFunction(statement *sql.Stmt, record 
 	}
 	state.semanticUnits++
 	return nil
+}
+
+func semanticTraits(value types.Type) []string {
+	if value == nil {
+		return nil
+	}
+	errorObject := types.Universe.Lookup("error")
+	if errorObject == nil {
+		return nil
+	}
+	errorInterface, ok := errorObject.Type().Underlying().(*types.Interface)
+	if !ok || !types.Implements(value, errorInterface) {
+		return nil
+	}
+	return []string{"error"}
 }
 
 func semanticType(value types.Type) string {

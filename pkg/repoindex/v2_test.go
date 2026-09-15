@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -17,10 +18,14 @@ func NewStore() (Store, error) { return nil, nil }
 var once sync.Once
 var store Store
 var initErr error
+type permanentError struct{}
+func (permanentError) Error() string { return "failed" }
+var concreteErr permanentError
 func load() (Store, error) {
   once.Do(func() { store, initErr = NewStore() })
   return store, initErr
 }
+func concreteFailure() error { return concreteErr }
 type fakeOnce struct{}
 func (fakeOnce) Do(fn func()) { fn() }
 func shadow(once fakeOnce) (Store, error) {
@@ -82,8 +87,18 @@ func shadow(once fakeOnce) (Store, error) {
 	for _, binding := range load.Bindings {
 		bindings[binding.ID] = binding
 	}
-	if len(assignment.Targets) != 2 || bindings[assignment.Targets[0]].Scope != "package" || bindings[assignment.Targets[1]].Type != "error" {
+	if len(assignment.Targets) != 2 || bindings[assignment.Targets[0]].Scope != "package" || bindings[assignment.Targets[1]].Type != "error" || !slices.Contains(bindings[assignment.Targets[1]].Traits, "error") {
 		t.Fatalf("targets=%#v bindings=%#v", assignment.Targets, bindings)
+	}
+	concrete := read("concreteFailure")
+	var concreteBinding semanticBinding
+	for _, binding := range concrete.Bindings {
+		if binding.Name == "concreteErr" {
+			concreteBinding = binding
+		}
+	}
+	if concreteBinding.Type != "app.permanentError" || !slices.Contains(concreteBinding.Traits, "error") {
+		t.Fatalf("concrete error binding=%#v", concreteBinding)
 	}
 	shadow := read("shadow")
 	for _, operation := range shadow.Operations {
