@@ -419,8 +419,8 @@ func TestCatalogChangePlannerKeepsRedTeamRejectionBlocking(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "rejected unsafe plan") {
 		t.Fatalf("red-team rejection became advisory: %v", err)
 	}
-	if len(provider.requests) != 3 || !strings.Contains(provider.requests[2].Prompt, "A decoy split across separate functions is inadequate") {
-		t.Fatalf("red-team review was not executed with the narrow-scope contract: %+v", provider.requests)
+	if len(provider.requests) != 3 || !strings.Contains(provider.requests[2].Prompt, "concrete semantic result") {
+		t.Fatalf("red-team review was not executed with the semantic-query contract: %+v", provider.requests)
 	}
 }
 
