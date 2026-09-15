@@ -61,6 +61,23 @@ func TestCatalogOverlapPreservesContextCancellation(t *testing.T) {
 	}
 }
 
+func TestCatalogChangePlannerDoesNotSilentlyDropAuthoritativeEvidenceContext(t *testing.T) {
+	provider := &catalogSequenceProviderStub{name: "camel", model: "auto"}
+	runtime := &catalogModelRuntimeStub{provider: provider}
+	_, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{
+		EvidencePRURL:      "not-a-pull-request-url",
+		EvidenceCommentURL: "https://github.com/example/repo/pull/1#discussion_r1",
+		EvidenceFile:       "resolver.go",
+		EvidenceDiff:       "@@ -1 +1 @@\n-old\n+new",
+	})
+	if err == nil || !strings.Contains(err.Error(), "load authoritative evidence source") {
+		t.Fatalf("missing evidence context error=%v", err)
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("model was called without authoritative context: %d calls", len(provider.requests))
+	}
+}
+
 type catalogSequenceProviderStub struct {
 	name, model string
 	outputs     []json.RawMessage
@@ -435,7 +452,7 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 	if !strings.Contains(string(provider.requests[0].Input), `"latest_validation_feedback":"expected a lazy-initialization finding"`) {
 		t.Fatalf("repair input omitted latest failure: %s", provider.requests[0].Input)
 	}
-	for _, want := range []string{"exact reviewed file revision", "authoritative for source facts", "absent from both evidence_diff and evidence_source_context", `within: "guard"`, `outside: "guard"`, "named factory call", "operative README", "synthetic line numbers", "acceptance criteria are exhaustive", "receiverType is present"} {
+	for _, want := range []string{"exact reviewed file revision", "authoritative for source facts", "scan it through its final numbered line", "never stop at the last line of evidence_diff", "absent from both evidence_diff and evidence_source_context", `within: "guard"`, `outside: "guard"`, "named factory call", "operative README", "synthetic line numbers", "acceptance criteria are exhaustive", "receiverType is present"} {
 		if !strings.Contains(provider.requests[1].Prompt, want) {
 			t.Fatalf("quality prompt omitted %q:\n%s", want, provider.requests[1].Prompt)
 		}
