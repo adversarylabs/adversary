@@ -90,19 +90,7 @@ func TestHandlerTreatsAlreadyCoveredAsSuccessfulTerminalOutcome(t *testing.T) {
 	if err := json.Unmarshal(start.Body.Bytes(), &job); err != nil {
 		t.Fatal(err)
 	}
-	for attempt := 0; attempt < 100; attempt++ {
-		status := httptest.NewRecorder()
-		req = httptest.NewRequest(http.MethodGet, "/api/jobs/"+job.ID, nil)
-		req.Header.Set(tokenHeader, "secret")
-		handler.ServeHTTP(status, req)
-		if err := json.Unmarshal(status.Body.Bytes(), &job); err != nil {
-			t.Fatal(err)
-		}
-		if job.Done {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	job = waitForProgressJob(t, handler, "secret", job)
 	if !job.Done || job.Error != "" || job.Resolution == nil || job.Resolution.Kind != "already_covered" || job.Resolution.CoveringRule != "actionable-errors" {
 		t.Fatalf("job=%+v", job)
 	}
@@ -127,19 +115,7 @@ func TestHandlerTreatsAlreadyCoveredAsSuccessfulTerminalOutcome(t *testing.T) {
 	if err := json.Unmarshal(override.Body.Bytes(), &overrideJob); err != nil {
 		t.Fatal(err)
 	}
-	for attempt := 0; attempt < 100; attempt++ {
-		status := httptest.NewRecorder()
-		req = httptest.NewRequest(http.MethodGet, "/api/jobs/"+overrideJob.ID, nil)
-		req.Header.Set(tokenHeader, "secret")
-		handler.ServeHTTP(status, req)
-		if err := json.Unmarshal(status.Body.Bytes(), &overrideJob); err != nil {
-			t.Fatal(err)
-		}
-		if overrideJob.Done {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	overrideJob = waitForProgressJob(t, handler, "secret", overrideJob)
 	if !overrideRequested || overrideJob.Error != "" || overrideJob.Resolution != nil || overrideJob.Candidate == nil || overrideJob.Candidate.Status != results.StatusProposed {
 		t.Fatalf("override requested=%v job=%+v", overrideRequested, overrideJob)
 	}
@@ -220,19 +196,7 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 	if err := json.Unmarshal(pullRequest.Body.Bytes(), &job); err != nil {
 		t.Fatal(err)
 	}
-	for attempt := 0; attempt < 100; attempt++ {
-		status := httptest.NewRecorder()
-		req = httptest.NewRequest(http.MethodGet, "/api/jobs/"+job.ID, nil)
-		req.Header.Set(tokenHeader, "secret")
-		handler.ServeHTTP(status, req)
-		if err := json.Unmarshal(status.Body.Bytes(), &job); err != nil {
-			t.Fatal(err)
-		}
-		if job.Done {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+	job = waitForProgressJob(t, handler, "secret", job)
 	if !job.Done || job.Error != "" || job.Candidate == nil || job.Candidate.CatalogPRURL != "https://github.com/acme/catalog/pull/7" {
 		t.Fatalf("pull request job=%+v", job)
 	}
@@ -274,6 +238,27 @@ func TestHandlerEditsAndDecidesCandidate(t *testing.T) {
 			t.Fatalf("%s row=%+v err=%v", action, row, err)
 		}
 	}
+}
+
+func waitForProgressJob(t *testing.T, handler http.Handler, token string, job progressJob) progressJob {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !job.Done && time.Now().Before(deadline) {
+		status := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/jobs/"+job.ID, nil)
+		req.Header.Set(tokenHeader, token)
+		handler.ServeHTTP(status, req)
+		if status.Code != http.StatusOK {
+			t.Fatalf("job status=%d body=%q", status.Code, status.Body.String())
+		}
+		if err := json.Unmarshal(status.Body.Bytes(), &job); err != nil {
+			t.Fatal(err)
+		}
+		if !job.Done {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	return job
 }
 
 func saveCandidate(t *testing.T, state string) {
