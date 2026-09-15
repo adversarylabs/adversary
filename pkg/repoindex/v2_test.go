@@ -1,10 +1,91 @@
 package repoindex
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestV2GoSemanticOperationsAreTypedAndScoped(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/app\n\ngo 1.22\n")
+	write(t, root, "lazy.go", `package app
+import "sync"
+type Store interface{}
+func NewStore() (Store, error) { return nil, nil }
+var once sync.Once
+var store Store
+var initErr error
+func load() (Store, error) {
+  once.Do(func() { store, initErr = NewStore() })
+  return store, initErr
+}
+type fakeOnce struct{}
+func (fakeOnce) Do(fn func()) { fn() }
+func shadow(once fakeOnce) (Store, error) {
+  once.Do(func() { store, initErr = NewStore() })
+  return store, initErr
+}
+`)
+	fingerprint, err := V2Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "graph")
+	meta, err := BuildV2(root, dir, fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.SemanticUnitCount < 4 {
+		t.Fatalf("semantic units=%d", meta.SemanticUnitCount)
+	}
+	graph, err := OpenV2(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer graph.Close()
+	read := func(name string) semanticUnitData {
+		var raw string
+		if err := graph.db.QueryRow("SELECT data FROM semantic_units WHERE name=?", name).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var data semanticUnitData
+		if err := json.Unmarshal([]byte(raw), &data); err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	load := read("load")
+	var guard, assignment semanticOperation
+	for _, operation := range load.Operations {
+		if operation.Kind == "call" && operation.Method == "Do" {
+			guard = operation
+		}
+		if operation.Kind == "assignment" {
+			assignment = operation
+		}
+	}
+	if guard.ReceiverType != "sync.Once" {
+		t.Fatalf("guard=%#v", guard)
+	}
+	if assignment.SourceKind != "call" || len(assignment.Ancestors) == 0 || assignment.Ancestors[0] != guard.ID {
+		t.Fatalf("assignment=%#v guard=%#v", assignment, guard)
+	}
+	bindings := map[string]semanticBinding{}
+	for _, binding := range load.Bindings {
+		bindings[binding.ID] = binding
+	}
+	if len(assignment.Targets) != 2 || bindings[assignment.Targets[0]].Scope != "package" || bindings[assignment.Targets[1]].Type != "error" {
+		t.Fatalf("targets=%#v bindings=%#v", assignment.Targets, bindings)
+	}
+	shadow := read("shadow")
+	for _, operation := range shadow.Operations {
+		if operation.Kind == "call" && operation.Method == "Do" && operation.ReceiverType == "sync.Once" {
+			t.Fatalf("shadowed custom receiver was typed as sync.Once: %#v", operation)
+		}
+	}
+}
 
 func TestV2GoAndTypeScriptGraphQueries(t *testing.T) {
 	root := t.TempDir()

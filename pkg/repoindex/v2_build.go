@@ -46,12 +46,20 @@ CREATE TABLE test_links (
   source_symbol_id INTEGER REFERENCES symbols(id), test_file_id INTEGER NOT NULL REFERENCES files(id),
   test_symbol_id INTEGER REFERENCES symbols(id), confidence REAL NOT NULL, reason TEXT NOT NULL
 );
+CREATE TABLE semantic_units (
+  id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id),
+  symbol_id INTEGER REFERENCES symbols(id), language TEXT NOT NULL, kind TEXT NOT NULL,
+  name TEXT NOT NULL, line INTEGER NOT NULL, column INTEGER NOT NULL,
+  end_line INTEGER NOT NULL, end_column INTEGER NOT NULL,
+  adapter TEXT NOT NULL, data TEXT NOT NULL
+);
 CREATE INDEX files_language_path ON files(language,path);
 CREATE INDEX symbols_file_name_kind ON symbols(file_id,name,kind);
 CREATE INDEX symbols_name_kind ON symbols(name,kind);
 CREATE INDEX edges_kind_source ON edges(kind,from_symbol_id,from_file_id);
 CREATE INDEX edges_kind_target ON edges(kind,to_symbol_id,to_file_id);
 CREATE INDEX test_links_source ON test_links(source_file_id,source_symbol_id);
+CREATE INDEX semantic_units_language_file ON semantic_units(language,file_id);
 `
 
 type v2FileRecord struct {
@@ -81,17 +89,18 @@ type v2SymbolDraft struct {
 }
 
 type v2BuildState struct {
-	db           *sql.DB
-	files        []v2FileRecord
-	fileByPath   map[string]*v2FileRecord
-	symbols      []v2SymbolDraft
-	byName       map[string][]*v2SymbolDraft
-	byFile       map[string][]*v2SymbolDraft
-	byFileName   map[string][]*v2SymbolDraft
-	byModuleName map[string][]*v2SymbolDraft
-	edges        int
-	testLinks    int
-	diagnostics  []V2Diagnostic
+	db            *sql.DB
+	files         []v2FileRecord
+	fileByPath    map[string]*v2FileRecord
+	symbols       []v2SymbolDraft
+	byName        map[string][]*v2SymbolDraft
+	byFile        map[string][]*v2SymbolDraft
+	byFileName    map[string][]*v2SymbolDraft
+	byModuleName  map[string][]*v2SymbolDraft
+	edges         int
+	testLinks     int
+	semanticUnits int
+	diagnostics   []V2Diagnostic
 }
 
 func V2Fingerprint(absRepo string) (string, error) {
@@ -192,7 +201,8 @@ func BuildV2(absRepo, dir, fingerprint string) (V2Meta, error) {
 		Fingerprint: fingerprint, RepoPath: absRepo, BuiltAt: time.Now().UTC(),
 		DurationMS: time.Since(started).Milliseconds(), FileCount: len(state.files),
 		SymbolCount: len(state.symbols), EdgeCount: state.edges, TestLinkCount: state.testLinks,
-		ParseFailures: state.diagnostics,
+		SemanticUnitCount: state.semanticUnits,
+		ParseFailures:     state.diagnostics,
 	}
 	raw, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
@@ -287,7 +297,10 @@ func (state *v2BuildState) index(absRepo string) error {
 	if err := state.insertRelations(absRepo, goModule); err != nil {
 		return err
 	}
-	return state.insertTestLinks()
+	if err := state.insertTestLinks(); err != nil {
+		return err
+	}
+	return state.insertSemanticUnits()
 }
 
 func moduleForPath(path, language, goModule string) string {

@@ -181,12 +181,15 @@ func TestUpgradeSynchronizesManagedV1RuntimeFiles(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	originalPackage := `{"adversarylabsCatalogRuntime": 1, "dependencies": {"@adversarylabs/sdk": "^9.9.9"}}`
+	originalLock := `{"lockfileVersion": 3, "catalogOwned": true}`
 	for path, content := range map[string]string{
-		"adversarylabs.yaml":                     "kind: AdversaryCatalog\n",
-		"adversaries/operability/README.md":      "# Operability\n\n## Purpose\n\nKeep failures actionable.\n",
-		"adversaries/operability/adversary.yaml": "name: private/operability\n",
-		"adversaries/operability/package.json":   `{"adversarylabsCatalogRuntime": 1}`,
-		"adversaries/operability/src/index.ts":   "// managed v1\n",
+		"adversarylabs.yaml":                        "kind: AdversaryCatalog\n",
+		"adversaries/operability/README.md":         "# Operability\n\n## Purpose\n\nKeep failures actionable.\n",
+		"adversaries/operability/adversary.yaml":    "name: private/operability\n",
+		"adversaries/operability/package.json":      originalPackage,
+		"adversaries/operability/package-lock.json": originalLock,
+		"adversaries/operability/src/index.ts":      "// managed v1\n",
 	} {
 		full := filepath.Join(root, filepath.FromSlash(path))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -204,9 +207,10 @@ func TestUpgradeSynchronizesManagedV1RuntimeFiles(t *testing.T) {
 		t.Fatalf("result=%+v", result)
 	}
 	packageJSON, _ := os.ReadFile(filepath.Join(dir, "package.json"))
+	packageLock, _ := os.ReadFile(filepath.Join(dir, "package-lock.json"))
 	source, _ := os.ReadFile(filepath.Join(dir, "src", "index.ts"))
 	readme, _ := os.ReadFile(filepath.Join(dir, "README.md"))
-	if !strings.Contains(string(packageJSON), `"adversarylabsCatalogRuntime": 1`) || !strings.Contains(string(source), "loadLearnedRules") {
+	if string(packageJSON) != originalPackage || string(packageLock) != originalLock || !strings.Contains(string(source), "loadLearnedRules") {
 		t.Fatalf("runtime was not synchronized: package=%s source=%s", packageJSON, source)
 	}
 	if !strings.Contains(string(readme), "Keep failures actionable") {

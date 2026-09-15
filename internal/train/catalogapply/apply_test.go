@@ -293,6 +293,44 @@ func TestWriteManagedDeterministicPlanUsesCatalogExtensionPoint(t *testing.T) {
 	}
 }
 
+func TestWriteManagedGoDeterministicPlanRequiresSemanticQuery(t *testing.T) {
+	root := t.TempDir()
+	prefix := "adversaries/reliability/"
+	dir := filepath.Join(root, "adversaries", "reliability")
+	request := ChangeRequest{
+		Adversary: "reliability", Executable: true, PolicyDriven: true, ManagedRuntime: 1,
+		EvidenceFile: "pkg/store/resolver.go",
+		Files: []SourceFile{
+			{Path: prefix + "README.md", Content: "# Reliability\n"},
+			{Path: prefix + "src/index.ts", Content: "import { registerDeterministicRules } from \"./deterministic.js\";\nregisterDeterministicRules(app);\n"},
+			{Path: prefix + "src/deterministic.ts", Content: "export function registerDeterministicRules() {}\n"},
+		},
+	}
+	semanticPlan := ChangePlan{Summary: "Reject poisoned lazy initialization in reliability", Strategy: StrategyDeterministic, Files: []ChangeFile{
+		{Path: prefix + "README.md", Content: "# Reliability\n\n- Retry failed lazy initialization.\n"},
+		{Path: prefix + "src/deterministic.ts", Content: "import { registerRule } from \"./rules/lazy.js\";\nexport function registerDeterministicRules(app: unknown) { registerRule(app); }\n"},
+		{Path: prefix + "src/rules/lazy.ts", Content: "export function registerRule(app: any) { app.rule(\"lazy\", (ctx: any) => ctx.repoGraph?.semanticMatches({language:\"go\",within:\"function\",steps:[]})); }\n"},
+		{Path: prefix + "test/lazy.test.ts", Content: "import { createApp } from \"../src/index.ts\";\nconst fixtureDirectory = \"/tmp/fixture\"; const evidencePath = \"pkg/store/resolver.go\";\nconst repoGraph = { semanticMatches: () => [] };\nvoid createApp().run({input:{source:{path:fixtureDirectory}},repoGraph:repoGraph as any}); void evidencePath;\n"},
+	}}
+	if _, err := writeChangePlan(root, filepath.Join(root, "adversaries"), dir, results.Result{Package: "reliability"}, request, semanticPlan); err != nil {
+		t.Fatal(err)
+	}
+
+	textPlan := semanticPlan
+	textPlan.Files = append([]ChangeFile(nil), semanticPlan.Files...)
+	textPlan.Files[2].Content = "export async function registerRule(app: any) { app.rule(\"lazy\", async (ctx: any) => ctx.loadInScopeSources()); }\n"
+	if _, err := writeChangePlan(root, filepath.Join(root, "adversaries"), dir, results.Result{Package: "reliability"}, request, textPlan); err == nil || !strings.Contains(err.Error(), "may not parse source text") {
+		t.Fatalf("expected source parsing rejection, got %v", err)
+	}
+
+	missingGraphTest := semanticPlan
+	missingGraphTest.Files = append([]ChangeFile(nil), semanticPlan.Files...)
+	missingGraphTest.Files[3].Content = "import { createApp } from \"../src/index.ts\";\nconst evidencePath = \"pkg/store/resolver.go\"; const fixtureDirectory = \"/tmp/fixture\";\nvoid createApp().run({input:{source:{path:fixtureDirectory}}}); void evidencePath;\n"
+	if _, err := writeChangePlan(root, filepath.Join(root, "adversaries"), dir, results.Result{Package: "reliability"}, request, missingGraphTest); err == nil || !strings.Contains(err.Error(), "must inject semantic RepoGraph") {
+		t.Fatalf("expected RepoGraph test rejection, got %v", err)
+	}
+}
+
 func TestPlannedProgressHasOnlyOneRunningStage(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "adversaries", "operability")

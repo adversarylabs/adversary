@@ -103,7 +103,8 @@ func ensureIgnorePatterns(path string, patterns []string) (bool, error) {
 }
 
 // EnsureRunnableAdversary creates or synchronizes the v1 policy-driven runtime.
-// Only files owned by the managed runtime are synchronized.
+// Package metadata belongs to the catalog after initialization and is never
+// rewritten during generation or runtime synchronization.
 func EnsureRunnableAdversary(dir, slug string) (bool, error) {
 	readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
 	if err != nil {
@@ -125,7 +126,7 @@ func EnsureRunnableAdversary(dir, slug string) (bool, error) {
 		}
 		files := runnableAdversaryFiles(slug, purposeFromREADME(string(readme)), string(readme))
 		updated := false
-		for _, name := range []string{"package.json", "package-lock.json", "tsconfig.json", "src/index.ts", "dist/index.js", "dist/index.d.ts", "test/index.test.ts"} {
+		for _, name := range []string{"tsconfig.json", "src/index.ts", "dist/index.js", "dist/index.d.ts", "test/index.test.ts"} {
 			path := filepath.Join(dir, filepath.FromSlash(name))
 			if current, err := os.ReadFile(path); err == nil && string(current) == files[name] {
 				continue
@@ -275,7 +276,7 @@ const runnablePackageJSON = `{
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && tsx --test test/*.test.ts"
   },
-	"dependencies": {"@adversarylabs/sdk": "^0.1.18", "yaml": "^2.8.1"},
+	"dependencies": {"@adversarylabs/sdk": "^0.1.24", "yaml": "^2.8.1"},
   "devDependencies": {"@types/node": "^26.5.0", "tsx": "^4.23.13", "typescript": "^7.0.2"}
 }
 `
