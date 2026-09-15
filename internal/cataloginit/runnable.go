@@ -15,7 +15,7 @@ import (
 )
 
 const runtimeVersion = "0.0.1"
-const minimumSDKVersion = "0.1.28"
+const minimumSDKVersion = "0.1.29"
 
 type UpgradeResult struct {
 	Location      string
@@ -483,7 +483,7 @@ const runnablePackageJSON = `{
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && tsx --test test/*.test.ts"
   },
-	"dependencies": {"@adversarylabs/sdk": "^0.1.28", "yaml": "^2.8.1"},
+	"dependencies": {"@adversarylabs/sdk": "^0.1.29", "yaml": "^2.8.1"},
   "devDependencies": {"@types/node": "^26.5.0", "tsx": "^4.23.13", "typescript": "^7.0.2"}
 }
 `
