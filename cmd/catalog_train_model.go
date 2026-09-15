@@ -483,7 +483,7 @@ PLAN REPAIR MODE: Apply latest_validation_feedback as a concrete edit to previou
 				return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: file %d has no path", index+1)
 			}
 		}
-		if repairingPlan && request.RepairStage == "build_and_test" {
+		if repairingPlan && (request.RepairStage == "build_and_test" || request.RepairStage == "plan_review") {
 			plan, err = mergeCatalogRepairPlan(*request.PreviousPlan, plan)
 			if err != nil {
 				return catalogapply.ChangePlan{}, fmt.Errorf("decode generated catalog change: %w", err)

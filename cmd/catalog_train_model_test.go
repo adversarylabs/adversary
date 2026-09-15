@@ -306,6 +306,34 @@ func TestMergeCatalogBuildRepairPreservesOriginalSummary(t *testing.T) {
 	}
 }
 
+func TestCatalogChangePlannerMergesQualityRepairDelta(t *testing.T) {
+	provider := &catalogSequenceProviderStub{name: "camel", model: "auto", outputs: []json.RawMessage{
+		json.RawMessage(`{"summary":"Tighten the matcher","files":[{"path":"adversaries/reliability/src/rules/lazy.ts","content":"// repaired"}]}`),
+		json.RawMessage(`{"disposition":"accept","reason":"The corrected matcher is scoped."}`),
+		json.RawMessage(`{"disposition":"accept","reason":"The red-team pass found no material counterexample."}`),
+	}}
+	runtime := &catalogModelRuntimeStub{provider: provider}
+	previous := &catalogapply.ChangePlan{Summary: "Detect fallible cached initialization", Strategy: catalogapply.StrategyDeterministic, Files: []catalogapply.ChangeFile{
+		{Path: "adversaries/reliability/README.md", Content: "# Reliability\n"},
+		{Path: "adversaries/reliability/src/rules/lazy.ts", Content: "// rejected"},
+		{Path: "adversaries/reliability/test/lazy.test.ts", Content: "// retained"},
+	}}
+
+	plan, err := catalogChangePlanner(runtime, "camel", "auto")(context.Background(), catalogapply.ChangeRequest{
+		ManagedRuntime: 1, GenerationAttempt: 2, MaxGenerationTurns: 3,
+		PreviousPlan: previous, RepairStage: "plan_review", ValidationFeedback: "Remove an unsupported SDK field.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Summary != previous.Summary || len(plan.Files) != 3 {
+		t.Fatalf("plan=%+v want merged quality-repair delta", plan)
+	}
+	if plan.Files[0].Content != previous.Files[0].Content || plan.Files[1].Content != "// repaired" || plan.Files[2].Content != previous.Files[2].Content {
+		t.Fatalf("quality repair did not retain unchanged files: %+v", plan.Files)
+	}
+}
+
 func TestNormalizeCatalogPlanFilesDropsModelBundlesFromDeterministicPlans(t *testing.T) {
 	files := []catalogapply.ChangeFile{
 		{Path: "adversaries/reliability/rules/lazy/rule.yaml"},
