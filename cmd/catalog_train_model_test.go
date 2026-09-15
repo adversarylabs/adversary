@@ -354,6 +354,11 @@ func TestCatalogChangePlannerUsesFocusedBuildAndTestRepairPrompt(t *testing.T) {
 	if !strings.Contains(string(provider.requests[0].Input), `"latest_validation_feedback":"expected a lazy-initialization finding"`) {
 		t.Fatalf("repair input omitted latest failure: %s", provider.requests[0].Input)
 	}
+	for _, want := range []string{"exact reviewed file revision", "authoritative for source facts", "absent from both evidence_diff and evidence_source_context"} {
+		if !strings.Contains(provider.requests[1].Prompt, want) {
+			t.Fatalf("quality prompt omitted %q:\n%s", want, provider.requests[1].Prompt)
+		}
+	}
 }
 
 func TestNormalizeCatalogSummaryAddsMissingAdversary(t *testing.T) {
