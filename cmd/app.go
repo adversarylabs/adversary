@@ -565,12 +565,16 @@ type processRegistryFactory struct {
 	host, realm, namespace string
 	debug                  io.Writer
 	identity               string
+	tokens                 *oci.BearerTokenCache
 }
 
 func (f processRegistryFactory) BindingIdentity() string { return f.identity }
 
 func (f processRegistryFactory) New(apiURL, profile string) (application.OCIRegistry, error) {
 	r := oci.NewHTTPRegistry()
+	if f.tokens != nil {
+		r.TokenCache = f.tokens
+	}
 	r.Debug = f.debug
 	r.BearerRealm = registryAuthRealm(apiURL)
 	r.BearerService = f.host
@@ -668,7 +672,7 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	docker := oci.DockerCredentialStore{HomeDir: homeDir, Lstat: os.Lstat, Open: oci.OpenRegularNoFollow, RunHelper: newCredentialHelperRunner(environment, lookPath)}
 	authStore := processAuthStore{store}
 	apiFactory := processAPIFactory{store: store}
-	registryFactory := processRegistryFactory{store: authStore, docker: docker, host: host, namespace: namespace, debug: debug, identity: store.Path}
+	registryFactory := processRegistryFactory{store: authStore, docker: docker, host: host, namespace: namespace, debug: debug, identity: store.Path, tokens: oci.NewBearerTokenCache()}
 	output := internaladversary.ExecProcessOutputRunner{}
 	node := internaladversary.NodeResolver{LookupEnv: environment.Lookup, LookPath: lookPath, HomeDir: homeDir, Glob: files.Glob, ResolveExecutable: resolveExplicitExecutable, Environment: environment, Output: output}
 	gitPath, gitErr := lookPath("git")
