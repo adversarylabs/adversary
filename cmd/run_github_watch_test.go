@@ -89,7 +89,7 @@ func TestGitHubReviewWatchSameHeadRerun(t *testing.T) {
 				opts := &runOptions{
 					path: t.TempDir(), githubReview: true, githubRepo: "acme/platform", githubPR: 185,
 					githubSubmit: true, githubAPIURL: srv.URL, githubRESTURL: srv.URL,
-					modelProvider: "disabled-for-test",
+					modelProvider:   "disabled-for-test",
 					resolvedHeadSHA: head,
 				}
 				if err := maybeGitHubReview(context.Background(), app, opts, envelopes, srv.URL, "default", &progress); err != nil {
