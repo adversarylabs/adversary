@@ -270,8 +270,9 @@ func TestEnsureAccessibleAdversariesStatusLines(t *testing.T) {
 }
 
 type concurrentResolveRegistry struct {
-	started chan struct{}
-	release chan struct{}
+	started     chan string
+	release     chan struct{}
+	releaseByID map[string]chan struct{}
 }
 
 func (*concurrentResolveRegistry) SetPlainHTTP(bool) {}
@@ -296,14 +297,18 @@ func (*concurrentResolveRegistry) GetNamespaceSignatureReferrer(context.Context,
 func (*concurrentResolveRegistry) GetNamespaceTrustReferrer(context.Context, oci.Reference, string) ([]byte, error) {
 	return nil, errors.New("unexpected trust pull")
 }
-func (r *concurrentResolveRegistry) Resolve(ctx context.Context, _ oci.Reference) (string, error) {
+func (r *concurrentResolveRegistry) Resolve(ctx context.Context, ref oci.Reference) (string, error) {
 	select {
-	case r.started <- struct{}{}:
+	case r.started <- ref.Repository:
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+	release := r.release
+	if selected := r.releaseByID[ref.Repository]; selected != nil {
+		release = selected
+	}
 	select {
-	case <-r.release:
+	case <-release:
 		return "", errors.New("fixture resolve failure")
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -342,7 +347,14 @@ func TestEnsureAccessibleAdversariesPullsConcurrently(t *testing.T) {
 		t.Fatal(err)
 	}
 	base.API = processAPIFactory{store: store, http: api.Client()}
-	registry := &concurrentResolveRegistry{started: make(chan struct{}, 2), release: make(chan struct{})}
+	oneRelease, twoRelease := make(chan struct{}), make(chan struct{})
+	registry := &concurrentResolveRegistry{
+		started: make(chan string, 2),
+		releaseByID: map[string]chan struct{}{
+			"team/one": oneRelease,
+			"team/two": twoRelease,
+		},
+	}
 	base.Registries = concurrentRegistryFactory{registry: registry, identity: store.Path}
 	app, err := application.New(base)
 	if err != nil {
@@ -358,11 +370,20 @@ func TestEnsureAccessibleAdversariesPullsConcurrently(t *testing.T) {
 			t.Fatal("catalog pulls did not overlap")
 		}
 	}
-	close(registry.release)
+	// Finish the second catalog entry first. Status output must still retain the
+	// catalog order rather than exposing worker completion order.
+	close(twoRelease)
+	time.Sleep(100 * time.Millisecond)
+	close(oneRelease)
 	err = <-done
 	var syncErr *accessibleAdversarySyncError
 	if !errors.As(err, &syncErr) || syncErr.Failed != 2 {
 		t.Fatalf("err = %v, want two pull failures", err)
+	}
+	out := stderr.String()
+	oneAt, twoAt := strings.Index(out, "one"), strings.Index(out, "two")
+	if oneAt < 0 || twoAt < 0 || oneAt > twoAt {
+		t.Fatalf("status rows are not in catalog order: %q", out)
 	}
 }
 

@@ -133,28 +133,39 @@ func ensureAccessibleAdversaries(
 		}()
 	}
 	var contextErr error
-	for range n {
-		completed := <-results
+	render := func(completed ensureResult) {
 		i, item := completed.job.index, completed.job.item
 		label := displayAdversaryName(item.name, item.ref)
 		pullErr := completed.err
 		if pullErr != nil {
 			if isContextError(pullErr) {
 				contextErr = pullErr
-				continue
+				return
 			}
 			failed++
 			writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "failed: "+shortPullError(pullErr), true)
-			continue
+			return
 		}
 		if completed.result.AlreadyPresent {
 			ready++
 			writeEnsureStatus(detail, useCR, i+1, n, label, item.version, "up to date", true)
-			continue
+			return
 		}
 		installed++
 		ready++
 		writeEnsureStatus(detail, useCR, i+1, n, label, item.version, "installed", true)
+	}
+	pending := make([]ensureResult, n)
+	completedByIndex := make([]bool, n)
+	next := 0
+	for range n {
+		completed := <-results
+		pending[completed.job.index] = completed
+		completedByIndex[completed.job.index] = true
+		for next < n && completedByIndex[next] {
+			render(pending[next])
+			next++
+		}
 	}
 	if contextErr != nil {
 		if useCR {
