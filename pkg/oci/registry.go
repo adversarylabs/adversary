@@ -621,7 +621,11 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	}
 	retry.Header.Set("Authorization", "Bearer "+token)
 	r.debugf("oci auth: retrying %s %s authorization_header=%t", retry.Method, retry.URL.Path, retry.Header.Get("Authorization") != "")
-	return client.Do(retry)
+	retryResp, retryErr := client.Do(retry)
+	if retryErr == nil && retryResp.StatusCode == http.StatusUnauthorized {
+		r.TokenCache.invalidate(key)
+	}
+	return retryResp, retryErr
 }
 
 func bearerTokenCacheKey(registry string, challenge bearerChallenge, scope string, creds Credentials, sendCreds bool) string {

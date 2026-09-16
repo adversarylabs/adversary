@@ -335,6 +335,60 @@ func TestBearerTokenCacheIsIsolatedByRegistryHost(t *testing.T) {
 	}
 }
 
+func TestBearerTokenCacheEvictsTokenRejectedByRetry(t *testing.T) {
+	var tokenRequests atomic.Int32
+	rejectAuthenticated := true
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Host {
+		case "auth.example":
+			request := tokenRequests.Add(1)
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"token":"registry-jwt-%d","expires_in":300}`, request))), Header: http.Header{}, Request: req}, nil
+		case "registry.example":
+			authorization := req.Header.Get("Authorization")
+			if authorization == "" || rejectAuthenticated {
+				return &http.Response{StatusCode: http.StatusUnauthorized, Status: "401 Unauthorized", Body: io.NopCloser(strings.NewReader("rejected")), Header: http.Header{"Www-Authenticate": {`Bearer realm="https://auth.example/token",service="registry.example"`}}, Request: req}, nil
+			}
+			if authorization != "Bearer registry-jwt-2" {
+				t.Fatalf("retry reused rejected token: %q", authorization)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}, Request: req}, nil
+		default:
+			t.Fatalf("unexpected host %q", req.URL.Host)
+			return nil, nil
+		}
+	})}
+	registry := NewHTTPRegistry()
+	registry.Client = client
+	registry.Credentials = staticCredentialStore{registry: "registry.example", creds: Credentials{Token: "cli-token"}}
+	registry.TokenAuthorities["registry.example"] = TokenAuthority{Origin: "https://auth.example", Service: "registry.example"}
+	ref := Reference{Registry: "registry.example", Repository: "team/tool", Tag: "latest"}
+	request := func() *http.Response {
+		req, err := registry.newRequest(t.Context(), http.MethodGet, ref, "/manifests/latest", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := registry.do(req, ref, "repository:team/tool:pull")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	first := request()
+	first.Body.Close()
+	if first.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("first status = %d, want 401", first.StatusCode)
+	}
+	rejectAuthenticated = false
+	second := request()
+	second.Body.Close()
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("second status = %d, want 200", second.StatusCode)
+	}
+	if got := tokenRequests.Load(); got != 2 {
+		t.Fatalf("token requests = %d, want 2", got)
+	}
+}
+
 func TestReadBearerTokenErrorIncludesTokenURL(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
