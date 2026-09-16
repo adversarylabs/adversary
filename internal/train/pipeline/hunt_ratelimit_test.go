@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -17,9 +18,70 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/state"
 )
 
-func TestHistoricalHuntRetriesRateLimitedCollection(t *testing.T) {
-	for _, endpoint := range []string{"", "/reviews", "/comments"} {
+func TestCollectOnePRPreservesRateLimitMetadataAfterGateExpires(t *testing.T) {
+	for _, endpoint := range []string{"", "/reviews", "/comments", "/active-gate"} {
 		t.Run("pull"+endpoint, func(t *testing.T) {
+			githubapi.ResetRateGateForTest()
+			t.Cleanup(githubapi.ResetRateGateForTest)
+			reset := time.Now().Add(time.Minute).Truncate(time.Second)
+			client := githubapi.NewClient("test")
+			requests := 0
+			client.HTTP = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				requests++
+				status, body := http.StatusOK, `[]`
+				header := make(http.Header)
+				if r.URL.Path == "/repos/acme/api/pulls/42" {
+					body = `{"number":42,"title":"candidate","base":{"sha":"base"},"head":{"sha":"head"}}`
+				}
+				if r.URL.Path == "/repos/acme/api/pulls/42"+endpoint {
+					status, body = http.StatusForbidden, `{"message":"API rate limit exceeded"}`
+					header.Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+				}
+				return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}
+			collect.SetDefaultClient(client)
+			t.Cleanup(func() { collect.SetDefaultClient(nil) })
+			if endpoint == "/active-gate" {
+				if _, _, err := client.RESTGet(context.Background(), "/repos/acme/api/pulls/42/active-gate"); !collect.IsRateLimit(err) {
+					t.Fatalf("seed rate gate: %v", err)
+				}
+			}
+			root := t.TempDir()
+			store, err := state.LoadDiscovery(root, "acme", "api")
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := collectOnePR(context.Background(), Options{}, root, huntJob{
+				owner: "acme", name: "api", ref: collect.PRRef{Number: 42}, store: store, turn: 1,
+			}, nil, nil, func(string, ...any) {})
+			if res.blocked == nil || res.blocked.Classification != "rate-limit" {
+				t.Fatalf("expected blocked rate limit: %+v", res)
+			}
+			// The worker can handle this result after another worker clears the
+			// hold or its deadline expires. The result must remain self-contained.
+			githubapi.ResetRateGateForTest()
+			var limited *collect.RateLimitError
+			if err := res.rateLimitError(); !errors.As(err, &limited) || !limited.ResetAt.Equal(reset) {
+				t.Fatalf("rate limit=%v; want original reset %s after gate expires", err, reset)
+			}
+			if endpoint == "/active-gate" && requests != 1 {
+				t.Fatalf("active gate made %d requests; want only the seed request", requests)
+			}
+		})
+	}
+}
+
+func TestHistoricalHuntRetriesRateLimitedCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint string
+		expiredReset   bool
+	}{
+		{name: "pull"},
+		{name: "reviews", endpoint: "/reviews"},
+		{name: "comments", endpoint: "/comments"},
+		{name: "expired-reset", expiredReset: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			githubapi.ResetRateGateForTest()
 			t.Cleanup(githubapi.ResetRateGateForTest)
 			var mu sync.Mutex
@@ -38,12 +100,16 @@ func TestHistoricalHuntRetriesRateLimitedCollection(t *testing.T) {
 				case "/repos/acme/api/pulls/42":
 					body = `{"number":42,"title":"candidate","base":{"sha":"base"},"head":{"sha":"head"}}`
 				}
-				if r.URL.Path == "/repos/acme/api/pulls/42"+endpoint {
+				if r.URL.Path == "/repos/acme/api/pulls/42"+tc.endpoint {
 					attempts++
 					if attempts == 1 {
 						limitedAt = time.Now()
 						status, body = http.StatusForbidden, `{"message":"secondary rate limit"}`
-						header.Set("Retry-After", "1")
+						if tc.expiredReset {
+							header.Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(-time.Minute).Unix(), 10))
+						} else {
+							header.Set("Retry-After", "1")
+						}
 					} else {
 						retriedAt = time.Now()
 					}

@@ -154,11 +154,7 @@ func runAuthorHunt(
 					out.resultsAdded += onKeep(res.kept)
 				}
 				if out.interrupted == nil {
-					if collect.IsRateLimit(res.err) {
-						out.interrupted = res.err
-					} else if res.blocked != nil && res.blocked.Classification == "rate-limit" {
-						out.interrupted = &collect.RateLimitError{Message: res.blocked.SanitizedError}
-					}
+					out.interrupted = res.rateLimitError()
 				}
 				mu.Unlock()
 			}

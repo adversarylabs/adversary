@@ -549,17 +549,11 @@ type collectResult struct {
 	noCases          bool
 }
 
-// Collection can report a dependency failure as a blocked result with no Go
-// error. Treat both forms identically when deciding whether to wait and retry.
+// Retain the collection error's reset deadline even if the shared gate has
+// expired by the time a worker decides whether to wait and retry.
 func (r collectResult) rateLimitError() error {
 	if collect.IsRateLimit(r.err) {
 		return r.err
-	}
-	if r.err == nil && r.blocked != nil && r.blocked.Classification == "rate-limit" {
-		return &collect.RateLimitError{
-			ResetAt: collect.RateLimitReset(nil),
-			Message: r.blocked.SanitizedError,
-		}
 	}
 	return nil
 }
@@ -618,6 +612,7 @@ func collectOnePR(
 		_ = job.store.Save()
 		progress("  ✗ blocked (%s): %s", cres.Blocked.Classification, cres.Blocked.SanitizedError)
 		res.blocked = cres.Blocked
+		res.err = cres.BlockedErr
 		res.execClass = cres.ExecutionClass
 		return res
 	}
