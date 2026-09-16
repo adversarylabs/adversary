@@ -179,14 +179,18 @@ func runParallelHunt(
 					continue
 				}
 				res := collectOnePR(ctx, opts, dataRoot, job, scopeClf, commentRouter, progress)
-				for opts.AllHistory && collect.IsRateLimit(res.err) && ctx.Err() == nil {
-					reset := collect.RateLimitReset(res.err)
+				for opts.AllHistory && ctx.Err() == nil {
+					rateErr := res.rateLimitError()
+					if rateErr == nil {
+						break
+					}
+					reset := collect.RateLimitReset(rateErr)
 					if reset.IsZero() {
 						progress("GitHub rate limit while collecting %s/%s#%d — backing off", job.owner, job.name, job.ref.Number)
 					} else {
 						progress("GitHub rate limit while collecting %s/%s#%d — waiting until %s", job.owner, job.name, job.ref.Number, reset.Local().Format(time.RFC3339))
 					}
-					if err := collect.WaitForRateLimit(ctx, res.err); err != nil {
+					if err := collect.WaitForRateLimit(ctx, rateErr); err != nil {
 						res.err = err
 						break
 					}
@@ -210,11 +214,7 @@ func runParallelHunt(
 					out.resultsAdded += onKeep(res.kept)
 				}
 				if out.interrupted == nil {
-					if collect.IsRateLimit(res.err) {
-						out.interrupted = res.err
-					} else if res.blocked != nil && res.blocked.Classification == "rate-limit" {
-						out.interrupted = &collect.RateLimitError{Message: res.blocked.SanitizedError}
-					}
+					out.interrupted = res.rateLimitError()
 				}
 				mu.Unlock()
 			}
@@ -547,6 +547,21 @@ type collectResult struct {
 	pinned           bool
 	turn             int
 	noCases          bool
+}
+
+// Collection can report a dependency failure as a blocked result with no Go
+// error. Treat both forms identically when deciding whether to wait and retry.
+func (r collectResult) rateLimitError() error {
+	if collect.IsRateLimit(r.err) {
+		return r.err
+	}
+	if r.err == nil && r.blocked != nil && r.blocked.Classification == "rate-limit" {
+		return &collect.RateLimitError{
+			ResetAt: collect.RateLimitReset(nil),
+			Message: r.blocked.SanitizedError,
+		}
+	}
+	return nil
 }
 
 func collectOnePR(

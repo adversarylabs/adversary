@@ -196,9 +196,11 @@ func defaultScope() *scope.Classifier {
 }
 
 func sanitize(s string) string {
-	s = strings.ReplaceAll(s, os.Getenv("GITHUB_TOKEN"), "***")
-	s = strings.ReplaceAll(s, os.Getenv("GH_TOKEN"), "***")
-	s = strings.ReplaceAll(s, os.Getenv("ADVERSARY_GITHUB_TOKEN"), "***")
+	for _, name := range []string{"GITHUB_TOKEN", "GH_TOKEN", "ADVERSARY_GITHUB_TOKEN"} {
+		if token := os.Getenv(name); token != "" {
+			s = strings.ReplaceAll(s, token, "***")
+		}
+	}
 	if len(s) > 500 {
 		s = s[:500] + "…"
 	}
