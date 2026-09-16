@@ -223,8 +223,11 @@ func maybeGitHubReview(ctx context.Context, app *application.App, opts *runOptio
 	})
 	// The host-detected intent applies to every adversary, including private or
 	// catalog packages that do not emit a review_basis observation themselves.
-	if basis := outcomecontext.ReviewedAs(opts.outcomeContext); basis != "" {
-		plan.ReviewBasis = basis
+	// Treat it as summary content so summary-free reviews contain findings only.
+	if opts.githubIncludeSummary {
+		if basis := outcomecontext.ReviewedAs(opts.outcomeContext); basis != "" {
+			plan.ReviewBasis = basis
+		}
 	}
 
 	// Default voice rewrite: try model provider; template remains on failure/missing creds.

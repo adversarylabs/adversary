@@ -114,6 +114,20 @@ func TestProjectFindingsCarriesReviewBasisWithoutTurningItIntoAComment(t *testin
 	}
 }
 
+func TestProjectFindingsOmitsReviewBasisWhenSummaryDisabled(t *testing.T) {
+	env := review.RunEnvelope{Result: review.ReviewResult{
+		Adversary: review.ReviewAdversary{Name: "code-review"},
+		Observations: []review.Note{{
+			Key: "code-review.inferred-outcome", Summary: "Reviewed as: permit repository-scoped pulls.",
+			Metadata: json.RawMessage(`{"role":"review_basis","confidence":"high"}`),
+		}},
+	}}
+	plan := ProjectFindings([]NamedEnvelope{{Adversary: "review/code", Envelope: env}}, ProjectOptions{OmitSummary: true})
+	if plan.ReviewBasis != "" {
+		t.Fatalf("review basis = %q", plan.ReviewBasis)
+	}
+}
+
 func TestProjectFindingsDoesNotSummarizeCleanAdversaries(t *testing.T) {
 	env := review.RunEnvelope{Result: review.ReviewResult{
 		Adversary:  review.ReviewAdversary{Name: "clean"},
