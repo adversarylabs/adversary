@@ -371,7 +371,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().IntVar(&opts.githubPR, "github-pr", 0, "pull request number for posting")
 	cmd.Flags().StringVar(&opts.githubRepo, "github-repo", "", "owner/name repository for posting")
 	cmd.Flags().BoolVar(&opts.githubSubmit, "github-submit", false, "submit the review as informational COMMENT (default leaves pending)")
-	cmd.Flags().BoolVar(&opts.githubIncludeSummary, "github-include-summary", true, "include the aggregate assessment and opinion in the review body")
+	cmd.Flags().BoolVar(&opts.githubIncludeSummary, "github-include-summary", true, "include the inferred review basis and aggregate assessment/opinion in the review body")
 	cmd.Flags().BoolVar(&opts.githubResolveAddressed, "github-resolve-addressed", true, "resolve prior Adversary review threads whose findings are absent after a successful rerun")
 	cmd.Flags().StringVar(&opts.githubMinSeverity, "github-min-severity", "", "only plan/post findings at this severity or higher")
 	cmd.Flags().StringVar(&opts.githubAPIURL, "github-api-url", "", "GraphQL endpoint override (default https://api.github.com/graphql)")

@@ -17,7 +17,7 @@ type ProjectOptions struct {
 	HeadSHA     string
 	MinSeverity string // empty = all
 	Voice       VoiceInfo
-	OmitSummary bool // keep inline/body findings but omit aggregate assessment/opinion
+	OmitSummary bool // keep inline/body findings but omit review basis and aggregate assessment/opinion
 }
 
 // ProjectFindings builds a CommentPlan from visible findings and the reserved
@@ -45,7 +45,7 @@ func ProjectFindings(envelopes []NamedEnvelope, opts ProjectOptions) CommentPlan
 
 	for _, ne := range envelopes {
 		res := ne.Envelope.Result
-		if plan.ReviewBasis == "" {
+		if !opts.OmitSummary && plan.ReviewBasis == "" {
 			plan.ReviewBasis = inferredReviewBasis(res.Observations)
 		}
 		ref := strings.TrimSpace(ne.Adversary)

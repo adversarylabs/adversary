@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/githubreview"
 	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/repository"
 )
@@ -76,5 +79,48 @@ func TestDetectOutcomeIntentKeepsOrdinaryInferenceFailureNonfatal(t *testing.T) 
 	opts := &runOptions{outcomeContext: outcomecontext.GitHubPullRequest("acme/app", 42, "Ship it", "")}
 	if err := detectOutcomeIntent(context.Background(), app, opts, io.Discard); err != nil {
 		t.Fatalf("ordinary inference failure became fatal: %v", err)
+	}
+}
+
+func TestMaybeGitHubReviewSummarySettingControlsOutcomeBasis(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		includeSummary bool
+		wantBasis      bool
+	}{
+		{name: "included", includeSummary: true, wantBasis: true},
+		{name: "omitted", includeSummary: false, wantBasis: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, name := range []string{"ADVERSARY_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"} {
+				t.Setenv(name, "")
+			}
+			planPath := filepath.Join(t.TempDir(), "plan.json")
+			opts := &runOptions{
+				path:                 t.TempDir(),
+				githubReview:         true,
+				githubDryRun:         true,
+				githubPlanFile:       planPath,
+				githubRepo:           "acme/app",
+				githubPR:             42,
+				githubIncludeSummary: tc.includeSummary,
+				modelProvider:        "disabled-for-test",
+				outcomeContext:       outcomecontext.GitHubPullRequest("acme/app", 42, "Permit repository-scoped pulls", ""),
+			}
+			if err := maybeGitHubReview(context.Background(), nil, opts, nil, "", "", io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(planPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var plan githubreview.CommentPlan
+			if err := json.Unmarshal(raw, &plan); err != nil {
+				t.Fatal(err)
+			}
+			if got := plan.ReviewBasis != ""; got != tc.wantBasis {
+				t.Fatalf("review basis = %q", plan.ReviewBasis)
+			}
+		})
 	}
 }
