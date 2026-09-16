@@ -37,6 +37,7 @@ type HTTPRegistry struct {
 
 	manifestMu    sync.Mutex
 	manifestCache map[string]cachedManifest
+	manifestOrder []string
 }
 
 type TokenAuthority struct{ Origin, Service string }
@@ -64,6 +65,8 @@ type cachedManifest struct {
 	data   []byte
 	digest string
 }
+
+const manifestCacheEntryLimit = 8
 
 func (r *HTTPRegistry) PushAdversaryManifestReferrer(ctx context.Context, imageRef Reference, imageDigest string, yaml []byte) (string, string, error) {
 	return r.PushAttachedReferrer(ctx, imageRef, imageDigest, AdversaryManifestMediaType, "adversary.yaml", "adversary-manifest", yaml)
@@ -323,19 +326,37 @@ func (r *HTTPRegistry) rememberManifest(ref Reference, data []byte, digest strin
 	if r.manifestCache == nil {
 		r.manifestCache = make(map[string]cachedManifest)
 	}
-	key := ref.Registry + "\x00" + ref.Repository + "\x00" + digest
+	key := manifestCacheKey(ref.Registry, ref.Repository, digest)
+	if _, exists := r.manifestCache[key]; !exists {
+		if len(r.manifestOrder) == manifestCacheEntryLimit {
+			delete(r.manifestCache, r.manifestOrder[0])
+			r.manifestOrder = r.manifestOrder[1:]
+		}
+		r.manifestOrder = append(r.manifestOrder, key)
+	}
 	r.manifestCache[key] = cachedManifest{data: append([]byte(nil), data...), digest: digest}
 }
 
 func (r *HTTPRegistry) cachedManifest(ref Reference) ([]byte, string, bool) {
-	key := ref.Registry + "\x00" + ref.Repository + "\x00" + ref.Digest
+	key := manifestCacheKey(ref.Registry, ref.Repository, ref.Digest)
 	r.manifestMu.Lock()
 	defer r.manifestMu.Unlock()
 	item, ok := r.manifestCache[key]
 	if !ok {
 		return nil, "", false
 	}
+	delete(r.manifestCache, key)
+	for i, ordered := range r.manifestOrder {
+		if ordered == key {
+			r.manifestOrder = append(r.manifestOrder[:i], r.manifestOrder[i+1:]...)
+			break
+		}
+	}
 	return append([]byte(nil), item.data...), item.digest, true
+}
+
+func manifestCacheKey(registry, repository, digest string) string {
+	return registry + "\x00" + repository + "\x00" + digest
 }
 
 func (r *HTTPRegistry) getArtifactManifest(ctx context.Context, ref Reference, digest string) ([]byte, string, error) {

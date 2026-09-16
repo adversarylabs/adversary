@@ -278,6 +278,28 @@ func TestResolveThenPullReusesVerifiedManifest(t *testing.T) {
 	}
 }
 
+func TestResolvedManifestCacheIsBoundedAndOneShot(t *testing.T) {
+	registry := NewHTTPRegistry()
+	for i := 0; i <= manifestCacheEntryLimit; i++ {
+		digest := fmt.Sprintf("digest-%d", i)
+		registry.rememberManifest(Reference{Registry: "registry.example", Repository: "team/tool"}, []byte(digest), digest)
+	}
+	if got := len(registry.manifestCache); got != manifestCacheEntryLimit {
+		t.Fatalf("manifest cache entries = %d, want %d", got, manifestCacheEntryLimit)
+	}
+	if _, _, ok := registry.cachedManifest(Reference{Registry: "registry.example", Repository: "team/tool", Digest: "digest-0"}); ok {
+		t.Fatal("oldest manifest was not evicted")
+	}
+	latest := fmt.Sprintf("digest-%d", manifestCacheEntryLimit)
+	ref := Reference{Registry: "registry.example", Repository: "team/tool", Digest: latest}
+	if data, digest, ok := registry.cachedManifest(ref); !ok || string(data) != latest || digest != latest {
+		t.Fatalf("latest manifest = %q, %q, %v", data, digest, ok)
+	}
+	if _, _, ok := registry.cachedManifest(ref); ok {
+		t.Fatal("resolved manifest cache entry was not consumed")
+	}
+}
+
 func TestCopyDescriptorStopsReaderWithNoProgress(t *testing.T) {
 	if _, _, err := copyDescriptor(io.Discard, ociNoProgressReader{}, 1); !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("expected no-progress error, got %v", err)
