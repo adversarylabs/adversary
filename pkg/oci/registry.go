@@ -541,7 +541,7 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	if req.Header.Get("Authorization") == "" && hasCreds {
 		if challenge, ok := r.configuredBearerChallenge(ref); ok && validRepositoryScope(ref, scope) {
 			sendCreds := hasCreds && r.trustedTokenAuthority(ref, challenge)
-			requestTokenKey = bearerTokenCacheKey(challenge, scope, creds, sendCreds)
+			requestTokenKey = bearerTokenCacheKey(ref.Registry, challenge, scope, creds, sendCreds)
 			token, tokenErr := r.TokenCache.getOrFetch(req.Context(), requestTokenKey, func() (bearerToken, error) {
 				return requestBearerToken(req.Context(), client, challenge, scope, creds, sendCreds)
 			})
@@ -583,7 +583,7 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	if hasCreds && !sendCreds {
 		r.debugf("oci auth: requesting anonymous token from untrusted cross-origin realm")
 	}
-	key := bearerTokenCacheKey(challenge, scope, creds, sendCreds)
+	key := bearerTokenCacheKey(ref.Registry, challenge, scope, creds, sendCreds)
 	token, err := r.TokenCache.getOrFetch(req.Context(), key, func() (bearerToken, error) {
 		return requestBearerToken(req.Context(), client, challenge, scope, creds, sendCreds)
 	})
@@ -603,13 +603,13 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	return client.Do(retry)
 }
 
-func bearerTokenCacheKey(challenge bearerChallenge, scope string, creds Credentials, sendCreds bool) string {
+func bearerTokenCacheKey(registry string, challenge bearerChallenge, scope string, creds Credentials, sendCreds bool) string {
 	identity := "anonymous"
 	if sendCreds {
 		sum := sha256.Sum256([]byte(creds.Username + "\x00" + creds.Password + "\x00" + creds.Token))
 		identity = fmt.Sprintf("%x", sum[:])
 	}
-	return challenge.Realm + "\x00" + challenge.Service + "\x00" + scope + "\x00" + identity
+	return registry + "\x00" + challenge.Realm + "\x00" + challenge.Service + "\x00" + scope + "\x00" + identity
 }
 
 func validRepositoryScope(ref Reference, scope string) bool {

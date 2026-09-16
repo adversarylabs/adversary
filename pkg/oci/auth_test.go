@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -284,6 +285,53 @@ func TestBearerTokenCacheIsSharedAcrossRegistryClients(t *testing.T) {
 	}
 	if got := registryRequests.Load(); got != 2 {
 		t.Fatalf("registry requests = %d, want 2", got)
+	}
+}
+
+func TestBearerTokenCacheIsIsolatedByRegistryHost(t *testing.T) {
+	var tokenRequests atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Host {
+		case "auth.example":
+			request := tokenRequests.Add(1)
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"token":"registry-jwt-%d","expires_in":300}`, request))), Header: http.Header{}, Request: req}, nil
+		case "one.registry.example", "two.registry.example":
+			want := "Bearer registry-jwt-1"
+			if req.URL.Host == "two.registry.example" {
+				want = "Bearer registry-jwt-2"
+			}
+			if got := req.Header.Get("Authorization"); got == "" {
+				return &http.Response{StatusCode: http.StatusUnauthorized, Status: "401 Unauthorized", Body: io.NopCloser(strings.NewReader("auth required")), Header: http.Header{"Www-Authenticate": {`Bearer realm="https://auth.example/token",service="shared-service"`}}, Request: req}, nil
+			} else if got != want {
+				t.Fatalf("%s received Authorization %q, want %q", req.URL.Host, got, want)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}, Request: req}, nil
+		default:
+			t.Fatalf("unexpected host %q", req.URL.Host)
+			return nil, nil
+		}
+	})}
+	cache := NewBearerTokenCache()
+	creds := Credentials{Token: "same-cli-token"}
+	for _, host := range []string{"one.registry.example", "two.registry.example"} {
+		registry := NewHTTPRegistry()
+		registry.Client = client
+		registry.Credentials = staticCredentialStore{registry: host, creds: creds}
+		registry.TokenAuthorities[host] = TokenAuthority{Origin: "https://auth.example", Service: "shared-service"}
+		registry.TokenCache = cache
+		ref := Reference{Registry: host, Repository: "team/tool", Tag: "latest"}
+		req, err := registry.newRequest(t.Context(), http.MethodGet, ref, "/manifests/latest", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := registry.do(req, ref, "repository:team/tool:pull")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	if got := tokenRequests.Load(); got != 2 {
+		t.Fatalf("token requests = %d, want one per registry host", got)
 	}
 }
 
