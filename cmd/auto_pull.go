@@ -17,6 +17,21 @@ import (
 
 const accessiblePullConcurrency = 8
 
+type accessibleAdversary struct {
+	name, ref, version string
+}
+
+type ensureJob struct {
+	index int
+	item  accessibleAdversary
+}
+
+type ensureResult struct {
+	job    ensureJob
+	result pullResult
+	err    error
+}
+
 // ensureAccessibleAdversaries verifies every remote catalog entry the user can
 // access (newest version per repository identity), pulls anything not already
 // at the resolved digest, and prints docker-pull-style status lines:
@@ -59,10 +74,7 @@ func ensureAccessibleAdversaries(
 		return nil
 	}
 
-	type chosen struct {
-		name, ref, version string
-	}
-	best := make(map[string]chosen, len(remote))
+	best := make(map[string]accessibleAdversary, len(remote))
 	order := make([]string, 0, len(remote))
 	for _, item := range remote {
 		ref := strings.TrimSpace(item.Reference)
@@ -88,10 +100,10 @@ func ensureAccessibleAdversaries(
 			if !preferCatalogVersion(version, prev.version) {
 				continue
 			}
-			best[key] = chosen{name: name, ref: ref, version: version}
+			best[key] = accessibleAdversary{name: name, ref: ref, version: version}
 			continue
 		}
-		best[key] = chosen{name: name, ref: ref, version: version}
+		best[key] = accessibleAdversary{name: name, ref: ref, version: version}
 		order = append(order, key)
 	}
 	if len(order) == 0 {
@@ -105,15 +117,6 @@ func ensureAccessibleAdversaries(
 	workers := min(n, accessiblePullConcurrency)
 	useCR := workers == 1 && !progress.InCI() && ensureWriterIsTTY(stderr)
 	ready, installed, failed := 0, 0, 0
-	type ensureJob struct {
-		index int
-		item  chosen
-	}
-	type ensureResult struct {
-		job    ensureJob
-		result pullResult
-		err    error
-	}
 	jobs := make(chan ensureJob, n)
 	results := make(chan ensureResult, n)
 	for i, key := range order {
@@ -155,18 +158,7 @@ func ensureAccessibleAdversaries(
 		ready++
 		writeEnsureStatus(detail, useCR, i+1, n, label, item.version, "installed", true)
 	}
-	pending := make([]ensureResult, n)
-	completedByIndex := make([]bool, n)
-	next := 0
-	for range n {
-		completed := <-results
-		pending[completed.job.index] = completed
-		completedByIndex[completed.job.index] = true
-		for next < n && completedByIndex[next] {
-			render(pending[next])
-			next++
-		}
-	}
+	renderEnsureResults(n, results, render)
 	if contextErr != nil {
 		if useCR {
 			fmt.Fprintln(stderr)
@@ -186,6 +178,21 @@ func ensureAccessibleAdversaries(
 		return &accessibleAdversarySyncError{Failed: failed, Total: n}
 	}
 	return nil
+}
+
+func renderEnsureResults(n int, results <-chan ensureResult, render func(ensureResult)) {
+	pending := make([]ensureResult, n)
+	completed := make([]bool, n)
+	next := 0
+	for range n {
+		result := <-results
+		pending[result.job.index] = result
+		completed[result.job.index] = true
+		for next < n && completed[next] {
+			render(pending[next])
+			next++
+		}
+	}
 }
 
 type accessibleAdversarySyncError struct {

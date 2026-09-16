@@ -270,9 +270,8 @@ func TestEnsureAccessibleAdversariesStatusLines(t *testing.T) {
 }
 
 type concurrentResolveRegistry struct {
-	started     chan string
-	release     chan struct{}
-	releaseByID map[string]chan struct{}
+	started chan string
+	release chan struct{}
 }
 
 func (*concurrentResolveRegistry) SetPlainHTTP(bool) {}
@@ -303,12 +302,8 @@ func (r *concurrentResolveRegistry) Resolve(ctx context.Context, ref oci.Referen
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
-	release := r.release
-	if selected := r.releaseByID[ref.Repository]; selected != nil {
-		release = selected
-	}
 	select {
-	case <-release:
+	case <-r.release:
 		return "", errors.New("fixture resolve failure")
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -347,13 +342,9 @@ func TestEnsureAccessibleAdversariesPullsConcurrently(t *testing.T) {
 		t.Fatal(err)
 	}
 	base.API = processAPIFactory{store: store, http: api.Client()}
-	oneRelease, twoRelease := make(chan struct{}), make(chan struct{})
 	registry := &concurrentResolveRegistry{
 		started: make(chan string, 2),
-		releaseByID: map[string]chan struct{}{
-			"team/one": oneRelease,
-			"team/two": twoRelease,
-		},
+		release: make(chan struct{}),
 	}
 	base.Registries = concurrentRegistryFactory{registry: registry, identity: store.Path}
 	app, err := application.New(base)
@@ -370,20 +361,25 @@ func TestEnsureAccessibleAdversariesPullsConcurrently(t *testing.T) {
 			t.Fatal("catalog pulls did not overlap")
 		}
 	}
-	// Finish the second catalog entry first. Status output must still retain the
-	// catalog order rather than exposing worker completion order.
-	close(twoRelease)
-	time.Sleep(100 * time.Millisecond)
-	close(oneRelease)
+	close(registry.release)
 	err = <-done
 	var syncErr *accessibleAdversarySyncError
 	if !errors.As(err, &syncErr) || syncErr.Failed != 2 {
 		t.Fatalf("err = %v, want two pull failures", err)
 	}
-	out := stderr.String()
-	oneAt, twoAt := strings.Index(out, "one"), strings.Index(out, "two")
-	if oneAt < 0 || twoAt < 0 || oneAt > twoAt {
-		t.Fatalf("status rows are not in catalog order: %q", out)
+}
+
+func TestRenderEnsureResultsInIndexOrder(t *testing.T) {
+	results := make(chan ensureResult, 2)
+	results <- ensureResult{job: ensureJob{index: 1}}
+	results <- ensureResult{job: ensureJob{index: 0}}
+
+	var got []int
+	renderEnsureResults(2, results, func(result ensureResult) {
+		got = append(got, result.job.index)
+	})
+	if len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Fatalf("render order = %v, want [0 1]", got)
 	}
 }
 

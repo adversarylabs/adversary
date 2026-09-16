@@ -2,9 +2,12 @@ package oci
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
+
+var errUnusableBearerToken = errors.New("registry bearer token is empty or expires too soon")
 
 // BearerTokenCache is an in-memory, concurrency-safe cache for registry bearer
 // tokens. It is safe to share across HTTPRegistry instances created for one CLI
@@ -55,7 +58,13 @@ func (c *BearerTokenCache) invalidate(key string) {
 func (c *BearerTokenCache) getOrFetch(ctx context.Context, key string, fetch func() (bearerToken, error)) (string, error) {
 	if c == nil {
 		entry, err := fetch()
-		return entry.value, err
+		if err != nil {
+			return "", err
+		}
+		if !usableBearerToken(entry, time.Now()) {
+			return "", errUnusableBearerToken
+		}
+		return entry.value, nil
 	}
 	for {
 		if token, ok := c.get(key); ok {
@@ -80,7 +89,8 @@ func (c *BearerTokenCache) getOrFetch(ctx context.Context, key string, fetch fun
 		entry, err := fetch()
 		c.mu.Lock()
 		current := c.generation[key] == generation
-		if current && err == nil && entry.value != "" && c.now().Add(10*time.Second).Before(entry.expiresAt) {
+		valid := err == nil && usableBearerToken(entry, c.now())
+		if current && valid {
 			c.entries[key] = entry
 		}
 		delete(c.inflight, key)
@@ -89,8 +99,15 @@ func (c *BearerTokenCache) getOrFetch(ctx context.Context, key string, fetch fun
 		if err == nil && !current {
 			continue
 		}
+		if err == nil && !valid {
+			return "", errUnusableBearerToken
+		}
 		return entry.value, err
 	}
+}
+
+func usableBearerToken(entry bearerToken, now time.Time) bool {
+	return entry.value != "" && now.Add(10*time.Second).Before(entry.expiresAt)
 }
 
 func (c *BearerTokenCache) initLocked() {

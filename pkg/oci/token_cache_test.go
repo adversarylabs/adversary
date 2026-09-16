@@ -42,3 +42,33 @@ func TestBearerTokenCacheDoesNotRestoreInvalidatedInflightToken(t *testing.T) {
 		t.Fatalf("cached token = %q, %v; want fresh token", got, ok)
 	}
 }
+
+func TestBearerTokenCacheRejectsUnusableFetchedTokens(t *testing.T) {
+	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		entry bearerToken
+	}{
+		{name: "empty", entry: bearerToken{expiresAt: now.Add(time.Minute)}},
+		{name: "already expired", entry: bearerToken{value: "token", expiresAt: now}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cache := NewBearerTokenCache()
+			cache.now = func() time.Time { return now }
+
+			token, err := cache.getOrFetch(context.Background(), "key", func() (bearerToken, error) {
+				return tt.entry, nil
+			})
+			if err != errUnusableBearerToken {
+				t.Fatalf("error = %v, want %v", err, errUnusableBearerToken)
+			}
+			if token != "" {
+				t.Fatalf("token = %q, want empty", token)
+			}
+			if _, ok := cache.get("key"); ok {
+				t.Fatal("unusable token was cached")
+			}
+		})
+	}
+}
