@@ -10,17 +10,19 @@ import (
 // tokens. It is safe to share across HTTPRegistry instances created for one CLI
 // invocation. Tokens and credential-derived keys are never persisted.
 type BearerTokenCache struct {
-	mu       sync.Mutex
-	entries  map[string]bearerToken
-	inflight map[string]chan struct{}
-	now      func() time.Time
+	mu         sync.Mutex
+	entries    map[string]bearerToken
+	inflight   map[string]chan struct{}
+	generation map[string]uint64
+	now        func() time.Time
 }
 
 func NewBearerTokenCache() *BearerTokenCache {
 	return &BearerTokenCache{
-		entries:  make(map[string]bearerToken),
-		inflight: make(map[string]chan struct{}),
-		now:      time.Now,
+		entries:    make(map[string]bearerToken),
+		inflight:   make(map[string]chan struct{}),
+		generation: make(map[string]uint64),
+		now:        time.Now,
 	}
 }
 
@@ -30,6 +32,7 @@ func (c *BearerTokenCache) get(key string) (string, bool) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.initLocked()
 	entry, ok := c.entries[key]
 	if !ok || entry.value == "" || !c.now().Add(10*time.Second).Before(entry.expiresAt) {
 		delete(c.entries, key)
@@ -43,7 +46,9 @@ func (c *BearerTokenCache) invalidate(key string) {
 		return
 	}
 	c.mu.Lock()
+	c.initLocked()
 	delete(c.entries, key)
+	c.generation[key]++
 	c.mu.Unlock()
 }
 
@@ -57,6 +62,7 @@ func (c *BearerTokenCache) getOrFetch(ctx context.Context, key string, fetch fun
 			return token, nil
 		}
 		c.mu.Lock()
+		c.initLocked()
 		if wait, ok := c.inflight[key]; ok {
 			c.mu.Unlock()
 			select {
@@ -68,16 +74,36 @@ func (c *BearerTokenCache) getOrFetch(ctx context.Context, key string, fetch fun
 		}
 		wait := make(chan struct{})
 		c.inflight[key] = wait
+		generation := c.generation[key]
 		c.mu.Unlock()
 
 		entry, err := fetch()
 		c.mu.Lock()
-		if err == nil && entry.value != "" && c.now().Add(10*time.Second).Before(entry.expiresAt) {
+		current := c.generation[key] == generation
+		if current && err == nil && entry.value != "" && c.now().Add(10*time.Second).Before(entry.expiresAt) {
 			c.entries[key] = entry
 		}
 		delete(c.inflight, key)
 		close(wait)
 		c.mu.Unlock()
+		if err == nil && !current {
+			continue
+		}
 		return entry.value, err
+	}
+}
+
+func (c *BearerTokenCache) initLocked() {
+	if c.entries == nil {
+		c.entries = make(map[string]bearerToken)
+	}
+	if c.inflight == nil {
+		c.inflight = make(map[string]chan struct{})
+	}
+	if c.generation == nil {
+		c.generation = make(map[string]uint64)
+	}
+	if c.now == nil {
+		c.now = time.Now
 	}
 }
