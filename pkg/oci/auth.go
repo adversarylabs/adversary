@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -242,21 +243,31 @@ func tokenRequestURL(challenge bearerChallenge, scope string) (string, error) {
 	return u.String(), nil
 }
 
+type bearerToken struct {
+	value     string
+	expiresAt time.Time
+}
+
 func readBearerToken(ctx context.Context, client *http.Client, challenge bearerChallenge, scope string, creds Credentials, hasCreds bool) (string, error) {
+	token, err := requestBearerToken(ctx, client, challenge, scope, creds, hasCreds)
+	return token.value, err
+}
+
+func requestBearerToken(ctx context.Context, client *http.Client, challenge bearerChallenge, scope string, creds Credentials, hasCreds bool) (bearerToken, error) {
 	tokenURL, err := tokenRequestURL(challenge, scope)
 	if err != nil {
-		return "", err
+		return bearerToken{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
 	if err != nil {
-		return "", err
+		return bearerToken{}, err
 	}
 	if hasCreds {
 		ApplyAuthHeader(req, creds)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return bearerToken{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -267,26 +278,52 @@ func readBearerToken(ctx context.Context, client *http.Client, challenge bearerC
 		}
 		u := req.URL
 		endpoint := u.Scheme + "://" + u.Host + u.EscapedPath()
-		return "", fmt.Errorf("token request failed: %s: %s: %s", resp.Status, endpoint, text)
+		return bearerToken{}, fmt.Errorf("token request failed: %s: %s: %s", resp.Status, endpoint, text)
 	}
 	var body struct {
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
+		ExpiresIn   any    `json:"expires_in"`
+		IssuedAt    string `json:"issued_at"`
 	}
 	data, err := readLimited(resp.Body, 1<<20, "token response")
 	if err != nil {
-		return "", err
+		return bearerToken{}, err
 	}
 	if err := json.Unmarshal(data, &body); err != nil {
-		return "", err
+		return bearerToken{}, err
 	}
-	if body.Token != "" {
-		return body.Token, nil
+	value := body.Token
+	if value == "" {
+		value = body.AccessToken
 	}
-	if body.AccessToken != "" {
-		return body.AccessToken, nil
+	if value == "" {
+		return bearerToken{}, fmt.Errorf("token response did not include a bearer token")
 	}
-	return "", fmt.Errorf("token response did not include a bearer token")
+	issuedAt := time.Now()
+	if parsed, parseErr := time.Parse(time.RFC3339, body.IssuedAt); parseErr == nil {
+		issuedAt = parsed
+	}
+	seconds := int64(60)
+	switch value := body.ExpiresIn.(type) {
+	case float64:
+		seconds = int64(value)
+	case string:
+		if parsed, parseErr := strconv.ParseInt(value, 10, 64); parseErr == nil {
+			seconds = parsed
+		}
+	}
+	if seconds < 0 {
+		seconds = 0
+	}
+	if seconds > 3600 {
+		seconds = 3600
+	}
+	expiresAt := issuedAt.Add(time.Duration(seconds) * time.Second)
+	if maximum := time.Now().Add(time.Hour); expiresAt.After(maximum) {
+		expiresAt = maximum
+	}
+	return bearerToken{value: value, expiresAt: expiresAt}, nil
 }
 
 func ApplyAuthHeader(req *http.Request, creds Credentials) {

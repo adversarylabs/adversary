@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -237,6 +238,52 @@ func TestApplyAuthHeaderBasic(t *testing.T) {
 	username, password, ok := req.BasicAuth()
 	if !ok || username != "user" || password != "pass" {
 		t.Fatalf("basic auth = %q %q %v", username, password, ok)
+	}
+}
+
+func TestBearerTokenCacheIsSharedAcrossRegistryClients(t *testing.T) {
+	var tokenRequests, registryRequests atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Host {
+		case "auth.example":
+			tokenRequests.Add(1)
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(`{"token":"registry-jwt","expires_in":300}`)), Header: http.Header{}, Request: req}, nil
+		case "registry.example":
+			registryRequests.Add(1)
+			if got := req.Header.Get("Authorization"); got != "Bearer registry-jwt" {
+				t.Fatalf("registry Authorization = %q", got)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader("ok")), Header: http.Header{}, Request: req}, nil
+		default:
+			t.Fatalf("unexpected host %q", req.URL.Host)
+			return nil, nil
+		}
+	})}
+	cache := NewBearerTokenCache()
+	ref := Reference{Registry: "registry.example", Repository: "team/tool", Tag: "latest"}
+	for range 2 {
+		registry := NewHTTPRegistry()
+		registry.Client = client
+		registry.Credentials = staticCredentialStore{registry: ref.Registry, creds: Credentials{Token: "cli-token"}}
+		registry.BearerRealm = "https://auth.example/token"
+		registry.BearerService = ref.Registry
+		registry.TokenAuthorities[ref.Registry] = TokenAuthority{Origin: "https://auth.example", Service: ref.Registry}
+		registry.TokenCache = cache
+		req, err := registry.newRequest(t.Context(), http.MethodGet, ref, "/manifests/latest", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := registry.do(req, ref, "repository:team/tool:pull")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	if got := tokenRequests.Load(); got != 1 {
+		t.Fatalf("token requests = %d, want 1", got)
+	}
+	if got := registryRequests.Load(); got != 2 {
+		t.Fatalf("registry requests = %d, want 2", got)
 	}
 }
 

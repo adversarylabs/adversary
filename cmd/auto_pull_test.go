@@ -269,6 +269,103 @@ func TestEnsureAccessibleAdversariesStatusLines(t *testing.T) {
 	}
 }
 
+type concurrentResolveRegistry struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (*concurrentResolveRegistry) SetPlainHTTP(bool) {}
+func (*concurrentResolveRegistry) PushSources(context.Context, oci.Reference, []byte, []oci.SourceBlob) (string, error) {
+	return "", errors.New("unexpected push")
+}
+func (*concurrentResolveRegistry) PushAdversaryManifestReferrer(context.Context, oci.Reference, string, []byte) (string, string, error) {
+	return "", "", errors.New("unexpected referrer push")
+}
+func (*concurrentResolveRegistry) PushAttachedReferrer(context.Context, oci.Reference, string, string, string, string, []byte) (string, string, error) {
+	return "", "", errors.New("unexpected referrer push")
+}
+func (*concurrentResolveRegistry) PullSources(context.Context, oci.Reference) (*oci.PulledSources, error) {
+	return nil, errors.New("unexpected pull")
+}
+func (*concurrentResolveRegistry) GetOfficialSignatureReferrer(context.Context, oci.Reference, string) ([]byte, error) {
+	return nil, errors.New("unexpected signature pull")
+}
+func (*concurrentResolveRegistry) GetNamespaceSignatureReferrer(context.Context, oci.Reference, string) ([]byte, error) {
+	return nil, errors.New("unexpected signature pull")
+}
+func (*concurrentResolveRegistry) GetNamespaceTrustReferrer(context.Context, oci.Reference, string) ([]byte, error) {
+	return nil, errors.New("unexpected trust pull")
+}
+func (r *concurrentResolveRegistry) Resolve(ctx context.Context, _ oci.Reference) (string, error) {
+	select {
+	case r.started <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	select {
+	case <-r.release:
+		return "", errors.New("fixture resolve failure")
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+type concurrentRegistryFactory struct {
+	registry application.OCIRegistry
+	identity string
+}
+
+func (f concurrentRegistryFactory) BindingIdentity() string { return f.identity }
+
+func (f concurrentRegistryFactory) New(string, string) (application.OCIRegistry, error) {
+	return f.registry, nil
+}
+
+func TestEnsureAccessibleAdversariesPullsConcurrently(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/search" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[
+			{"name":"one","version":"1.0.0","reference":"registry.example/team/one:1.0.0"},
+			{"name":"two","version":"1.0.0","reference":"registry.example/team/two:1.0.0"}
+		]}`))
+	}))
+	defer api.Close()
+
+	var stdout, stderr bytes.Buffer
+	base := lifecycleTestApp(t, repository.Repository{Root: t.TempDir()}, &stdout, &stderr).Dependencies()
+	store := base.Auth.(processAuthStore).ConfigStore
+	if err := store.SetAuth(adversarylabs.AuthKey(api.URL, "work"), adversarylabs.Auth{Token: "token"}); err != nil {
+		t.Fatal(err)
+	}
+	base.API = processAPIFactory{store: store, http: api.Client()}
+	registry := &concurrentResolveRegistry{started: make(chan struct{}, 2), release: make(chan struct{})}
+	base.Registries = concurrentRegistryFactory{registry: registry, identity: store.Path}
+	app, err := application.New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- ensureAccessibleAdversaries(t.Context(), app, api.URL, "work", &stderr) }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-registry.started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("catalog pulls did not overlap")
+		}
+	}
+	close(registry.release)
+	err = <-done
+	var syncErr *accessibleAdversarySyncError
+	if !errors.As(err, &syncErr) || syncErr.Failed != 2 {
+		t.Fatalf("err = %v, want two pull failures", err)
+	}
+}
+
 func TestEnsureAccessibleAdversariesPropagatesPullCancellation(t *testing.T) {
 	// Hang registry resolve so cancel is observed on the pull path, not a fast soft-fail.
 	registryHang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

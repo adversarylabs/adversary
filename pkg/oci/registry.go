@@ -3,12 +3,14 @@ package oci
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/adversarylabs/adversary/pkg/blobsource"
 )
@@ -29,6 +31,12 @@ type HTTPRegistry struct {
 	// TokenAuthorities binds a registry to the only cross-origin bearer realm
 	// and service allowed to receive its stored credentials.
 	TokenAuthorities map[string]TokenAuthority
+	// TokenCache reuses short-lived bearer tokens across requests and registry
+	// clients. A shared cache substantially reduces cold catalog pull round trips.
+	TokenCache *BearerTokenCache
+
+	manifestMu    sync.Mutex
+	manifestCache map[string]cachedManifest
 }
 
 type TokenAuthority struct{ Origin, Service string }
@@ -45,10 +53,16 @@ func NewHTTPRegistry() *HTTPRegistry {
 	return &HTTPRegistry{
 		Client:      NewHTTPClient(),
 		Credentials: DockerCredentialStore{},
+		TokenCache:  NewBearerTokenCache(),
 		TokenAuthorities: map[string]TokenAuthority{
 			"registry-1.docker.io": {Origin: "https://auth.docker.io", Service: "registry.docker.io"},
 		},
 	}
+}
+
+type cachedManifest struct {
+	data   []byte
+	digest string
 }
 
 func (r *HTTPRegistry) PushAdversaryManifestReferrer(ctx context.Context, imageRef Reference, imageDigest string, yaml []byte) (string, string, error) {
@@ -246,11 +260,19 @@ func validatePulledManifest(manifest Manifest) error {
 func (r *HTTPRegistry) Resolve(ctx context.Context, ref Reference) (string, error) {
 	ctx, cancel := withOperationDeadline(ctx)
 	defer cancel()
-	_, digest, err := r.getManifest(ctx, ref)
+	data, digest, err := r.getManifest(ctx, ref)
+	if err == nil {
+		r.rememberManifest(ref, data, digest)
+	}
 	return digest, err
 }
 
 func (r *HTTPRegistry) getManifest(ctx context.Context, ref Reference) ([]byte, string, error) {
+	if ref.Digest != "" {
+		if data, digest, ok := r.cachedManifest(ref); ok {
+			return data, digest, nil
+		}
+	}
 	req, err := r.newRequest(ctx, http.MethodGet, ref, "/manifests/"+ref.ManifestReference(), nil)
 	if err != nil {
 		return nil, "", err
@@ -290,6 +312,30 @@ func (r *HTTPRegistry) getManifest(ctx context.Context, ref Reference) ([]byte, 
 		return nil, "", err
 	}
 	return data, digest, nil
+}
+
+func (r *HTTPRegistry) rememberManifest(ref Reference, data []byte, digest string) {
+	if digest == "" || len(data) == 0 {
+		return
+	}
+	r.manifestMu.Lock()
+	defer r.manifestMu.Unlock()
+	if r.manifestCache == nil {
+		r.manifestCache = make(map[string]cachedManifest)
+	}
+	key := ref.Registry + "\x00" + ref.Repository + "\x00" + digest
+	r.manifestCache[key] = cachedManifest{data: append([]byte(nil), data...), digest: digest}
+}
+
+func (r *HTTPRegistry) cachedManifest(ref Reference) ([]byte, string, bool) {
+	key := ref.Registry + "\x00" + ref.Repository + "\x00" + ref.Digest
+	r.manifestMu.Lock()
+	defer r.manifestMu.Unlock()
+	item, ok := r.manifestCache[key]
+	if !ok {
+		return nil, "", false
+	}
+	return append([]byte(nil), item.data...), item.digest, true
 }
 
 func (r *HTTPRegistry) getArtifactManifest(ctx context.Context, ref Reference, digest string) ([]byte, string, error) {
@@ -491,6 +537,20 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 			ApplyAuthHeader(req, creds)
 		}
 	}
+	var requestTokenKey string
+	if req.Header.Get("Authorization") == "" && hasCreds {
+		if challenge, ok := r.configuredBearerChallenge(ref); ok && validRepositoryScope(ref, scope) {
+			sendCreds := hasCreds && r.trustedTokenAuthority(ref, challenge)
+			requestTokenKey = bearerTokenCacheKey(challenge, scope, creds, sendCreds)
+			token, tokenErr := r.TokenCache.getOrFetch(req.Context(), requestTokenKey, func() (bearerToken, error) {
+				return requestBearerToken(req.Context(), client, challenge, scope, creds, sendCreds)
+			})
+			if tokenErr != nil {
+				return nil, tokenErr
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -498,6 +558,7 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	if resp.StatusCode != http.StatusUnauthorized {
 		return resp, nil
 	}
+	r.TokenCache.invalidate(requestTokenKey)
 	challenge, ok := parseBearerChallenge(resp.Header.Get("WWW-Authenticate"))
 	if !ok {
 		r.debugf("oci auth: %s %s returned 401 without bearer challenge", req.Method, req.URL.Path)
@@ -522,7 +583,10 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	if hasCreds && !sendCreds {
 		r.debugf("oci auth: requesting anonymous token from untrusted cross-origin realm")
 	}
-	token, err := readBearerToken(req.Context(), client, challenge, scope, creds, sendCreds)
+	key := bearerTokenCacheKey(challenge, scope, creds, sendCreds)
+	token, err := r.TokenCache.getOrFetch(req.Context(), key, func() (bearerToken, error) {
+		return requestBearerToken(req.Context(), client, challenge, scope, creds, sendCreds)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -537,6 +601,15 @@ func (r *HTTPRegistry) do(req *http.Request, ref Reference, scope string) (*http
 	retry.Header.Set("Authorization", "Bearer "+token)
 	r.debugf("oci auth: retrying %s %s authorization_header=%t", retry.Method, retry.URL.Path, retry.Header.Get("Authorization") != "")
 	return client.Do(retry)
+}
+
+func bearerTokenCacheKey(challenge bearerChallenge, scope string, creds Credentials, sendCreds bool) string {
+	identity := "anonymous"
+	if sendCreds {
+		sum := sha256.Sum256([]byte(creds.Username + "\x00" + creds.Password + "\x00" + creds.Token))
+		identity = fmt.Sprintf("%x", sum[:])
+	}
+	return challenge.Realm + "\x00" + challenge.Service + "\x00" + scope + "\x00" + identity
 }
 
 func validRepositoryScope(ref Reference, scope string) bool {
