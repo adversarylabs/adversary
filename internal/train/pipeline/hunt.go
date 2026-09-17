@@ -138,7 +138,15 @@ func runParallelHunt(
 		progress("Discovery window: %d/%d repos starting at catalog index %d; next run continues from index %d",
 			windowCount, totalCatalogRepos, windowStart, (windowStart+windowCount)%totalCatalogRepos)
 	}
-	progress("max-turns=%d, target in-scope PRs=%d, concurrency=%d", maxTurns, targetPRs, concurrency)
+	targetLabel := "in-scope PRs"
+	if opts.CollectOnly {
+		targetLabel = "catalog candidates"
+	}
+	if opts.AllHistory {
+		progress("limits=none, since=%s, concurrency=%d", opts.AuthorSince, concurrency)
+	} else {
+		progress("max-turns=%d, target %s=%d, concurrency=%d", maxTurns, targetLabel, targetPRs, concurrency)
+	}
 
 	var mu sync.Mutex
 	stores := map[string]*state.DiscoveryStore{}
@@ -171,9 +179,26 @@ func runParallelHunt(
 					continue
 				}
 				res := collectOnePR(ctx, opts, dataRoot, job, scopeClf, commentRouter, progress)
+				for opts.AllHistory && ctx.Err() == nil {
+					rateErr := res.rateLimitError()
+					if rateErr == nil {
+						break
+					}
+					reset := collect.RateLimitReset(rateErr)
+					if reset.IsZero() {
+						progress("GitHub rate limit while collecting %s/%s#%d — backing off", job.owner, job.name, job.ref.Number)
+					} else {
+						progress("GitHub rate limit while collecting %s/%s#%d — waiting until %s", job.owner, job.name, job.ref.Number, reset.Local().Format(time.RFC3339))
+					}
+					if err := collect.WaitForRateLimit(ctx, rateErr); err != nil {
+						res.err = err
+						break
+					}
+					res = collectOnePR(ctx, opts, dataRoot, job, scopeClf, commentRouter, progress)
+				}
 				if ctx.Err() != nil {
-					// Still persist any in-scope gold from a finished collect.
-					if res.inScopeN > 0 && len(res.kept) > 0 {
+					// Still persist any usable catalog evidence from a finished collect.
+					if (res.inScopeN > 0 || (res.retainUnassigned && res.unassignedN > 0)) && len(res.kept) > 0 {
 						mu.Lock()
 						accepted := applyCollectResult(&out, res, job.pinned, targetPRs)
 						if accepted && onKeep != nil {
@@ -188,20 +213,65 @@ func runParallelHunt(
 				if accepted && onKeep != nil {
 					out.resultsAdded += onKeep(res.kept)
 				}
+				if out.interrupted == nil {
+					out.interrupted = res.rateLimitError()
+				}
 				mu.Unlock()
 			}
 		}()
 	}
 
-	// Feeder: discover one bounded, durable catalog window, then enqueue jobs.
-	// The default repo mode spends one GitHub list request per repository. The
-	// github_events mode replaces that wave with one public ClickHouse query, but
+	// Feeder: discover successive waves within one bounded, durable repository
+	// window, then enqueue jobs until the result/turn limits or exhaustion. The
+	// default repo mode spends one GitHub list request per repository per wave. The
+	// github_events mode replaces each wave with one public ClickHouse query, but
 	// selected candidates are still hydrated by the canonical GitHub collector.
 	// A per-target cursor lets later runs resume at the next window while a shared
 	// seed staggers different targets' first run. Collect workers already run up
 	// to `concurrency` PRs at once.
+	historical := map[string][]collect.PRRef{}
+	historicalIndex := map[string]int{}
+	historicalDiscoveryFailed := false
+	if opts.AllHistory {
+		since, err := time.Parse("2006-01-02", strings.TrimSpace(opts.AuthorSince))
+		if err != nil {
+			out.interrupted = fmt.Errorf("parse historical cutoff: %w", err)
+			historicalDiscoveryFailed = true
+		} else {
+			progress("Historical scan: every merged PR since %s (no PR or turn limit)", since.Format("2006-01-02"))
+			for _, r := range catalogRepos {
+				store, storeErr := storeFor(r.Owner, r.Name)
+				if storeErr != nil {
+					out.interrupted = storeErr
+					historicalDiscoveryFailed = true
+					break
+				}
+				found, discoverErr := collect.DiscoverHistoricalPRs(r.Owner, r.Name, collect.HistoricalDiscoverOpts{
+					Context: ctx, Since: since, Skip: store.SeenSet(),
+					OnRateLimit: func(reset time.Time) {
+						if reset.IsZero() {
+							progress("GitHub rate limit while paging %s — backing off", r.FullName())
+						} else {
+							progress("GitHub rate limit while paging %s — waiting until %s", r.FullName(), reset.Local().Format(time.RFC3339))
+						}
+					},
+				})
+				if discoverErr != nil {
+					out.interrupted = discoverErr
+					historicalDiscoveryFailed = true
+					break
+				}
+				historical[r.FullName()] = found
+				progress("Historical candidates in %s: %d new", r.FullName(), len(found))
+			}
+		}
+	}
+
 feedLoop:
 	for {
+		if historicalDiscoveryFailed {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			mu.Lock()
 			out.interrupted = fmt.Errorf("train interrupted: %w", err)
@@ -226,7 +296,25 @@ feedLoop:
 			ok    bool
 		}
 		hits := make([]discHit, len(catalogRepos))
-		if githubEventsMode {
+		if opts.AllHistory {
+			for i, r := range catalogRepos {
+				store, err := storeFor(r.Owner, r.Name)
+				if err != nil {
+					out.interrupted = err
+					break feedLoop
+				}
+				key := r.FullName()
+				refs, index := historical[key], historicalIndex[key]
+				for index < len(refs) && store.Seen(refs[index].Number) {
+					index++
+				}
+				if index < len(refs) {
+					hits[i] = discHit{repo: r, store: store, ref: refs[index], ok: true}
+					index++
+				}
+				historicalIndex[key] = index
+			}
+		} else if githubEventsMode {
 			repoNames := make([]string, 0, len(catalogRepos))
 			for _, r := range catalogRepos {
 				repoNames = append(repoNames, r.FullName())
@@ -391,8 +479,8 @@ feedLoop:
 
 		if enqueuedThisWave == 0 {
 			progress("No new PR candidates in this catalog window — stopping hunt")
+			break
 		}
-		break
 	}
 
 	close(jobs)
@@ -419,10 +507,10 @@ feedLoop:
 		}
 	}
 	if out.interrupted != nil {
-		progress("Hunt interrupted: turns=%d, in-scope PRs kept=%d", out.turnsUsed, out.prsWithInScope)
+		progress("Hunt interrupted: turns=%d, %s kept=%d", out.turnsUsed, targetLabel, out.prsWithInScope)
 		return out
 	}
-	progress("Hunt finished: turns=%d, in-scope PRs kept=%d (concurrency=%d)", out.turnsUsed, out.prsWithInScope, concurrency)
+	progress("Hunt finished: turns=%d, %s kept=%d (concurrency=%d)", out.turnsUsed, targetLabel, out.prsWithInScope, concurrency)
 	return out
 }
 
@@ -444,19 +532,30 @@ func catalogRepoWindow(catalog []repos.Repo, start, count int) []repos.Repo {
 }
 
 type collectResult struct {
-	kept      []*cases.Case
-	inScopeN  int
-	outScopeN int
-	blocked   *dataroot.BlockedResult
-	execClass dataroot.ExecutionClass
-	err       error
-	owner     string
-	name      string
-	ref       collect.PRRef
-	store     *state.DiscoveryStore
-	pinned    bool
-	turn      int
-	noCases   bool
+	kept             []*cases.Case
+	inScopeN         int
+	outScopeN        int
+	unassignedN      int
+	retainUnassigned bool
+	blocked          *dataroot.BlockedResult
+	execClass        dataroot.ExecutionClass
+	err              error
+	owner            string
+	name             string
+	ref              collect.PRRef
+	store            *state.DiscoveryStore
+	pinned           bool
+	turn             int
+	noCases          bool
+}
+
+// Retain the collection error's reset deadline even if the shared gate has
+// expired by the time a worker decides whether to wait and retry.
+func (r collectResult) rateLimitError() error {
+	if collect.IsRateLimit(r.err) {
+		return r.err
+	}
+	return nil
 }
 
 func collectOnePR(
@@ -513,6 +612,7 @@ func collectOnePR(
 		_ = job.store.Save()
 		progress("  ✗ blocked (%s): %s", cres.Blocked.Classification, cres.Blocked.SanitizedError)
 		res.blocked = cres.Blocked
+		res.err = cres.BlockedErr
 		res.execClass = cres.ExecutionClass
 		return res
 	}
@@ -523,6 +623,7 @@ func collectOnePR(
 	var kept []*cases.Case
 	inScopeN := 0
 	outScopeN := 0
+	unassignedN := 0
 	for _, c := range cres.CaseCandidates {
 		if c.Exclusion != nil && c.ReviewEvent.ReviewedSHA == "" {
 			continue
@@ -530,6 +631,7 @@ func collectOnePR(
 		kept = append(kept, c)
 		inScopeN += len(cases.ApprovedLabels(c.Labels.ExpectedConcerns))
 		outScopeN += len(cases.OutOfScopeLabels(c.Labels.ExpectedConcerns))
+		unassignedN += len(cases.UnclearLabels(c.Labels.ExpectedConcerns))
 	}
 	if len(kept) == 0 {
 		job.store.Record(job.ref.Number, job.ref.Title, job.ref.URL, state.OutcomeNoCases, "no reconstructable review rounds")
@@ -542,6 +644,8 @@ func collectOnePR(
 	res.kept = kept
 	res.inScopeN = inScopeN
 	res.outScopeN = outScopeN
+	res.unassignedN = unassignedN
+	res.retainUnassigned = opts.CollectOnly
 	res.execClass = cres.ExecutionClass
 
 	outcome := state.OutcomeNoInScope
@@ -550,6 +654,10 @@ func collectOnePR(
 		outcome = state.OutcomeGraded
 		note = fmt.Sprintf("%d in-scope concern(s) — keep", inScopeN)
 		progress("  ✓ keep: %d in-scope, %d out-of-scope human comment(s)", inScopeN, outScopeN)
+	} else if opts.CollectOnly && unassignedN > 0 {
+		outcome = state.OutcomeCandidate
+		note = fmt.Sprintf("%d unassigned human concern(s) — keep for review", unassignedN)
+		progress("  ? keep: %d unassigned human comment(s), %d out-of-scope", unassignedN, outScopeN)
 	} else {
 		progress("  · no in-scope comments (%d out-of-scope) — keep hunting", outScopeN)
 	}
@@ -606,8 +714,8 @@ func restrictGoldToTrainingTarget(c *cases.Case, target string) {
 // checked here, not only by the feeder: buffered and in-flight jobs can finish
 // after the feeder has admitted the target number of PRs.
 //
-// The return value reports whether an in-scope PR was admitted and should be
-// persisted to results.db.
+// The return value reports whether a PR with an assigned concern, or an
+// unassigned catalog candidate, was admitted and should be persisted.
 func applyCollectResult(out *huntOutcome, res collectResult, pinned bool, targetPRs int) bool {
 	if res.blocked != nil && out.blocked == nil {
 		out.blocked = res.blocked
@@ -618,7 +726,7 @@ func applyCollectResult(out *huntOutcome, res collectResult, pinned bool, target
 	if res.err != nil || res.noCases || len(res.kept) == 0 {
 		return false
 	}
-	if res.inScopeN > 0 {
+	if res.inScopeN > 0 || (res.retainUnassigned && res.unassignedN > 0) {
 		if targetPRs > 0 && out.prsWithInScope >= targetPRs {
 			return false
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/modelreview"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/pack"
 )
@@ -135,23 +137,58 @@ func TestProcessRuntimeRoutesDistinctStreamsAndSnapshot(t *testing.T) {
 	}
 }
 
-func TestProcessRuntimeModelFlagsOverrideEnvironment(t *testing.T) {
+func TestProcessRuntimeForwardsExplicitCloudflareModelOptionsToBroker(t *testing.T) {
 	environment := internaladversary.NewProcessEnvironment([]string{
 		"ADVERSARY_MODEL_PROVIDER=anthropic",
 		"ADVERSARY_MODEL=environment-model",
 		"ANTHROPIC_API_KEY=anthropic-secret",
+		"CLOUDFLARE_API_TOKEN=cloudflare-secret",
+		"CLOUDFLARE_ACCOUNT_ID=account-id",
+	}, false)
+	applicationOptions := application.AdversaryRunOptions{
+		ModelProvider: "cloudflare",
+		Model:         "openai/gpt-5.5",
+	}
+	internalOptions := toInternalRunOptions(applicationOptions)
+	runner := (processRuntime{environment: environment}).runner(applicationOptions)
+	broker, err := runner.ModelBrokerFactory(modelreview.Config{
+		Provider: internalOptions.ModelProvider,
+		Model:    internalOptions.Model,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broker.Provider.Name() != "cloudflare" || broker.Provider.Model() != "openai/gpt-5.5" {
+		t.Fatalf("provider = %s/%s", broker.Provider.Name(), broker.Provider.Model())
+	}
+}
+
+func TestProcessRuntimeDisablesProviderKeepAlivesFromEnvironment(t *testing.T) {
+	environment := internaladversary.NewProcessEnvironment([]string{
+		"ADVERSARY_MODEL_DISABLE_KEEP_ALIVES=true",
 		"FIREWORKS_API_KEY=fireworks-secret",
 	}, false)
 	runner := (processRuntime{environment: environment}).runner(application.AdversaryRunOptions{
 		ModelProvider: "fireworks",
-		Model:         "accounts/fireworks/models/reviewer",
+		Model:         "glm-5.2",
 	})
-	broker, err := runner.ModelBrokerFactory()
+	broker, err := runner.ModelBrokerFactory(modelreview.Config{
+		Provider: "fireworks",
+		Model:    "glm-5.2",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if broker.Provider.Name() != "fireworks" || broker.Provider.Model() != "accounts/fireworks/models/reviewer" {
-		t.Fatalf("provider = %s/%s", broker.Provider.Name(), broker.Provider.Model())
+	provider, ok := broker.Provider.(*modelreview.FireworksProvider)
+	if !ok {
+		t.Fatalf("provider = %T", broker.Provider)
+	}
+	transport, ok := provider.Client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T", provider.Client.Transport)
+	}
+	if !transport.DisableKeepAlives {
+		t.Fatal("DisableKeepAlives = false")
 	}
 }
 

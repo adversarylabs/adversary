@@ -58,7 +58,7 @@ func (e *autoRecordingExecutor) Run(_ context.Context, spec RuntimeSpec) (Runtim
 	return RuntimeResult{}, os.WriteFile(spec.Env["ADVERSARY_OUTPUT"], []byte(output), 0644)
 }
 
-func TestAutoSelectsAvailableAdversariesAndSharesOneContext(t *testing.T) {
+func TestAutoSelectsAvailableAdversariesAndScopesEachContext(t *testing.T) {
 	repo, resolver := autoRepository(t, map[string]string{
 		"container/dockerfile:1.0.0": "name: container/dockerfile\ndetection:\n  files: [Dockerfile]\n",
 		"lang/go:1.0.0":              "name: lang/go\ndetection:\n  files: ['**/*.go']\n",
@@ -71,11 +71,45 @@ func TestAutoSelectsAvailableAdversariesAndSharesOneContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changes.calls != 1 || len(executor.contexts) != 2 || !reflect.DeepEqual(executor.contexts[0], executor.contexts[1]) || !reflect.DeepEqual(executor.contexts[0].ChangedFiles, result.Context.ChangedFiles) || executor.contexts[0].RepositoryRoot != "/workspace" || result.Context.RepositoryRoot != changes.context.RepositoryRoot {
+	if changes.calls != 1 || len(executor.contexts) != 2 || executor.contexts[0].RepositoryRoot != "/workspace" || result.Context.RepositoryRoot != changes.context.RepositoryRoot {
 		t.Fatalf("calls=%d contexts=%#v result=%#v", changes.calls, executor.contexts, result.Context)
+	}
+	if got := executor.contexts[0].ChangedFiles; len(got) != 1 || got[0].Path != "Dockerfile" {
+		t.Fatalf("docker scope = %#v", got)
+	}
+	if got := executor.contexts[1].ChangedFiles; len(got) != 1 || got[0].Path != "cmd/main.go" {
+		t.Fatalf("go scope = %#v", got)
 	}
 	if len(result.Selections) != 2 || !result.Selections[0].Selected || !result.Selections[1].Selected {
 		t.Fatalf("selections = %#v", result.Selections)
+	}
+}
+
+func TestAutoAllFilesPreservesResolvedReviewContext(t *testing.T) {
+	repo, resolver := autoRepository(t, map[string]string{
+		"lang/go:1.0.0": "name: lang/go\ndetection:\n  files: ['**/*.go']\n",
+	})
+	resolved := detection.Context{
+		SchemaVersion:  detection.SchemaVersion,
+		RepositoryRoot: t.TempDir(),
+		Mode:           detection.ModePullRequest,
+		BaseRef:        "main",
+		HeadRef:        "feature",
+		ChangedFiles:   []detection.ChangedFile{{Path: "cmd/main.go", Status: detection.StatusModified}},
+	}
+	changes := &fakeChangeResolver{context: resolved}
+	executor := &autoRecordingExecutor{}
+	runner := Runner{Resolver: &resolver, Repository: &repo, RequireInjectedResolver: true, Executor: executor}
+	_, err := (AutoRunner{Runner: runner, Changes: changes, Resolver: &resolver}).Auto(context.Background(), AutoOptions{
+		All: true, AllFiles: true, MinimumConfidence: detection.ConfidenceMedium,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := resolved
+	want.RepositoryRoot = "/workspace"
+	if len(executor.contexts) != 1 || !reflect.DeepEqual(executor.contexts[0], want) {
+		t.Fatalf("all-files context = %#v, want %#v", executor.contexts, want)
 	}
 }
 

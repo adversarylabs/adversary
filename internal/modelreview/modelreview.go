@@ -20,7 +20,7 @@ const (
 	MaxInputBytes       = 4 << 20
 	MaxSchemaBytes      = 512 << 10
 	MaxOutputTokens     = 65_536
-	MaxRequestTimeoutMS = 10 * 60 * 1_000
+	MaxRequestTimeoutMS = 30 * 60 * 1_000
 )
 
 type Budget struct {

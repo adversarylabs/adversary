@@ -11,6 +11,7 @@ import (
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
 
@@ -31,8 +32,11 @@ type AutoOptions struct {
 	RunTimeout               time.Duration
 	DetectionTimeout         time.Duration
 	Format                   string
+	ModelProvider            string
+	Model                    string
 	IncludeSuppressed        bool
 	RepoIndexMode            string
+	OutcomeContext           *outcomecontext.Context
 	ReportSelections         func(AutoResult) error
 	// ReportRunStart is called before each selected adversary runs (1-based index
 	// among selected adversaries). Used for terminal progress when results go elsewhere.
@@ -168,11 +172,14 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 			RepoPath:                 repositoryRoot,
 			Force:                    true,
 			Format:                   opts.Format,
+			ModelProvider:            opts.ModelProvider,
+			Model:                    opts.Model,
 			IncludeSuppressed:        opts.IncludeSuppressed,
 			AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
 			RunTimeout:               opts.RunTimeout,
 			AllFiles:                 opts.AllFiles,
 			RepoIndexMode:            opts.RepoIndexMode,
+			OutcomeContext:           opts.OutcomeContext,
 			// Multi automatic selection keeps a clean progress stream; use
 			// --verbose on explicit single-ref run for identity banners.
 			Verbose: false,
@@ -181,10 +188,11 @@ func (a AutoRunner) Auto(ctx context.Context, opts AutoOptions) (AutoResult, err
 			name := selection.Candidate.Name
 			runOpts.OnEnvelope = func(env review.RunEnvelope) { opts.OnEnvelope(name, env) }
 		}
-		if !opts.AllFiles {
-			ctxCopy := reviewContext
-			runOpts.ReviewContext = &ctxCopy
+		ctxCopy := reviewContext
+		if !opts.AllFiles && len(selection.Result.RelevantFiles) > 0 {
+			ctxCopy = ReviewContextForFiles(reviewContext, selection.Result.RelevantFiles)
 		}
+		runOpts.ReviewContext = &ctxCopy
 		err := a.Runner.Run(ctx, runOpts)
 		if opts.ReportRunFinish != nil {
 			if finishErr := opts.ReportRunFinish(selection.Candidate.Name, runIndex, selectedTotal, err); finishErr != nil {

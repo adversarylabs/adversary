@@ -402,6 +402,16 @@ func TestRenderTerminalPreservesLegitimateUnicodeFormatCharacters(t *testing.T) 
 	}
 }
 
+func TestSanitizeTerminalInlineRejectsControlSequences(t *testing.T) {
+	got := SanitizeTerminalInline("Reviewed as: safe\x1b[2J\rforged\nline")
+	if strings.ContainsAny(got, "\x1b\r\n") {
+		t.Fatalf("sanitized value contains terminal controls: %q", got)
+	}
+	if !strings.Contains(got, "Reviewed as: safe") || !strings.Contains(got, "forged line") {
+		t.Fatalf("sanitized value lost text: %q", got)
+	}
+}
+
 func TestDecodeRunEnvelopeRejectsUnversionedPayload(t *testing.T) {
 	_, err := DecodeRunEnvelope([]byte(`{"findings":[]}`))
 	if err == nil {
@@ -463,7 +473,7 @@ func TestDecodeRunEnvelopeRejectsSharedInvalidFixtures(t *testing.T) {
 }
 
 func TestProtocolSchemasAreValidJSON(t *testing.T) {
-	for _, name := range []string{"adversary.input.v1.schema.json", "adversary.review.v1.schema.json"} {
+	for _, name := range []string{"adversary.input.v1.schema.json", "adversary.outcome-context.v1.schema.json", "adversary.review.v1.schema.json"} {
 		canonical, err := os.ReadFile(filepath.Join("..", "..", "schema", name))
 		if err != nil {
 			t.Fatal(err)

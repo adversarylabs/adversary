@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/progress"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/blobsource"
 	"github.com/adversarylabs/adversary/pkg/namespacesig"
@@ -104,7 +105,7 @@ func registerExactRef(resolver application.Resolver, ref, digest string) error {
 		if current.Digest == digest {
 			return nil
 		}
-		if updateErr := resolver.UpdateRef(ref, current.Digest, digest); updateErr != nil {
+		if updateErr := registerRefCAS(resolver, ref, current.Digest, digest); updateErr != nil {
 			return fmt.Errorf("retarget %s from %s to %s: %w", ref, current.Digest, digest, updateErr)
 		}
 		return nil
@@ -112,10 +113,24 @@ func registerExactRef(resolver application.Resolver, ref, digest string) error {
 	if !os.IsNotExist(err) {
 		return err
 	}
-	if createErr := resolver.UpdateRef(ref, "", digest); createErr != nil {
+	if createErr := registerRefCAS(resolver, ref, "", digest); createErr != nil {
 		return fmt.Errorf("create local reference %s -> %s: %w", ref, digest, createErr)
 	}
 	return nil
+}
+
+// Concurrent pulls of identical content may both observe a missing/old ref.
+// A lost CAS is success only when the winner installed exactly our digest.
+// Never overwrite a different concurrent target or suppress unrelated errors.
+func registerRefCAS(resolver application.Resolver, ref, oldDigest, digest string) error {
+	err := resolver.UpdateRef(ref, oldDigest, digest)
+	if errors.Is(err, repository.ErrCAS) {
+		current, readErr := resolver.ResolveRecord(ref)
+		if readErr == nil && current.Digest == digest {
+			return nil
+		}
+	}
+	return err
 }
 
 // registerVersionRef also pins registry/name:version when the pulled tag was
@@ -173,8 +188,8 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 	if ref.Registry == "localhost" || hasLocalhostPort(ref.Registry) {
 		registry.SetPlainHTTP(true)
 	}
-	fmt.Fprintln(stderr, "Pulling manifest...")
-	fmt.Fprintln(stderr)
+	fmt.Fprintln(progress.Detail(stderr), "Pulling manifest...")
+	fmt.Fprintln(progress.Detail(stderr))
 	digest, err := registry.Resolve(ctx, ref)
 	if err != nil {
 		return pullResult{}, err
@@ -207,7 +222,7 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 		return pullResult{}, resolveErr
 	}
 
-	fmt.Fprintln(stderr, "Downloading layers...")
+	fmt.Fprintln(progress.Detail(stderr), "Downloading layers...")
 	artifact, err := registry.PullSources(ctx, pinned)
 	if err != nil {
 		return pullResult{}, err
@@ -281,7 +296,7 @@ func fetchAndStoreOfficialSignature(ctx context.Context, app *application.App, r
 		return err
 	}
 	if stderr != nil {
-		fmt.Fprintln(stderr, "Official signature verified and stored.")
+		fmt.Fprintln(progress.Detail(stderr), "Official signature verified and stored.")
 	}
 	return nil
 }
@@ -329,7 +344,7 @@ func fetchAndStoreNamespaceSignature(ctx context.Context, app *application.App, 
 		return err
 	}
 	if stderr != nil {
-		fmt.Fprintln(stderr, "Team namespace signature verified and stored.")
+		fmt.Fprintln(progress.Detail(stderr), "Team namespace signature verified and stored.")
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,10 +22,13 @@ import (
 
 	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/cataloginit"
 	"github.com/adversarylabs/adversary/internal/dependencies"
+	"github.com/adversarylabs/adversary/internal/findingverify"
 	"github.com/adversarylabs/adversary/internal/initproject"
 	"github.com/adversarylabs/adversary/internal/modelreview"
 	internalpaths "github.com/adversarylabs/adversary/internal/paths"
+	trainreviewui "github.com/adversarylabs/adversary/internal/train/reviewui"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/detection"
 	"github.com/adversarylabs/adversary/pkg/manifest"
@@ -34,6 +38,10 @@ import (
 	"github.com/adversarylabs/adversary/pkg/review"
 	"golang.org/x/term"
 )
+
+func openTelemetryOutput(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+}
 
 type processTimer struct{ *time.Timer }
 
@@ -55,6 +63,20 @@ func (processProjects) Init(opts application.ProjectInitOptions) (application.Pr
 }
 func (p processProjects) RenderInit(w io.Writer, result application.ProjectInitResult, destination string) {
 	initproject.RenderSuccess(w, initproject.Result{Location: result.Location, SDK: result.SDK}, destination, p.platform)
+}
+func (processProjects) InitCatalog(opts application.CatalogInitOptions) (application.CatalogInitResult, error) {
+	result, err := cataloginit.Create(cataloginit.Options{Destination: opts.Destination})
+	return application.CatalogInitResult{Location: result.Location}, err
+}
+func (p processProjects) RenderCatalogInit(w io.Writer, result application.CatalogInitResult) {
+	cataloginit.RenderSuccess(w, cataloginit.Result{Location: result.Location}, p.platform)
+}
+func (processProjects) UpgradeCatalog(opts application.CatalogUpgradeOptions) (application.CatalogUpgradeResult, error) {
+	result, err := cataloginit.Upgrade(opts.Path)
+	return application.CatalogUpgradeResult{Location: result.Location, Upgraded: result.Upgraded}, err
+}
+func (processProjects) RenderCatalogUpgrade(w io.Writer, result application.CatalogUpgradeResult) {
+	cataloginit.RenderUpgradeSuccess(w, cataloginit.UpgradeResult{Location: result.Location, Upgraded: result.Upgraded})
 }
 func (processProjects) Validate(ctx context.Context, value string, resolver application.Resolver) (application.ProjectValidation, error) {
 	path, err := filepath.Abs(value)
@@ -178,6 +200,44 @@ type processRuntime struct {
 }
 
 func (p processRuntime) BindingIdentity() string { return p.resolver.Repository.RootPath() }
+func (p processRuntime) ReviewCatalog(ctx context.Context, opts application.CatalogReviewOptions) error {
+	var assist func(context.Context, trainreviewui.AssistRequest) (trainreviewui.AssistResult, error)
+	if opts.Assist != nil {
+		assist = func(ctx context.Context, request trainreviewui.AssistRequest) (trainreviewui.AssistResult, error) {
+			result, err := opts.Assist(ctx, application.CatalogAssistRequest{
+				Evidence: request.Evidence, File: request.File, DiffHunk: request.DiffHunk,
+				CurrentAdversary: request.CurrentAdversary, CurrentRule: request.CurrentRule, Adversaries: request.Adversaries,
+			})
+			return trainreviewui.AssistResult{
+				Adversary: result.Adversary, ProposedRule: result.ProposedRule,
+				AdversaryMission: result.AdversaryMission, Rationale: result.Rationale,
+			}, err
+		}
+	}
+	var createPR func(context.Context, string, bool, func(trainreviewui.Progress)) error
+	if opts.CreatePR != nil {
+		createPR = func(ctx context.Context, id string, allowOverlap bool, report func(trainreviewui.Progress)) error {
+			return opts.CreatePR(ctx, id, allowOverlap, func(update application.CatalogProgress) {
+				report(trainreviewui.Progress{Stage: update.Stage, State: update.State, Detail: update.Detail})
+			})
+		}
+	}
+	return trainreviewui.Serve(ctx, trainreviewui.Options{
+		StateRoot: opts.StateRoot, Adversaries: opts.Adversaries, Output: opts.Output,
+		Entropy: rand.Reader, Listen: net.Listen, Assist: assist, Apply: opts.Apply, CreatePR: createPR,
+		OpenURL: func(ctx context.Context, u string) error {
+			return openBrowser(ctx, u, p.environment, p.resolveExecutable, internaladversary.ExecProcessOutputRunner{})
+		},
+	})
+}
+func (p processRuntime) RunSourceIdentity(ctx context.Context, repoPath string) (application.RunSourceIdentity, error) {
+	resolver, ok := p.git.(internaladversary.GitSourceIdentityResolver)
+	if !ok {
+		return application.RunSourceIdentity{}, fmt.Errorf("runtime Git dependency does not support source identity")
+	}
+	identity, err := resolver.SourceIdentity(ctx, repoPath)
+	return application.RunSourceIdentity{Ref: identity.Ref, SHA: identity.SHA}, err
+}
 func (p processRuntime) Run(ctx context.Context, opts application.AdversaryRunOptions) error {
 	opts, resolved, err := p.resolveRunScope(ctx, opts)
 	if err != nil {
@@ -271,7 +331,9 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 	runner := p.runner(application.AdversaryRunOptions{
 		Stdout: opts.Stdout, Stderr: opts.Stderr,
 		ModelProvider: opts.ModelProvider, Model: opts.Model,
-		MuteChildStderr: true,
+		ReviewFeedbackPrompt: opts.ReviewFeedbackPrompt,
+		OutcomeContext:       opts.OutcomeContext,
+		MuteChildStderr:      true,
 	})
 	internalOptions := internaladversary.AutoOptions{
 		ReviewContext: reviewContext, AllFiles: allFiles,
@@ -279,10 +341,12 @@ func (p processRuntime) Auto(ctx context.Context, opts application.AdversaryAuto
 		MinimumConfidence: opts.MinimumConfidence,
 		Includes:          opts.Includes, Excludes: opts.Excludes,
 		All: opts.All, DryRun: opts.DryRun, Format: opts.Format,
+		ModelProvider: opts.ModelProvider, Model: opts.Model,
 		AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution,
 		RunTimeout:               opts.RunTimeout, DetectionTimeout: opts.DetectionTimeout,
 		IncludeSuppressed: opts.IncludeSuppressed,
 		RepoIndexMode:     opts.RepoIndexMode,
+		OutcomeContext:    opts.OutcomeContext,
 	}
 	if opts.ReportSelections != nil {
 		internalOptions.ReportSelections = func(result internaladversary.AutoResult) error {
@@ -348,15 +412,15 @@ func toApplicationAutoResult(result internaladversary.AutoResult) application.Ad
 }
 func (p processRuntime) runner(opts application.AdversaryRunOptions) internaladversary.Runner {
 	shell := func() ([]string, error) { return internaladversary.PlatformShell(p.node.LookPath) }
-	modelBrokerFactory := func() (modelreview.Broker, error) {
-		provider, err := modelreview.ProviderFromConfig(modelreview.Config{
-			Provider: opts.ModelProvider,
-			Model:    opts.Model,
-		}, p.environment.Lookup, http.DefaultClient)
+	modelBrokerFactory := func(config modelreview.Config) (modelreview.Broker, error) {
+		provider, err := modelreview.ProviderFromConfig(config, p.environment.Lookup, modelreview.HTTPClientFromEnvironment(p.environment.Lookup))
 		if err != nil {
 			return modelreview.Broker{}, err
 		}
-		return modelreview.Broker{Provider: provider, Entropy: rand.Reader, Listen: net.Listen}, nil
+		return modelreview.Broker{
+			Provider: provider, Entropy: rand.Reader, Listen: net.Listen,
+			PromptSuffix: opts.ReviewFeedbackPrompt,
+		}, nil
 	}
 	// Host process streams default to CLI stderr so review rendering can own stdout.
 	childOut, childErr := opts.Stderr, opts.Stderr
@@ -371,7 +435,7 @@ func toInternalRunOptions(opts application.AdversaryRunOptions) internaladversar
 	if opts.OnEnvelope != nil {
 		onEnvelope = func(env review.RunEnvelope) { opts.OnEnvelope(env) }
 	}
-	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout, ReviewContext: opts.ReviewContext, RepoIndexMode: opts.RepoIndexMode, OnEnvelope: onEnvelope}
+	return internaladversary.RunOptions{AdversaryRef: opts.AdversaryRef, RepoPath: opts.RepoPath, BaseRef: opts.BaseRef, HeadRef: opts.HeadRef, Builder: opts.Builder, ModelProvider: opts.ModelProvider, Model: opts.Model, Format: opts.Format, Force: opts.Force, KeepTemp: opts.KeepTemp, NoNetwork: opts.NoNetwork, Verbose: opts.Verbose, IncludeSuppressed: opts.IncludeSuppressed, Shell: opts.Shell, AllFiles: opts.AllFiles, AllowUnsafeHostExecution: opts.AllowUnsafeHostExecution, Build: opts.Build, RunTimeout: opts.RunTimeout, BuildTimeout: opts.BuildTimeout, ReviewContext: opts.ReviewContext, ReviewAssignment: opts.ReviewAssignment, OutcomeContext: opts.OutcomeContext, RepoIndexMode: opts.RepoIndexMode, OnEnvelope: onEnvelope}
 }
 
 type processTTY struct{}
@@ -443,6 +507,10 @@ func (c classifiedAPIClient) RecordPull(ctx context.Context, token, reference, d
 func (c classifiedAPIClient) RecordUsage(ctx context.Context, token, eventType, cliVersion string, report adversarylabs.RunUsageReport) error {
 	return authError("record usage", c.inner.RecordUsage(ctx, token, eventType, cliVersion, report))
 }
+func (c classifiedAPIClient) PullTelemetry(ctx context.Context, token, traceID string) (json.RawMessage, error) {
+	v, e := c.inner.PullTelemetry(ctx, token, traceID)
+	return v, authError("pull telemetry", e)
+}
 
 type processOCIRegistry struct{ *oci.HTTPRegistry }
 
@@ -497,12 +565,16 @@ type processRegistryFactory struct {
 	host, realm, namespace string
 	debug                  io.Writer
 	identity               string
+	tokens                 *oci.BearerTokenCache
 }
 
 func (f processRegistryFactory) BindingIdentity() string { return f.identity }
 
 func (f processRegistryFactory) New(apiURL, profile string) (application.OCIRegistry, error) {
 	r := oci.NewHTTPRegistry()
+	if f.tokens != nil {
+		r.TokenCache = f.tokens
+	}
 	r.Debug = f.debug
 	r.BearerRealm = registryAuthRealm(apiURL)
 	r.BearerService = f.host
@@ -600,7 +672,7 @@ func newProcessApp(stdin io.Reader, stdout, stderr io.Writer) (*application.App,
 	docker := oci.DockerCredentialStore{HomeDir: homeDir, Lstat: os.Lstat, Open: oci.OpenRegularNoFollow, RunHelper: newCredentialHelperRunner(environment, lookPath)}
 	authStore := processAuthStore{store}
 	apiFactory := processAPIFactory{store: store}
-	registryFactory := processRegistryFactory{store: authStore, docker: docker, host: host, namespace: namespace, debug: debug, identity: store.Path}
+	registryFactory := processRegistryFactory{store: authStore, docker: docker, host: host, namespace: namespace, debug: debug, identity: store.Path, tokens: oci.NewBearerTokenCache()}
 	output := internaladversary.ExecProcessOutputRunner{}
 	node := internaladversary.NodeResolver{LookupEnv: environment.Lookup, LookPath: lookPath, HomeDir: homeDir, Glob: files.Glob, ResolveExecutable: resolveExplicitExecutable, Environment: environment, Output: output}
 	gitPath, gitErr := lookPath("git")
@@ -822,4 +894,50 @@ func openBrowser(ctx context.Context, url string, environment internaladversary.
 		return fmt.Errorf("open browser: %w", err)
 	}
 	return nil
+}
+
+func (p processRuntime) prepareFindingVerification(ctx context.Context, change *detection.Context) (*findingverify.Collector, error) {
+	return findingverify.NewCollector(ctx, change)
+}
+func (p processRuntime) findingVerificationProvider(config modelreview.Config) (modelreview.Provider, error) {
+	return modelreview.ProviderFromConfig(config, p.environment.Lookup, modelreview.HTTPClientFromEnvironment(p.environment.Lookup))
+}
+
+func (p processRuntime) ModelReviewProvider(config application.ModelReviewConfig) (application.ModelReviewProvider, error) {
+	provider, err := modelreview.ProviderFromConfig(
+		modelreview.Config{Provider: config.Provider, Model: config.Model},
+		p.environment.Lookup,
+		modelreview.HTTPClientFromEnvironment(p.environment.Lookup),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return processModelReviewProvider{provider: provider}, nil
+}
+
+type processModelReviewProvider struct{ provider modelreview.Provider }
+
+func (p processModelReviewProvider) Name() string  { return p.provider.Name() }
+func (p processModelReviewProvider) Model() string { return p.provider.Model() }
+func (p processModelReviewProvider) Review(ctx context.Context, request application.ModelReviewRequest) (json.RawMessage, error) {
+	result, err := p.provider.Review(ctx, modelreview.Request{
+		ProtocolVersion: modelreview.ProtocolVersion,
+		Prompt:          request.Prompt,
+		Input:           request.Input,
+		Schema:          request.Schema,
+		Budget: modelreview.Budget{
+			MaximumOutputTokens: request.MaximumOutputTokens,
+			TimeoutMS:           request.TimeoutMS,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.Output, nil
+}
+func (p processRuntime) readFindingVerification(name string) (findingverify.Report, error) {
+	return findingverify.ReadReport(name)
+}
+func (p processRuntime) writeFindingVerification(name string, report findingverify.Report) error {
+	return findingverify.WriteReport(name, report)
 }

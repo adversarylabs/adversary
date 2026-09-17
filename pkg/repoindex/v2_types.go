@@ -17,25 +17,26 @@ import (
 
 const (
 	V2SchemaVersion   = "v2"
-	V2AdapterRevision = "go-ast-v1+ts-syntax-v1"
+	V2AdapterRevision = "go-semantic-operations-v3+ts-syntax-v1"
 	EnvRepoGraph      = "ADVERSARY_REPO_GRAPH"
 	v2DatabaseFile    = "graph.sqlite"
 	v2MetaFile        = "meta.json"
 )
 
 type V2Meta struct {
-	SchemaVersion   string         `json:"schemaVersion"`
-	AdapterRevision string         `json:"adapterRevision"`
-	Fingerprint     string         `json:"fingerprint"`
-	RepoPath        string         `json:"repoPath"`
-	BuiltAt         time.Time      `json:"builtAt"`
-	DurationMS      int64          `json:"durationMs"`
-	FileCount       int            `json:"fileCount"`
-	SymbolCount     int            `json:"symbolCount"`
-	EdgeCount       int            `json:"edgeCount"`
-	TestLinkCount   int            `json:"testLinkCount"`
-	ParseFailures   []V2Diagnostic `json:"parseFailures,omitempty"`
-	Rebuilt         bool           `json:"-"`
+	SchemaVersion     string         `json:"schemaVersion"`
+	AdapterRevision   string         `json:"adapterRevision"`
+	Fingerprint       string         `json:"fingerprint"`
+	RepoPath          string         `json:"repoPath"`
+	BuiltAt           time.Time      `json:"builtAt"`
+	DurationMS        int64          `json:"durationMs"`
+	FileCount         int            `json:"fileCount"`
+	SymbolCount       int            `json:"symbolCount"`
+	EdgeCount         int            `json:"edgeCount"`
+	TestLinkCount     int            `json:"testLinkCount"`
+	SemanticUnitCount int            `json:"semanticUnitCount"`
+	ParseFailures     []V2Diagnostic `json:"parseFailures,omitempty"`
+	Rebuilt           bool           `json:"-"`
 }
 
 type V2Diagnostic struct {

@@ -28,12 +28,33 @@ func TestProcessEnvironmentCanDenyParentCredentialsAfterOverrides(t *testing.T) 
 		"OPENAI_API_KEY=parent-secret",
 		"ANTHROPIC_API_KEY=other-secret",
 		"FIREWORKS_API_KEY=fireworks-secret",
+		"CAMEL_API_KEY=camel-secret",
+		"CLOUDFLARE_API_TOKEN=cloudflare-secret",
 	}, false)
 	got := env.EntriesWithout(
 		map[string]string{"OPENAI_API_KEY": "override-secret", "ADVERSARY_MODEL_TOKEN": "broker-token"},
-		[]string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "FIREWORKS_API_KEY"},
+		[]string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "FIREWORKS_API_KEY", "CAMEL_API_KEY", "CLOUDFLARE_API_TOKEN"},
 	)
 	want := []string{"ADVERSARY_MODEL_TOKEN=broker-token", "PATH=/bin"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("entries = %#v, want %#v", got, want)
+	}
+}
+
+func TestProcessEnvironmentAllowlistExcludesAmbientCredentials(t *testing.T) {
+	env := NewProcessEnvironment([]string{
+		"PATH=/bin",
+		"HOME=/home/test",
+		"AWS_SECRET_ACCESS_KEY=aws-secret",
+		"GITHUB_TOKEN=github-secret",
+		"EXPLICIT_VALUE=allowed",
+	}, false)
+	got := env.EntriesAllowed(
+		map[string]string{"ADVERSARY_REPO": "/repo"},
+		[]string{"PATH", "HOME", "EXPLICIT_VALUE"},
+		nil,
+	)
+	want := []string{"ADVERSARY_REPO=/repo", "EXPLICIT_VALUE=allowed", "HOME=/home/test", "PATH=/bin"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("entries = %#v, want %#v", got, want)
 	}

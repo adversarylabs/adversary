@@ -1,0 +1,297 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/findingverify"
+	"github.com/adversarylabs/adversary/internal/modelreview"
+	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/review"
+	"github.com/spf13/cobra"
+)
+
+// Host services live on the process runtime rather than in command handlers.
+type findingVerificationRuntime interface {
+	prepareFindingVerification(context.Context, *detection.Context) (*findingverify.Collector, error)
+	findingVerificationProvider(modelreview.Config) (modelreview.Provider, error)
+	readFindingVerification(string) (findingverify.Report, error)
+	writeFindingVerification(string, findingverify.Report) error
+}
+
+func verifyComposedResults(ctx context.Context, opts *runOptions, runs []composedRunResult, collector *findingverify.Collector, contextErr error, progress io.Writer) ([]composedRunResult, *findingverify.Report, error) {
+	snapshot := findingverify.Snapshot{Version: findingverify.Version, Candidates: []findingverify.Candidate{}}
+	var reader findingverify.Reader
+	if collector != nil {
+		snapshot.Base, snapshot.Head = collector.Base, collector.Head
+		reader = collector.Read
+	}
+	for i, run := range runs {
+		if run.envelope == nil {
+			continue
+		}
+		for j, f := range run.envelope.Result.Findings {
+			changedRegions := append([]detection.ReviewRegion(nil), run.changedRegions...)
+			c := findingverify.Candidate{ID: fmt.Sprintf("run-%d-finding-%d", i, j), Reviewer: run.ref, Scope: run.scope, WholeRepository: opts.allFiles, ChangedRegions: changedRegions, Finding: f, Sources: []findingverify.Source{}}
+			if contextErr != nil {
+				c.ContextError = "Pinned review context unavailable."
+			} else if collector != nil {
+				collector.Prepare(ctx, &c)
+			} else {
+				c.ContextError = "Pinned review context unavailable."
+			}
+			snapshot.Candidates = append(snapshot.Candidates, c)
+		}
+	}
+	provider := opts.verificationProvider
+	if provider == nil && len(snapshot.Candidates) > 0 {
+		// Provider configuration errors become explicit unresolved decisions. They
+		// must not silently bypass verification or erase successful peer findings.
+		if opts.verificationRuntime != nil {
+			provider, _ = opts.verificationRuntime.findingVerificationProvider(modelreview.Config{Provider: opts.modelProvider, Model: opts.model})
+		}
+	}
+	report, err := findingverify.Run(ctx, snapshot, provider, reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	filtered := append([]composedRunResult(nil), runs...)
+	decision := 0
+	for i, run := range runs {
+		if run.envelope == nil {
+			continue
+		}
+		envelope := *run.envelope
+		envelope.Result.Findings = []review.Finding{}
+		for _, f := range run.envelope.Result.Findings {
+			candidate := report.Snapshot.Candidates[decision]
+			verification := report.Decisions[decision]
+			if verificationDecisionPublishes(candidate, verification) {
+				f = reanchorFindingToChangedCitation(f, candidate, verification)
+				envelope.Result.Findings = append(envelope.Result.Findings, f)
+			}
+			decision++
+		}
+		filtered[i].envelope = &envelope
+	}
+	keep, fallback, reject, unresolved := verificationDispositionCounts(report)
+	fmt.Fprintf(progress, "Finding verification: %d kept · %d high-confidence fallback · %d rejected · %d unresolved\n", keep, fallback, reject, unresolved)
+	if opts.verificationOutput != "" {
+		if opts.verificationRuntime == nil {
+			return filtered, &report, fmt.Errorf("runtime cannot save verification report")
+		}
+		if err := opts.verificationRuntime.writeFindingVerification(opts.verificationOutput, report); err != nil {
+			return filtered, &report, err
+		}
+	}
+	if ctx.Err() != nil {
+		return filtered, &report, ctx.Err()
+	}
+	// Uncertainty is a per-finding outcome, not a failed review. High-confidence
+	// candidates with usable source context survive an inconclusive verifier;
+	// operational failures and weaker candidates remain withheld in the report.
+	return filtered, &report, nil
+}
+
+func verificationDecisionPublishes(candidate findingverify.Candidate, decision findingverify.Decision) bool {
+	if decision.Status == "keep" {
+		return true
+	}
+	if decision.Status != "unresolved" || candidate.Finding.Confidence != "high" || candidate.ContextError != "" {
+		return false
+	}
+	if decision.Failure != "" || operationalVerificationFailure(decision.Reason) {
+		return false
+	}
+	_, _, ok := fallbackCausalCitation(candidate, decision)
+	return ok
+}
+
+func operationalVerificationFailure(reason string) bool {
+	for _, prefix := range []string{
+		"Verification provider unavailable.",
+		"Verification provider request failed.",
+		"Verification canceled.",
+		"Verification output exceeds ",
+		"Candidate context exceeds ",
+		"Invalid verification decision:",
+		"Verification remained incomplete.",
+	} {
+		if strings.HasPrefix(reason, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func reanchorFindingToChangedCitation(f review.Finding, candidate findingverify.Candidate, decision findingverify.Decision) review.Finding {
+	source, citation, ok := fallbackCausalCitation(candidate, decision)
+	if !ok {
+		return f
+	}
+	for i, evidence := range f.Evidence {
+		if evidence.File != source.Path || evidence.Line == nil {
+			continue
+		}
+		end := *evidence.Line
+		if evidence.EndLine != nil {
+			end = *evidence.EndLine
+		}
+		if citation.Line < *evidence.Line || citation.Line > end {
+			continue
+		}
+		if i > 0 {
+			f.Evidence = append([]review.Evidence{evidence}, append(f.Evidence[:i], f.Evidence[i+1:]...)...)
+		}
+		return f
+	}
+	line := citation.Line
+	anchor := review.Evidence{File: source.Path, Line: &line, Message: "Causal changed line verified by Adversary."}
+	f.Evidence = append([]review.Evidence{anchor}, f.Evidence...)
+	return f
+}
+
+func fallbackCausalCitation(candidate findingverify.Candidate, decision findingverify.Decision) (findingverify.Source, findingverify.Citation, bool) {
+	for _, citation := range decision.Evidence {
+		if source, ok := fallbackSourceAtLine(candidate, citation.SourceID, "", citation.Line); ok {
+			return source, citation, true
+		}
+	}
+	// A verifier can fail to produce a schema-valid citation even when the
+	// reviewer's original evidence already points into pinned changed source.
+	// Reuse only that source-backed location; free-form snippets and messages do
+	// not qualify on their own.
+	for _, evidence := range candidate.Finding.Evidence {
+		if evidence.Line == nil {
+			continue
+		}
+		if source, ok := fallbackSourceAtLine(candidate, "", evidence.File, *evidence.Line); ok {
+			return source, findingverify.Citation{SourceID: source.ID, Line: *evidence.Line}, true
+		}
+	}
+	return findingverify.Source{}, findingverify.Citation{}, false
+}
+
+func fallbackSourceAtLine(candidate findingverify.Candidate, sourceID, path string, line int) (findingverify.Source, bool) {
+	for _, source := range append(append([]findingverify.Source(nil), candidate.Sources...), candidate.RetrievedSources...) {
+		if sourceID != "" && source.ID != sourceID {
+			continue
+		}
+		if path != "" && source.Path != path {
+			continue
+		}
+		if source.Side != "head" || source.Unavailable != "" || strings.TrimSpace(source.Content) == "" {
+			continue
+		}
+		lineCount := len(strings.Split(strings.TrimSuffix(source.Content, "\n"), "\n"))
+		if line < source.StartLine || line >= source.StartLine+lineCount {
+			continue
+		}
+		if candidate.WholeRepository {
+			return source, true
+		}
+		for _, region := range candidate.ChangedRegions {
+			if source.Path == region.Path && line >= region.StartLine && line <= region.EndLine {
+				return source, true
+			}
+		}
+	}
+	return findingverify.Source{}, false
+}
+
+func verificationDispositionCounts(r findingverify.Report) (keep, fallback, reject, unresolved int) {
+	for i, decision := range r.Decisions {
+		switch {
+		case decision.Status == "keep":
+			keep++
+		case verificationDecisionPublishes(r.Snapshot.Candidates[i], decision):
+			fallback++
+		case decision.Status == "reject":
+			reject++
+		default:
+			unresolved++
+		}
+	}
+	return
+}
+
+func applyVerificationSummary(env *review.RunEnvelope, r findingverify.Report, incomplete bool) {
+	_, fallback, reject, unresolved := verificationDispositionCounts(r)
+	// Include withheld unresolved findings for inspection without presenting them
+	// as review comments. Full source/replay data is an opt-in file.
+	pending := []findingverify.Candidate{}
+	for i, d := range r.Decisions {
+		if d.Status == "unresolved" && !verificationDecisionPublishes(r.Snapshot.Candidates[i], d) {
+			c := r.Snapshot.Candidates[i]
+			c.Sources = nil
+			c.RetrievedSources = nil
+			c.Patch = ""
+			pending = append(pending, c)
+		}
+	}
+	metadata, _ := json.Marshal(struct {
+		Revision   string                    `json:"promptRevision"`
+		Decisions  []findingverify.Decision  `json:"decisions"`
+		Unresolved []findingverify.Candidate `json:"unresolvedCandidates"`
+	}{r.PromptRevision, r.Decisions, pending})
+	summary := fmt.Sprintf("%d findings after deduplication; %d high-confidence verifier fallbacks released; %d rejected; %d unresolved withheld.", len(env.Result.Findings), fallback, reject, unresolved)
+	env.Result.Observations = append(env.Result.Observations, review.Note{Key: "composition.finding-verification", Summary: summary, Metadata: metadata})
+	risk := "none"
+	for _, f := range env.Result.Findings {
+		if severityRank(f.Severity) > severityRank(risk) {
+			risk = f.Severity
+		}
+	}
+	env.Result.Assessment = &review.Assessment{Risk: risk, Summary: summary}
+	env.Result.Opinion = &review.Opinion{Summary: summary}
+	if !incomplete && unresolved == 0 {
+		ship := len(env.Result.Findings) == 0
+		env.Result.Opinion.Ship = &ship
+	} else if incomplete {
+		env.Result.Opinion.Summary = "Review incomplete. " + summary
+	} else {
+		env.Result.Opinion.Summary = "Unresolved findings withheld; no clean-review opinion. " + summary
+	}
+}
+func newVerifyFindingsCommand(app *application.App) *cobra.Command {
+	var providerName, model, output string
+	command := &cobra.Command{Use: "verify-findings <report.json>", Short: "Replay candidate verification from a saved report without regenerating reviews", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		runtime, ok := app.Dependencies().Runtime.(findingVerificationRuntime)
+		if !ok {
+			return fmt.Errorf("runtime does not support finding verification replay")
+		}
+		original, err := runtime.readFindingVerification(args[0])
+		if err != nil {
+			return err
+		}
+		provider, err := runtime.findingVerificationProvider(modelreview.Config{Provider: providerName, Model: model})
+		if err != nil {
+			return err
+		}
+		// Replay has no live repository reader. A request absent from the saved
+		// packet stays unresolved rather than silently reading a different checkout.
+		report, err := findingverify.Run(cmd.Context(), original.Snapshot, provider, nil)
+		if err != nil {
+			return err
+		}
+		if output != "" {
+			err = runtime.writeFindingVerification(output, report)
+		} else {
+			err = json.NewEncoder(cmd.OutOrStdout()).Encode(report)
+		}
+		if err != nil {
+			return err
+		}
+		// A completed replay may contain unresolved decisions. Its report is the
+		// outcome; uncertainty must not turn it into an execution failure.
+		return cmd.Context().Err()
+	}}
+	command.Flags().StringVar(&providerName, "model-provider", "", "verification model provider")
+	command.Flags().StringVar(&model, "model", "", "verification model")
+	command.Flags().StringVar(&output, "output", "", "save replay result (default: stdout)")
+	return command
+}

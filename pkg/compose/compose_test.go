@@ -155,6 +155,21 @@ func TestExpandDedupeDiamond(t *testing.T) {
 	}
 }
 
+func TestExpandDedupesVersionedAndUnversionedAliasesByManifestIdentity(t *testing.T) {
+	load := mapLoader{byRef: map[string]string{
+		"root":                 baseYAML("root", "uses:\n  - name: go/concurrency\n  - name: go/concurrency\n    version: 0.0.1\n"),
+		"go/concurrency":       baseYAML("go/concurrency", ""),
+		"go/concurrency:0.0.1": baseYAML("go/concurrency", ""),
+	}}
+	got, err := Expand([]string{"root"}, load, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Refs) != 2 || got.Refs[0] != "root" {
+		t.Fatalf("refs = %#v", got.Refs)
+	}
+}
+
 func TestExpandCycle(t *testing.T) {
 	load := mapLoader{
 		byRef: map[string]string{

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/adversarylabs/adversary/internal/githubapi"
+	"github.com/adversarylabs/adversary/internal/githubauth"
 )
 
 var (
@@ -27,7 +28,7 @@ func DefaultClient() (*githubapi.Client, error) {
 	if defaultClient != nil {
 		return defaultClient, nil
 	}
-	token, err := githubapi.RequireToken()
+	token, err := githubauth.RequireToken()
 	if err != nil {
 		return nil, err
 	}

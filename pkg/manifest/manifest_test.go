@@ -56,6 +56,7 @@ func TestParseAllowsExtensionlessNodeEntrypoint(t *testing.T) {
 
 func TestParseDetectionContract(t *testing.T) {
 	input := strings.Replace(valid, "runtime:\n", `detection:
+  scope: repository
   files: [Dockerfile, "**/Dockerfile"]
   repository_files: [package.json]
   change_types: [added, modified, renamed]
@@ -66,13 +67,15 @@ runtime:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Detection.Files) != 2 || m.Detection.Entrypoint != "dist/detect.js" {
+	if m.Detection.Scope != "repository" || len(m.Detection.Files) != 2 || m.Detection.Entrypoint != "dist/detect.js" {
 		t.Fatalf("detection = %#v", m.Detection)
 	}
 }
 
 func TestParseDetectionRejectsInvalidContract(t *testing.T) {
 	for _, detection := range []string{
+		"  scope: future\n",
+		"  scope: ''\n",
 		"  files: ['  ']\n",
 		"  change_types: [conflicted]\n",
 		"  entrypoint: ../detect.js\n",

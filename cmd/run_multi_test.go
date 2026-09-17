@@ -20,6 +20,7 @@ type multiRecordingRuntime struct {
 	opts         []application.AdversaryRunOptions
 	errs         map[string]error
 	stdoutBodies map[string]string
+	stderrBodies map[string]string
 }
 
 func (r *multiRecordingRuntime) BindingIdentity() string {
@@ -28,6 +29,9 @@ func (r *multiRecordingRuntime) BindingIdentity() string {
 func (r *multiRecordingRuntime) Run(_ context.Context, opts application.AdversaryRunOptions) error {
 	r.refs = append(r.refs, opts.AdversaryRef)
 	r.opts = append(r.opts, opts)
+	if opts.Stderr != nil {
+		_, _ = opts.Stderr.Write([]byte(r.stderrBodies[opts.AdversaryRef]))
+	}
 	if opts.Stdout != nil {
 		if r.stdoutBodies != nil {
 			if body, ok := r.stdoutBodies[opts.AdversaryRef]; ok {

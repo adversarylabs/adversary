@@ -3,6 +3,7 @@ package dependencies
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -56,6 +57,9 @@ func (*browserAPI) RecordPull(context.Context, string, string, string) error {
 }
 func (*browserAPI) RecordUsage(context.Context, string, string, string, adversarylabs.RunUsageReport) error {
 	return errors.New("unexpected RecordUsage")
+}
+func (*browserAPI) PullTelemetry(context.Context, string, string) (json.RawMessage, error) {
+	return nil, errors.New("unexpected PullTelemetry")
 }
 
 func (c *browserAPI) loginOptions() adversarylabs.BrowserLoginOptions {

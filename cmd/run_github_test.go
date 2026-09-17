@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -151,6 +153,39 @@ func TestResolvePRRunContextFlagConflicts(t *testing.T) {
 	}
 }
 
+func TestResolvePRRunContextCapturesPullRequestOutcome(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/app/pulls/42" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"number": 42,
+			"title": "Permit repository-scoped pulls",
+			"body": "Push access must remain forbidden.",
+			"base": {"sha": "aaaaaaaa"},
+			"head": {"sha": "bbbbbbbb"}
+		}`))
+	}))
+	defer server.Close()
+
+	opts := runOptions{
+		githubReview:  true,
+		githubRepo:    "acme/app",
+		githubPR:      42,
+		githubRESTURL: server.URL,
+	}
+	if err := resolvePRRunContext(context.Background(), &opts, nil); err != nil {
+		t.Fatal(err)
+	}
+	if opts.outcomeContext == nil || len(opts.outcomeContext.Sources) != 2 {
+		t.Fatalf("outcome context = %#v", opts.outcomeContext)
+	}
+	if opts.outcomeContext.Sources[0].Text != "Permit repository-scoped pulls" {
+		t.Fatalf("outcome title = %q", opts.outcomeContext.Sources[0].Text)
+	}
+}
+
 func TestMaybeGitHubReviewEnhancesWithFakeProviderWiring(t *testing.T) {
 	// Same sequence as maybeGitHubReview: ProjectFindings then EnhanceBodies with voice prompt.
 	line := 5
@@ -184,7 +219,7 @@ func TestMaybeGitHubReviewEnhancesWithFakeProviderWiring(t *testing.T) {
 	if plan.Comments[0].BodySource != "llm" || !strings.Contains(plan.Comments[0].Body, "LLM polished") {
 		t.Fatalf("%#v", plan.Comments[0])
 	}
-	if !strings.Contains(plan.Comments[0].Body, "adversary-review:v1") {
+	if !strings.Contains(plan.Comments[0].Body, "adversary-review:v2") {
 		t.Fatal("marker missing")
 	}
 	if fp.calls != 1 {

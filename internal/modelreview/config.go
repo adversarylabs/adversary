@@ -3,18 +3,38 @@ package modelreview
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
 const (
-	ProviderEnv         = "ADVERSARY_MODEL_PROVIDER"
-	ModelEnv            = "ADVERSARY_MODEL"
-	OpenAIKeyEnv        = "OPENAI_API_KEY"
-	OpenAIBaseURLEnv    = "ADVERSARY_OPENAI_BASE_URL"
-	AnthropicKeyEnv     = "ANTHROPIC_API_KEY"
-	AnthropicBaseURLEnv = "ADVERSARY_ANTHROPIC_BASE_URL"
-	FireworksKeyEnv     = "FIREWORKS_API_KEY"
-	FireworksBaseURLEnv = "ADVERSARY_FIREWORKS_BASE_URL"
+	CodexReasoningEffortEnv       = "ADVERSARY_CODEX_REASONING_EFFORT"
+	ProviderEnv                   = "ADVERSARY_MODEL_PROVIDER"
+	ModelEnv                      = "ADVERSARY_MODEL"
+	OpenAIKeyEnv                  = "OPENAI_API_KEY"
+	OpenAIBaseURLEnv              = "ADVERSARY_OPENAI_BASE_URL"
+	OpenAIReasoningEffortEnv      = "ADVERSARY_OPENAI_REASONING_EFFORT"
+	OpenAIMaxOutputTokensEnv      = "ADVERSARY_OPENAI_MAX_OUTPUT_TOKENS"
+	CloudflareKeyEnv              = "CLOUDFLARE_API_TOKEN"
+	CloudflareAccountIDEnv        = "CLOUDFLARE_ACCOUNT_ID"
+	CloudflareBaseURLEnv          = "ADVERSARY_CLOUDFLARE_BASE_URL"
+	CloudflareGatewayIDEnv        = "ADVERSARY_CLOUDFLARE_GATEWAY_ID"
+	AnthropicKeyEnv               = "ANTHROPIC_API_KEY"
+	AnthropicBaseURLEnv           = "ADVERSARY_ANTHROPIC_BASE_URL"
+	FireworksKeyEnv               = "FIREWORKS_API_KEY"
+	FireworksBaseURLEnv           = "ADVERSARY_FIREWORKS_BASE_URL"
+	FireworksReasoningEffortEnv   = "ADVERSARY_FIREWORKS_REASONING_EFFORT"
+	FireworksResponseFormatEnv    = "ADVERSARY_FIREWORKS_RESPONSE_FORMAT"
+	FireworksStructuredRetriesEnv = "ADVERSARY_FIREWORKS_STRUCTURED_RETRIES"
+	CamelKeyEnv                   = "CAMEL_API_KEY"
+	CamelBaseURLEnv               = "ADVERSARY_CAMEL_BASE_URL"
+	CamelReasoningEffortEnv       = "ADVERSARY_CAMEL_REASONING_EFFORT"
+	CamelResponseFormatEnv        = "ADVERSARY_CAMEL_RESPONSE_FORMAT"
+	CamelStructuredRetriesEnv     = "ADVERSARY_CAMEL_STRUCTURED_RETRIES"
+	CamelRequestRetriesEnv        = "ADVERSARY_CAMEL_REQUEST_RETRIES"
+	CamelMaxConcurrencyEnv        = "ADVERSARY_CAMEL_MAX_CONCURRENCY"
+	ModelContentDiagnosticsEnv    = "ADVERSARY_MODEL_CONTENT_DIAGNOSTICS"
+	DisableKeepAlivesEnv          = "ADVERSARY_MODEL_DISABLE_KEEP_ALIVES"
 )
 
 type LookupEnv func(string) (string, bool)
@@ -22,6 +42,16 @@ type LookupEnv func(string) (string, bool)
 type Config struct {
 	Provider string
 	Model    string
+}
+
+// HTTPClientFromEnvironment returns a provider client with the standard Go
+// transport settings. Long-running requests to local or overlay-network model
+// servers can opt out of pooled connections so every review round starts on a
+// fresh socket rather than reusing one the remote server has silently dropped.
+func HTTPClientFromEnvironment(lookup LookupEnv) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableKeepAlives = envEnabled(lookup, DisableKeepAlivesEnv)
+	return &http.Client{Transport: transport}
 }
 
 func ProviderFromEnvironment(lookup LookupEnv, client *http.Client) (Provider, error) {
@@ -36,20 +66,6 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 	if provider == "" {
 		provider = normalizedEnv(lookup, ProviderEnv)
 	}
-	openAIKey := normalizedEnv(lookup, OpenAIKeyEnv)
-	anthropicKey := normalizedEnv(lookup, AnthropicKeyEnv)
-	fireworksKey := normalizedEnv(lookup, FireworksKeyEnv)
-	if provider == "" {
-		configured := configuredProviders(openAIKey, anthropicKey, fireworksKey)
-		switch len(configured) {
-		case 0:
-			return nil, fmt.Errorf("model access requires %s, %s, or %s", OpenAIKeyEnv, AnthropicKeyEnv, FireworksKeyEnv)
-		case 1:
-			provider = configured[0]
-		default:
-			return nil, fmt.Errorf("%s is required when multiple model provider keys are configured", ProviderEnv)
-		}
-	}
 	model := strings.TrimSpace(config.Model)
 	if model == "" {
 		model = normalizedEnv(lookup, ModelEnv)
@@ -57,16 +73,83 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 	if model == "" {
 		return nil, fmt.Errorf("%s is required for model-backed adversaries", ModelEnv)
 	}
+	if strings.HasPrefix(model, "codex/") {
+		if provider != "" && !strings.EqualFold(provider, "codex") {
+			return nil, fmt.Errorf("codex/ model prefix conflicts with provider %q", provider)
+		}
+		provider = "codex"
+		model = strings.TrimSpace(strings.TrimPrefix(model, "codex/"))
+		if model == "" {
+			return nil, fmt.Errorf("codex/ requires a model ID")
+		}
+	}
+	openAIKey := normalizedEnv(lookup, OpenAIKeyEnv)
+	cloudflareKey := normalizedEnv(lookup, CloudflareKeyEnv)
+	cloudflareAccountID := normalizedEnv(lookup, CloudflareAccountIDEnv)
+	anthropicKey := normalizedEnv(lookup, AnthropicKeyEnv)
+	fireworksKey := normalizedEnv(lookup, FireworksKeyEnv)
+	camelKey := normalizedEnv(lookup, CamelKeyEnv)
+	if provider == "" {
+		var err error
+		provider, err = InferProviderFromEnvironment(lookup)
+		if err != nil {
+			return nil, err
+		}
+	}
 	switch strings.ToLower(provider) {
+	case "codex":
+		effort := normalizedEnv(lookup, CodexReasoningEffortEnv)
+		if effort == "" {
+			effort = "high"
+		}
+		switch effort {
+		case "low", "medium", "high", "xhigh", "max":
+		default:
+			return nil, fmt.Errorf("unsupported ADVERSARY_CODEX_REASONING_EFFORT %q", effort)
+		}
+		return &CodexProvider{ModelID: model, ReasoningEffort: effort}, nil
 	case "openai":
 		if openAIKey == "" {
 			return nil, fmt.Errorf("%s is required for model provider openai", OpenAIKeyEnv)
 		}
+		effort, err := openAIReasoningEffortFromEnvironment(lookup)
+		if err != nil {
+			return nil, err
+		}
+		maxTokens, err := boundedIntegerFromEnvironmentWithDefault(lookup, OpenAIMaxOutputTokensEnv, 0, 1, MaxOutputTokens)
+		if err != nil {
+			return nil, err
+		}
 		return &OpenAIProvider{
-			APIKey:  openAIKey,
-			ModelID: model,
-			BaseURL: valueOrDefault(normalizedEnv(lookup, OpenAIBaseURLEnv), "https://api.openai.com"),
-			Client:  client,
+			ReasoningEffort: effort,
+			MaxOutputTokens: maxTokens,
+			APIKey:          openAIKey,
+			ModelID:         model,
+			BaseURL:         valueOrDefault(normalizedEnv(lookup, OpenAIBaseURLEnv), "https://api.openai.com"),
+			Client:          client,
+		}, nil
+	case "cloudflare":
+		if cloudflareKey == "" {
+			return nil, fmt.Errorf("%s is required for model provider cloudflare", CloudflareKeyEnv)
+		}
+		if cloudflareAccountID == "" {
+			return nil, fmt.Errorf("%s is required for model provider cloudflare", CloudflareAccountIDEnv)
+		}
+		baseURL := normalizedEnv(lookup, CloudflareBaseURLEnv)
+		if baseURL == "" {
+			baseURL = "https://api.cloudflare.com/client/v4/accounts/" + cloudflareAccountID + "/ai"
+		}
+		headers := map[string]string{}
+		if gatewayID := normalizedEnv(lookup, CloudflareGatewayIDEnv); gatewayID != "" {
+			headers["cf-aig-gateway-id"] = gatewayID
+		}
+		return &OpenAIProvider{
+			ProviderName: "cloudflare",
+			APIKey:       cloudflareKey,
+			ModelID:      model,
+			BaseURL:      strings.TrimRight(baseURL, "/"),
+			Headers:      headers,
+			Client:       client,
 		}, nil
 	case "anthropic":
 		if anthropicKey == "" {
@@ -82,26 +165,164 @@ func ProviderFromConfig(config Config, lookup LookupEnv, client *http.Client) (P
 		if fireworksKey == "" {
 			return nil, fmt.Errorf("%s is required for model provider fireworks", FireworksKeyEnv)
 		}
+		reasoningEffort, err := fireworksReasoningEffortFromEnvironment(lookup)
+		if err != nil {
+			return nil, err
+		}
+		structuredRetries, err := boundedIntegerFromEnvironment(lookup, FireworksStructuredRetriesEnv, 0, 3)
+		if err != nil {
+			return nil, err
+		}
+		responseFormat, err := fireworksResponseFormatFromEnvironment(lookup)
+		if err != nil {
+			return nil, err
+		}
 		return &FireworksProvider{
-			APIKey:  fireworksKey,
-			ModelID: model,
-			BaseURL: valueOrDefault(normalizedEnv(lookup, FireworksBaseURLEnv), "https://api.fireworks.ai/inference"),
-			Client:  client,
+			APIKey:                    fireworksKey,
+			ModelID:                   model,
+			BaseURL:                   valueOrDefault(normalizedEnv(lookup, FireworksBaseURLEnv), "https://api.fireworks.ai/inference"),
+			Client:                    client,
+			ReasoningEffort:           reasoningEffort,
+			ResponseFormat:            responseFormat,
+			StructuredOutputRetries:   structuredRetries,
+			IncludeContentDiagnostics: envEnabled(lookup, ModelContentDiagnosticsEnv),
+		}, nil
+	case "camel", "camel-stream":
+		if camelKey == "" {
+			return nil, fmt.Errorf("%s is required for model provider camel", CamelKeyEnv)
+		}
+		reasoningEffort, err := reasoningEffortFromEnvironment(lookup, CamelReasoningEffortEnv)
+		if err != nil {
+			return nil, err
+		}
+		structuredRetries, err := boundedIntegerFromEnvironment(lookup, CamelStructuredRetriesEnv, 0, 3)
+		if err != nil {
+			return nil, err
+		}
+		requestRetries, err := boundedIntegerFromEnvironmentWithDefault(lookup, CamelRequestRetriesEnv, 8, 0, 20)
+		if err != nil {
+			return nil, err
+		}
+		maxConcurrency, err := boundedIntegerFromEnvironmentWithDefault(lookup, CamelMaxConcurrencyEnv, defaultCamelConcurrency, 1, 256)
+		if err != nil {
+			return nil, err
+		}
+		responseFormat, err := responseFormatFromEnvironment(lookup, CamelResponseFormatEnv, "json_object")
+		if err != nil {
+			return nil, err
+		}
+		return &CamelProvider{
+			APIKey:                    camelKey,
+			ModelID:                   model,
+			BaseURL:                   valueOrDefault(normalizedEnv(lookup, CamelBaseURLEnv), "https://stream.camelai.com"),
+			Client:                    client,
+			ReasoningEffort:           reasoningEffort,
+			ResponseFormat:            responseFormat,
+			StructuredOutputRetries:   structuredRetries,
+			RequestRetries:            requestRetries,
+			MaxConcurrency:            maxConcurrency,
+			IncludeContentDiagnostics: envEnabled(lookup, ModelContentDiagnosticsEnv),
 		}, nil
 	default:
-		return nil, fmt.Errorf("unsupported %s %q (supported: openai, anthropic, fireworks)", ProviderEnv, provider)
+		return nil, fmt.Errorf("unsupported %s %q (supported: openai, cloudflare, anthropic, fireworks, camel, codex)", ProviderEnv, provider)
 	}
 }
 
-func configuredProviders(openAIKey, anthropicKey, fireworksKey string) []string {
+// InferProviderFromEnvironment applies the same unambiguous credential-set
+// contract for every caller that needs a provider before choosing a default
+// model. Partial Cloudflare credentials are configuration errors, not absence.
+func InferProviderFromEnvironment(lookup LookupEnv) (string, error) {
+	if lookup == nil {
+		return "", fmt.Errorf("model environment lookup is required")
+	}
+	if provider := normalizedEnv(lookup, ProviderEnv); provider != "" {
+		return strings.ToLower(provider), nil
+	}
+	openAIKey := normalizedEnv(lookup, OpenAIKeyEnv)
+	cloudflareKey := normalizedEnv(lookup, CloudflareKeyEnv)
+	cloudflareAccountID := normalizedEnv(lookup, CloudflareAccountIDEnv)
+	if cloudflareKey != "" || cloudflareAccountID != "" {
+		if cloudflareKey == "" {
+			return "", fmt.Errorf("%s is required for model provider cloudflare", CloudflareKeyEnv)
+		}
+		if cloudflareAccountID == "" {
+			return "", fmt.Errorf("%s is required for model provider cloudflare", CloudflareAccountIDEnv)
+		}
+	}
+	configured := configuredProviders(
+		openAIKey,
+		cloudflareKey,
+		normalizedEnv(lookup, AnthropicKeyEnv),
+		normalizedEnv(lookup, FireworksKeyEnv),
+		normalizedEnv(lookup, CamelKeyEnv),
+	)
+	switch len(configured) {
+	case 0:
+		return "", fmt.Errorf("model access requires %s, %s with %s, %s, %s, or %s", OpenAIKeyEnv, CloudflareKeyEnv, CloudflareAccountIDEnv, AnthropicKeyEnv, FireworksKeyEnv, CamelKeyEnv)
+	case 1:
+		return configured[0], nil
+	default:
+		return "", fmt.Errorf("%s is required when multiple model provider keys are configured", ProviderEnv)
+	}
+}
+
+func fireworksResponseFormatFromEnvironment(lookup LookupEnv) (string, error) {
+	return responseFormatFromEnvironment(lookup, FireworksResponseFormatEnv, "json_schema")
+}
+
+func responseFormatFromEnvironment(lookup LookupEnv, name, defaultFormat string) (string, error) {
+	format := strings.ToLower(normalizedEnv(lookup, name))
+	switch format {
+	case "":
+		return defaultFormat, nil
+	case "json_schema", "json_object":
+		return format, nil
+	default:
+		return "", fmt.Errorf("unsupported %s %q (supported: json_schema, json_object)", name, format)
+	}
+}
+
+func boundedIntegerFromEnvironment(lookup LookupEnv, name string, minimum, maximum int) (int, error) {
+	return boundedIntegerFromEnvironmentWithDefault(lookup, name, minimum, minimum, maximum)
+}
+
+func boundedIntegerFromEnvironmentWithDefault(lookup LookupEnv, name string, defaultValue, minimum, maximum int) (int, error) {
+	value := normalizedEnv(lookup, name)
+	if value == "" {
+		return defaultValue, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < minimum || parsed > maximum {
+		return 0, fmt.Errorf("%s must be an integer from %d through %d", name, minimum, maximum)
+	}
+	return parsed, nil
+}
+
+func fireworksReasoningEffortFromEnvironment(lookup LookupEnv) (string, error) {
+	return reasoningEffortFromEnvironment(lookup, FireworksReasoningEffortEnv)
+}
+
+func reasoningEffortFromEnvironment(lookup LookupEnv, name string) (string, error) {
+	effort := strings.ToLower(normalizedEnv(lookup, name))
+	switch effort {
+	case "", "none", "low", "medium", "high":
+		return effort, nil
+	default:
+		return "", fmt.Errorf("unsupported %s %q (supported: none, low, medium, high)", name, effort)
+	}
+}
+
+func configuredProviders(openAIKey, cloudflareKey, anthropicKey, fireworksKey, camelKey string) []string {
 	var configured []string
 	for _, candidate := range []struct {
 		name string
 		key  string
 	}{
 		{name: "openai", key: openAIKey},
+		{name: "cloudflare", key: cloudflareKey},
 		{name: "anthropic", key: anthropicKey},
 		{name: "fireworks", key: fireworksKey},
+		{name: "camel", key: camelKey},
 	} {
 		if candidate.key != "" {
 			configured = append(configured, candidate.name)
@@ -120,4 +341,22 @@ func valueOrDefault(value, fallback string) string {
 		return fallback
 	}
 	return strings.TrimRight(value, "/")
+}
+
+func envEnabled(lookup LookupEnv, name string) bool {
+	if lookup == nil {
+		return false
+	}
+	value := normalizedEnv(lookup, name)
+	return strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
+}
+
+func openAIReasoningEffortFromEnvironment(lookup LookupEnv) (string, error) {
+	effort := strings.ToLower(normalizedEnv(lookup, OpenAIReasoningEffortEnv))
+	switch effort {
+	case "", "none", "low", "medium", "high", "xhigh", "max":
+		return effort, nil
+	default:
+		return "", fmt.Errorf("unsupported %s %q (supported: none, low, medium, high, xhigh, max)", OpenAIReasoningEffortEnv, effort)
+	}
 }

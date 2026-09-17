@@ -441,6 +441,54 @@ func TestResetDiscovery(t *testing.T) {
 	}
 }
 
+func TestResetDiscoveryTargetPreservesOtherTrainingState(t *testing.T) {
+	root := t.TempDir()
+	catalog, err := trainstate.LoadDiscoveryForTarget(root, "private-catalog", "o", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.Record(1, "catalog", "url", trainstate.OutcomeCandidate, "candidate")
+	if err := catalog.Save(); err != nil {
+		t.Fatal(err)
+	}
+	packageTrain, err := trainstate.LoadDiscoveryForTarget(root, "go-security", "o", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageTrain.Record(2, "package", "url", trainstate.OutcomeGraded, "graded")
+	if err := packageTrain.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := trainstate.TakeCatalogWindow(root, "private-catalog", 10, 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := trainstate.TakeCatalogWindow(root, "go-security", 10, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := ResetDiscoveryTarget(root, "private-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed=%d want 1", removed)
+	}
+	kept, err := trainstate.LoadDiscoveryForTarget(root, "go-security", "o", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !kept.Seen(2) {
+		t.Fatal("catalog reset erased executable-adversary discovery state")
+	}
+	start, _, err := trainstate.TakeCatalogWindow(root, "go-security", 10, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start != 6 {
+		t.Fatalf("other cursor start=%d want 6", start)
+	}
+}
+
 func TestProgressiveKeptThenGraded(t *testing.T) {
 	state := t.TempDir()
 	c := &cases.Case{
@@ -526,6 +574,140 @@ func TestHumanGoldPreservesFullSummaryForTriage(t *testing.T) {
 	}
 	if rows[0].Summary != summary {
 		t.Fatalf("summary was truncated: got %d bytes want %d", len(rows[0].Summary), len(summary))
+	}
+}
+
+func TestWriteCatalogCaseRetainsUnassignedHumanConcern(t *testing.T) {
+	state := t.TempDir()
+	c := &cases.Case{
+		ID:          "unassigned-case",
+		Repository:  cases.Repository{Owner: "acme", Name: "api", URL: "https://github.com/acme/api"},
+		PullRequest: cases.PullRequest{Number: 42, Title: "Extend redaction"},
+		Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+			ID:          "comment-1",
+			Summary:     "How about tcp6? For completeness you can also add unix.",
+			Scope:       "unclear",
+			ScopeReason: "no adversary confidently claimed this plausible human comment",
+		}}},
+	}
+	if n, err := WriteKeptCase(state, "run-1", c); err != nil || n != 0 {
+		t.Fatalf("ordinary package training retained unassigned concern: n=%d err=%v", n, err)
+	}
+	if n, err := WriteCatalogCase(state, "run-1", c); err != nil || n != 1 {
+		t.Fatalf("catalog training did not retain unassigned concern: n=%d err=%v", n, err)
+	}
+	rows, err := List(state, "unassigned", StatusNew)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	if !strings.Contains(rows[0].DraftBody, "Triage:") {
+		t.Fatalf("unassigned row omitted routing context: %s", rows[0].DraftBody)
+	}
+}
+
+func TestFormatCatalogListTableExplainsTriage(t *testing.T) {
+	out := FormatCatalogListTable([]Result{{
+		ID: "candidate1", Status: StatusNew, Package: "operability", Kind: KindHuman,
+		Summary: "Should we log these errors for debuggability?",
+	}, {
+		ID: "candidate2", Status: StatusNew, Package: "unassigned", Kind: KindHuman,
+		Summary: "How about tcp6 for completeness?",
+	}})
+	for _, want := range []string{"ADVERSARY", "HUMAN REVIEW EVIDENCE", "operability", "2 triaged candidate(s)", "`unassigned` means"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("catalog table omitted %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Kinds:") {
+		t.Fatalf("catalog table leaked executable-training vocabulary:\n%s", out)
+	}
+}
+
+func TestFormatCatalogInspectUsesCatalogVocabulary(t *testing.T) {
+	out := FormatCatalogInspect(Result{
+		ID: "candidate1", Status: StatusNew, Package: "operability", Kind: KindHuman,
+		Summary: "Should we log these errors?", PRURL: "https://github.com/acme/api/pull/42",
+		TriageReason: "Routing evidence here.",
+	})
+	for _, want := range []string{"Adversary: operability", "Evidence:  Should we log", "Model rationale:", "/pull/42"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("catalog inspect omitted %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Kind:") || strings.Contains(out, "Package:") {
+		t.Fatalf("catalog inspect leaked executable-training vocabulary:\n%s", out)
+	}
+}
+
+func TestWriteCatalogCaseDeduplicatesRepeatedEvidenceInRun(t *testing.T) {
+	state := t.TempDir()
+	makeCase := func(id, concernID string) *cases.Case {
+		return &cases.Case{
+			ID:          id,
+			Repository:  cases.Repository{Owner: "acme", Name: "api", URL: "https://github.com/acme/api"},
+			PullRequest: cases.PullRequest{Number: 42, Title: "Fix cancellation", Author: "pr-author"},
+			Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+				ID: concernID, Summary: "Pass request context to cancel kubectl commands in case they hang.",
+				Scope: "in_scope", Approved: true, OwnerAdversary: "reliability-and-concurrency",
+				CommentAuthor: "reviewer", CommentURL: "https://github.com/acme/api/pull/42#discussion_r9",
+				File: "worker.go", Line: 42, DiffHunk: "@@ -40,2 +40,2 @@\n-old()\n+new()",
+			}}},
+		}
+	}
+	if n, err := WriteCatalogCase(state, "run-1", makeCase("round-1", "comment-1")); err != nil || n != 1 {
+		t.Fatalf("first write: n=%d err=%v", n, err)
+	}
+	if n, err := WriteCatalogCase(state, "run-1", makeCase("round-2", "comment-2")); err != nil || n != 0 {
+		t.Fatalf("duplicate write: n=%d err=%v", n, err)
+	}
+	rows, err := List(state, "", StatusNew)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	if rows[0].PRAuthor != "pr-author" || rows[0].CommentAuthor != "reviewer" || rows[0].Line != 42 || !strings.Contains(rows[0].DiffHunk, "+new()") {
+		t.Fatalf("presentation evidence was not persisted: %+v", rows[0])
+	}
+}
+
+func TestWriteCatalogCaseDeduplicatesRepeatedEvidenceAcrossRuns(t *testing.T) {
+	state := t.TempDir()
+	makeCase := func(id string) *cases.Case {
+		return &cases.Case{
+			ID: id, Repository: cases.Repository{Owner: "acme", Name: "api", URL: "https://github.com/acme/api"},
+			PullRequest: cases.PullRequest{Number: 42}, Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+				ID: id, Summary: "Preserve the private API contract.", Scope: "in_scope", Approved: true,
+				OwnerAdversary: "compatibility",
+			}}},
+		}
+	}
+	if n, err := WriteCatalogCase(state, "run-1", makeCase("first")); err != nil || n != 1 {
+		t.Fatalf("first write: n=%d err=%v", n, err)
+	}
+	if n, err := WriteCatalogCase(state, "run-2", makeCase("second")); err != nil || n != 0 {
+		t.Fatalf("cross-run duplicate: n=%d err=%v", n, err)
+	}
+}
+
+func TestWriteCatalogCasePreservesSameEvidenceForDistinctOwners(t *testing.T) {
+	state := t.TempDir()
+	makeCase := func(id, owner string) *cases.Case {
+		return &cases.Case{
+			ID: id, Repository: cases.Repository{Owner: "acme", Name: "api", URL: "https://github.com/acme/api"},
+			PullRequest: cases.PullRequest{Number: 42}, Labels: cases.Labels{ExpectedConcerns: []cases.ExpectedConcern{{
+				ID: id, Summary: "Preserve the private API contract.", Scope: "in_scope", Approved: true,
+				OwnerAdversary: owner,
+			}}},
+		}
+	}
+	if n, err := WriteCatalogCase(state, "run-1", makeCase("first", "compatibility")); err != nil || n != 1 {
+		t.Fatalf("first write: n=%d err=%v", n, err)
+	}
+	if n, err := WriteCatalogCase(state, "run-1", makeCase("second", "data-integrity")); err != nil || n != 1 {
+		t.Fatalf("distinct owner write: n=%d err=%v", n, err)
+	}
+	rows, err := List(state, "", StatusNew)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
 	}
 }
 

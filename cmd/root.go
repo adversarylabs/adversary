@@ -55,6 +55,9 @@ func newRootCommand(app *application.App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
+		PersistentPostRun: func(executed *cobra.Command, args []string) {
+			renderTrainingInboxNotice(executed, deps)
+		},
 	}
 	cmd.Version = fmt.Sprintf("%s (commit %s, built %s, %s, review protocol %d)", version.Version, version.Commit, version.BuildDate, runtime.Version(), review.ProtocolVersion)
 	cmd.SetVersionTemplate("adversary {{.Version}}\n")
@@ -66,8 +69,10 @@ func newRootCommand(app *application.App) *cobra.Command {
 
 	cmd.AddCommand(newRunCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newInspectCommand(app))
+	cmd.AddCommand(newVerifyFindingsCommand(app))
 	cmd.AddCommand(newValidateCommand(app))
 	cmd.AddCommand(newInitCommand(app))
+	cmd.AddCommand(newCatalogCommand(app))
 	cmd.AddCommand(newPackCommand(app))
 	cmd.AddCommand(newListCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newOutdatedCommand(app, &apiURL, &profile))
@@ -81,7 +86,7 @@ func newRootCommand(app *application.App) *cobra.Command {
 	cmd.AddCommand(newSearchCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newWhoamiCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newStoreCommand(app))
-	cmd.AddCommand(newTrainCommand(app))
+	cmd.AddCommand(newTelemetryCommand(app, &apiURL, &profile))
 	cmd.AddCommand(newCompletionCommand(cmd))
 	classifyCommandErrors(cmd)
 	return cmd

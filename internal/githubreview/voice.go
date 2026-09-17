@@ -127,3 +127,24 @@ func EnsureMarker(body, adversary, findingID, pathStr string, line *int) string 
 	body = strings.TrimRight(body, "\n") + "\n\n" + m + "\n"
 	return body
 }
+
+// EnsurePlannedMarker replaces any legacy marker with the provenance-rich v2
+// marker for a projected finding.
+func EnsurePlannedMarker(body string, comment PlannedComment) string {
+	body = stripReviewMarker(body)
+	return strings.TrimRight(body, "\n") + "\n\n" + MarkerV2(comment) + "\n"
+}
+
+func stripReviewMarker(body string) string {
+	for {
+		start := strings.Index(body, "<!-- adversary-review:v")
+		if start < 0 {
+			return body
+		}
+		endRel := strings.Index(body[start:], "-->")
+		if endRel < 0 {
+			return body[:start]
+		}
+		body = body[:start] + body[start+endRel+3:]
+	}
+}

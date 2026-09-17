@@ -6,9 +6,11 @@ import (
 	"strings"
 
 	"github.com/adversarylabs/adversary/internal/application"
+	internalpaths "github.com/adversarylabs/adversary/internal/paths"
 	"github.com/adversarylabs/adversary/internal/train/adversaries"
 	"github.com/adversarylabs/adversary/internal/train/collect"
 	"github.com/adversarylabs/adversary/internal/train/dataroot"
+	traininbox "github.com/adversarylabs/adversary/internal/train/inbox"
 	"github.com/adversarylabs/adversary/internal/train/pipeline"
 	"github.com/adversarylabs/adversary/internal/train/repos"
 	"github.com/adversarylabs/adversary/internal/train/results"
@@ -16,38 +18,6 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/workspace"
 	"github.com/spf13/cobra"
 )
-
-func newTrainCommand(app *application.App) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "train",
-		Short: "Train adversary packages from PR review history (draft gaps; stateful)",
-		Long: `Train walks your PR review history, grades local adversary packages against
-human review comments, and drafts suggested improvements.
-
-Workflow:
-  adversary train run
-  adversary train results ls
-  adversary train results inspect <id>
-  adversary train results apply <id>  # optional manual control
-  adversary train reset          # forget seen PRs and re-hunt
-
-It does not fine-tune model weights. Official catalog packages (when enabled)
-act as a read-only jury only.
-
-Configure history sources and packages in adversary.train.yaml (see train init).`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(newTrainInitCommand(app))
-	cmd.AddCommand(newTrainRunCommand(app))
-	cmd.AddCommand(newTrainResultsCommand(app))
-	cmd.AddCommand(newTrainResetCommand(app))
-	cmd.AddCommand(newTrainStoryCommand(app))
-	cmd.AddCommand(newTrainStatusCommand(app))
-	cmd.AddCommand(newTrainIssuesCommand(app))
-	return cmd
-}
 
 func newTrainInitCommand(app *application.App) *cobra.Command {
 	var path string
@@ -104,12 +74,19 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 		noIssues         bool
 		maxPRs           int
 		maxTurns         int
+		allHistory       bool
+		since            string
 		concurrency      int
 		resetDiscovery   bool
 		fixture          bool
 		pr               int
 		owner            string
 		repo             string
+		authorsOnly      []string
+		authorsIgnore    []string
+		sourceRepos      []string
+		modelProvider    string
+		model            string
 	)
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -119,6 +96,7 @@ func newTrainRunCommand(app *application.App) *cobra.Command {
 issues for consolidated improvements. Drafts never target official package ids.
 Use --no-issues for a local-only run.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			catalogMode := cmd.Parent() != nil && cmd.Parent().Name() == "catalog"
 			if adversaryOnly != "" && allAdversaries {
 				return fmt.Errorf("--adversary and --all-adversaries cannot be combined")
 			}
@@ -138,11 +116,31 @@ Use --no-issues for a local-only run.`,
 			}
 			cfgPath, err := workspace.FindConfig(ws)
 			if err != nil {
-				return fmt.Errorf("%w (run: adversary train init)", err)
+				if catalogMode {
+					return fmt.Errorf("%w (run: adversary catalog init)", err)
+				}
+				return err
 			}
 			cfg, err := workspace.Load(cfgPath)
 			if err != nil {
 				return err
+			}
+			if len(authorsOnly) > 0 {
+				cfg.Sources.AuthorsOnly = append([]string{}, authorsOnly...)
+			}
+			if len(authorsIgnore) > 0 {
+				cfg.Sources.AuthorsIgnore = append(cfg.Sources.AuthorsIgnore, authorsIgnore...)
+			}
+			if len(sourceRepos) > 0 {
+				cfg.Sources.Repos = append([]string{}, sourceRepos...)
+				cfg.Sources.Org = ""
+				cfg.Sources.Discovery = "repos"
+			}
+			if strings.TrimSpace(since) != "" {
+				cfg.Sources.Since = strings.TrimSpace(since)
+			}
+			if allHistory {
+				cfg.Run.AllHistory = true
 			}
 			if !fixture {
 				if err := cfg.Validate(); err != nil {
@@ -156,6 +154,15 @@ Use --no-issues for a local-only run.`,
 			stateRoot := workspace.ResolveStateAbs(cfgPath, cfg.StateDirResolved())
 			if err := workspace.EnsureStateDir(stateRoot); err != nil {
 				return err
+			}
+			if catalogMode {
+				dataRoot, err := internalpaths.DataDir()
+				if err != nil {
+					return err
+				}
+				if err := traininbox.Register(dataRoot, cfgPath, stateRoot); err != nil {
+					return fmt.Errorf("register catalog training inbox: %w", err)
+				}
 			}
 
 			if maxPRs > 0 {
@@ -297,6 +304,19 @@ Use --no-issues for a local-only run.`,
 			if cfg.Sources.Org != "" {
 				authorOrgs = append(authorOrgs, cfg.Sources.Org)
 			}
+			var catalogTriageLLM func(string) ([]byte, error)
+			var catalogTriageModelName string
+			if catalogMode && !fixture {
+				modelRuntime, ok := app.Dependencies().Runtime.(application.ModelReviewRuntime)
+				if !ok {
+					return fmt.Errorf("catalog triage model runtime is unavailable")
+				}
+				catalogTriageLLM, catalogTriageModelName, err = newCatalogTriageModel(cmd.Context(), modelRuntime, modelProvider, model)
+				if err != nil {
+					return err
+				}
+			}
+
 			opts := pipeline.Options{
 				Context:             cmd.Context(),
 				DataRoot:            stateRoot,
@@ -324,11 +344,17 @@ Use --no-issues for a local-only run.`,
 				AuthorSince:         cfg.Sources.Since,
 				MaxPRs:              cfg.Run.MaxPRs,
 				MaxTurns:            cfg.Run.MaxTurns,
+				AllHistory:          cfg.Run.AllHistory,
 				Concurrency:         cfg.Run.Concurrency,
 				ResetDiscovery:      resetDiscovery,
 				PR:                  pr,
 				Owner:               owner,
 				Repo:                repo,
+				CollectOnly:         catalogMode,
+				CatalogTriageLLM:    catalogTriageLLM,
+			}
+			if catalogMode {
+				opts.DiscoveryNamespace = "private-catalog"
 			}
 			if opts.MaxPRs == 0 {
 				opts.MaxPRs = 1
@@ -342,7 +368,11 @@ Use --no-issues for a local-only run.`,
 			}
 
 			stderr := cmd.ErrOrStderr()
-			fmt.Fprintln(stderr, "adversary train run")
+			if catalogMode {
+				fmt.Fprintln(stderr, "adversary catalog train")
+			} else {
+				fmt.Fprintln(stderr, "adversary train run")
+			}
 			fmt.Fprintf(stderr, "  config: %s\n", cfgPath)
 			fmt.Fprintf(stderr, "  state:  %s\n", stateRoot)
 			if fixture {
@@ -350,6 +380,9 @@ Use --no-issues for a local-only run.`,
 			} else {
 				fmt.Fprintln(stderr, "  mode:   live history")
 				fmt.Fprintf(stderr, "  discovery: %s\n", discoveryMode)
+				if cfg.Run.AllHistory {
+					fmt.Fprintf(stderr, "  history: all merged PRs since %s (no candidate limit; rate-limit backoff enabled)\n", cfg.Sources.Since)
+				}
 				if discoveryMode == "author_reviews" {
 					fmt.Fprintf(stderr, "  authors: %v roles: %v orgs: %v\n",
 						cfg.Sources.AuthorsOnly, cfg.Sources.AuthorRoles, authorOrgs)
@@ -368,7 +401,12 @@ Use --no-issues for a local-only run.`,
 			if cycleAdversaries {
 				fmt.Fprintln(stderr, "  targeting: persistent adversary round-robin (one package this run)")
 			}
-			if cfg.OfficialEnabled() && !fixture {
+			if catalogMode {
+				fmt.Fprintln(stderr, "  publishing: local candidates only; catalog changes require later review")
+				if catalogTriageModelName != "" {
+					fmt.Fprintf(stderr, "  triage model: %s\n", catalogTriageModelName)
+				}
+			} else if cfg.OfficialEnabled() && !fixture {
 				fmt.Fprintln(stderr, "  official jury: enabled (drafts for locals only)")
 			} else {
 				fmt.Fprintln(stderr, "  official jury: disabled (catalog jury only — local uses composition still expands)")
@@ -379,16 +417,28 @@ Use --no-issues for a local-only run.`,
 			// Always show progress toward results — including on interrupt (partial SQLite writes).
 			if res != nil {
 				if err != nil {
-					fmt.Fprintf(out, "train run stopped\n")
+					if catalogMode {
+						fmt.Fprintln(out, "catalog train stopped")
+					} else {
+						fmt.Fprintln(out, "train run stopped")
+					}
 				} else {
-					fmt.Fprintf(out, "train run complete\n")
+					if catalogMode {
+						fmt.Fprintln(out, "catalog train complete")
+					} else {
+						fmt.Fprintln(out, "train run complete")
+					}
 				}
 				fmt.Fprintf(out, "  run:     %s\n", res.RunID)
 				if res.Scorecard != nil {
 					fmt.Fprintf(out, "  grade:   %d failure(s) scored\n", res.Scorecard.FailureCount)
 				}
 				fmt.Fprintf(out, "  results: %d row(s) written this run\n", res.ResultsAdded)
-				fmt.Fprintf(out, "  evidence: adversary train results ls\n")
+				if catalogMode {
+					fmt.Fprintf(out, "  review:  adversary catalog train review\n")
+				} else {
+					fmt.Fprintf(out, "  evidence: adversary train results ls\n")
+				}
 				if res.HumanReport != nil && res.HumanReport.READMEPath != "" {
 					fmt.Fprintf(out, "  story:   %s\n", res.HumanReport.READMEPath)
 				}
@@ -434,13 +484,20 @@ Use --no-issues for a local-only run.`,
 	cmd.Flags().StringSliceVar(&excluded, "exclude-adversary", nil, "exclude a local adversary id (repeatable or comma-separated)")
 	cmd.Flags().BoolVar(&noIssues, "no-issues", false, "keep results local instead of creating GitHub issues")
 	cmd.Flags().IntVar(&maxPRs, "max-prs", 0, "override run.max_prs")
-	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns (PR attempts and catalog probe window)")
+	cmd.Flags().IntVar(&maxTurns, "max-turns", 0, "override run.max_turns (maximum PR attempts)")
+	cmd.Flags().BoolVar(&allHistory, "all-history", false, "process every merged PR back to sources.since; ignore PR and turn limits")
+	cmd.Flags().StringVar(&since, "since", "", "override sources.since (YYYY-MM-DD)")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 0, "override run.concurrency (parallel PR collect; default 2)")
 	cmd.Flags().BoolVar(&resetDiscovery, "reset-discovery", false, "forget seen PRs and restart catalog discovery before hunting")
 	cmd.Flags().BoolVar(&fixture, "fixture", false, "hermetic fixture run (for tests/gates; ignores empty sources)")
 	cmd.Flags().IntVar(&pr, "pr", 0, "pin a single PR number (debug)")
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub owner with --pr/--repo")
 	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo with --pr/--owner")
+	cmd.Flags().StringSliceVar(&authorsOnly, "author", nil, "include review comments from this GitHub login (repeatable or comma-separated)")
+	cmd.Flags().StringSliceVar(&authorsIgnore, "exclude-author", nil, "exclude review comments from this GitHub login (repeatable or comma-separated)")
+	cmd.Flags().StringSliceVar(&sourceRepos, "source-repo", nil, "scan this owner/repository instead of configured repositories (repeatable or comma-separated)")
+	cmd.Flags().StringVar(&modelProvider, "model-provider", "", "triage model provider: openai, cloudflare, anthropic, fireworks, camel, or codex (overrides ADVERSARY_MODEL_PROVIDER)")
+	cmd.Flags().StringVar(&model, "model", "", "triage model identifier (overrides ADVERSARY_MODEL)")
 	return cmd
 }
 
@@ -486,7 +543,7 @@ func newTrainResultsLSCommand(app *application.App) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&path, "path", "", "workspace with adversary.train.yaml")
 	cmd.Flags().StringVar(&pkg, "package", "", "filter by package id")
-	cmd.Flags().StringVar(&status, "status", "", "filter: new|applied|dismissed")
+	cmd.Flags().StringVar(&status, "status", "", "filter: new|accepted|applied|dismissed")
 	return cmd
 }
 
@@ -536,7 +593,7 @@ implementation issue per reviewer comment. Use --include-individual-issues or
   adversary train results apply --all --include-individual-issues
   adversary train results apply --all --include-human-issues
 
-Requires ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN with issues:write
+Uses an active gh auth login, or ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN with issues:write
 on the package repo (unless --no-issue). Does not open a PR.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -659,9 +716,9 @@ func newTrainResetCommand(app *application.App) *cobra.Command {
 		Long: `By default clears discovery state (seen PRs and catalog position),
 so the next train run will re-examine the catalog repos.
 
-  adversary train reset           # discovery only
-  adversary train reset --results # clear results inbox only
-  adversary train reset --all     # discovery + results`,
+  adversary catalog train reset           # discovery only
+  adversary catalog train reset --results # clear results inbox only
+  adversary catalog train reset --all     # discovery + results`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			state, err := resolveStateDir(path)
 			if err != nil {

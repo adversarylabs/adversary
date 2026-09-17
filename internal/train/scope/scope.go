@@ -468,8 +468,14 @@ func NonActionableHumanComment(body string) (reason string, ok bool) {
 	if isDismissiveResolution(lower) {
 		return "rebuttal / no-action-needed response, not a review request", true
 	}
+	if isWithdrawnObservation(lower) {
+		return "withdrawn / self-resolved observation, not an unresolved review request", true
+	}
 	if isVerificationOnlySummary(lower) {
 		return "successful verification report without an unresolved request", true
+	}
+	if isTrivialProcessComment(lower) || isBarePraiseOrCelebration(lower) {
+		return "social reaction / praise without an unresolved request", true
 	}
 	if (isApprovalOrNonDefect(body) || isPraiseSummary(lower)) && !hasReviewRequest(lower) {
 		return "approval / praise summary without an unresolved request", true
@@ -621,6 +627,11 @@ func IsThreadAgreementReply(body string) bool {
 }
 
 func isVerificationOnlySummary(lower string) bool {
+	if !hasReviewRequest(lower) && !containsDefectAsk(lower) &&
+		strings.Contains(lower, "checks passing") &&
+		(strings.Contains(lower, "not complaining") || strings.Contains(lower, "looks valid")) {
+		return true
+	}
 	if !strings.HasPrefix(strings.TrimSpace(lower), "verified ") || hasReviewRequest(lower) || containsDefectAsk(lower) {
 		return false
 	}
@@ -681,14 +692,61 @@ func isDismissiveResolution(lower string) bool {
 	}
 	markers := []string{
 		"don't need to worry", "do not need to worry", "no need to worry",
+		"don't need to change", "do not need to change", "no need to change",
 		"nothing to worry", "not a concern", "no action needed", "can be ignored",
 		"safe to ignore", "fine to ignore", "okay to ignore", "ok to ignore",
-		"working as intended", "behaving as intended",
+		"working as intended", "behaving as intended", "going to dismiss this",
+		"i'll dismiss this", "i will dismiss this", "there are tests for this already",
+		"probably just copied",
 	}
 	for _, marker := range markers {
 		if containsUnnegatedMarker(lower, marker) {
 			return true
 		}
+	}
+	return false
+}
+
+func isWithdrawnObservation(lower string) bool {
+	if hasReviewRequest(lower) {
+		return false
+	}
+	markers := []string{
+		"nm, found the answer", "nvm, found the answer", "nevermind, found the answer",
+		"never mind, found the answer", "answered my own question", "withdraw this comment",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBarePraiseOrCelebration(lower string) bool {
+	if hasReviewRequest(lower) || containsDefectAsk(lower) {
+		return false
+	}
+	trimmed := strings.TrimSpace(lower)
+	trimmed = strings.Trim(trimmed, " \t\r\n.!,:;_*-+🎉🚀🛡️✅👍👏")
+	words := strings.Fields(trimmed)
+	if len(words) == 0 {
+		return strings.Contains(lower, "shipit") || strings.Contains(lower, "🚀")
+	}
+	if len(words) <= 5 {
+		allowed := map[string]bool{
+			"nice": true, "smart": true, "great": true, "good": true,
+			"improvement": true, "change": true, "work": true, "valid": true,
+			"this": true, "looks": true, "solid": true, "shipit": true,
+			"let's": true, "lets": true, "go": true, "securebuild": true,
+		}
+		for _, word := range words {
+			word = strings.Trim(word, "`:#")
+			if !allowed[word] {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }
@@ -720,16 +778,18 @@ func isPraiseSummary(lower string) bool {
 	if hasReviewRequest(lower) || containsDefectAsk(lower) {
 		return false
 	}
-	trim := strings.TrimSpace(lower)
+	trim := strings.TrimLeft(strings.TrimSpace(lower), "- *")
 	praiseOpening := strings.HasPrefix(trim, "overall") || strings.HasPrefix(trim, "summary:") ||
 		strings.HasPrefix(trim, "this is a ") || strings.HasPrefix(trim, "this is an ") ||
-		strings.HasPrefix(trim, "the fix is ") || strings.HasPrefix(trim, "the change is ")
+		strings.HasPrefix(trim, "the fix is ") || strings.HasPrefix(trim, "the change is ") ||
+		strings.HasPrefix(trim, "clean consolidation") || strings.HasPrefix(trim, "great improvement")
 	if !praiseOpening {
 		return false
 	}
 	markers := []string{
 		"correct", "behavior-preserving", "behaviour-preserving", "clean cleanup",
 		"solid", "sound", "well-scoped", "looks good", "good change", "nice cleanup", "safe cleanup",
+		"clean consolidation", "great improvement",
 	}
 	for _, marker := range markers {
 		if strings.Contains(trim, marker) {
@@ -1068,7 +1128,8 @@ func isTrivialProcessComment(lower string) bool {
 	switch t {
 	case "changes", "change", "ditto", "same", "nit", "nits", "some nits",
 		"ok", "okay", "yes", "no", "done", "fixed", "sg", "sgtm", "ack",
-		"+1", "-1", "fyi", "ptal", "bump", "rebase", "please rebase":
+		"+1", "-1", "fyi", "ptal", "bump", "rebase", "please rebase",
+		"nice", "smart", "great", ":shipit:":
 		return true
 	}
 	if len(t) < 12 && (t == "lgtm" || strings.HasPrefix(t, "lgtm ") || t == "ship it") {

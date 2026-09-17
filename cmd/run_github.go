@@ -2,14 +2,21 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"html"
 	"io"
 	"strings"
+	"time"
 
+	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/githubreview"
 	"github.com/adversarylabs/adversary/internal/modelreview"
+	"github.com/adversarylabs/adversary/internal/outcomeinfer"
+	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/review"
 )
 
@@ -47,6 +54,15 @@ func resolvePRRunContext(ctx context.Context, opts *runOptions, progress io.Writ
 		}
 		opts.githubPR = opts.prURL.Number
 		opts.githubRepo = opts.prURL.Owner + "/" + opts.prURL.Repo
+	}
+	if opts.prURL == nil && opts.githubReview && (opts.githubRepo == "" || opts.githubPR <= 0) {
+		repository, number := githubreview.ActionsContext(githubapi.LookupEnv)
+		if opts.githubRepo == "" {
+			opts.githubRepo = repository
+		}
+		if opts.githubPR <= 0 {
+			opts.githubPR = number
+		}
 	}
 
 	if opts.prURL == nil && !opts.githubReview {
@@ -91,6 +107,7 @@ func resolvePRRunContext(ctx context.Context, opts *runOptions, progress io.Writ
 		opts.tempPRDir = ws.TempDir
 		opts.worktreeRoot = ws.WorktreeRoot
 		opts.resolvedHeadSHA = ws.HeadSHA
+		opts.outcomeContext = outcomecontext.GitHubPullRequest(opts.githubRepo, opts.githubPR, ws.Title, ws.Body)
 		return nil
 	}
 
@@ -108,6 +125,7 @@ func resolvePRRunContext(ctx context.Context, opts *runOptions, progress io.Writ
 		opts.head = headSHA
 	}
 	opts.resolvedHeadSHA = headSHA
+	opts.outcomeContext = outcomecontext.GitHubPullRequest(opts.githubRepo, opts.githubPR, pr.Title, pr.Body)
 	if progress != nil {
 		fmt.Fprintf(progress, "Resolved PR %s/%s#%d → base %s… head %s…\n",
 			owner, repo, opts.githubPR, shortSHA(baseSHA), shortSHA(headSHA))
@@ -122,6 +140,37 @@ func shortSHA(s string) string {
 	return s
 }
 
+// detectOutcomeIntent enriches the safe metadata fallback once, before any
+// adversary runs. Failure is deliberately non-fatal: intent is additive and
+// must never disable the existing review system.
+func detectOutcomeIntent(ctx context.Context, app *application.App, opts *runOptions, progress io.Writer) error {
+	if opts.outcomeContext == nil {
+		return nil
+	}
+	runtime, ok := app.Dependencies().Runtime.(application.ModelReviewRuntime)
+	if ok {
+		provider, err := runtime.ModelReviewProvider(application.ModelReviewConfig{
+			Provider: opts.modelProvider,
+			Model:    opts.model,
+		})
+		if err == nil {
+			if intent, inferErr := outcomeinfer.Infer(ctx, provider, opts.outcomeContext); inferErr == nil {
+				opts.outcomeContext.Intent = intent
+			} else if errors.Is(inferErr, context.Canceled) || errors.Is(inferErr, context.DeadlineExceeded) {
+				return inferErr
+			} else if opts.verbose && progress != nil {
+				fmt.Fprintf(progress, "warning: outcome inference failed; using PR metadata: %v\n", inferErr)
+			}
+		} else if opts.verbose && progress != nil {
+			fmt.Fprintf(progress, "warning: outcome inference unavailable; using PR metadata: %v\n", err)
+		}
+	}
+	if progress != nil {
+		fmt.Fprintln(progress, review.SanitizeTerminalInline(outcomecontext.ReviewedAs(opts.outcomeContext)))
+	}
+	return nil
+}
+
 func (o *runOptions) githubRepoOwner() (owner, repo string) {
 	parts := strings.SplitN(strings.TrimSpace(o.githubRepo), "/", 2)
 	if len(parts) != 2 {
@@ -130,7 +179,7 @@ func (o *runOptions) githubRepoOwner() (owner, repo string) {
 	return parts[0], parts[1]
 }
 
-func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []githubreview.NamedEnvelope, progress io.Writer) error {
+func maybeGitHubReview(ctx context.Context, app *application.App, opts *runOptions, envelopes []githubreview.NamedEnvelope, apiURL, profile string, progress io.Writer) error {
 	if !opts.githubReview {
 		return nil
 	}
@@ -167,10 +216,19 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 	plan := githubreview.ProjectFindings(envelopes, githubreview.ProjectOptions{
 		Repository:  owner + "/" + repo,
 		PullRequest: opts.githubPR,
+		HeadSHA:     opts.resolvedHeadSHA,
 		MinSeverity: opts.githubMinSeverity,
 		Voice:       voiceInfo,
 		OmitSummary: !opts.githubIncludeSummary,
 	})
+	// The host-detected intent applies to every adversary, including private or
+	// catalog packages that do not emit a review_basis observation themselves.
+	// Treat it as summary content so summary-free reviews contain findings only.
+	if opts.githubIncludeSummary {
+		if basis := outcomecontext.ReviewedAs(opts.outcomeContext); basis != "" {
+			plan.ReviewBasis = basis
+		}
+	}
 
 	// Default voice rewrite: try model provider; template remains on failure/missing creds.
 	// BuildRewritePrompt (inside EnhanceBodies) wraps agent/voice.md so Example maintainer
@@ -184,6 +242,24 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 			VoicePrompt: voicePrompt,
 		})
 		githubreview.EnhanceSummary(ctx, &plan, githubreview.EnhanceOptions{Provider: provider})
+	}
+	// Execution status is host-authored, not model-rewritten or suppressed by
+	// --github-include-summary=false. Findings still use normal inline placement.
+	if len(opts.githubRunFailures) > 0 {
+		const maxFailures = 20
+		failures := opts.githubRunFailures
+		if len(failures) > maxFailures {
+			failures = failures[:maxFailures]
+		}
+		notice := "### Partial Adversary review\n\nThis review did not complete because one or more review jobs failed. Any findings are partial; an absence of findings does not mean the change passed review.\n\nFailed review jobs:\n\n" + strings.Join(failures, "\n")
+		if remaining := len(opts.githubRunFailures) - len(failures); remaining > 0 {
+			notice += fmt.Sprintf("\n- %d additional failed jobs.", remaining)
+		}
+		notice += "\n\nSee the CI logs for full diagnostics. Fix the execution failure and rerun the review."
+		if strings.TrimSpace(plan.ReviewBody) != "" {
+			notice += "\n\n---\n\n" + plan.ReviewBody
+		}
+		plan.ReviewBody = notice
 	}
 	logVoiceSource(progress, voiceInfo)
 
@@ -243,17 +319,122 @@ func maybeGitHubReview(ctx context.Context, opts *runOptions, envelopes []github
 		}
 	}
 
-	_, err := githubreview.Post(ctx, plan, githubreview.PostOptions{
-		Client: client,
-		Owner:  owner,
-		Repo:   repo,
-		Number: opts.githubPR,
-		Submit: opts.githubSubmit,
+	result, err := githubreview.Post(ctx, plan, githubreview.PostOptions{
+		Client:           client,
+		Owner:            owner,
+		Repo:             repo,
+		Number:           opts.githubPR,
+		Submit:           opts.githubSubmit,
+		ResolveAddressed: opts.githubResolveAddressed && len(opts.githubRunFailures) == 0,
 		Progress: func(s string) {
 			fmt.Fprintln(progress, s)
 		},
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	registerGitHubReviewWatch(ctx, app, opts, apiURL, profile, result, progress)
+	return nil
+}
+
+func loadGitHubReviewFeedback(ctx context.Context, app *application.App, opts *runOptions, apiURL, profile string, progress io.Writer) {
+	if !opts.githubReview || opts.githubDryRun || opts.githubRepo == "" || opts.githubPR <= 0 {
+		return
+	}
+	deps := app.Dependencies()
+	auth, ok, err := scopedAuth(deps.Auth, apiURL, profile, deps.RegistryHost)
+	if err != nil || !ok || auth.Token == "" {
+		return
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	client := adversarylabs.NewClientWithBaseURL(adversarylabs.ConfigStore{}, apiURL)
+	memories, err := client.ReviewFeedbackMemory(requestCtx, auth.Token, opts.githubRepo, nil)
+	if err != nil {
+		fmt.Fprintf(progress, "Warning: could not load review feedback memory: %v\n", err)
+		return
+	}
+	opts.reviewFeedbackPrompt = adversarylabs.BuildReviewFeedbackPrompt(memories)
+	if len(memories) > 0 {
+		fmt.Fprintf(progress, "Loaded %d repository feedback memor%s for this review.\n", len(memories), pluralY(len(memories)))
+	}
+}
+
+func registerGitHubReviewWatch(
+	ctx context.Context,
+	app *application.App,
+	opts *runOptions,
+	apiURL, profile string,
+	result *githubreview.PostResult,
+	progress io.Writer,
+) {
+	if app == nil || result == nil || result.ReviewID == "" || len(result.PostedComments) == 0 {
+		return
+	}
+	deps := app.Dependencies()
+	auth, ok, err := scopedAuth(deps.Auth, apiURL, profile, deps.RegistryHost)
+	if err != nil || !ok || auth.Token == "" {
+		fmt.Fprintln(progress, "Warning: review posted but feedback watching requires an authenticated Adversary Labs CI session.")
+		return
+	}
+	watch := adversarylabs.ReviewWatch{
+		Repository: opts.githubRepo, PullRequest: opts.githubPR,
+		ReviewNodeID: result.ReviewID, HeadSHA: opts.resolvedHeadSHA,
+	}
+	for _, comment := range result.PostedComments {
+		watch.Comments = append(watch.Comments, adversarylabs.ReviewWatchComment{
+			Adversary: comment.Adversary, PackageName: comment.Package,
+			PackageVersion: comment.PackageVersion, FindingID: comment.FindingID,
+			RuleID: comment.RuleID, Path: comment.Anchor.Path, Body: comment.Body,
+		})
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	client := adversarylabs.NewClientWithBaseURL(adversarylabs.ConfigStore{}, apiURL)
+	if err := client.RegisterReviewWatch(requestCtx, auth.Token, watch); err != nil {
+		fmt.Fprintf(progress, "Warning: review posted but feedback watch registration failed: %v\n", err)
+		return
+	}
+	fmt.Fprintf(progress, "Feedback watch registered for %d review comment(s).\n", len(watch.Comments))
+}
+
+func pluralY(count int) string {
+	if count == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
+// recordGitHubRunFailure captures failures independently of review envelopes:
+// failed jobs may never emit one, and findings exits are successful reviews.
+func (o *runOptions) recordGitHubRunFailure(ref, scope string, err error, stderr string) {
+	var findings *internaladversary.FindingsError
+	if !o.githubReview || err == nil || errors.As(err, &findings) || errors.Is(err, context.Canceled) {
+		return
+	}
+	message := firstInterestingErrorLine(stderr)
+	if message == "" {
+		message = err.Error()
+	}
+	label := ref
+	if scope != "" {
+		label += " [" + scope + "]"
+	}
+	// Child errors can contain request diagnostics. Redact known credentials
+	// before truncation so even a key straddling the limit cannot leak to a PR.
+	for _, key := range []string{
+		modelreview.OpenAIKeyEnv, modelreview.AnthropicKeyEnv,
+		modelreview.FireworksKeyEnv, modelreview.CamelKeyEnv, modelreview.CloudflareKeyEnv,
+		"ADVERSARY_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "ADVERSARY_TOKEN",
+	} {
+		if secret, ok := githubapi.LookupEnv(key); ok && secret != "" {
+			message = strings.ReplaceAll(message, secret, "[redacted]")
+			label = strings.ReplaceAll(label, secret, "[redacted]")
+		}
+	}
+	label = html.EscapeString(truncateRunes(strings.Join(strings.Fields(label), " "), 160))
+	message = html.EscapeString(truncateRunes(strings.Join(strings.Fields(message), " "), 500))
+	o.githubRunFailures = append(o.githubRunFailures, "- <code>"+label+"</code>: <code>"+message+"</code>")
 }
 
 func logVoiceSource(progress io.Writer, voiceInfo githubreview.VoiceInfo) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,12 +19,21 @@ import (
 	"github.com/adversarylabs/adversary/internal/application"
 	"github.com/adversarylabs/adversary/internal/githubapi"
 	"github.com/adversarylabs/adversary/internal/githubreview"
+	"github.com/adversarylabs/adversary/internal/modelreview"
+	"github.com/adversarylabs/adversary/internal/telemetry"
 	"github.com/adversarylabs/adversary/pkg/adversarylabs"
 	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/spf13/cobra"
 )
 
 type runOptions struct {
+	verificationRuntime      findingVerificationRuntime
+	verifyFindings           bool
+	verificationOutput       string
+	verificationProvider     modelreview.Provider
+	composeSelections        []application.ComposeSelection
+	composePlan              bool
 	path                     string
 	base                     string
 	head                     string
@@ -55,25 +65,43 @@ type runOptions struct {
 	runTimeout               time.Duration
 	buildTimeout             time.Duration
 	repoIndex                string
+	composeConcurrency       int
+	composeRetries           int
+	composeBatchLines        int
+	composeBatchGroups       int
+	composeExhaustive        bool
+	composeRootFullOnly      bool
+	composeBroadFullOnly     bool
+	composeFullReviewers     []string
+	tagValues                []string
+	telemetryTags            map[string]string
+	telemetryFile            string
+	noTelemetry              bool
+	reviewContext            *detection.Context
+	reviewAssignment         *detection.ReviewAssignment
+	outcomeContext           *outcomecontext.Context
 
 	// GitHub review (opt-in posting / plan).
-	githubReview         bool
-	githubDryRun         bool
-	githubPlanFile       string
-	githubPR             int
-	githubRepo           string
-	githubSubmit         bool
-	githubIncludeSummary bool
-	githubMinSeverity    string
-	githubAPIURL         string
-	githubRESTURL        string
+	githubReview           bool
+	githubDryRun           bool
+	githubPlanFile         string
+	githubPR               int
+	githubRepo             string
+	githubSubmit           bool
+	githubIncludeSummary   bool
+	githubResolveAddressed bool
+	githubMinSeverity      string
+	githubAPIURL           string
+	githubRESTURL          string
+	githubRunFailures      []string
 
 	// Filled by peel/resolve.
-	prURL           *githubapi.PRRef
-	tempPRDir       string
-	worktreeRoot    string // source repo when tempPRDir is a linked worktree
-	resolvedHeadSHA string
-	envelopes       []githubreview.NamedEnvelope
+	prURL                *githubapi.PRRef
+	tempPRDir            string
+	worktreeRoot         string // source repo when tempPRDir is a linked worktree
+	resolvedHeadSHA      string
+	envelopes            []githubreview.NamedEnvelope
+	reviewFeedbackPrompt string
 	// Local adversary package roots (for agent/voice.md resolution).
 	adversaryPackageRoots []string
 	// noCompose skips expanding adversary.yaml uses (composition).
@@ -82,6 +110,7 @@ type runOptions struct {
 
 func newRunCommand(app *application.App, apiURL, profile *string) *cobra.Command {
 	opts := &runOptions{}
+	opts.verificationRuntime, _ = app.Dependencies().Runtime.(findingVerificationRuntime)
 
 	cmd := &cobra.Command{
 		Use:   "run [adversary-ref...] | run <github-pr-url> [adversary-ref...]",
@@ -91,11 +120,11 @@ func newRunCommand(app *application.App, apiURL, profile *string) *cobra.Command
 With one or more adversary references, those adversaries run explicitly.
 If a package lists uses: in adversary.yaml, the CLI expands composition
 (transitively), runs each member, and keeps GitHub comment voice from the
-entry package(s). Use --no-compose to run only the named refs.
+entry package(s).
 
-With no adversary references, run pulls every adversary you can access (unless
---no-pull), detects which apply to the resolved review scope, and runs the
-selected set. Use --all to skip detection and run every installed adversary.
+With no adversary references or only a pull request URL, run selects review/code,
+which expands its generalist and specialist composition. Use --all to select
+across every adversary you can access instead.
 Use --all-files for a whole-repository scan instead of change inference.
 
 A GitHub pull request URL may be passed as a positional argument to set the
@@ -109,10 +138,10 @@ review base/head and optional posting context. Posting still requires
   adversary run adversarylabs/dockerfile
   adversary run ./local-adversary --path ../project
   adversary run person/torvalds --path ../app
-  adversary run ./go-meta --no-compose
   adversary run adversarylabs/dockerfile --base main --head feature
   adversary run adversarylabs/go-cli adversarylabs/secrets --all-files
   adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id
+  adversary run review/code --model-provider camel --model auto
   adversary run --all --all-files --output-file review.txt
   adversary run go-cli secrets --format json --output-file results.json
   adversary run https://github.com/owner/repo/pull/123
@@ -122,6 +151,18 @@ review base/head and optional posting context. Posting still requires
 			format, err := commandFormat(cmd, opts.format, opts.json)
 			if err != nil {
 				return err
+			}
+			if opts.verificationOutput != "" {
+				if !opts.verifyFindings || opts.noCompose || opts.shell || wantsAutomaticSelection(cmd, opts) {
+					return fmt.Errorf("--verification-output requires verified composition")
+				}
+				if opts.outputFile != "" {
+					verificationPath, _ := filepath.Abs(opts.verificationOutput)
+					resultPath, _ := filepath.Abs(opts.outputFile)
+					if verificationPath == resultPath {
+						return fmt.Errorf("verification and review outputs require separate files")
+					}
+				}
 			}
 			if opts.debug && cmd.Flags().Changed("verbose") {
 				return fmt.Errorf("--debug and --verbose cannot be combined")
@@ -138,7 +179,7 @@ review base/head and optional posting context. Posting still requires
 				return fmt.Errorf("--github-review cannot be combined with --shell")
 			}
 			if !opts.githubReview {
-				if opts.githubDryRun || opts.githubPlanFile != "" || opts.githubSubmit || cmd.Flags().Changed("github-include-summary") || opts.githubMinSeverity != "" {
+				if opts.githubDryRun || opts.githubPlanFile != "" || opts.githubSubmit || cmd.Flags().Changed("github-include-summary") || cmd.Flags().Changed("github-resolve-addressed") || opts.githubMinSeverity != "" {
 					return fmt.Errorf("GitHub review flags require --github-review")
 				}
 				if cmd.Flags().Changed("github-pr") || cmd.Flags().Changed("github-repo") {
@@ -162,9 +203,9 @@ review base/head and optional posting context. Posting still requires
 			opts.modelProvider = strings.ToLower(strings.TrimSpace(opts.modelProvider))
 			opts.model = strings.TrimSpace(opts.model)
 			switch opts.modelProvider {
-			case "", "openai", "anthropic", "fireworks":
+			case "", "openai", "cloudflare", "anthropic", "fireworks", "camel", "camel-stream", "codex":
 			default:
-				return fmt.Errorf("--model-provider must be openai, anthropic, or fireworks")
+				return fmt.Errorf("--model-provider must be openai, cloudflare, anthropic, fireworks, camel, or codex")
 			}
 			if cmd.Flags().Changed("model-provider") && opts.modelProvider == "" {
 				return fmt.Errorf("--model-provider must not be empty")
@@ -193,6 +234,25 @@ review base/head and optional posting context. Posting still requires
 			if opts.runTimeout < 0 || opts.buildTimeout < 0 || opts.detectionTimeout < 0 {
 				return fmt.Errorf("timeouts cannot be negative")
 			}
+			if opts.composeConcurrency < 1 {
+				return fmt.Errorf("--compose-concurrency must be at least 1")
+			}
+			if opts.composeRetries < 0 || opts.composeRetries > 5 {
+				return fmt.Errorf("--compose-retries must be between 0 and 5")
+			}
+			if opts.composeBatchLines < 1 {
+				return fmt.Errorf("--compose-batch-lines must be at least 1")
+			}
+			if opts.composeBatchGroups < 0 {
+				return fmt.Errorf("--compose-batch-groups cannot be negative")
+			}
+			opts.telemetryTags, err = telemetry.ParseTags(opts.tagValues)
+			if err != nil {
+				return err
+			}
+			if opts.composePlan && wantsAutomaticSelection(cmd, opts) {
+				return fmt.Errorf("--compose-plan cannot be combined with automatic inventory selection flags")
+			}
 			opts.format = format
 			if opts.json {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --json is deprecated; use --format json.")
@@ -212,6 +272,10 @@ review base/head and optional posting context. Posting still requires
 			if err := resolvePRRunContext(cmd.Context(), opts, progressOut); err != nil {
 				return err
 			}
+			if err := detectOutcomeIntent(cmd.Context(), app, opts, progressOut); err != nil {
+				return err
+			}
+			loadGitHubReviewFeedback(cmd.Context(), app, opts, valueOf(apiURL), valueOf(profile), progressOut)
 			// Register cleanup only after resolve may set tempPRDir / worktree root.
 			if opts.tempPRDir != "" || (opts.worktreeRoot != "" && opts.githubPR > 0) {
 				prNum := opts.githubPR
@@ -219,16 +283,26 @@ review base/head and optional posting context. Posting still requires
 			}
 
 			var runErr error
-			if len(args) == 0 {
+			if len(args) == 0 && wantsAutomaticSelection(cmd, opts) {
 				runErr = runAutomaticSelection(cmd, app, opts, apiURL, profile, resultOut, progressOut)
 			} else {
+				if len(args) == 0 {
+					args = []string{"review/code"}
+				}
 				if err := rejectAutomaticOnlyFlags(cmd, opts); err != nil {
 					return err
 				}
 				runErr = runAdversaries(cmd.Context(), app, opts, args, apiURL, profile, resultOut, progressOut)
 			}
-			// Still project/post when only findings error.
-			postErr := maybeGitHubReview(cmd.Context(), opts, opts.envelopes, progressOut)
+			if opts.composePlan {
+				return runErr
+			}
+			// Retain usable findings after execution failures, but make incomplete
+			// coverage explicit even when the optional assessment is disabled.
+			if len(opts.githubRunFailures) == 0 {
+				opts.recordGitHubRunFailure("review run", "", runErr, "")
+			}
+			postErr := maybeGitHubReview(cmd.Context(), app, opts, opts.envelopes, valueOf(apiURL), valueOf(profile), progressOut)
 			if postErr != nil {
 				// Policy A: post failure wins over findings (exit 4).
 				return postErr
@@ -241,7 +315,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().StringVar(&opts.base, "base", "", "git base ref (defaults to the detected default branch when --head is set)")
 	cmd.Flags().StringVar(&opts.head, "head", "", "git head ref (defaults to HEAD when --base is set)")
 	cmd.Flags().StringVar(&opts.builder, "builder", "local", "build mechanism for local adversaries: local or docker")
-	cmd.Flags().StringVar(&opts.modelProvider, "model-provider", "", "model provider: openai, anthropic, or fireworks (overrides ADVERSARY_MODEL_PROVIDER)")
+	cmd.Flags().StringVar(&opts.modelProvider, "model-provider", "", "model provider: openai, cloudflare, anthropic, fireworks, camel, or codex (overrides ADVERSARY_MODEL_PROVIDER)")
 	cmd.Flags().StringVar(&opts.model, "model", "", "provider model identifier (overrides ADVERSARY_MODEL)")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "run even when triggers.files_changed does not match")
 	cmd.Flags().StringVar(&opts.format, "format", "text", "output format: text or json")
@@ -257,6 +331,7 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().BoolVar(&opts.allFiles, "all-files", false, "scan the entire target instead of inferring a change")
 	cmd.Flags().BoolVar(&opts.all, "all", false, "with no adversary refs: run every available adversary without detection filtering")
 	cmd.Flags().BoolVar(&opts.noPull, "no-pull", false, "with no adversary refs: do not pull remote adversaries; use only the local store")
+	cmd.Flags().BoolVar(&opts.composePlan, "compose-plan", false, "preview composition selection without downloading packages or running reviewers")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "with no adversary refs: resolve and print selections without running")
 	cmd.Flags().BoolVar(&opts.explain, "explain", false, "with no adversary refs: show selected and skipped adversaries with reasons")
 	cmd.Flags().StringVar(&opts.minimumConfidence, "min-confidence", "medium", "with no adversary refs: minimum confidence to run (low, medium, or high)")
@@ -268,8 +343,27 @@ review base/head and optional posting context. Posting still requires
 	_ = cmd.Flags().MarkDeprecated("no-build", "local builds are skipped by default; omit this flag")
 	cmd.Flags().DurationVar(&opts.runTimeout, "timeout", 0, "maximum adversary execution time (0 disables the deadline)")
 	cmd.Flags().DurationVar(&opts.buildTimeout, "build-timeout", 10*time.Minute, "maximum explicit local build time")
-	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "auto", "local repository index: auto, off, force, graph, or graph-force")
+	cmd.Flags().StringVar(&opts.repoIndex, "repo-index", "graph", "local repository index: auto, off, force, graph, or graph-force")
+	cmd.Flags().IntVar(&opts.composeConcurrency, "compose-concurrency", 5, "maximum composed reviewers to run concurrently")
+	cmd.Flags().IntVar(&opts.composeRetries, "compose-retries", 2, "maximum retries for a transiently failed composed reviewer")
+	cmd.Flags().IntVar(&opts.composeBatchLines, "compose-batch-lines", 600, "approximate changed-line budget for each routed specialist batch")
+	cmd.Flags().IntVar(&opts.composeBatchGroups, "compose-batch-groups", 0, "maximum independent change groups in each routed specialist batch (0 is unlimited)")
+	cmd.Flags().BoolVar(&opts.composeExhaustive, "compose-exhaustive", false, "run every composed reviewer against every review group")
+	cmd.Flags().BoolVar(&opts.composeRootFullOnly, "compose-root-full-only", false, "run the composition root only against the full change")
+	cmd.Flags().BoolVar(&opts.composeBroadFullOnly, "compose-broad-full-only", false, "run composed reviewers without selective file scope only against the full change")
+	cmd.Flags().StringSliceVar(&opts.composeFullReviewers, "compose-full-reviewer", nil, "run a composed reviewer once against the full change (repeatable)")
+	cmd.Flags().StringArrayVar(&opts.tagValues, "tag", nil, "attach a telemetry tag as key=value (repeatable; use benchmark=true for benchmark runs)")
+	cmd.Flags().StringVar(&opts.telemetryFile, "telemetry-file", "", "append OpenTelemetry JSON traces to this file")
+	cmd.Flags().BoolVar(&opts.noTelemetry, "no-telemetry", false, "disable all run telemetry for this command")
+	cmd.Flags().BoolVar(&opts.verifyFindings, "verify-findings", true, "verify composed findings against source before deduplication")
+	cmd.Flags().StringVar(&opts.verificationOutput, "verification-output", "", "save private verification inputs and decisions for replay")
 	cmd.Flags().BoolVar(&opts.noCompose, "no-compose", false, "do not expand adversary.yaml uses composition; run only the named refs")
+	_ = cmd.Flags().MarkHidden("no-compose")
+	_ = cmd.Flags().MarkHidden("compose-exhaustive")
+	_ = cmd.Flags().MarkHidden("compose-batch-groups")
+	_ = cmd.Flags().MarkHidden("compose-root-full-only")
+	_ = cmd.Flags().MarkHidden("compose-broad-full-only")
+	_ = cmd.Flags().MarkHidden("compose-full-reviewer")
 
 	cmd.Flags().BoolVar(&opts.githubReview, "github-review", false, "build a GitHub PR comment plan and post (unless --github-dry-run)")
 	cmd.Flags().BoolVar(&opts.githubDryRun, "github-dry-run", false, "with --github-review: plan/place only; never mutate GitHub")
@@ -277,12 +371,18 @@ review base/head and optional posting context. Posting still requires
 	cmd.Flags().IntVar(&opts.githubPR, "github-pr", 0, "pull request number for posting")
 	cmd.Flags().StringVar(&opts.githubRepo, "github-repo", "", "owner/name repository for posting")
 	cmd.Flags().BoolVar(&opts.githubSubmit, "github-submit", false, "submit the review as informational COMMENT (default leaves pending)")
-	cmd.Flags().BoolVar(&opts.githubIncludeSummary, "github-include-summary", true, "include the aggregate assessment and opinion in the review body")
+	cmd.Flags().BoolVar(&opts.githubIncludeSummary, "github-include-summary", true, "include the inferred review basis and aggregate assessment/opinion in the review body")
+	cmd.Flags().BoolVar(&opts.githubResolveAddressed, "github-resolve-addressed", true, "resolve prior Adversary review threads whose findings are absent after a successful rerun")
 	cmd.Flags().StringVar(&opts.githubMinSeverity, "github-min-severity", "", "only plan/post findings at this severity or higher")
 	cmd.Flags().StringVar(&opts.githubAPIURL, "github-api-url", "", "GraphQL endpoint override (default https://api.github.com/graphql)")
 	cmd.Flags().StringVar(&opts.githubRESTURL, "github-rest-url", "", "REST API base override (default https://api.github.com)")
 
 	return cmd
+}
+
+func wantsAutomaticSelection(cmd *cobra.Command, opts *runOptions) bool {
+	return opts.all || opts.noPull || opts.dryRun || opts.explain || len(opts.includes) > 0 || len(opts.excludes) > 0 ||
+		cmd.Flags().Changed("min-confidence") || cmd.Flags().Changed("detection-timeout")
 }
 
 func rejectAutomaticOnlyFlags(cmd *cobra.Command, opts *runOptions) error {
@@ -374,27 +474,58 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	// callbacks fail before every selected adversary executes.
 	var ran []string
 	usageStarted := time.Now()
+	finalUsage := withRunSourceContext(cmd.Context(), app, adversarylabs.RunUsageReport{Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}, opts)
+	var selectedForUsage []string
+	var finishUsage func(adversarylabs.RunUsageReport)
+	defer func() {
+		if finishUsage != nil {
+			finishUsage(finalUsage)
+		}
+	}()
 	runStarted := make(map[string]time.Time)
 	var usageResults []adversarylabs.RunUsageAdversaryResult
+	var childDiagnostics bytes.Buffer
+	autoStderr := progressOut
+	if opts.githubReview {
+		autoStderr = io.MultiWriter(progressOut, &childDiagnostics)
+	}
 	_, err = app.Dependencies().Runtime.Auto(cmd.Context(), application.AdversaryAutoOptions{
 		RepoPath: opts.path, BaseRef: opts.base, HeadRef: opts.head, AllFiles: opts.allFiles,
 		ModelProvider: opts.modelProvider, Model: opts.model,
-		MinimumConfidence: minimum,
-		Includes:          opts.includes, Excludes: opts.excludes,
+		ReviewFeedbackPrompt: opts.reviewFeedbackPrompt,
+		OutcomeContext:       opts.outcomeContext,
+		MinimumConfidence:    minimum,
+		Includes:             opts.includes, Excludes: opts.excludes,
 		All: opts.all, DryRun: opts.dryRun, Explain: opts.explain, Format: opts.format,
 		AllowUnsafeHostExecution: opts.allowUnsafeHostExecution, IncludeSuppressed: opts.includeSuppressed,
 		RunTimeout: opts.runTimeout, DetectionTimeout: opts.detectionTimeout,
 		RepoIndexMode: opts.repoIndex,
-		Stdout:        resultOut, Stderr: progressOut,
+		Stdout:        resultOut, Stderr: autoStderr,
 		ReportSelections: func(result application.AdversaryAutoResult) error {
+			selectedForUsage = nil
+			for _, selection := range result.Selections {
+				if selection.Selected {
+					selectedForUsage = append(selectedForUsage, selection.Candidate.Name)
+				}
+			}
 			return renderRunSelections(selectionOut, result, opts.explain)
 		},
 		ReportRunStart: func(name string, index, total int) error {
+			if finishUsage == nil && !opts.dryRun {
+				initial := finalUsage
+				initial.Adversaries = selectedForUsage
+				if len(initial.Adversaries) == 0 {
+					initial.Adversaries = []string{name}
+				}
+				finishUsage = beginRunUsage(cmd.Context(), app, valueOf(apiURL), valueOf(profile), initial)
+			}
+			childDiagnostics.Reset()
 			runStarted[name] = time.Now()
 			_, err := fmt.Fprintf(progressOut, "[%d/%d] %s\n", index, total, name)
 			return err
 		},
 		ReportRunFinish: func(name string, index, total int, runErr error) error {
+			opts.recordGitHubRunFailure(name, "", runErr, childDiagnostics.String())
 			// Record after the runner returns so we never count selections that
 			// never entered Run (e.g. ReportRunStart failure).
 			if strings.TrimSpace(name) != "" {
@@ -431,11 +562,21 @@ func runAutomaticSelection(cmd *cobra.Command, app *application.App, opts *runOp
 	})
 	// Sanitized usage: CLI version + adversaries that actually ran.
 	if !opts.dryRun && len(ran) > 0 {
-		reportRunUsage(cmd.Context(), app, valueOf(apiURL), valueOf(profile), adversarylabs.RunUsageReport{
-			Adversaries: ran,
-			DurationMS:  time.Since(usageStarted).Milliseconds(),
-			Results:     usageResults,
-		})
+		finalUsage = adversarylabs.RunUsageReport{
+			Outcome:           "completed",
+			Adversaries:       ran,
+			DurationMS:        time.Since(usageStarted).Milliseconds(),
+			Results:           usageResults,
+			Tags:              opts.telemetryTags,
+			TelemetryFile:     opts.telemetryFile,
+			TelemetryDisabled: opts.noTelemetry,
+		}
+	}
+	if err != nil {
+		var findings *internaladversary.FindingsError
+		if !errors.As(err, &findings) {
+			finalUsage.Outcome = "failed"
+		}
 	}
 	if err == nil && strings.TrimSpace(opts.outputFile) != "" {
 		fmt.Fprintf(progressOut, "Results written to %s\n", opts.outputFile)
@@ -539,18 +680,44 @@ func runAdversaries(
 	apiURL, profile *string,
 	resultOut, progressOut io.Writer,
 ) error {
+	entryRefs := append([]string(nil), refs...)
 	for i := range refs {
 		refs[i] = canonicalCatalogReference(refs[i])
+		entryRefs[i] = refs[i]
 	}
 	// --shell is a single interactive package session. Skip uses expansion entirely
 	// so we never pull a composition graph, never re-expand after auto-install, and
 	// never launch a shell into a multi-member product by accident. Name a leaf
 	// explicitly (or use --no-compose) when you want shell into one specialist.
 	noCompose := opts.noCompose || opts.shell
+	if opts.composePlan && noCompose {
+		return fmt.Errorf("--compose-plan requires composition (incompatible with --shell and --no-compose)")
+	}
 	if opts.shell && !opts.noCompose && progressOut != nil {
 		fmt.Fprintln(progressOut, "Note: --shell skips adversary.yaml uses expansion (single package only).")
 	}
-	expanded, voiceRoots, err := expandComposeRefs(ctx, app, refs, valueOf(apiURL), valueOf(profile), noCompose, true, progressOut)
+	var expanded, voiceRoots []string
+	var err error
+	if !noCompose && app != nil {
+		var plan application.ComposePlan
+		plan, err = selectComposeRefs(ctx, app, opts, refs, valueOf(apiURL), valueOf(profile), resultOut, progressOut)
+		expanded, voiceRoots = plan.Refs, plan.VoiceRoots
+		opts.composeSelections = plan.Selections
+		for _, selection := range plan.Selections {
+			if selection.Root {
+				for i, ref := range entryRefs {
+					if ref == selection.Reference {
+						entryRefs[i] = selection.ResolvedReference
+					}
+				}
+			}
+		}
+		if opts.composePlan {
+			return err
+		}
+	} else {
+		expanded, voiceRoots, err = expandComposeRefs(ctx, app, refs, valueOf(apiURL), valueOf(profile), noCompose, true, progressOut)
+	}
 	if err != nil {
 		return err
 	}
@@ -561,6 +728,13 @@ func runAdversaries(
 	refs = expanded
 	if opts.shell && len(refs) > 1 {
 		return fmt.Errorf("--shell requires exactly one adversary reference")
+	}
+	if !noCompose && len(entryRefs) == 1 && (len(refs) > 1 || len(opts.composeSelections) > 1) {
+		return runComposedAdversaries(ctx, app, opts, entryRefs[0], refs, valueOf(apiURL), valueOf(profile), resultOut, progressOut)
+	}
+
+	if opts.verificationOutput != "" {
+		return fmt.Errorf("--verification-output requires a composition with multiple reviewers")
 	}
 
 	multi := len(refs) > 1
@@ -574,6 +748,9 @@ func runAdversaries(
 	var hardErr error
 	hardRef := ""
 	usageStarted := time.Now()
+	finalUsage := withRunSourceContext(ctx, app, adversarylabs.RunUsageReport{Adversaries: refs, Tags: opts.telemetryTags, TelemetryFile: opts.telemetryFile, TelemetryDisabled: opts.noTelemetry}, opts)
+	finishUsage := beginRunUsage(ctx, app, valueOf(apiURL), valueOf(profile), finalUsage)
+	defer func() { finishUsage(finalUsage) }()
 	var usageResults []adversarylabs.RunUsageAdversaryResult
 
 	for i, ref := range refs {
@@ -601,11 +778,15 @@ func runAdversaries(
 		runStderr := progressOut
 		if showProgress {
 			runStderr = &childErr
+		} else if opts.githubReview {
+			// Preserve live diagnostics while retaining the failure cause for the PR.
+			runStderr = io.MultiWriter(progressOut, &childErr)
 		}
 
 		envelopeStart := len(opts.envelopes)
 		runStarted := time.Now()
 		err := runOneAdversary(ctx, app, opts, ref, valueOf(apiURL), valueOf(profile), runStdout, runStderr)
+		opts.recordGitHubRunFailure(ref, "", err, childErr.String())
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
@@ -661,6 +842,7 @@ func runAdversaries(
 		}
 		if multi && jsonMode {
 			if nonJSONStdout {
+				opts.recordGitHubRunFailure(ref, "", fmt.Errorf("adversary wrote non-JSON stdout"), "")
 				// Non-JSON stdout is a hard failure even when the runtime returned
 				// nil or FindingsError (Greptile: item.error alone left exit success).
 				item.Error = joinMultiRunError(item.Error, "adversary wrote non-JSON stdout")
@@ -678,11 +860,15 @@ func runAdversaries(
 			return err
 		}
 	}
-	reportRunUsage(ctx, app, valueOf(apiURL), valueOf(profile), adversarylabs.RunUsageReport{
-		Adversaries: refs,
-		DurationMS:  time.Since(usageStarted).Milliseconds(),
-		Results:     usageResults,
-	})
+	finalUsage = adversarylabs.RunUsageReport{
+		Outcome:           "completed",
+		Adversaries:       refs,
+		DurationMS:        time.Since(usageStarted).Milliseconds(),
+		Results:           usageResults,
+		Tags:              opts.telemetryTags,
+		TelemetryFile:     opts.telemetryFile,
+		TelemetryDisabled: opts.noTelemetry,
+	}
 	if multi || toFile {
 		fmt.Fprintf(progressOut, "\nRan %d adversaries", len(refs))
 		if findingsTotal > 0 {
@@ -762,7 +948,7 @@ func firstInterestingErrorLine(stderr string) string {
 			continue
 		}
 		// Prefer the actual Node error line over stack frames.
-		if strings.Contains(line, "Error [") || strings.HasPrefix(line, "Error:") || strings.Contains(line, "ERR_") {
+		if strings.Contains(line, "Error [") || strings.Contains(line, "Error:") || strings.Contains(line, "ERR_") {
 			return line
 		}
 	}
@@ -804,9 +990,13 @@ func runOneAdversary(
 		RunTimeout:               opts.runTimeout,
 		BuildTimeout:             opts.buildTimeout,
 		RepoIndexMode:            opts.repoIndex,
+		ReviewContext:            opts.reviewContext,
+		ReviewAssignment:         opts.reviewAssignment,
+		OutcomeContext:           opts.outcomeContext,
 		Stdout:                   stdout,
 		Stderr:                   stderr,
 		OnEnvelope:               collectEnvelope(&opts.envelopes, ref),
+		ReviewFeedbackPrompt:     opts.reviewFeedbackPrompt,
 	}
 	err := app.Dependencies().Runtime.Run(ctx, runOpts)
 	if errors.Is(err, context.Canceled) {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/adversarylabs/adversary/internal/train/state"
 )
 
 // ResetDiscovery clears seen-PR memory and the catalog cursor so train run will
@@ -29,6 +31,31 @@ func ResetDiscovery(stateRoot string) (removed int, err error) {
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return 0, err
+	}
+	return removed, nil
+}
+
+// ResetDiscoveryTarget clears one workflow's seen-PR memory and catalog cursor
+// without disturbing discovery state owned by other training workflows.
+func ResetDiscoveryTarget(stateRoot, target string) (removed int, err error) {
+	probe := state.PathForTarget(stateRoot, target, "owner", "repo")
+	dir := filepath.Dir(probe)
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, err
+	}
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
+				removed++
+			}
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return 0, err
+		}
+	}
+	if err := state.ResetCatalogTarget(stateRoot, target); err != nil {
+		return removed, err
 	}
 	return removed, nil
 }

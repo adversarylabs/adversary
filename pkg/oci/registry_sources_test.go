@@ -228,6 +228,78 @@ func TestPullSourcesPreservesRegisteredManifestAndBlobDigests(t *testing.T) {
 	}
 }
 
+func TestResolveThenPullReusesVerifiedManifest(t *testing.T) {
+	config := []byte(`{"full_name":"team/reused","version":"1.0.0","name":"reused","files":[]}`)
+	layer := []byte("package layer")
+	layerDescriptor := Descriptor{MediaType: PackageLayerMediaType, Digest: Digest(layer), Size: int64(len(layer))}
+	manifestData, manifestDigest, _, err := NewManifest(config, layerDescriptor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifestRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "adversary-manifest"):
+			http.NotFound(w, r)
+		case strings.Contains(r.URL.Path, "/manifests/"):
+			manifestRequests.Add(1)
+			w.Header().Set("Docker-Content-Digest", manifestDigest)
+			_, _ = w.Write(manifestData)
+		case strings.HasSuffix(r.URL.Path, "/blobs/"+Digest(config)):
+			_, _ = w.Write(config)
+		case strings.HasSuffix(r.URL.Path, "/blobs/"+Digest(layer)):
+			_, _ = w.Write(layer)
+		case strings.Contains(r.URL.Path, "/referrers/"):
+			_, _ = w.Write([]byte(`{"manifests":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+	registry := NewHTTPRegistry()
+	registry.Client = server.Client()
+	registry.PlainHTTP = true
+	ref := Reference{Registry: u.Host, Repository: "team/reused", Tag: "latest"}
+	digest, err := registry.Resolve(t.Context(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := ref
+	pinned.Tag = ""
+	pinned.Digest = digest
+	pulled, err := registry.PullSources(t.Context(), pinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pulled.Close()
+	if got := manifestRequests.Load(); got != 1 {
+		t.Fatalf("manifest requests = %d, want 1", got)
+	}
+}
+
+func TestResolvedManifestCacheIsBoundedAndOneShot(t *testing.T) {
+	registry := NewHTTPRegistry()
+	for i := 0; i <= manifestCacheEntryLimit; i++ {
+		digest := fmt.Sprintf("digest-%d", i)
+		registry.rememberManifest(Reference{Registry: "registry.example", Repository: "team/tool"}, []byte(digest), digest)
+	}
+	if got := len(registry.manifestCache); got != manifestCacheEntryLimit {
+		t.Fatalf("manifest cache entries = %d, want %d", got, manifestCacheEntryLimit)
+	}
+	if _, _, ok := registry.cachedManifest(Reference{Registry: "registry.example", Repository: "team/tool", Digest: "digest-0"}); ok {
+		t.Fatal("oldest manifest was not evicted")
+	}
+	latest := fmt.Sprintf("digest-%d", manifestCacheEntryLimit)
+	ref := Reference{Registry: "registry.example", Repository: "team/tool", Digest: latest}
+	if data, digest, ok := registry.cachedManifest(ref); !ok || string(data) != latest || digest != latest {
+		t.Fatalf("latest manifest = %q, %q, %v", data, digest, ok)
+	}
+	if _, _, ok := registry.cachedManifest(ref); ok {
+		t.Fatal("resolved manifest cache entry was not consumed")
+	}
+}
+
 func TestCopyDescriptorStopsReaderWithNoProgress(t *testing.T) {
 	if _, _, err := copyDescriptor(io.Discard, ociNoProgressReader{}, 1); !errors.Is(err, io.ErrNoProgress) {
 		t.Fatalf("expected no-progress error, got %v", err)

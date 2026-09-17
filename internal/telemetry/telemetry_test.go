@@ -33,6 +33,19 @@ func TestDisabledWith(t *testing.T) {
 	}) {
 		t.Fatal("ADVERSARY_TELEMETRY=1 should leave enabled")
 	}
+	for key, value := range map[string]string{
+		"OTEL_SDK_DISABLED":    "true",
+		"OTEL_TRACES_EXPORTER": "none",
+	} {
+		if !DisabledWith(func(k string) string {
+			if k == key {
+				return value
+			}
+			return ""
+		}) {
+			t.Fatalf("%s=%s should disable telemetry", key, value)
+		}
+	}
 }
 
 func TestSanitizeAdversarySelection(t *testing.T) {
@@ -69,6 +82,9 @@ func TestSanitizeOfficialDomainsOnly(t *testing.T) {
 
 	if got := SanitizeAdversaryRef("ci/gitlab-ci"); got != "ci/gitlab-ci" {
 		t.Fatalf("got %q", got)
+	}
+	if got := SanitizeAdversaryRef("adversarylabs/adversary"); got != "adversarylabs/adversary" {
+		t.Fatalf("meta adversary got %q", got)
 	}
 	if got := SanitizeAdversaryRef("internal/x"); got != "local" {
 		t.Fatalf("non-official domain got %q want local", got)

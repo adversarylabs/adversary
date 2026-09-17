@@ -11,10 +11,23 @@ existing one.
 
 ## Unreleased
 
+- `adversary run` now defaults to the `review/code` composition. The generalist
+  reviews the full change while manifest-matched specialists run concurrently
+  on scoped changed files with repository-graph context.
+- Composed reviews now emit one conservatively deduplicated result and retain
+  every contributing reviewer in finding metadata. `--no-compose` remains
+  supported for controlled evaluation but is hidden from normal help.
+- GitHub reviews register posted inline findings with Adversary Labs, retrieve
+  repository-scoped maintainer feedback before later model-backed reviews, and
+  embed provenance-rich v2 markers for SaaS polling.
 - Packing preserves self-contained JavaScript bundles instead of appending the
   installed SDK dependency closure when no unresolved SDK import remains.
 - Model provider and model can be selected per run with flags, and Fireworks is
   supported through its structured Chat Completions API.
+- camelStream is supported directly with `--model-provider camel --model auto`,
+  `CAMEL_API_KEY`, and Camel-specific endpoint and structured-output settings.
+- Camel model calls retry transient connection, rate-limit, and server failures
+  in place instead of forcing an entire composed review to restart.
 - Model-backed adversaries can request a CLI-owned, authenticated review broker
   with provider credentials kept out of the adversary process.
 - CLI audit remediation is being delivered as dependency-ordered pull requests.

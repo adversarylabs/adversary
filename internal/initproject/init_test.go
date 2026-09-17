@@ -10,6 +10,42 @@ import (
 	"testing"
 )
 
+func TestCreateGeneratesVersionActionCompatibleNodeRuntime(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "version-compatible")
+	if _, err := Create(Options{Destination: dst, SDK: "typescript"}); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := os.ReadFile(filepath.Join(dst, "adversary.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(manifest), "  command:\n    - dist/index.js\n") {
+		t.Fatalf("runtime command is not a block-style string list:\n%s", manifest)
+	}
+	if strings.Contains(string(manifest), "command: [") {
+		t.Fatalf("runtime command uses unsupported inline YAML:\n%s", manifest)
+	}
+
+	for _, name := range []string{"src/index.ts", "dist/index.js"} {
+		source, err := os.ReadFile(filepath.Join(dst, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			`readFileSync(new URL("../package.json", import.meta.url), "utf8")`,
+			"version: packageVersion",
+		} {
+			if !strings.Contains(string(source), want) {
+				t.Fatalf("%s missing %q:\n%s", name, want, source)
+			}
+		}
+		if strings.Contains(string(source), `version: "0.0.1"`) {
+			t.Fatalf("%s hard-codes the runtime version:\n%s", name, source)
+		}
+	}
+}
+
 func TestCreateCleansOwnedStageAfterInjectedRenderAndWriteFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -297,7 +333,7 @@ func TestCreateScaffoldsAgentVoice(t *testing.T) {
 		"### Design / technical judgment",
 		"### Defects / correctness",
 		"### Nits / style",
-		"adversary train results apply",
+		"Catalog training may ask implementers",
 		"## Output",
 	} {
 		if !strings.Contains(text, want) {

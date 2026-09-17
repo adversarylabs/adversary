@@ -11,8 +11,26 @@ import (
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/adversarylabs/adversary/internal/progress"
 	"golang.org/x/term"
 )
+
+const accessiblePullConcurrency = 8
+
+type accessibleAdversary struct {
+	name, ref, version string
+}
+
+type ensureJob struct {
+	index int
+	item  accessibleAdversary
+}
+
+type ensureResult struct {
+	job    ensureJob
+	result pullResult
+	err    error
+}
 
 // ensureAccessibleAdversaries verifies every remote catalog entry the user can
 // access (newest version per repository identity), pulls anything not already
@@ -24,6 +42,8 @@ import (
 //	  ✗  dockercompose              failed: 404 Not Found
 //	9 ready · 1 failed
 //
+// Independent packages are pulled with bounded concurrency so a cold CI runner
+// does not serialize registry, authentication, and trust-discovery latency.
 // Catalog entries often ship an untagged repository reference plus a separate
 // Version field. Untagged pulls resolve to :latest, which many packages never
 // publish — so ensure pins the catalog version onto the pull reference.
@@ -54,10 +74,7 @@ func ensureAccessibleAdversaries(
 		return nil
 	}
 
-	type chosen struct {
-		name, ref, version string
-	}
-	best := make(map[string]chosen, len(remote))
+	best := make(map[string]accessibleAdversary, len(remote))
 	order := make([]string, 0, len(remote))
 	for _, item := range remote {
 		ref := strings.TrimSpace(item.Reference)
@@ -83,10 +100,10 @@ func ensureAccessibleAdversaries(
 			if !preferCatalogVersion(version, prev.version) {
 				continue
 			}
-			best[key] = chosen{name: name, ref: ref, version: version}
+			best[key] = accessibleAdversary{name: name, ref: ref, version: version}
 			continue
 		}
-		best[key] = chosen{name: name, ref: ref, version: version}
+		best[key] = accessibleAdversary{name: name, ref: ref, version: version}
 		order = append(order, key)
 	}
 	if len(order) == 0 {
@@ -96,36 +113,57 @@ func ensureAccessibleAdversaries(
 	n := len(order)
 	fmt.Fprintf(stderr, "Ensuring %d accessible adversaries\n", n)
 
-	useCR := ensureWriterIsTTY(stderr)
+	detail := progress.Detail(stderr)
+	workers := min(n, accessiblePullConcurrency)
+	useCR := workers == 1 && !progress.InCI() && ensureWriterIsTTY(stderr)
 	ready, installed, failed := 0, 0, 0
+	jobs := make(chan ensureJob, n)
+	results := make(chan ensureResult, n)
 	for i, key := range order {
-		item := best[key]
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+		jobs <- ensureJob{index: i, item: best[key]}
+	}
+	close(jobs)
+	for range workers {
+		go func() {
+			for job := range jobs {
+				if err := ctx.Err(); err != nil {
+					results <- ensureResult{job: job, err: err}
+					continue
+				}
+				result, err := pullAdversary(ctx, job.item.ref, apiURL, profile, app, io.Discard)
+				results <- ensureResult{job: job, result: result, err: err}
+			}
+		}()
+	}
+	var contextErr error
+	render := func(completed ensureResult) {
+		i, item := completed.job.index, completed.job.item
 		label := displayAdversaryName(item.name, item.ref)
-		writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "checking…", false)
-
-		result, pullErr := pullAdversary(ctx, item.ref, apiURL, profile, app, io.Discard)
+		pullErr := completed.err
 		if pullErr != nil {
 			if isContextError(pullErr) {
-				if useCR {
-					fmt.Fprintln(stderr)
-				}
-				return pullErr
+				contextErr = pullErr
+				return
 			}
 			failed++
 			writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "failed: "+shortPullError(pullErr), true)
-			continue
+			return
 		}
-		if result.AlreadyPresent {
+		if completed.result.AlreadyPresent {
 			ready++
-			writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "up to date", true)
-			continue
+			writeEnsureStatus(detail, useCR, i+1, n, label, item.version, "up to date", true)
+			return
 		}
 		installed++
 		ready++
-		writeEnsureStatus(stderr, useCR, i+1, n, label, item.version, "installed", true)
+		writeEnsureStatus(detail, useCR, i+1, n, label, item.version, "installed", true)
+	}
+	renderEnsureResults(n, results, render)
+	if contextErr != nil {
+		if useCR {
+			fmt.Fprintln(stderr)
+		}
+		return contextErr
 	}
 
 	fmt.Fprintf(stderr, "%d ready", ready)
@@ -140,6 +178,21 @@ func ensureAccessibleAdversaries(
 		return &accessibleAdversarySyncError{Failed: failed, Total: n}
 	}
 	return nil
+}
+
+func renderEnsureResults(n int, results <-chan ensureResult, render func(ensureResult)) {
+	pending := make([]ensureResult, n)
+	completed := make([]bool, n)
+	next := 0
+	for range n {
+		result := <-results
+		pending[result.job.index] = result
+		completed[result.job.index] = true
+		for next < n && completed[next] {
+			render(pending[next])
+			next++
+		}
+	}
 }
 
 type accessibleAdversarySyncError struct {
