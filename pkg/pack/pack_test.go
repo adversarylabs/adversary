@@ -742,7 +742,7 @@ func TestBuildProjectRequiresLockfileToInstall(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "package.json", `{"name":"x","version":"1.0.0","scripts":{"build":"tsc"}}`)
 	// No node_modules and no lockfile: nothing reproducible to install from.
-	err := BuildProject(context.Background(), BuildOptions{Dir: dir, Builder: "local"})
+	err := BuildProject(context.Background(), BuildOptions{Dir: dir, Builder: "local", BuildStateDir: filepath.Join(t.TempDir(), "state")})
 	if err == nil || !strings.Contains(err.Error(), "node_modules was not found") {
 		t.Fatalf("error = %v", err)
 	}
