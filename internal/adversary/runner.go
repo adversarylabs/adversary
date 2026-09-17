@@ -500,7 +500,7 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		})
 		if brokerErr != nil {
 			cancelRun()
-			return fmt.Errorf("configure model broker: %w", brokerErr)
+			return fmt.Errorf("configure model broker (this adversary declares permissions.model: true, which requires a model API key): %w; provide a model key, or set permissions.model: false in the manifest if no rule uses the model broker", brokerErr)
 		}
 		repositoryContext, contextErr := repopolicy.Discover(repoPath, changedFiles)
 		if contextErr != nil {
