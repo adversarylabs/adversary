@@ -27,6 +27,9 @@ type Result struct {
 	CacheReused    bool
 	CaseCandidates []*cases.Case
 	Blocked        *dataroot.BlockedResult
+	// BlockedErr retains the original dependency error for retry decisions.
+	// Persist or display Blocked instead, which contains the sanitized message.
+	BlockedErr error `json:"-"`
 }
 
 // CollectOptions optional knobs for collect.
@@ -105,6 +108,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		client, err = clientFor(ctx)
 		if err != nil {
 			res.ExecutionClass = dataroot.ClassPartial
+			res.BlockedErr = err
 			res.Blocked = &dataroot.BlockedResult{
 				Dependency:     "github-token",
 				Operation:      "collect",
@@ -124,6 +128,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		}
 		res.ExecutionClass = dataroot.ClassPartial
 		res.Blocked = blockedFromErr("github-api", "collect-rate-gate", gateErr)
+		res.BlockedErr = gateErr
 		return res, nil
 	}
 
@@ -134,6 +139,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		}
 		res.ExecutionClass = dataroot.ClassPartial
 		res.Blocked = blockedFromErr("github-api", "collect-pr", err)
+		res.BlockedErr = err
 		return res, nil
 	}
 	reviewsJSON, err := client.RESTGetPaginated(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", owner, repo, pr))
@@ -142,6 +148,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 			return res, nil
 		}
 		res.Blocked = blockedFromErr("github-api", "collect-reviews", err)
+		res.BlockedErr = err
 		res.ExecutionClass = dataroot.ClassPartial
 		return res, nil
 	}
@@ -151,6 +158,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 			return res, nil
 		}
 		res.Blocked = blockedFromErr("github-api", "collect-comments", err)
+		res.BlockedErr = err
 		res.ExecutionClass = dataroot.ClassPartial
 		return res, nil
 	}
@@ -196,9 +204,11 @@ func defaultScope() *scope.Classifier {
 }
 
 func sanitize(s string) string {
-	s = strings.ReplaceAll(s, os.Getenv("GITHUB_TOKEN"), "***")
-	s = strings.ReplaceAll(s, os.Getenv("GH_TOKEN"), "***")
-	s = strings.ReplaceAll(s, os.Getenv("ADVERSARY_GITHUB_TOKEN"), "***")
+	for _, name := range []string{"GITHUB_TOKEN", "GH_TOKEN", "ADVERSARY_GITHUB_TOKEN"} {
+		if token := os.Getenv(name); token != "" {
+			s = strings.ReplaceAll(s, token, "***")
+		}
+	}
 	if len(s) > 500 {
 		s = s[:500] + "…"
 	}
