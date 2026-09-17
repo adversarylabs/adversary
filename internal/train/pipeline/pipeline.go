@@ -32,6 +32,7 @@ import (
 	"github.com/adversarylabs/adversary/internal/train/score"
 	"github.com/adversarylabs/adversary/internal/train/securefs"
 	"github.com/adversarylabs/adversary/internal/train/state"
+	"gopkg.in/yaml.v3"
 )
 
 // Options for the first-slice end-to-end path.
@@ -60,10 +61,13 @@ type Options struct {
 	MaxPRs int
 	// MaxTurns is how many PRs we may attempt while hunting (default 15).
 	// Each turn = try one not-yet-seen PR (collect + scope). For repo-catalog
-	// discovery it also bounds the rotating repository probe window, so an
-	// invocation may attempt fewer turns when that window has no candidates.
+	// discovery it also bounds the rotating repository probe window. Successive
+	// waves continue within that window until an exit condition is reached.
 	// Stops early when MaxPRs usable cases are collected.
 	MaxTurns int
+	// AllHistory processes every merged PR back to AuthorSince and ignores the
+	// normal target and turn limits. It is supported by repository discovery.
+	AllHistory bool
 	// Concurrency is how many PR collects may run in parallel (gh API). Default 4.
 	// Local package `adversary run` stays serialized via a per-path lock.
 	Concurrency int
@@ -75,6 +79,12 @@ type Options struct {
 	LocalPackageDirs []string
 	// LocalPackageRoot loads every child with docs/scope.md (workspace adversaries/).
 	LocalPackageRoot string
+	// CollectOnly routes and persists human review evidence without executing or
+	// mutating adversary packages. Private catalog training uses this mode.
+	CollectOnly bool
+	// CatalogTriageLLM performs provider-neutral semantic triage for plausible
+	// catalog comments. Live catalog training requires this callback.
+	CatalogTriageLLM func(string) ([]byte, error)
 	// TrainOnlyIDs limits train-eligible locals (empty = all locals).
 	TrainOnlyIDs []string
 	// TrainExcludeIDs removes locals from both training and routing.
@@ -204,6 +214,12 @@ func Run(opts Options) (*Result, error) {
 		if maxTurns <= 0 {
 			maxTurns = 15
 		}
+		if opts.AllHistory {
+			// Date-bounded exhaustive mode uses source exhaustion as its stop
+			// condition rather than candidate or attempt counts.
+			unlimited := int(^uint(0) >> 1)
+			targetPRs, maxTurns = unlimited, unlimited
+		}
 
 		// Build the set of repos to hunt across (config sources first).
 		// Author-reviews mode does not need a catalog.
@@ -240,7 +256,11 @@ func Run(opts Options) (*Result, error) {
 		var siblingPkgs []adversaries.Package
 		var loadErr error
 		if opts.LocalPackageRoot != "" {
-			siblingPkgs, loadErr = adversaries.DiscoverRoot(opts.LocalPackageRoot)
+			if opts.CollectOnly {
+				siblingPkgs, loadErr = adversaries.DiscoverCatalogRoot(opts.LocalPackageRoot)
+			} else {
+				siblingPkgs, loadErr = adversaries.DiscoverRoot(opts.LocalPackageRoot)
+			}
 		} else if len(opts.LocalPackageDirs) > 0 {
 			for _, d := range opts.LocalPackageDirs {
 				pkg, err := adversaries.DiscoverRoot(d)
@@ -326,7 +346,12 @@ func Run(opts Options) (*Result, error) {
 			}
 			opts.targetAdversaryOnly = len(siblingPkgs) == 1
 			cands := routerCandidates(routingPkgs)
-			commentRouter = &scope.Router{Candidates: cands, UseLLM: os.Getenv("OPENAI_API_KEY") != ""}
+			commentRouter = &scope.Router{
+				Candidates:    cands,
+				UseLLM:        opts.CatalogTriageLLM != nil || os.Getenv("OPENAI_API_KEY") != "",
+				CatalogTriage: opts.CollectOnly,
+				CallLLM:       opts.CatalogTriageLLM,
+			}
 			fmt.Fprintf(os.Stderr, "Loaded %d adversaries for comment routing: %v\n", len(routingPkgs), packageIDs(routingPkgs))
 			fmt.Fprintf(os.Stderr, "Training %d adversaries this run: %v\n", len(siblingPkgs), packageIDs(siblingPkgs))
 			// Always expand each local package's adversary.yaml uses for product
@@ -357,7 +382,11 @@ func Run(opts Options) (*Result, error) {
 		onKeep := func(kept []*cases.Case) int {
 			added := 0
 			for _, c := range kept {
-				n, err := results.WriteKeptCase(opts.DataRoot, runID, c)
+				writeCase := results.WriteKeptCase
+				if opts.CollectOnly {
+					writeCase = results.WriteCatalogCase
+				}
+				n, err := writeCase(opts.DataRoot, runID, c)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "warning: results persist: %v\n", err)
 					continue
@@ -371,7 +400,13 @@ func Run(opts Options) (*Result, error) {
 		}
 
 		if opts.ResetDiscovery {
-			removed, err := results.ResetDiscovery(opts.DataRoot)
+			var removed int
+			var err error
+			if strings.TrimSpace(opts.DiscoveryNamespace) != "" {
+				removed, err = results.ResetDiscoveryTarget(opts.DataRoot, opts.DiscoveryNamespace)
+			} else {
+				removed, err = results.ResetDiscovery(opts.DataRoot)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("reset discovery state: %w", err)
 			}
@@ -390,7 +425,7 @@ func Run(opts Options) (*Result, error) {
 		rateLimited := hunt.interrupted != nil && collect.IsRateLimit(hunt.interrupted)
 		if hunt.interrupted != nil && !rateLimited {
 			// Ctrl+C / hard stop — gold already in SQLite.
-			out.Message = fmt.Sprintf("train interrupted during hunt (%d result row(s) saved)\n  next: adversary train results ls", out.ResultsAdded)
+			out.Message = fmt.Sprintf("train interrupted during hunt (%d result row(s) saved)\n  next: %s", out.ResultsAdded, reviewResultsCommand(opts))
 			return out, hunt.interrupted
 		}
 		caseList = hunt.caseList
@@ -399,7 +434,7 @@ func Run(opts Options) (*Result, error) {
 			progress("Using last out-of-scope-only PR for the story (no in-scope gold this hunt)")
 		}
 		if rateLimited {
-			out.Message = fmt.Sprintf("GitHub rate limit during hunt (%d result row(s) saved)\n  wait for quota reset; use --concurrency 1 or 2\n  next: adversary train results ls", out.ResultsAdded)
+			out.Message = fmt.Sprintf("GitHub rate limit during hunt (%d result row(s) saved)\n  wait for quota reset; use --concurrency 1 or 2\n  next: %s", out.ResultsAdded, reviewResultsCommand(opts))
 			if len(caseList) > 0 {
 				progress("rate limited — grading %d kept case(s) already collected (no more hunting)", len(caseList))
 			}
@@ -443,11 +478,11 @@ func Run(opts Options) (*Result, error) {
 			out.ExitCode = dataroot.ExitBlocked
 			out.Message = out.Blocked.NextAction + "\n" + out.Blocked.SanitizedError
 			if out.ResultsAdded > 0 {
-				out.Message += fmt.Sprintf("\n%d result row(s) already in results.db — adversary train results ls\n", out.ResultsAdded)
+				out.Message += fmt.Sprintf("\n%d result row(s) already in results.db — %s\n", out.ResultsAdded, reviewResultsCommand(opts))
 			}
 			return out, nil
 		}
-		rcpt.Notes = fmt.Sprintf("hunt turns=%d in_scope_prs=%d target_prs=%d max_turns=%d concurrency=%d repos=%d; %s",
+		rcpt.Notes = fmt.Sprintf("hunt turns=%d kept_prs=%d target_prs=%d max_turns=%d concurrency=%d repos=%d; %s",
 			hunt.turnsUsed, hunt.prsWithInScope, targetPRs, maxTurns, normalizeConcurrency(opts.Concurrency), len(catalogRepos), strings.Join(huntLog, " | "))
 	}
 
@@ -470,6 +505,19 @@ func Run(opts Options) (*Result, error) {
 		_, _ = receipt.Save(opts.DataRoot, rcpt)
 		out.ExitCode = dataroot.ExitFailed
 		out.Message = "no usable cases after reconstruction"
+		return out, nil
+	}
+	if opts.CollectOnly {
+		for _, c := range usable {
+			if _, err := results.WriteCatalogCase(opts.DataRoot, runID, c); err != nil {
+				return nil, fmt.Errorf("persist catalog training result: %w", err)
+			}
+		}
+		refreshResultsAdded(out, opts.DataRoot, 0)
+		rcpt.Finish("success")
+		_, _ = receipt.Save(opts.DataRoot, rcpt)
+		out.ExitCode = dataroot.ExitSuccess
+		out.Message = fmt.Sprintf("%d catalog training result row(s) ready for review", out.ResultsAdded)
 		return out, nil
 	}
 
@@ -505,7 +553,7 @@ func Run(opts Options) (*Result, error) {
 			_, _ = receipt.Save(opts.DataRoot, rcpt)
 			out.ExitCode = 130
 			out.Failures = allFailures
-			out.Message = fmt.Sprintf("train interrupted during grade (%d result row(s) saved)\n  next: adversary train results ls", out.ResultsAdded)
+			out.Message = fmt.Sprintf("train interrupted during grade (%d result row(s) saved)\n  next: %s", out.ResultsAdded, reviewResultsCommand(opts))
 			return out, fmt.Errorf("train interrupted: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Grading case %d/%d: %s\n", i+1, len(usable), c.ID)
@@ -932,6 +980,13 @@ func Run(opts Options) (*Result, error) {
 	return out, nil
 }
 
+func reviewResultsCommand(opts Options) string {
+	if opts.CollectOnly {
+		return "adversary catalog train review"
+	}
+	return "the package-training results viewer"
+}
+
 func collectChangedFileEvidence(ctx context.Context, runtimes []caseRuntime) map[string]map[string]string {
 	out := map[string]map[string]string{}
 	for _, rt := range runtimes {
@@ -1156,11 +1211,58 @@ func routerCandidates(pkgs []adversaries.Package) []scope.Candidate {
 			ID:            pkg.ID,
 			AdversaryName: pkg.ID,
 			Mission:       pkg.ScopeMarkdown,
+			LearnedRules:  learnedRuleSummaries(pkg.Dir),
 			Languages:     pkg.Languages,
 			FileGlobs:     pkg.FileGlobs,
 		})
 	}
 	return candidates
+}
+
+func learnedRuleSummaries(packageDir string) string {
+	paths, err := filepath.Glob(filepath.Join(packageDir, "rules", "*", "rule.yaml"))
+	if err != nil || len(paths) == 0 {
+		return ""
+	}
+	sort.Strings(paths)
+	type learnedRuleEvidence struct {
+		Path     string `json:"path"`
+		ID       string `json:"id"`
+		Summary  string `json:"summary"`
+		Guidance string `json:"guidance"`
+	}
+	var summaries []learnedRuleEvidence
+	total := 0
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(packageDir, path)
+		if err != nil {
+			continue
+		}
+		var rule struct {
+			ID       string `yaml:"id"`
+			Summary  string `yaml:"summary"`
+			Guidance string `yaml:"guidance"`
+		}
+		if yaml.Unmarshal(raw, &rule) != nil {
+			continue
+		}
+		item := learnedRuleEvidence{
+			Path: filepath.ToSlash(rel), ID: truncate(rule.ID, 200),
+			Summary: truncate(rule.Summary, 800), Guidance: truncate(rule.Guidance, 2_000),
+		}
+		encoded, _ := json.Marshal(item)
+		if total+len(encoded) > 8_000 {
+			break
+		}
+		total += len(encoded)
+		summaries = append(summaries, item)
+	}
+	encoded, _ := json.Marshal(summaries)
+	return string(encoded)
 }
 
 func gradeOwners(c *cases.Case, primaryID string) map[string][]cases.ExpectedConcern {
@@ -1226,7 +1328,7 @@ func loadPriorMissEvidence(stateRoot string) []report.MissEvidence {
 }
 
 func eligiblePriorMiss(row results.Result) bool {
-	if row.Kind != results.KindMiss || row.Status == results.StatusDismissed || strings.TrimSpace(row.PRURL) == "" {
+	if row.Kind != results.KindMiss || row.Status == results.StatusDismissed || row.Status == results.StatusCovered || strings.TrimSpace(row.PRURL) == "" {
 		return false
 	}
 	// Legacy inboxes may predate the collection-time conversation filter. Do

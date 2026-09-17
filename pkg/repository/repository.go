@@ -1057,31 +1057,17 @@ func (r Repository) replaceSource(kind string, source blobsource.Source) (retErr
 	cleanup = false
 	return nil
 }
+
+// Materialize resolves a verified immutable tree without retaining an execution
+// lease. Use the same shared-reader path as runtime leases so resolving another
+// consumer does not wait for an already-running review to finish.
 func (r Repository) Materialize(rec Record) (string, error) {
-	if err := r.init(); err != nil {
-		return "", err
-	}
-	lifecycleLock, err := publock.Acquire(r.Root, "repo-lifecycle")
+	lease, err := r.LeaseMaterialized(rec)
 	if err != nil {
 		return "", err
 	}
-	defer lifecycleLock.Close()
-	digestLock, err := publock.Acquire(r.Root, "repo-digest\x00"+rec.Digest)
-	if err != nil {
-		return "", err
-	}
-	defer digestLock.Close()
-	canonical, err := r.record(rec.Digest)
-	if err != nil {
-		return "", err
-	}
-	rec = canonical
-	lock, err := publock.Acquire(r.Root, "repo-materialize\x00"+rec.Digest)
-	if err != nil {
-		return "", err
-	}
-	defer lock.Close()
-	return r.materializeLocked(rec)
+	defer lease.Close()
+	return lease.Path, nil
 }
 
 type MaterializationLease struct {
@@ -1115,13 +1101,41 @@ func (r Repository) LeaseMaterialized(rec Record) (*MaterializationLease, error)
 	if err != nil {
 		return nil, err
 	}
-	lock, err := publock.Acquire(r.Root, "repo-materialize\x00"+rec.Digest)
+	lockKey := "repo-materialize\x00" + rec.Digest
+	lock, err := publock.AcquireShared(r.Root, lockKey)
 	if err != nil {
 		return nil, err
 	}
-	path, err := r.materializeLocked(canonical)
+	if v := r.Verify(canonical); len(v.Missing)+len(v.Corrupt) > 0 {
+		lock.Close()
+		return nil, fmt.Errorf("artifact content failed verification")
+	}
+	path := filepath.Join(r.Root, "materialized", key(canonical.Digest))
+	if root, openErr := os.OpenRoot(path); openErr == nil {
+		sealedErr := archiveutil.ValidateSealed(root)
+		root.Close()
+		if sealedErr == nil {
+			return &MaterializationLease{Path: path, lock: lock}, nil
+		}
+	}
+	// Creation or repair requires an exclusive lease. Lifecycle and digest
+	// locks remain held, preventing a competing writer or new lease during
+	// the transition; existing readers retain their shared leases.
+	lock.Close()
+	lock, err = publock.Acquire(r.Root, lockKey)
+	if err != nil {
+		return nil, err
+	}
+	path, err = r.materializeLocked(canonical)
 	if err != nil {
 		lock.Close()
+		return nil, err
+	}
+	// Reacquire shared while still holding lifecycle/digest locks. This also
+	// works on platforms without an atomic exclusive-to-shared downgrade.
+	lock.Close()
+	lock, err = publock.AcquireShared(r.Root, lockKey)
+	if err != nil {
 		return nil, err
 	}
 	return &MaterializationLease{Path: path, lock: lock}, nil

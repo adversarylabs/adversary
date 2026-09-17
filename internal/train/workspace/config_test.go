@@ -136,6 +136,26 @@ sources:
 	}
 }
 
+func TestAllHistoryRequiresDateBoundedRepoDiscovery(t *testing.T) {
+	cfg := Config{
+		Adversaries: AdversariesConfig{Path: "."},
+		Sources:     SourcesConfig{Discovery: "repos", Repos: []string{"acme/api"}, Since: "2025-09-12"},
+		Run:         RunConfig{AllHistory: true},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Sources.Since = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires sources.since") {
+		t.Fatalf("missing since err=%v", err)
+	}
+	cfg.Sources.Since = "2025-09-12"
+	cfg.Sources.Discovery = "github_events"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires sources.discovery: repos") {
+		t.Fatalf("discovery mode err=%v", err)
+	}
+}
+
 func TestAuthorReviewsRequiresAuthors(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, DefaultConfigName)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"os"
 	"strings"
 
@@ -15,22 +16,25 @@ const maxInlineComments = 50
 
 // PostOptions controls live GitHub review creation.
 type PostOptions struct {
-	Client   *githubapi.Client
-	Owner    string
-	Repo     string
-	Number   int
-	Submit   bool // submit as COMMENT after create
-	DryRun   bool
-	Progress func(string) // optional stderr messages
+	Client           *githubapi.Client
+	Owner            string
+	Repo             string
+	Number           int
+	Submit           bool // submit as COMMENT after create
+	DryRun           bool
+	ResolveAddressed bool
+	Progress         func(string) // optional stderr messages
 }
 
 // PostResult is returned after a successful create/submit.
 type PostResult struct {
-	ReviewID  string
-	ReviewURL string
-	State     string
-	Posted    int
-	BodyOnly  int
+	ReviewID       string
+	ReviewURL      string
+	State          string
+	Posted         int
+	BodyOnly       int
+	PostedComments []PlannedComment
+	Resolved       int
 }
 
 // Post creates a pending PR review (optionally submits as COMMENT).
@@ -44,7 +48,10 @@ func Post(ctx context.Context, plan CommentPlan, opts PostOptions) (*PostResult,
 	if opts.Owner == "" || opts.Repo == "" || opts.Number <= 0 {
 		return nil, &application.Error{Operation: "github-review", Kind: "usage", Err: fmt.Errorf("owner, repo, and pr number required")}
 	}
-	if len(plan.Comments) == 0 && strings.TrimSpace(plan.ReviewBody) == "" {
+	nothingToPost := len(plan.Comments) == 0 &&
+		strings.TrimSpace(plan.ReviewBody) == "" &&
+		strings.TrimSpace(plan.ReviewBasis) == ""
+	if nothingToPost && !opts.ResolveAddressed {
 		if opts.Progress != nil {
 			opts.Progress("GitHub review: nothing to post")
 		}
@@ -75,21 +82,37 @@ query($owner:String!,$name:String!,$number:Int!){
 	if prID == "" || headOID == "" {
 		return nil, &application.Error{Operation: "github-review", Kind: "network", Err: fmt.Errorf("pull request not found")}
 	}
-
-	// Fetch patches and place.
-	files, err := opts.Client.ListPullRequestFiles(ctx, opts.Owner, opts.Repo, opts.Number)
-	if err != nil {
-		return nil, mapGitHubErr("list pull request files", err)
+	if nothingToPost {
+		resolved, err := resolveAddressedThreads(ctx, plan, opts)
+		if err != nil {
+			return nil, err
+		}
+		if opts.Progress != nil {
+			opts.Progress(fmt.Sprintf("GitHub review: nothing to post; resolved %d addressed comment(s)", resolved))
+		}
+		return &PostResult{Resolved: resolved}, nil
 	}
-	ApplyPlacement(&plan, files, headOID)
+
+	// Body-only reviews do not need changed-file placement.
+	if len(plan.Comments) > 0 {
+		files, err := opts.Client.ListPullRequestFiles(ctx, opts.Owner, opts.Repo, opts.Number)
+		if err != nil {
+			return nil, mapGitHubErr("list pull request files", err)
+		}
+		ApplyPlacement(&plan, files, headOID)
+	}
 
 	// Cap inline threads.
 	var threads []map[string]any
 	var bodySections []string
+	if basis := strings.Join(strings.Fields(plan.ReviewBasis), " "); basis != "" {
+		bodySections = append(bodySections, "**"+escapeMarkdownText(basis)+"**")
+	}
 	if strings.TrimSpace(plan.ReviewBody) != "" {
 		bodySections = append(bodySections, strings.TrimSpace(plan.ReviewBody))
 	}
 	inline := 0
+	var postedComments []PlannedComment
 	for _, c := range plan.Comments {
 		if c.Placement == "unplaceable" {
 			continue
@@ -112,6 +135,7 @@ query($owner:String!,$name:String!,$number:Int!){
 				th["line"] = *c.Anchor.EndLine
 			}
 			threads = append(threads, th)
+			postedComments = append(postedComments, c)
 			inline++
 			continue
 		}
@@ -159,6 +183,7 @@ mutation($input:AddPullRequestReviewInput!){
 		// Fallback: body-only pending review if threads field rejected.
 		if strings.Contains(err.Error(), "threads") || strings.Contains(err.Error(), "Field") {
 			delete(input, "threads")
+			postedComments = nil
 			// Fold threads into body.
 			fallbackBody := reviewBodyContent
 			for _, th := range threads {
@@ -179,12 +204,14 @@ mutation($input:AddPullRequestReviewInput!){
 	}
 
 	res := &PostResult{
-		ReviewID:  mut.AddPullRequestReview.PullRequestReview.ID,
-		ReviewURL: mut.AddPullRequestReview.PullRequestReview.URL,
-		State:     mut.AddPullRequestReview.PullRequestReview.State,
-		Posted:    len(threads),
-		BodyOnly:  len(bodySections),
+		ReviewID:       mut.AddPullRequestReview.PullRequestReview.ID,
+		ReviewURL:      mut.AddPullRequestReview.PullRequestReview.URL,
+		State:          mut.AddPullRequestReview.PullRequestReview.State,
+		Posted:         len(threads),
+		BodyOnly:       len(bodySections),
+		PostedComments: postedComments,
 	}
+	res.Posted = len(postedComments)
 
 	if opts.Submit && res.ReviewID != "" {
 		var sub struct {
@@ -217,7 +244,35 @@ mutation($input:SubmitPullRequestReviewInput!){
 	if opts.Progress != nil && res.ReviewURL != "" {
 		opts.Progress("GitHub review: " + res.ReviewURL + " (" + res.State + ")")
 	}
+	if opts.ResolveAddressed {
+		resolved, err := resolveAddressedThreads(ctx, plan, opts)
+		if err != nil {
+			return res, err
+		}
+		res.Resolved = resolved
+		if opts.Progress != nil && resolved > 0 {
+			opts.Progress(fmt.Sprintf("GitHub review: resolved %d addressed comment(s)", resolved))
+		}
+	}
 	return res, nil
+}
+
+func escapeMarkdownText(value string) string {
+	value = html.EscapeString(value)
+	return strings.NewReplacer(
+		"\\", "\\\\",
+		"`", "\\`",
+		"*", "\\*",
+		"_", "\\_",
+		"{", "\\{",
+		"}", "\\}",
+		"[", "\\[",
+		"]", "\\]",
+		"(", "\\(",
+		")", "\\)",
+		"!", "\\!",
+		"|", "\\|",
+	).Replace(value)
 }
 
 func mapGitHubErr(op string, err error) error {

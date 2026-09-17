@@ -92,6 +92,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "scope": { "enum": ["repository", "change"] },
         "files": {
           "type": "array",
           "uniqueItems": true,

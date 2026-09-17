@@ -13,12 +13,12 @@ func TestProjectFindingsOnlyAndMinSeverity(t *testing.T) {
 	env := review.RunEnvelope{
 		ProtocolVersion: 1,
 		Result: review.ReviewResult{
-			Adversary:    review.ReviewAdversary{Name: "go-cli"},
+			Adversary:    review.ReviewAdversary{Name: "go/cli", Version: "1.2.3"},
 			Target:       review.ReviewTarget{},
 			Positives:    []review.Note{{Key: "p", Summary: "good"}},
 			Observations: []review.Note{{Key: "o", Summary: "obs"}},
 			Findings: []review.Finding{
-				{ID: "f-high", Title: "High issue", Category: "c", Severity: "high", Confidence: "high", Summary: "S high", Evidence: []review.Evidence{{File: "a.go", Line: &line}}, Recommendation: "fix"},
+				{ID: "f-high", RuleID: "cli/high", Title: "High issue", Category: "c", Severity: "high", Confidence: "high", Summary: "S high", Evidence: []review.Evidence{{File: "a.go", Line: &line}}, Recommendation: "fix"},
 				{ID: "f-low", Title: "Low issue", Category: "c", Severity: "low", Confidence: "high", Summary: "S low", Evidence: []review.Evidence{{File: "b.go", Line: &line}}},
 			},
 			Suppressed: review.Suppressed{},
@@ -27,7 +27,10 @@ func TestProjectFindingsOnlyAndMinSeverity(t *testing.T) {
 			},
 		},
 	}
-	plan := ProjectFindings([]NamedEnvelope{{Adversary: "go-cli", Envelope: env}}, ProjectOptions{MinSeverity: "medium"})
+	plan := ProjectFindings([]NamedEnvelope{{Adversary: "library/go/cli", Envelope: env}}, ProjectOptions{MinSeverity: "medium", HeadSHA: "abc123"})
+	if len(plan.ReviewedAdversaries) != 1 || plan.ReviewedAdversaries[0] != "library/go/cli" {
+		t.Fatalf("reviewed adversaries %#v", plan.ReviewedAdversaries)
+	}
 	if plan.Summary.FindingsSeen != 2 {
 		t.Fatalf("seen %d", plan.Summary.FindingsSeen)
 	}
@@ -43,8 +46,12 @@ func TestProjectFindingsOnlyAndMinSeverity(t *testing.T) {
 			t.Fatal(c)
 		}
 	}
-	if !strings.Contains(plan.Comments[0].Body, "adversary-review:v1") {
+	if !strings.Contains(plan.Comments[0].Body, "adversary-review:v2") {
 		t.Fatal(plan.Comments[0].Body)
+	}
+	marker, ok, err := ParseMarker(plan.Comments[0].Body)
+	if err != nil || !ok || marker.Package != "go/cli" || marker.PackageVersion != "1.2.3" || marker.RuleID != "cli/high" || marker.HeadSHA != "abc123" {
+		t.Fatalf("marker=%+v ok=%v err=%v", marker, ok, err)
 	}
 	raw, _ := json.Marshal(plan)
 	if strings.Contains(string(raw), "f-sup") {
@@ -85,6 +92,42 @@ func TestProjectFindingsCanOmitAggregateSummary(t *testing.T) {
 	}
 }
 
+func TestProjectFindingsCarriesReviewBasisWithoutTurningItIntoAComment(t *testing.T) {
+	line := 3
+	env := review.RunEnvelope{Result: review.ReviewResult{
+		Adversary: review.ReviewAdversary{Name: "code-review"},
+		Observations: []review.Note{{
+			Key: "code-review.inferred-outcome", Summary: "Reviewed as: permit repository-scoped pulls.",
+			Metadata: json.RawMessage(`{"role":"review_basis","confidence":"high"}`),
+		}},
+		Findings: []review.Finding{{
+			ID: "f", Title: "Finding", Severity: "high", Confidence: "high",
+			Summary: "inline detail", Evidence: []review.Evidence{{File: "a.go", Line: &line}},
+		}},
+	}}
+	plan := ProjectFindings([]NamedEnvelope{{Adversary: "review/code", Envelope: env}}, ProjectOptions{})
+	if plan.ReviewBasis != "Reviewed as: permit repository-scoped pulls." {
+		t.Fatalf("review basis = %q", plan.ReviewBasis)
+	}
+	if len(plan.Comments) != 1 {
+		t.Fatalf("comments = %#v", plan.Comments)
+	}
+}
+
+func TestProjectFindingsOmitsReviewBasisWhenSummaryDisabled(t *testing.T) {
+	env := review.RunEnvelope{Result: review.ReviewResult{
+		Adversary: review.ReviewAdversary{Name: "code-review"},
+		Observations: []review.Note{{
+			Key: "code-review.inferred-outcome", Summary: "Reviewed as: permit repository-scoped pulls.",
+			Metadata: json.RawMessage(`{"role":"review_basis","confidence":"high"}`),
+		}},
+	}}
+	plan := ProjectFindings([]NamedEnvelope{{Adversary: "review/code", Envelope: env}}, ProjectOptions{OmitSummary: true})
+	if plan.ReviewBasis != "" {
+		t.Fatalf("review basis = %q", plan.ReviewBasis)
+	}
+}
+
 func TestProjectFindingsDoesNotSummarizeCleanAdversaries(t *testing.T) {
 	env := review.RunEnvelope{Result: review.ReviewResult{
 		Adversary:  review.ReviewAdversary{Name: "clean"},
@@ -92,6 +135,9 @@ func TestProjectFindingsDoesNotSummarizeCleanAdversaries(t *testing.T) {
 		Opinion:    &review.Opinion{Summary: "I would merge this as-is."},
 	}}
 	plan := ProjectFindings([]NamedEnvelope{{Adversary: "clean", Envelope: env}}, ProjectOptions{})
+	if len(plan.ReviewedAdversaries) != 1 || plan.ReviewedAdversaries[0] != "clean" {
+		t.Fatalf("reviewed adversaries %#v", plan.ReviewedAdversaries)
+	}
 	if len(plan.Comments) != 0 || plan.ReviewBody != "" {
 		t.Fatalf("clean result created review content: %#v", plan)
 	}

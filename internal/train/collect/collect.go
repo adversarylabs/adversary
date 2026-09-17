@@ -27,6 +27,9 @@ type Result struct {
 	CacheReused    bool
 	CaseCandidates []*cases.Case
 	Blocked        *dataroot.BlockedResult
+	// BlockedErr retains the original dependency error for retry decisions.
+	// Persist or display Blocked instead, which contains the sanitized message.
+	BlockedErr error `json:"-"`
 }
 
 // CollectOptions optional knobs for collect.
@@ -50,6 +53,7 @@ type rawReviewComment struct {
 	Body                  string         `json:"body"`
 	Path                  string         `json:"path"`
 	Line                  int            `json:"line"`
+	OriginalLine          int            `json:"original_line"`
 	OriginalCommitID      string         `json:"original_commit_id"`
 	CommitID              string         `json:"commit_id"`
 	CreatedAt             string         `json:"created_at"`
@@ -104,6 +108,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		client, err = clientFor(ctx)
 		if err != nil {
 			res.ExecutionClass = dataroot.ClassPartial
+			res.BlockedErr = err
 			res.Blocked = &dataroot.BlockedResult{
 				Dependency:     "github-token",
 				Operation:      "collect",
@@ -111,7 +116,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 				SanitizedError: err.Error(),
 				StagesNotRun:   []string{"collect"},
 				RetrySafe:      true,
-				NextAction:     "set ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN",
+				NextAction:     "run gh auth login or set ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN",
 			}
 			return res, nil
 		}
@@ -123,6 +128,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		}
 		res.ExecutionClass = dataroot.ClassPartial
 		res.Blocked = blockedFromErr("github-api", "collect-rate-gate", gateErr)
+		res.BlockedErr = gateErr
 		return res, nil
 	}
 
@@ -133,6 +139,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 		}
 		res.ExecutionClass = dataroot.ClassPartial
 		res.Blocked = blockedFromErr("github-api", "collect-pr", err)
+		res.BlockedErr = err
 		return res, nil
 	}
 	reviewsJSON, err := client.RESTGetPaginated(ctx, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", owner, repo, pr))
@@ -141,6 +148,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 			return res, nil
 		}
 		res.Blocked = blockedFromErr("github-api", "collect-reviews", err)
+		res.BlockedErr = err
 		res.ExecutionClass = dataroot.ClassPartial
 		return res, nil
 	}
@@ -150,6 +158,7 @@ func CollectPRWithOptions(dataRoot, owner, repo string, pr int, opts CollectOpti
 			return res, nil
 		}
 		res.Blocked = blockedFromErr("github-api", "collect-comments", err)
+		res.BlockedErr = err
 		res.ExecutionClass = dataroot.ClassPartial
 		return res, nil
 	}
@@ -195,9 +204,11 @@ func defaultScope() *scope.Classifier {
 }
 
 func sanitize(s string) string {
-	s = strings.ReplaceAll(s, os.Getenv("GITHUB_TOKEN"), "***")
-	s = strings.ReplaceAll(s, os.Getenv("GH_TOKEN"), "***")
-	s = strings.ReplaceAll(s, os.Getenv("ADVERSARY_GITHUB_TOKEN"), "***")
+	for _, name := range []string{"GITHUB_TOKEN", "GH_TOKEN", "ADVERSARY_GITHUB_TOKEN"} {
+		if token := os.Getenv(name); token != "" {
+			s = strings.ReplaceAll(s, token, "***")
+		}
+	}
 	if len(s) > 500 {
 		s = s[:500] + "…"
 	}
@@ -210,7 +221,7 @@ func blockedFromErr(dep, op string, err error) *dataroot.BlockedResult {
 	next := "check GitHub token and repository access (ADVERSARY_GITHUB_TOKEN / GITHUB_TOKEN / GH_TOKEN)"
 	if IsRateLimit(err) {
 		class = "rate-limit"
-		next = "wait for GitHub rate limit reset, lower run.concurrency (e.g. 1–2), then train run again; partial results stay in results.db"
+		next = "wait for GitHub rate limit reset, lower run.concurrency (e.g. 1–2), then rerun the training command; partial results stay in results.db"
 	} else if strings.Contains(msg, "401") || strings.Contains(msg, "403") || strings.Contains(msg, "auth") {
 		class = "auth"
 	} else if strings.Contains(msg, "404") {
@@ -381,7 +392,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 					Author:           c.User.Login,
 					Body:             c.Body,
 					Path:             c.Path,
-					Line:             c.Line,
+					Line:             reviewCommentLine(c),
 					OriginalCommitID: oc,
 					CreatedAt:        created,
 					// Manual approval path: not auto-gold
@@ -427,6 +438,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			},
 			PullRequest: cases.PullRequest{
 				Number:         pr,
+				Author:         prObj.User.Login,
 				BaseSHA:        prObj.Base.SHA,
 				InitialHeadSHA: sha,
 				FinalHeadSHA:   prObj.Head.SHA,
@@ -491,7 +503,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			created, _ := time.Parse(time.RFC3339, c.CreatedAt)
 			allComments = append(allComments, cases.Comment{
 				ID: c.ID, Kind: "review-comment", URL: githubCommentURL(prObj.HTMLURL, c.HTMLURL, "discussion_r", c.ID), Author: c.User.Login, Body: c.Body,
-				Path: c.Path, Line: c.Line, OriginalCommitID: oc, CreatedAt: created,
+				Path: c.Path, Line: reviewCommentLine(c), OriginalCommitID: oc, CreatedAt: created,
 			})
 		}
 		sha, source, excl := cases.ReconstructReviewedSHA(cases.ReviewSignal{OriginalCommitIDs: origIDs, PRHeadSHA: prObj.Head.SHA})
@@ -501,7 +513,7 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 			SchemaVersion: 4,
 			ID:            cases.CaseID(repoSlug, pr, 1),
 			Repository:    cases.Repository{Owner: owner, Name: repo, URL: prObj.HTMLURL},
-			PullRequest:   cases.PullRequest{Number: pr, BaseSHA: prObj.Base.SHA, InitialHeadSHA: sha, FinalHeadSHA: prObj.Head.SHA, Title: prObj.Title},
+			PullRequest:   cases.PullRequest{Number: pr, Author: prObj.User.Login, BaseSHA: prObj.Base.SHA, InitialHeadSHA: sha, FinalHeadSHA: prObj.Head.SHA, Title: prObj.Title},
 			ReviewEvent:   cases.ReviewEvent{RoundIndex: 1, Kind: "inline-comment-cluster", ReviewedSHA: sha, ReviewedSHASource: source},
 			Comments:      allComments,
 			Labels:        cases.Labels{ExpectedConcerns: labels},
@@ -510,6 +522,13 @@ func BuildCasesFromCacheFiltered(owner, repo string, pr int, cacheDir string, cl
 		})
 	}
 	return out, nil
+}
+
+func reviewCommentLine(comment rawReviewComment) int {
+	if comment.Line > 0 {
+		return comment.Line
+	}
+	return comment.OriginalLine
 }
 
 // AuthorFilter decides if a comment author may count as gold (train config).
@@ -573,8 +592,12 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 		}
 		body = scope.NormalizeReviewComment(body)
 		labels[i].Summary = body
+		labels[i].CommentAuthor = author
 		if matched != nil {
 			ctx := commentContext[commentKey{kind: matched.Kind, id: matched.ID}]
+			labels[i].CommentURL = matched.URL
+			labels[i].Line = matched.Line
+			labels[i].DiffHunk = ctx.diffHunk
 			labels[i].ThreadContext = append([]cases.ReviewThreadContext(nil), ctx.threadContext...)
 			labels[i].ThreadDisposition = ctx.threadDisposition
 			labels[i].ThreadDispositionURL = ctx.threadDispositionURL
@@ -657,6 +680,7 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 			)
 			labels[i].OwnerAdversary = route.OwnerID
 			labels[i].ScopeReason = route.Reason
+			labels[i].ProposedRule = strings.TrimSpace(route.GeneralizedRule)
 			labels[i].ScopeMethod = route.Method
 			// Broad generalists keep short comments (LGTM, "why?", etc.); specialists
 			// still require a minimal summary so empty stubs are not gold.
@@ -669,7 +693,10 @@ func applyScopeFilteredWithContext(labels []cases.ExpectedConcern, comments []ca
 				labels[i].Approved = true
 				labels[i].Confidence = "medium"
 			} else {
-				labels[i].Scope = string(scope.OutOfScope)
+				labels[i].Scope = string(route.Decision)
+				if labels[i].Scope == "" || route.Decision == scope.InScope {
+					labels[i].Scope = string(scope.OutOfScope)
+				}
 				labels[i].Approved = false
 				if labels[i].ScopeReason == "" {
 					labels[i].ScopeReason = "no adversary claimed this comment"

@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/adversarylabs/adversary/internal/modelreview"
+	"github.com/adversarylabs/adversary/internal/repopolicy"
 	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/pack"
 	"github.com/adversarylabs/adversary/pkg/repoindex"
 	"github.com/adversarylabs/adversary/pkg/repository"
@@ -26,6 +28,8 @@ type RunOptions struct {
 	BaseRef                  string
 	HeadRef                  string
 	Builder                  string
+	ModelProvider            string
+	Model                    string
 	Force                    bool
 	Format                   string
 	KeepTemp                 bool
@@ -39,15 +43,24 @@ type RunOptions struct {
 	RunTimeout               time.Duration
 	BuildTimeout             time.Duration
 	ReviewContext            *detection.Context
+	ReviewAssignment         *detection.ReviewAssignment
+	OutcomeContext           *outcomecontext.Context
 	ReferenceIdentity        string
-	// RepoIndexMode controls local repo index ensure (auto|off|force). Empty = auto.
+	// RepoIndexMode controls local repo index ensure. Empty retains the runtime's
+	// compatibility default; the CLI product default is graph.
 	RepoIndexMode string
 	// OnEnvelope is invoked with the decoded protocol envelope after suppression
 	// stripping and before/after rendering. Callers use it for post-run projection.
 	OnEnvelope func(review.RunEnvelope)
 }
 
-const maxRunOutputBytes int64 = 16 << 20
+const (
+	maxRunOutputBytes int64 = 16 << 20
+	// Protocol files contain repository context, never provider credentials. They
+	// live below an os.MkdirTemp directory (0700), while this mode lets an isolated
+	// runtime UID read the input and write the output mounted into its sandbox.
+	runtimeProtocolFileMode fs.FileMode = 0o644
+)
 
 type FindingsError struct{ Count int }
 
@@ -100,7 +113,7 @@ type Runner struct {
 	Now                     func() time.Time
 	Files                   RuntimeFiles
 	BuildProject            func(context.Context, pack.BuildOptions) error
-	ModelBrokerFactory      func() (modelreview.Broker, error)
+	ModelBrokerFactory      func(modelreview.Config) (modelreview.Broker, error)
 	BuildStateDir           string
 	Shell                   func() ([]string, error)
 	Repository              *repository.Repository
@@ -258,6 +271,18 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		PrintVerboseLoad(stderr, opts.AdversaryRef, resolved)
 	}
 
+	scopedByManifest := false
+	if opts.ReviewContext != nil && resolved.Manifest != nil && !opts.Force && !opts.AllFiles {
+		scoped, declared := ScopeReviewContext(*resolved.Manifest, *opts.ReviewContext)
+		if declared {
+			opts.ReviewContext = &scoped
+			scopedByManifest = true
+			if opts.Verbose {
+				fmt.Fprintf(stderr, "Review route: %d relevant changed files\n", len(scoped.ChangedFiles))
+			}
+		}
+	}
+
 	baseRef, headRef := opts.BaseRef, opts.HeadRef
 	var changedFiles []string
 	if opts.ReviewContext != nil {
@@ -279,15 +304,19 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		}
 	}
 
-	if resolved.Manifest != nil && len(resolved.Manifest.Triggers.FilesChanged) > 0 && (opts.ReviewContext != nil || opts.BaseRef != "" || opts.HeadRef != "") {
-		if !ShouldRunForChangedFiles(resolved.Manifest.Triggers.FilesChanged, changedFiles, opts.Force || opts.AllFiles) {
+	if resolved.Manifest != nil && (scopedByManifest || len(resolved.Manifest.Triggers.FilesChanged) > 0) && (opts.ReviewContext != nil || opts.BaseRef != "" || opts.HeadRef != "") {
+		if len(changedFiles) == 0 || (!scopedByManifest && !ShouldRunForChangedFiles(resolved.Manifest.Triggers.FilesChanged, changedFiles, opts.Force || opts.AllFiles)) {
+			skipSummary := "No changed files matched triggers.files_changed."
+			if scopedByManifest {
+				skipSummary = "No changed files matched this adversary's review scope."
+			}
 			skipped := review.RunEnvelope{
 				ProtocolVersion: review.ProtocolVersion,
 				Result: review.ReviewResult{
 					Adversary:    review.ReviewAdversary{Name: resolved.Name},
 					Target:       review.ReviewTarget{Repository: repoPath},
 					Positives:    []review.Note{},
-					Observations: []review.Note{{Key: "run-skipped", Summary: "No changed files matched triggers.files_changed."}},
+					Observations: []review.Note{{Key: "run-skipped", Summary: skipSummary}},
 					Findings:     []review.Finding{},
 					Suppressed:   review.Suppressed{},
 				},
@@ -374,13 +403,25 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 	input := NewInput(baseRef, headRef, changedFiles, opts.AllFiles)
 	if executionReviewContext != nil {
 		input = NewInputFromReviewContext(*executionReviewContext, opts.AllFiles)
+		if opts.ReviewAssignment != nil && len(opts.ReviewAssignment.Regions) > 0 {
+			input = input.WithChangedRanges(opts.ReviewAssignment.Regions)
+		} else if regionResolver, ok := git.(ChangeRegionResolver); ok && opts.ReviewContext != nil {
+			regions, regionErr := regionResolver.ChangedRegions(ctx, repoPath, *opts.ReviewContext)
+			if regionErr != nil {
+				if opts.Verbose {
+					fmt.Fprintf(stderr, "warning: changed-line resolution failed; runtime input will contain file-level scope only: %v\n", regionErr)
+				}
+			} else {
+				input = input.WithChangedRanges(regions)
+			}
+		}
 	}
 	inputData, err := MarshalInput(input)
 	if err != nil {
 		return err
 	}
 	inputPath := filepath.Join(runDir, "input.json")
-	if err := files.WriteFile(inputPath, inputData, 0644); err != nil {
+	if err := files.WriteFile(inputPath, inputData, runtimeProtocolFileMode); err != nil {
 		return err
 	}
 	var reviewContextPath string
@@ -390,14 +431,28 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			return fmt.Errorf("marshal resolved review context: %w", err)
 		}
 		reviewContextPath = filepath.Join(runDir, "change-context.json")
-		if err := files.WriteFile(reviewContextPath, contextData, 0644); err != nil {
+		if err := files.WriteFile(reviewContextPath, contextData, runtimeProtocolFileMode); err != nil {
 			return err
 		}
 		config.Env["ADVERSARY_CHANGE_CONTEXT"] = reviewContextPath
 	}
+	if opts.OutcomeContext != nil {
+		if err := opts.OutcomeContext.Validate(); err != nil {
+			return &ProtocolError{Err: fmt.Errorf("validate outcome context: %w", err)}
+		}
+		contextData, err := json.MarshalIndent(opts.OutcomeContext, "", "  ")
+		if err != nil {
+			return &ProtocolError{Err: fmt.Errorf("marshal outcome context: %w", err)}
+		}
+		outcomeContextPath := filepath.Join(runDir, "outcome-context.json")
+		if err := files.WriteFile(outcomeContextPath, contextData, runtimeProtocolFileMode); err != nil {
+			return &ExecutionError{Err: fmt.Errorf("write outcome context: %w", err)}
+		}
+		config.Env["ADVERSARY_OUTCOME_CONTEXT"] = outcomeContextPath
+	}
 
 	outputPath := filepath.Join(runDir, "output.json")
-	if err := files.WriteFile(outputPath, nil, 0644); err != nil {
+	if err := files.WriteFile(outputPath, nil, runtimeProtocolFileMode); err != nil {
 		return err
 	}
 	if resolved.LocalDir {
@@ -439,16 +494,37 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 			cancelRun()
 			return fmt.Errorf("model broker dependency is required by this adversary")
 		}
-		broker, brokerErr := r.ModelBrokerFactory()
+		broker, brokerErr := r.ModelBrokerFactory(modelreview.Config{
+			Provider: opts.ModelProvider,
+			Model:    opts.Model,
+		})
 		if brokerErr != nil {
 			cancelRun()
 			return fmt.Errorf("configure model broker: %w", brokerErr)
+		}
+		repositoryContext, contextErr := repopolicy.Discover(repoPath, changedFiles)
+		if contextErr != nil {
+			cancelRun()
+			return fmt.Errorf("discover repository conventions: %w", contextErr)
+		}
+		broker.RepositoryContext, contextErr = json.Marshal(repositoryContext)
+		if contextErr != nil {
+			cancelRun()
+			return fmt.Errorf("encode repository conventions: %w", contextErr)
+		}
+		if assignment := reviewAssignmentForFiles(opts.ReviewAssignment, changedFiles); assignment != nil {
+			broker.ReviewAssignment, contextErr = json.Marshal(assignment)
+			if contextErr != nil {
+				cancelRun()
+				return fmt.Errorf("encode review assignment: %w", contextErr)
+			}
 		}
 		modelSession, brokerErr = broker.Start(runCtx)
 		if brokerErr != nil {
 			cancelRun()
 			return fmt.Errorf("start model broker: %w", brokerErr)
 		}
+		// Start returns a closeable model-broker session, not a tracing span.
 		defer modelSession.Close()
 		config.Env["ADVERSARY_MODEL_ENDPOINT"] = modelSession.Endpoint
 		config.Env["ADVERSARY_MODEL_TOKEN"] = modelSession.Token
@@ -526,6 +602,26 @@ func (r Runner) Run(ctx context.Context, opts RunOptions) error {
 		return &FindingsError{Count: len(envelope.Result.Findings)}
 	}
 	return nil
+}
+
+func reviewAssignmentForFiles(assignment *detection.ReviewAssignment, files []string) *detection.ReviewAssignment {
+	if assignment == nil {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		allowed[file] = struct{}{}
+	}
+	filtered := &detection.ReviewAssignment{ID: assignment.ID, Regions: []detection.ReviewRegion{}}
+	for _, region := range assignment.Regions {
+		if _, ok := allowed[region.Path]; ok {
+			filtered.Regions = append(filtered.Regions, region)
+		}
+	}
+	if len(filtered.Regions) == 0 {
+		return nil
+	}
+	return filtered
 }
 
 func executorRepositoryRoot(backend ExecutorBackend, hostPath string) string {
@@ -682,6 +778,7 @@ func NewRunConfig(resolved ResolvedAdversary, repoPath, runDir string, opts RunO
 		"ADVERSARY_INPUT":              inputPath,
 		"ADVERSARY_OUTPUT":             outputPath,
 		"ADVERSARY_CHANGE_CONTEXT":     "",
+		"ADVERSARY_OUTCOME_CONTEXT":    "",
 		"ADVERSARY_VERBOSE":            boolEnv(opts.Verbose),
 		"ADVERSARY_INCLUDE_SUPPRESSED": boolEnv(opts.IncludeSuppressed),
 	}
@@ -714,8 +811,10 @@ func (c RunConfig) RuntimeSpec() RuntimeSpec {
 		Env:            c.Env,
 		EnvironmentDeny: []string{
 			modelreview.OpenAIKeyEnv,
+			modelreview.CloudflareKeyEnv,
 			modelreview.AnthropicKeyEnv,
 			modelreview.FireworksKeyEnv,
+			modelreview.CamelKeyEnv,
 		},
 		Shell:       c.Options.Shell,
 		Publisher:   c.Resolved.Publisher,

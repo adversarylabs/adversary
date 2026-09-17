@@ -23,6 +23,8 @@ type WorkspaceResult struct {
 	Owner        string
 	Repo         string
 	Number       int
+	Title        string
+	Body         string
 }
 
 // PreparePRWorkspace resolves PR metadata and a local tree at the PR head.
@@ -65,6 +67,8 @@ func PreparePRWorkspace(
 	}
 	out.Owner, out.Repo = owner, repo
 	out.Number = number
+	out.Title = pr.Title
+	out.Body = pr.Body
 
 	if path == "" {
 		path = "."

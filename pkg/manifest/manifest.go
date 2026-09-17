@@ -58,6 +58,8 @@ type Triggers struct {
 // Entrypoint is optional and is executed only after publisher trust policy has
 // selected an appropriate executor.
 type Detection struct {
+	// Scope controls pre-download selection: repository (default) or change.
+	Scope           string   `yaml:"scope,omitempty" json:"scope,omitempty"`
 	Files           []string `yaml:"files,omitempty" json:"files,omitempty"`
 	RepositoryFiles []string `yaml:"repository_files,omitempty" json:"repository_files,omitempty"`
 	ChangeTypes     []string `yaml:"change_types,omitempty" json:"change_types,omitempty"`
@@ -180,6 +182,10 @@ func validatePresentFields(root *yaml.Node, m Manifest) error {
 			return errors.New("manifest runtime.version must not be empty when present")
 		}
 	}
+	detection := fieldNode(root, "detection")
+	if detection != nil && hasField(detection, "scope") && m.Detection.Scope == "" {
+		return errors.New("manifest detection.scope must not be empty when present")
+	}
 	findings := fieldNode(root, "findings")
 	if findings != nil && hasField(findings, "format") && m.Findings.Format == "" {
 		return errors.New("manifest findings.format must not be empty when present")
@@ -298,6 +304,9 @@ func (m Manifest) Validate() error {
 			}
 			seen[value] = struct{}{}
 		}
+	}
+	if m.Detection.Scope != "" && m.Detection.Scope != "repository" && m.Detection.Scope != "change" {
+		return fmt.Errorf("manifest detection.scope must be repository or change")
 	}
 	seenChangeTypes := make(map[string]struct{}, len(m.Detection.ChangeTypes))
 	for i, changeType := range m.Detection.ChangeTypes {

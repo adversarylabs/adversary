@@ -1,10 +1,115 @@
 package repoindex
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
+
+func TestV2GoSemanticOperationsAreTypedAndScoped(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/app\n\ngo 1.22\n")
+	write(t, root, "lazy.go", `package app
+import "sync"
+type Store interface{}
+func NewStore() (Store, error) { return nil, nil }
+var once sync.Once
+var store Store
+var initErr error
+type permanentError struct{}
+func (permanentError) Error() string { return "failed" }
+var concreteErr permanentError
+func load() (Store, error) {
+  once.Do(func() { store, initErr = NewStore() })
+  return store, initErr
+}
+func concreteFailure() error { return concreteErr }
+type fakeOnce struct{}
+func (fakeOnce) Do(fn func()) { fn() }
+func shadow(once fakeOnce) (Store, error) {
+  once.Do(func() { store, initErr = NewStore() })
+  return store, initErr
+}
+`)
+	fingerprint, err := V2Fingerprint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "graph")
+	meta, err := BuildV2(root, dir, fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.SemanticUnitCount < 4 {
+		t.Fatalf("semantic units=%d", meta.SemanticUnitCount)
+	}
+	graph, err := OpenV2(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer graph.Close()
+	read := func(name string) semanticUnitData {
+		var raw string
+		if err := graph.db.QueryRow("SELECT data FROM semantic_units WHERE name=?", name).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var data semanticUnitData
+		if err := json.Unmarshal([]byte(raw), &data); err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	load := read("load")
+	var guard, constructor, assignment semanticOperation
+	for _, operation := range load.Operations {
+		if operation.Kind == "call" && operation.Method == "Do" {
+			guard = operation
+		}
+		if operation.Kind == "call" && operation.Name == "NewStore" {
+			constructor = operation
+		}
+		if operation.Kind == "assignment" {
+			assignment = operation
+		}
+	}
+	if guard.ReceiverType != "sync.Once" {
+		t.Fatalf("guard=%#v", guard)
+	}
+	if guard.Ancestors == nil {
+		t.Fatalf("top-level operation ancestors must encode as an empty array: %#v", guard)
+	}
+	if assignment.SourceKind != "call" || assignment.SourceOperation != constructor.ID || len(assignment.Ancestors) == 0 || assignment.Ancestors[0] != guard.ID {
+		t.Fatalf("assignment=%#v guard=%#v constructor=%#v", assignment, guard, constructor)
+	}
+	if assignment.ID >= constructor.ID {
+		t.Fatalf("assignment must start before its nested RHS call: assignment=%#v constructor=%#v", assignment, constructor)
+	}
+	bindings := map[string]semanticBinding{}
+	for _, binding := range load.Bindings {
+		bindings[binding.ID] = binding
+	}
+	if len(assignment.Targets) != 2 || bindings[assignment.Targets[0]].Scope != "package" || bindings[assignment.Targets[1]].Type != "error" || !slices.Contains(bindings[assignment.Targets[1]].Traits, "error") {
+		t.Fatalf("targets=%#v bindings=%#v", assignment.Targets, bindings)
+	}
+	concrete := read("concreteFailure")
+	var concreteBinding semanticBinding
+	for _, binding := range concrete.Bindings {
+		if binding.Name == "concreteErr" {
+			concreteBinding = binding
+		}
+	}
+	if concreteBinding.Type != "app.permanentError" || !slices.Contains(concreteBinding.Traits, "error") {
+		t.Fatalf("concrete error binding=%#v", concreteBinding)
+	}
+	shadow := read("shadow")
+	for _, operation := range shadow.Operations {
+		if operation.Kind == "call" && operation.Method == "Do" && operation.ReceiverType == "sync.Once" {
+			t.Fatalf("shadowed custom receiver was typed as sync.Once: %#v", operation)
+		}
+	}
+}
 
 func TestV2GoAndTypeScriptGraphQueries(t *testing.T) {
 	root := t.TempDir()
@@ -120,6 +225,60 @@ func TestEnsureV2CacheDirtyFingerprintAndPublicationRecovery(t *testing.T) {
 	dirty, err := EnsureV2(root, ModeAuto, nil)
 	if err != nil || !dirty.Meta.Rebuilt || dirty.Meta.Fingerprint == first.Meta.Fingerprint {
 		t.Fatalf("dirty=%#v err=%v", dirty, err)
+	}
+}
+
+func TestEnsureV2SharesCacheAcrossIdenticalWorktrees(t *testing.T) {
+	root := t.TempDir()
+	run(t, root, "git", "init")
+	run(t, root, "git", "config", "user.email", "t@example.com")
+	run(t, root, "git", "config", "user.name", "t")
+	write(t, root, "main.go", "package main\n\nfunc main() {}\n")
+	run(t, root, "git", "add", ".")
+	run(t, root, "git", "commit", "-m", "init")
+
+	clone := filepath.Join(t.TempDir(), "clone")
+	run(t, "", "git", "clone", "--quiet", root, clone)
+	t.Setenv("ADVERSARY_REPO_INDEX_DIR", t.TempDir())
+
+	first, err := EnsureV2(root, ModeAuto, nil)
+	if err != nil || first == nil || !first.Meta.Rebuilt {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	second, err := EnsureV2(clone, ModeAuto, nil)
+	if err != nil || second == nil {
+		t.Fatalf("second=%#v err=%v", second, err)
+	}
+	if second.Meta.Rebuilt {
+		t.Fatal("expected identical worktree at a different path to reuse graph cache")
+	}
+	if first.Dir != second.Dir {
+		t.Fatalf("cache directories differ: %s vs %s", first.Dir, second.Dir)
+	}
+}
+
+func TestV2LineColumnLookup(t *testing.T) {
+	body := []byte("first\nsecond\n")
+	record := v2FileRecord{body: body, lineStarts: lineStartOffsets(body)}
+	for _, test := range []struct {
+		offset, line, column int
+	}{
+		{0, 1, 1},
+		{5, 1, 6},
+		{6, 2, 1},
+		{12, 2, 7},
+		{13, 3, 1},
+	} {
+		line, column := record.lineColumn(test.offset)
+		if line != test.line || column != test.column {
+			t.Fatalf("offset %d: got %d:%d, want %d:%d", test.offset, line, column, test.line, test.column)
+		}
+	}
+	unicodeBody := []byte("const π = value")
+	unicodeRecord := v2FileRecord{body: unicodeBody, lineStarts: lineStartOffsets(unicodeBody)}
+	line, column := unicodeRecord.lineColumn(len("const π"))
+	if line != 1 || column != 8 {
+		t.Fatalf("unicode position: got %d:%d, want 1:8", line, column)
 	}
 }
 

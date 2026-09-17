@@ -34,6 +34,7 @@ type Repository struct {
 
 type PullRequest struct {
 	Number         int    `json:"number" yaml:"number"`
+	Author         string `json:"author,omitempty" yaml:"author,omitempty"`
 	BaseSHA        string `json:"base_sha" yaml:"base_sha"`
 	InitialHeadSHA string `json:"initial_head_sha" yaml:"initial_head_sha"`
 	FinalHeadSHA   string `json:"final_head_sha,omitempty" yaml:"final_head_sha,omitempty"`
@@ -90,13 +91,18 @@ type Labels struct {
 }
 
 type ExpectedConcern struct {
-	ID         string   `json:"id" yaml:"id"`
-	Summary    string   `json:"summary" yaml:"summary"`
-	Importance string   `json:"importance" yaml:"importance"` // high | medium | low
-	Confidence string   `json:"confidence" yaml:"confidence"`
-	Source     []string `json:"source" yaml:"source"`
-	File       string   `json:"file,omitempty" yaml:"file,omitempty"`
-	Approved   bool     `json:"approved" yaml:"approved"`
+	ID            string   `json:"id" yaml:"id"`
+	Summary       string   `json:"summary" yaml:"summary"`
+	Importance    string   `json:"importance" yaml:"importance"` // high | medium | low
+	Confidence    string   `json:"confidence" yaml:"confidence"`
+	Source        []string `json:"source" yaml:"source"`
+	File          string   `json:"file,omitempty" yaml:"file,omitempty"`
+	CommentAuthor string   `json:"comment_author,omitempty" yaml:"comment_author,omitempty"`
+	CommentURL    string   `json:"comment_url,omitempty" yaml:"comment_url,omitempty"`
+	Line          int      `json:"line,omitempty" yaml:"line,omitempty"`
+	DiffHunk      string   `json:"diff_hunk,omitempty" yaml:"diff_hunk,omitempty"`
+	ProposedRule  string   `json:"proposed_rule,omitempty" yaml:"proposed_rule,omitempty"`
+	Approved      bool     `json:"approved" yaml:"approved"`
 	// Scope relative to the owning adversary mission.
 	// in_scope | out_of_scope | unclear — only in_scope should be graded as gold.
 	Scope       string `json:"scope,omitempty" yaml:"scope,omitempty"`

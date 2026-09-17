@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/adversarylabs/adversary/pkg/outcomecontext"
 	"github.com/adversarylabs/adversary/pkg/pack"
 )
 
@@ -301,6 +302,7 @@ type recordingExecutor struct {
 	input   Input
 	spec    RuntimeSpec
 	context detection.Context
+	outcome outcomecontext.Context
 }
 
 func (e *recordingExecutor) Backend() ExecutorBackend {
@@ -343,6 +345,15 @@ func (e *recordingExecutor) Run(ctx context.Context, spec RuntimeSpec) (RuntimeR
 			return RuntimeResult{}, err
 		}
 	}
+	if path := spec.Env["ADVERSARY_OUTCOME_CONTEXT"]; path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return RuntimeResult{}, err
+		}
+		if err := json.Unmarshal(data, &e.outcome); err != nil {
+			return RuntimeResult{}, err
+		}
+	}
 
 	output := `{"protocolVersion":1,"result":{"adversary":{"name":"local/adversary"},"target":{},"positives":[],"observations":[],"findings":[],"suppressed":{"observations":0,"findings":0}}}`
 	if err := os.WriteFile(filepath.Join(spec.RunDir, "output.json"), []byte(output), 0644); err != nil {
@@ -377,6 +388,36 @@ runtime:
 	}
 	if executor.input.Change == nil || !reflect.DeepEqual(executor.input.Change.ChangedFiles, []string{"Dockerfile"}) {
 		t.Fatalf("legacy input did not receive resolved paths: %#v", executor.input)
+	}
+}
+
+func TestRunInjectsOutcomeContextAsSeparateProtocolFile(t *testing.T) {
+	adversaryDir := t.TempDir()
+	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), "name: local/adversary\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writeFile(t, filepath.Join(adversaryDir, "dist", "index.js"), "")
+	executor := &recordingExecutor{}
+	outcome := outcomecontext.GitHubPullRequest("acme/app", 42, "Add delegated trust", "Keep external registries untrusted.")
+	if err := (Runner{Stdout: &strings.Builder{}, Stderr: &strings.Builder{}, Executor: executor}).Run(context.Background(), RunOptions{AdversaryRef: adversaryDir, RepoPath: t.TempDir(), OutcomeContext: outcome}); err != nil {
+		t.Fatal(err)
+	}
+	if executor.outcome.SchemaVersion != outcomecontext.SchemaVersion || len(executor.outcome.Sources) != 2 || executor.outcome.Intent.Objective != "Add delegated trust" {
+		t.Fatalf("outcome context = %#v", executor.outcome)
+	}
+}
+
+func TestRunClassifiesInvalidOutcomeContextAsProtocolFailure(t *testing.T) {
+	adversaryDir := t.TempDir()
+	writeFile(t, filepath.Join(adversaryDir, "adversary.yaml"), "name: local/adversary\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
+	writeFile(t, filepath.Join(adversaryDir, "dist", "index.js"), "")
+	outcome := outcomecontext.GitHubPullRequest("acme/app", 42, "Add delegated trust", "")
+	outcome.Subject.Provider = ""
+	err := (Runner{Stdout: &strings.Builder{}, Stderr: &strings.Builder{}, Executor: &recordingExecutor{}}).Run(
+		context.Background(),
+		RunOptions{AdversaryRef: adversaryDir, RepoPath: t.TempDir(), OutcomeContext: outcome},
+	)
+	var protocolErr *ProtocolError
+	if !errors.As(err, &protocolErr) || !strings.Contains(err.Error(), "validate outcome context") {
+		t.Fatalf("error = %T %v, want ProtocolError", err, err)
 	}
 }
 

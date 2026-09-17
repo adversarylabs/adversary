@@ -1,11 +1,14 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Adversary, Severity, log } from "@adversarylabs/sdk";
+const packageVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 export function createApp() {
     const app = new Adversary({
         name: "local/{{name}}",
+        version: packageVersion,
     });
     app.rule("readme.exists", async (ctx) => {
         log.info("Checking for README.md...");

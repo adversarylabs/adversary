@@ -32,23 +32,26 @@ adversary run https://github.com/owner/repo/pull/123 --github-review --github-su
 | `--github-pr N` | PR number (or use PR URL / Actions env) |
 | `--github-repo owner/name` | Repository (or use PR URL / `GITHUB_REPOSITORY`) |
 | `--github-submit` | Submit review as `COMMENT` (default leaves **pending**) |
-| `--github-include-summary=false` | Omit the persistent aggregate assessment/opinion while retaining finding comments |
+| `--github-resolve-addressed` | Resolve prior Adversary threads whose findings disappear after a complete successful rerun (default `true`) |
+| `--github-include-summary=false` | Omit the inferred review basis and persistent aggregate assessment/opinion while retaining finding comments and execution-failure notices |
 | `--github-min-severity` | `info`\|`low`\|`medium`\|`high`\|`critical` (default: all) |
 | `--github-api-url` | GraphQL endpoint override |
 | `--github-rest-url` | REST base override |
 
 Posting is **never** enabled solely because a PR URL was passed.
 
-## Auth
+## Review-posting auth
 
-Token resolution order:
+`adversary run --github-review` resolves an explicit environment token in this
+order:
 
 1. `ADVERSARY_GITHUB_TOKEN`
 2. `GITHUB_TOKEN`
 3. `GH_TOKEN`
 
-The CLI does not read `gh auth`’s on-disk store. Optionally:
-`export GH_TOKEN=$(gh auth token)`.
+The review-posting path does not read `gh auth`'s on-disk store. Optionally run
+`export GH_TOKEN=$(gh auth token)` before posting. Catalog training has separate
+read-only history authentication described below.
 
 ## Comment voice
 
@@ -89,14 +92,29 @@ There is no nearest-line guessing.
 Hard posting failures (auth/network/mutation) map to exit class **4**, even when
 findings exist (class 1). Soft placement skips do not change the exit class.
 
+## Incomplete reviews
+
+When review jobs fail, the CLI still posts usable findings, but adds a
+**Partial Adversary review** notice naming failed reviewers, their scopes, and
+bounded failure diagnostics. This notice also appears when no job returned
+findings, and is not disabled by `--github-include-summary=false`. Known provider
+and GitHub credentials are redacted; full diagnostics remain in the CI logs.
+
+The notice is host-generated and is never rewritten by the model. Findings keep
+normal inline placement and off-diff fallback. A findings-only exit does not
+produce a failure notice. Posting a partial review does not turn an execution
+failure into success; all-failed compositions retain the underlying error class.
+
 ## Content policy
 
 - Visible **findings** only (never observations, positives, or suppressed details)
+- Execution failures add an explicit partial-run notice, separate from findings
 - Empty plan → no GitHub mutation
 - The aggregate summary synthesizes actual findings only; clean adversaries never add review-body noise
 - Max 50 inline comments; overflow goes to the review body
 
-## Train without `gh`
+## Catalog training authentication
 
-`adversary train` collect/discover/org expansion uses the same direct GitHub
-HTTP client. Set a token env var; install of the `gh` CLI is not required.
+`adversary catalog train` uses the direct GitHub HTTP client. Explicit token
+environment variables take precedence; otherwise it uses the active `gh auth`
+token. The `gh` CLI is not required when an environment token is configured.

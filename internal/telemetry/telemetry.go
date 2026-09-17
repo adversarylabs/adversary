@@ -22,6 +22,7 @@ const (
 var officialCatalogDomains = map[string]struct{}{
 	"go": {}, "ci": {}, "container": {}, "security": {}, "review": {},
 	"infra": {}, "deps": {}, "meta": {}, "cloud": {}, "lang": {}, "web": {}, "factory": {},
+	"adversarylabs": {},
 }
 
 // pathExists is injected in tests.
@@ -57,6 +58,13 @@ func DisabledWith(getenv func(string) string) bool {
 		return true
 	}
 	if envTruthy(getenv("ADVERSARY_NO_TELEMETRY")) {
+		return true
+	}
+	// OpenTelemetry's standard global SDK opt-out and trace-exporter opt-out.
+	if envTruthy(getenv("OTEL_SDK_DISABLED")) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(getenv("OTEL_TRACES_EXPORTER")), "none") {
 		return true
 	}
 	if v := strings.TrimSpace(getenv("ADVERSARY_TELEMETRY")); v != "" {

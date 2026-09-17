@@ -53,6 +53,14 @@ type HostExecutor struct {
 	Timer             func(time.Duration) RuntimeTimer
 }
 
+// hostChildEnvironmentBaseline contains non-secret process plumbing needed by
+// common runtimes. Any additional parent variable must be requested through
+// permissions.environment.allow in the adversary manifest.
+var hostChildEnvironmentBaseline = []string{
+	"COMSPEC", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "PATH", "PATHEXT",
+	"SystemRoot", "TEMP", "TERM", "TMP", "TMPDIR", "USER", "USERNAME", "USERPROFILE", "WINDIR",
+}
+
 func (HostExecutor) Backend() ExecutorBackend { return HostExecutorBackend }
 
 func (HostExecutor) Capabilities() ExecutorCapabilities {
@@ -166,7 +174,9 @@ func (e HostExecutor) Run(ctx context.Context, spec RuntimeSpec) (RuntimeResult,
 	if err := ctx.Err(); err != nil {
 		return RuntimeResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
 	}
-	process, err := e.Launcher.Start(ProcessLaunchOptions{Path: executable, Args: command[1:], Dir: spec.AdversaryPath, Stdout: e.Stdout, Stderr: e.Stderr, Stdin: e.Stdin, Env: e.Environment.EntriesWithout(spec.Env, spec.EnvironmentDeny)})
+	allowedEnvironment := append([]string(nil), hostChildEnvironmentBaseline...)
+	allowedEnvironment = append(allowedEnvironment, spec.Permissions.EnvironmentAllow...)
+	process, err := e.Launcher.Start(ProcessLaunchOptions{Path: executable, Args: command[1:], Dir: spec.AdversaryPath, Stdout: e.Stdout, Stderr: e.Stderr, Stdin: e.Stdin, Env: e.Environment.EntriesAllowed(spec.Env, allowedEnvironment, spec.EnvironmentDeny)})
 	if err != nil {
 		return RuntimeResult{ExitCode: -1, Kind: "Process"}, &ChildExitError{ExitCode: -1, Err: err}
 	}

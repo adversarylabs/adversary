@@ -10,7 +10,11 @@ permissions, selected executor, executor capabilities, permission policy, then
 launch. Trust does not imply a capability, and selecting an executor does not
 silently weaken a mandatory permission.
 
-`HostExecutor` is a first-class backend.
+`HostExecutor` is a first-class backend. Its child environment is fail-closed:
+only basic runtime variables, CLI-owned `ADVERSARY_*` values, and variables
+named by `permissions.environment.allow` are passed to the adversary. Ambient
+environment credentials are not inherited by default.
+
 It is the default for explicit local source projects, which are trusted by the
 developer's direct path selection and run without a warning or unsafe flag. It
 is also acceptable for installed artifacts that carry a **verified official
@@ -30,7 +34,8 @@ references resolve once through the unified repository; the resulting digest is
 passed to the executor and reported before launch.
 
 Host execution is not a sandbox: child code can access the user's filesystem,
-repository, environment, processes, and network with the user's authority. Its
+repository, allowed process environment, processes, and network with the user's
+authority. Its
 capability report therefore claims none of the filesystem, environment,
 network, CPU, memory, or process isolation boundaries. `--no-network`,
 and manifest permissions with `enforcement: required` fail before launch with

@@ -18,10 +18,41 @@ func TestPostDryRunNoop(t *testing.T) {
 	}
 }
 
-func TestPostNothingToPost(t *testing.T) {
+func TestPostReviewBasisOnly(t *testing.T) {
+	var addInput map[string]any
+	filesCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/files") {
+			filesCalls++
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		switch {
+		case strings.Contains(payload.Query, "pullRequest(number"):
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"id":"PR_1","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","url":"https://github.com/o/r/pull/1"}}}}`))
+		case strings.Contains(payload.Query, "addPullRequestReview"):
+			addInput, _ = payload.Variables["input"].(map[string]any)
+			_, _ = w.Write([]byte(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"RV_1","url":"https://github.com/o/r/pull/1#pullrequestreview-1","state":"PENDING"}}}}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := githubapi.NewClient("t")
+	client.HTTP = srv.Client()
+	client.RESTBase = srv.URL
+	client.GQLURL = srv.URL + "/"
 	var msgs []string
-	res, err := Post(context.Background(), CommentPlan{}, PostOptions{
-		Client: githubapi.NewClient("t"),
+	res, err := Post(context.Background(), CommentPlan{ReviewBasis: "Reviewed as: inferred outcome."}, PostOptions{
+		Client: client,
 		Owner:  "o", Repo: "r", Number: 1,
 		Progress: func(s string) { msgs = append(msgs, s) },
 	})
@@ -31,13 +62,74 @@ func TestPostNothingToPost(t *testing.T) {
 	if res == nil {
 		t.Fatal("nil result")
 	}
-	if len(msgs) == 0 || !strings.Contains(msgs[0], "nothing to post") {
-		t.Fatalf("%v", msgs)
+	if res.ReviewID != "RV_1" {
+		t.Fatalf("result = %#v", res)
+	}
+	body, _ := addInput["body"].(string)
+	if !strings.Contains(body, "Reviewed as: inferred outcome.") {
+		t.Fatalf("review body = %q", body)
+	}
+	if len(msgs) == 0 || strings.Contains(msgs[0], "nothing to post") {
+		t.Fatalf("progress = %v", msgs)
+	}
+	if filesCalls != 0 {
+		t.Fatalf("basis-only review fetched pull request files %d time(s)", filesCalls)
+	}
+}
+
+func TestPostEscapesReviewBasisMarkdown(t *testing.T) {
+	var addInput map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/files") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		switch {
+		case strings.Contains(payload.Query, "pullRequest(number"):
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"id":"PR_1","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","url":"https://github.com/o/r/pull/1"}}}}`))
+		case strings.Contains(payload.Query, "addPullRequestReview"):
+			addInput, _ = payload.Variables["input"].(map[string]any)
+			_, _ = w.Write([]byte(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"RV_1","url":"https://github.com/o/r/pull/1#pullrequestreview-1","state":"PENDING"}}}}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := githubapi.NewClient("t")
+	client.HTTP = srv.Client()
+	client.RESTBase = srv.URL
+	client.GQLURL = srv.URL + "/"
+	_, err := Post(context.Background(), CommentPlan{
+		ReviewBasis: "Reviewed as: [click](https://evil.example) <img src=x> **trusted**\n\n> quote\n# heading\n---",
+	}, PostOptions{Client: client, Owner: "o", Repo: "r", Number: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := addInput["body"].(string)
+	if strings.Contains(body, "[click](https://evil.example)") || strings.Contains(body, "<img") {
+		t.Fatalf("review body contains active markdown: %q", body)
+	}
+	if !strings.Contains(body, `\[click\]\(https://evil.example\) &lt;img src=x&gt; \*\*trusted\*\*`) {
+		t.Fatalf("review body did not preserve escaped text: %q", body)
+	}
+	for _, marker := range []string{"\n> quote", "\n# heading", "\n---"} {
+		if strings.Contains(body, marker) {
+			t.Fatalf("review body contains injected block marker %q: %q", marker, body)
+		}
 	}
 }
 
 func TestPostCreatesPendingReview(t *testing.T) {
 	var gqlBodies []string
+	var addInput map[string]any
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// GraphQL endpoint is absolute URL set on client
@@ -51,6 +143,8 @@ func TestPostCreatesPendingReview(t *testing.T) {
 				return
 			}
 			if strings.Contains(q, "addPullRequestReview") {
+				variables, _ := body["variables"].(map[string]any)
+				addInput, _ = variables["input"].(map[string]any)
 				_, _ = w.Write([]byte(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"RV_1","url":"https://github.com/o/r/pull/1#pullrequestreview-1","state":"PENDING"}}}}`))
 				return
 			}
@@ -75,7 +169,8 @@ func TestPostCreatesPendingReview(t *testing.T) {
 
 	line := 2
 	plan := CommentPlan{
-		ReviewBody: "overall",
+		ReviewBody:  "overall",
+		ReviewBasis: "Reviewed as: preserve pull-only registry access.",
 		Comments: []PlannedComment{{
 			FindingID: "f1", Title: "T", Severity: "high", Body: "body text", BodySource: "template",
 			Placement: "inline", Anchor: Anchor{Path: "a.go", Line: &line},
@@ -89,6 +184,13 @@ func TestPostCreatesPendingReview(t *testing.T) {
 	}
 	if res.ReviewID != "RV_1" || res.State != "COMMENTED" {
 		t.Fatalf("%#v gql=%v", res, gqlBodies)
+	}
+	if res.Posted != 1 || len(res.PostedComments) != 1 || res.PostedComments[0].FindingID != "f1" {
+		t.Fatalf("posted comments = %#v", res.PostedComments)
+	}
+	body, _ := addInput["body"].(string)
+	if !strings.Contains(body, "Reviewed as: preserve pull-only registry access.") {
+		t.Fatalf("review body = %q", body)
 	}
 }
 

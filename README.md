@@ -56,8 +56,83 @@ See [automatic selection](docs/automatic-detection.md) for change resolution,
 manifest detection declarations, selection policy, and CI behavior.
 See [composition](docs/composition.md) for `adversary.yaml` `uses` (language packs
 and persona entrypoints that expand to specialist adversaries).
+See [finding verification](docs/finding-verification.md) for source-based checks
+before deduplication and replaying the filter on saved candidates.
 See [comment voice](docs/voice.md) for `agent/voice.md`, example banks, and GitHub
 rewrite with `--github-review`.
+
+## Private catalog training
+
+Create a private catalog, configure the GitHub repositories and human reviewers
+whose comments should count, then run a foreground scan. The scan never pauses
+for input: it stores resumable results in a local, gitignored SQLite inbox and
+exits. Review is a separate command.
+
+```sh
+adversary catalog init my-private-adversaries
+cd my-private-adversaries
+# Edit adversary.train.yaml, or select sources and a model on the command line:
+adversary catalog train --source-repo acme/api --source-repo acme/web \
+  --model-provider cloudflare --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
+adversary catalog train review
+adversary catalog train inspect
+adversary catalog train inspect <id>
+adversary catalog train accept <id>
+```
+
+Catalogs initialized before runnable private starters were introduced can be
+updated in place while preserving their policies:
+
+```sh
+adversary catalog upgrade
+```
+
+For an exhaustive, resumable repository scan, set a date boundary and remove
+the normal candidate limits:
+
+```yaml
+sources:
+  discovery: repos
+  since: "2025-09-12"
+run:
+  all_history: true
+```
+
+The equivalent one-off flags are `--since 2025-09-12 --all-history`. Historical
+scans detect GitHub primary and secondary rate limits, wait for the advertised
+reset (or a conservative fallback), and continue unless interrupted.
+
+Bare `inspect` opens a localhost review queue with every candidate in a left
+nav grouped by source repository. Inline comments appear with their file, diff
+hunk, PR author, and reviewer identity. Context controls load adjacent lines
+from the exact reviewed GitHub revision. Reviewers can edit the proposed rule,
+route it to an existing or new private adversary, apply it to local catalog
+files immediately, approve it for a later batch, dismiss it, and reopen earlier
+decisions. Use `inspect --all` for the terminal wizard instead.
+
+Use repeatable `--author` and `--exclude-author` flags for one-off reviewer
+selection; the equivalent committed policy is `sources.authors_only` and
+`sources.authors_ignore`. Model configuration can also come from
+`ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Results approved for later
+record a decision only. Applying a result updates tracked local catalog files,
+but does not commit, push, upload private evidence to Adversary Labs, or open a
+pull request. The scan does send bounded comment, thread, review-summary, and
+diff evidence to the model provider you select.
+Interactive CLI commands display a one-line stderr reminder while registered
+catalogs still have unreviewed results; machine-readable and noninteractive
+commands remain quiet.
+
+The collector intentionally runs in the foreground and checkpoints its state.
+Shells and schedulers can run it unattended without a CLI-managed background
+process. A future catalog GitHub Action can use the same interface, but needs an
+explicit cross-repository credential and an agreed `--auto` contract before it
+can safely create catalog pull requests.
+
+See the [private catalog training guide](docs/train.md) for discovery and inbox
+behavior.
+
+See [review feedback](docs/github-feedback.md) for the SaaS-owned learning loop
+that watches replies and steers later reviews.
 
 ## Automatic review scope
 
@@ -102,11 +177,14 @@ Unknown publishers require a sandbox backend or `--allow-unsafe-host-execution`;
 override is not isolation. Manifest permissions are advisory by default;
 `permissions.enforcement: required` and `--no-network` fail before launch when
 the selected executor cannot enforce them.
-The child can access the repository, credentials, network, processes, and any
-other resources available to your account. Restrictions the host runner cannot
-enforce fail closed. OCI digests provide integrity and identity, not publisher
-authenticity. Registry credentials and trusted CA/proxy configuration are part
-of the user's environment trust boundary. See [artifact limits](docs/artifact-trust-and-limits.md)
+The child can access the repository, filesystem, network, processes, and other
+resources available to your account. Its process environment contains only
+basic runtime variables, CLI-owned values, and keys explicitly named by
+`permissions.environment.allow`; other ambient credentials are omitted.
+Restrictions the host runner cannot enforce fail closed. OCI digests provide
+integrity and identity, not publisher authenticity. Registry credentials and
+trusted CA/proxy configuration are part of the user's environment trust
+boundary. See [artifact limits](docs/artifact-trust-and-limits.md)
 and [network policy](docs/network-oci-policy.md).
 
 ## Configuration and precedence
@@ -123,7 +201,7 @@ and are not general CLI configuration.
 | registry | explicit OCI reference | `ADVERSARY_REGISTRY_HOST`, `ADVERSARY_REGISTRY_NAMESPACE` | Adversary Labs registry |
 | artifact data | — | `ADVERSARY_DATA_DIR` | OS data directory |
 | Node runtime | manifest requirement | `ADVERSARY_NODE_PATH`, then `PATH` | user runtime locations |
-| model provider | `--model-provider`, `--model` | `ADVERSARY_MODEL_PROVIDER`, `ADVERSARY_MODEL`, provider API key | inferred only when exactly one supported key is present |
+| model provider | `--model-provider`, `--model` | `ADVERSARY_MODEL_PROVIDER`, `ADVERSARY_MODEL`, provider API key | inferred only when exactly one supported provider credential set is present |
 | OCI diagnostics | `--verbose` | `ADVERSARY_OCI_DEBUG` (internal transport toggle) | disabled; secrets redacted |
 | review suppression | command behavior | `ADVERSARY_INCLUDE_SUPPRESSED` (injected into adversary) | suppressed details omitted |
 | adversary protocol paths | — | `ADVERSARY_INPUT`, `ADVERSARY_OUTPUT`, `ADVERSARY_REPO` (injected) | per-run temporary paths |
@@ -150,6 +228,68 @@ adversary run adversarylabs/example \
   --model "your-model-id"
 ```
 
+Selecting OpenAI `gpt-5.6-luna` defaults to high reasoning. Because reasoning
+and the final answer share the output allowance, the CLI multiplies each
+adversary's requested token budget by four, with a 16,384-token minimum and
+65,536-token maximum. For example, a 1,500-token planning budget becomes 16,384,
+and an 8,000-token review budget becomes 32,000. These are ceilings, not target
+lengths; larger generations can increase cost and latency. Request deadlines
+remain unchanged.
+
+`ADVERSARY_OPENAI_REASONING_EFFORT` explicitly selects `none`, `low`, `medium`,
+`high`, `xhigh`, or `max` (subject to the selected model's support).
+`ADVERSARY_OPENAI_MAX_OUTPUT_TOKENS` sets an exact per-request output cap from
+1 through 65,536 and overrides automatic sizing. Setting reasoning to `none`
+also disables Luna's automatic headroom unless an explicit output cap is set.
+Other models retain their existing defaults. Incomplete Responses are reported
+as errors, including the effective budget when the output limit is exhausted;
+they are not automatically retried at a higher cost.
+
+Codex can use an installed `codex` executable and your existing ChatGPT
+subscription login, without an API key:
+
+```sh
+codex login
+adversary run review/code --model codex/gpt-5.6-luna
+# Equivalent explicit provider:
+adversary run review/code --model-provider codex --model gpt-5.6-luna
+```
+
+GitHub review runs infer one structured intent from the pull request title and body,
+then pass that bounded, source-attributed outcome context to every adversary. If
+inference is unavailable, the title is used as a low-confidence fallback and the
+existing review still runs. PR prose is untrusted input, not instructions. Local
+runs without GitHub metadata continue normally and receive no inferred intent.
+
+The `codex/` prefix selects Codex before API-key inference. An explicitly
+configured different provider conflicts with this prefix. The model ID must be
+available to your Codex account. `ADVERSARY_CODEX_REASONING_EFFORT` defaults to
+`high`; supported selections are `low`, `medium`, `high`, `xhigh`, and `max`,
+subject to model support.
+
+Use a recent Codex CLI supporting `exec --ignore-user-config`, `--ephemeral`,
+and `--output-schema`. Each model request starts an isolated, ephemeral,
+read-only Codex session with shell, web search, multi-agent, and app tools
+disabled. User config is ignored to avoid custom providers and MCP servers;
+authentication remains in the existing `CODEX_HOME` (default `~/.codex`).
+The CLI requires `codex login status` to report ChatGPT authentication, strips
+API credentials from the subprocess environment, and never falls back to paid
+API access. Authentication and execution failures are not automatically retried
+by this provider. Final JSON is checked against the adversary's requested schema.
+
+Requests sharing a `CODEX_HOME` are serialized across adversary processes using
+an OS lock. Queue waiting counts against the request deadline. Other programs
+using Codex do not participate in that lock: use a dedicated authenticated home
+for a trusted private CI runner, and do not copy a login across concurrent
+machines. Subscription usage limits still apply. See OpenAI's
+[CI authentication guidance](https://learn.chatgpt.com/docs/auth/ci-cd-auth).
+
+Codex does not expose a hard output-token cap through `exec`; the requested
+output budget is advisory in the prompt. Timeouts and final response byte limits
+are enforced. On Windows, cancellation terminates the direct Codex child;
+on Unix it terminates its process group. Codex's agent harness differs from the
+API provider, so record `codex` as a separate provider in benchmark comparisons.
+
 Fireworks uses its full model identifier:
 
 ```sh
@@ -159,17 +299,65 @@ adversary run adversarylabs/example \
   --model "accounts/fireworks/models/your-model-id"
 ```
 
-Flags override `ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Without a
-provider flag or environment value, the CLI infers `openai`, `anthropic`, or
-`fireworks` only when exactly one of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
-`FIREWORKS_API_KEY` is configured. API tokens are intentionally not accepted as
-flags because command arguments can leak through process listings and shell
-history.
+Cloudflare AI Gateway uses Cloudflare's OpenAI-compatible Responses endpoint.
+Set the account ID and a token with Workers AI Read permission; model identifiers
+use Cloudflare's `author/model` format. A gateway ID is optional and enables the
+configured gateway's logging, caching, rate limits, and policies:
 
-`ADVERSARY_OPENAI_BASE_URL`, `ADVERSARY_ANTHROPIC_BASE_URL`, and
-`ADVERSARY_FIREWORKS_BASE_URL` override provider endpoints for compatible
-gateways and testing. Model-backed execution currently uses the host executor
-because sandbox and container loopback routing is not yet available.
+```sh
+export CLOUDFLARE_API_TOKEN="..."
+export CLOUDFLARE_ACCOUNT_ID="..."
+export ADVERSARY_CLOUDFLARE_GATEWAY_ID="your-gateway"
+adversary run adversarylabs/example \
+  --model-provider cloudflare \
+  --model "openai/gpt-5.5"
+```
+
+camelStream is a first-class OpenAI-compatible provider and uses Camel's own
+credential namespace:
+
+```sh
+export CAMEL_API_KEY="qaml_live_..."
+adversary run review/code \
+  --model-provider camel \
+  --model auto
+```
+
+Flags override `ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Without a
+provider flag or environment value, the CLI infers `openai`, `cloudflare`,
+`anthropic`, `fireworks`, or `camel` only when exactly one provider credential
+set is configured. Cloudflare requires both `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID`; the other providers use `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `FIREWORKS_API_KEY`, or `CAMEL_API_KEY`. API
+tokens are intentionally not accepted as flags because command arguments can
+leak through process listings and shell history.
+
+`ADVERSARY_OPENAI_BASE_URL`, `ADVERSARY_CLOUDFLARE_BASE_URL`,
+`ADVERSARY_ANTHROPIC_BASE_URL`, `ADVERSARY_FIREWORKS_BASE_URL`, and
+`ADVERSARY_CAMEL_BASE_URL` override provider
+endpoints for compatible gateways and testing. Model-backed execution currently
+uses the host executor because sandbox and container loopback routing is not yet
+available.
+Camel retries transient connection, rate-limit, and server failures up to eight
+times within the affected model call. Backoff grows from 2s to 60s plus jitter;
+`Retry-After` seconds and HTTP dates are honored without shortening the requested
+wait. The original request deadline and cancellation still bound all waits.
+Set `ADVERSARY_CAMEL_REQUEST_RETRIES` from `0` through `20` to override the default.
+Capacity retry exhaustion does not restart the entire specialist.
+
+`ADVERSARY_CAMEL_MAX_CONCURRENCY` limits actual simultaneous Camel HTTP requests
+(default `5`, range `1`–`256`), independently of `--compose-concurrency`. All
+specialist brokers and the verifier in the **same CLI process**, using the same
+endpoint and credential, share this budget and a cooldown. Congestion halves the
+effective limit (minimum one); ten successful responses after the cooldown restore
+one slot, never beyond the configured cap. Conflicting limits for the same
+credential within a process use the smaller limit.
+
+This is not an account-wide distributed lock. Multiple CLI processes, CI jobs,
+or machines sharing a key must divide the account budget externally. The benchmark
+fleet reserves slots in Postgres and sets each CLI cap to its reservation; new
+review jobs must wait for outstanding judge leases. For a 20-stream fleet with
+five slots per review, at most four reviews can run when no judges hold slots.
 `--no-network` applies to the adversary child; provider network access remains
 isolated in the CLI-owned broker.
 
@@ -180,6 +368,26 @@ configuration or the selected Adversary profile as documented in
 [network policy](docs/network-oci-policy.md). Never put passwords in URLs or
 command history. Pass service-account tokens through `--token-stdin`; the CLI
 does not accept them as command-line values.
+
+## Run telemetry
+
+Authenticated runs report privacy-safe OpenTelemetry timing spans to
+Adversary Labs. The trace contains adversary identifiers, group identifiers,
+durations, statuses, and aggregate finding counts. It never contains source
+code, repository identity, file paths, prompts, or finding text.
+
+Attach short labels with repeatable `--tag key=value`. Benchmark harnesses
+should pass `--tag benchmark=true`; these traces are stored for comparison but
+hidden from normal project analytics by default. `--telemetry-file trace.jsonl`
+appends each completed run as OTLP/HTTP JSON, and `adversary telemetry pull
+<trace-id>` retrieves an authorized stored trace in the same format. Standard
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, headers,
+and timeout variables send a copy to another OTLP/HTTP collector.
+
+Telemetry is disabled for one run with `--no-telemetry`, or globally by any of `DO_NOT_TRACK=1`,
+`ADVERSARY_DO_NOT_TRACK=1`, `ADVERSARY_NO_TELEMETRY=1`,
+`ADVERSARY_TELEMETRY=0`, `OTEL_SDK_DISABLED=true`, or
+`OTEL_TRACES_EXPORTER=none`.
 
 ## Output and exits
 
@@ -214,35 +422,4 @@ Release, rollback, and provenance policy is in [docs/release.md](docs/release.md
 
 Security reports: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Train (review history → package improvement issues)
-
-Grade **home-built** (local) packages against your team’s PR review history and
-file deduplicated improvement issues. Official catalog packages can act as a
-read-only jury only.
-
-```sh
-cd my-adversary
-adversary train init --single-package
-# edit adversary.train.yaml (sources, authors, official jury)
-adversary train run
-adversary train results ls
-```
-
-In a workspace of sibling packages, repeat the following for durable
-round-robin coverage. Each target gets independent discovery memory; the
-separately trained `torvalds` package is excluded automatically.
-
-```sh
-adversary train run --cycle-adversaries --max-prs 1
-```
-
-For large public-repository catalogs, `sources.discovery: github_events`
-batches candidate selection through ClickHouse's read-only GH Archive mirror.
-Selected PRs are still hydrated from GitHub before any review evidence is used.
-
-`train run` opens issues for consolidated drafts and false-positive fixes by
-default. Individual misses remain in the local results database as evidence.
-Use `--no-issues` when you want a local-only run.
-
-Guide: **[docs/train.md](docs/train.md)** (home-built workflow).  
 Also: [composition](docs/composition.md), [comment voice](docs/voice.md).

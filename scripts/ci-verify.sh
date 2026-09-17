@@ -133,7 +133,7 @@ cross_build() {
 }
 
 generated_template_tests() {
-  local tmp binary project
+  local tmp binary project actions_root
   need npm
   tmp="$(make_temp_dir)"
   trap 'rm -rf -- "$tmp"' RETURN
@@ -142,15 +142,18 @@ generated_template_tests() {
   log "generate TypeScript template with the actual CLI"
   go build -trimpath -o "$binary" .
   HOME="$tmp/home" "$binary" init "$project"
-  log "generated TypeScript npm ci, build, tests, local pack, and complete audit"
+  log "generated TypeScript npm ci (including default audit), build, tests, and local pack"
   (
     cd "$project"
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm ci
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm run build
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm test
     HOME="$tmp/home" "$binary" pack . --name adversarylabs/generated-template
-    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm audit --audit-level=low
   )
+  actions_root="${ADVERSARY_ACTIONS_PATH:-}"
+  [[ -n "$actions_root" ]] || fail "ADVERSARY_ACTIONS_PATH must point to an adversarylabs/actions@v1 checkout"
+  log "generated catalog patch bump with adversarylabs/actions/version@v1"
+  scripts/test-generated-version-action.sh "$binary" "$actions_root"
   rm -rf -- "$tmp"
   trap - RETURN
 }
@@ -162,14 +165,13 @@ example_smoke_tests() {
   trap 'rm -rf -- "$tmp"' RETURN
   project="$tmp/comment-sentence-adversary"
   mkdir -p -- "$project"
-  log "checked-in comment-sentence example clean npm ci, build, tests, and audit"
+  log "checked-in comment-sentence example clean npm ci (including default audit), build, and tests"
   git archive --format=tar HEAD:smoke-tests/comment-sentence-adversary | tar -xf - -C "$project"
   (
     cd "$project"
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm ci
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm run build
     HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm test
-    HOME="$tmp/home" npm_config_cache="$tmp/npm-cache" npm audit --audit-level=low
   )
   rm -rf -- "$tmp"
   trap - RETURN

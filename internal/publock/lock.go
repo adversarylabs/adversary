@@ -10,6 +10,15 @@ import (
 type Lock struct{ file *os.File }
 
 func Acquire(root, key string) (*Lock, error) {
+	return acquire(root, key, false)
+}
+
+// AcquireShared protects read-only consumers while allowing concurrent readers.
+func AcquireShared(root, key string) (*Lock, error) {
+	return acquire(root, key, true)
+}
+
+func acquire(root, key string, shared bool) (*Lock, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
@@ -31,7 +40,7 @@ func Acquire(root, key string) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := lockFile(f); err != nil {
+	if err := lockFile(f, shared); err != nil {
 		f.Close()
 		return nil, err
 	}

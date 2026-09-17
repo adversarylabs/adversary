@@ -42,6 +42,24 @@ func TestNewInputFromDirtyReviewContextPreservesChangedFiles(t *testing.T) {
 	}
 }
 
+func TestNewInputFromReviewContextUsesResolvedMergeBase(t *testing.T) {
+	input := NewInputFromReviewContext(detection.Context{
+		Mode:      detection.ModePullRequest,
+		BaseRef:   "main",
+		HeadRef:   "deadbeef",
+		MergeBase: "cafebabe",
+		ChangedFiles: []detection.ChangedFile{
+			{Path: "src/app.ts", Status: detection.StatusModified},
+		},
+	}, false)
+	if input.Change == nil {
+		t.Fatal("Change is nil")
+	}
+	if input.Change.BaseRef != "cafebabe" || input.Change.HeadRef != "deadbeef" {
+		t.Fatalf("resolved refs = %q...%q", input.Change.BaseRef, input.Change.HeadRef)
+	}
+}
+
 func TestMarshalInputDiff(t *testing.T) {
 	data, err := MarshalInput(NewInput("main", "HEAD", []string{".github/workflows/test.yml"}, false))
 	if err != nil {
@@ -84,5 +102,30 @@ func TestMarshalInputDiffAllFiles(t *testing.T) {
 	}
 	if len(got.Change.ChangedFiles) != 1 || got.Change.ChangedFiles[0] != "README.md" {
 		t.Fatalf("ChangedFiles = %#v", got.Change.ChangedFiles)
+	}
+}
+
+func TestWithChangedRanges(t *testing.T) {
+	input := NewInputFromReviewContext(detection.Context{
+		Mode:         detection.ModeBranchComparison,
+		BaseRef:      "main",
+		HeadRef:      "HEAD",
+		ChangedFiles: []detection.ChangedFile{{Path: "src/app.ts", Status: detection.StatusModified}},
+	}, false).WithChangedRanges([]detection.ReviewRegion{{Path: "src/app.ts", StartLine: 12, EndLine: 18}})
+
+	data, err := MarshalInput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Input
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Change == nil || len(got.Change.ChangedRanges) != 1 {
+		t.Fatalf("ChangedRanges = %#v", got.Change)
+	}
+	want := detection.ReviewRegion{Path: "src/app.ts", StartLine: 12, EndLine: 18}
+	if got.Change.ChangedRanges[0] != want {
+		t.Fatalf("ChangedRanges[0] = %#v, want %#v", got.Change.ChangedRanges[0], want)
 	}
 }

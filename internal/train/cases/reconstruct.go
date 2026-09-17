@@ -130,13 +130,16 @@ func CandidateLabelsFromComments(comments []Comment) []ExpectedConcern {
 			summary = truncate(strings.TrimSpace(c.Body), 200)
 		}
 		out = append(out, ExpectedConcern{
-			ID:         fmt.Sprintf("c-%d-%d", c.ID, i),
-			Summary:    summary,
-			Importance: importanceFromClassification(c.Classification),
-			Confidence: "medium",
-			Source:     []string{"human-review"},
-			File:       c.Path,
-			Approved:   c.ApprovedAsLabel,
+			ID:            fmt.Sprintf("c-%d-%d", c.ID, i),
+			Summary:       summary,
+			Importance:    importanceFromClassification(c.Classification),
+			Confidence:    "medium",
+			Source:        []string{"human-review"},
+			File:          c.Path,
+			CommentAuthor: c.Author,
+			CommentURL:    c.URL,
+			Line:          c.Line,
+			Approved:      c.ApprovedAsLabel,
 		})
 	}
 	return out
@@ -177,11 +180,22 @@ func ApprovedLabels(labels []ExpectedConcern) []ExpectedConcern {
 	return out
 }
 
-// OutOfScopeLabels returns concerns we deliberately do not grade as misses.
+// OutOfScopeLabels returns concerns we deliberately rejected as training evidence.
 func OutOfScopeLabels(labels []ExpectedConcern) []ExpectedConcern {
 	var out []ExpectedConcern
 	for _, l := range labels {
-		if l.Scope == "out_of_scope" || l.Scope == "unclear" {
+		if l.Scope == "out_of_scope" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// UnclearLabels returns plausible human concerns that still need owner review.
+func UnclearLabels(labels []ExpectedConcern) []ExpectedConcern {
+	var out []ExpectedConcern
+	for _, l := range labels {
+		if l.Scope == "unclear" {
 			out = append(out, l)
 		}
 	}

@@ -23,19 +23,22 @@ jobs:
       - name: Mount adversary cache
         uses: depot/cache-mount@c4ccf77f90f7fa7df6a002813c0b13f6a5943063 # v1
         with:
-          name: adversary-${{ github.event.repository.id }}-${{ github.event.pull_request.number }}-v1
+          # Packages are content-addressed and publication is lock-protected, so
+          # every PR can safely reuse the repository's warm artifact cache.
+          name: adversary-${{ github.event.repository.id }}-review-v2
           path: /mnt/adversary
 
       - name: Run adversaries
-        uses: adversarylabs/actions/run@5732ffce7abc90efc8ded4a8f7193dfa6469aa0d # v1.3.2
+        uses: adversarylabs/actions/run@v1
+        env:
+          CAMEL_API_KEY: ${{ secrets.CAMEL_API_KEY }}
         with:
-          cli-version: 2026.8.26-beta.3
           adversaries: auto
+          # Includes selection-before-download and live lifecycle heartbeats.
           path: .
           data-dir: /mnt/adversary
           include-summary: false
-          model-provider: fireworks
-          model: ${{ vars.ADVERSARY_MODEL }}
-          model-api-key: ${{ secrets.FIREWORKS_API_KEY }}
+          model: auto
           auth-mode: oidc
           registry-namespace: adversarylabs
+          timeout-minutes: 18

@@ -94,8 +94,47 @@ func TestHostExecutorResolvesNamedProcessFromCapturedEnvironment(t *testing.T) {
 		t.Fatalf("launch options = %#v", launcher.options)
 	}
 	joined := strings.Join(launcher.options.Env, "\n")
-	if !strings.Contains(joined, "PATH="+captured) || strings.Contains(joined, hostile) || !strings.Contains(joined, "MARKER=captured") {
+	if !strings.Contains(joined, "PATH="+captured) || strings.Contains(joined, hostile) || strings.Contains(joined, "MARKER=captured") {
 		t.Fatalf("launch environment = %#v", launcher.options.Env)
+	}
+}
+
+func TestHostExecutorPassesOnlyBaselineExplicitAndRuntimeEnvironment(t *testing.T) {
+	captured := t.TempDir()
+	environment := NewProcessEnvironment([]string{
+		"PATH=" + captured,
+		"AWS_SECRET_ACCESS_KEY=ambient-secret",
+		"GITHUB_TOKEN=ambient-token",
+		"REQUESTED=parent-value",
+	}, false)
+	launcher := &recordingProcessLauncher{}
+	executor := HostExecutor{
+		Environment: environment,
+		ResolveExecutable: func(string) (string, error) {
+			return filepath.Join(captured, "scanner"), nil
+		},
+		Launcher: launcher,
+	}
+	spec := RuntimeSpec{
+		RuntimeName:   "process",
+		Command:       []string{"scanner"},
+		AdversaryPath: t.TempDir(),
+		Env:           map[string]string{"ADVERSARY_OUTPUT": "/tmp/output.json"},
+		Permissions:   RuntimePermissions{EnvironmentAllow: []string{"REQUESTED"}},
+	}
+	if _, err := executor.Run(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(launcher.options.Env, "\n")
+	for _, want := range []string{"PATH=" + captured, "REQUESTED=parent-value", "ADVERSARY_OUTPUT=/tmp/output.json"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("launch environment missing %q: %#v", want, launcher.options.Env)
+		}
+	}
+	for _, denied := range []string{"AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN"} {
+		if strings.Contains(joined, denied) {
+			t.Fatalf("launch environment leaked %s: %#v", denied, launcher.options.Env)
+		}
 	}
 }
 
