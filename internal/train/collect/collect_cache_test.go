@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/githubapi"
-	"github.com/doomerlabs/adversary/internal/train/dataroot"
-	"github.com/doomerlabs/adversary/internal/train/scope"
+	"github.com/doomerlabs/doomer/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/train/dataroot"
+	"github.com/doomerlabs/doomer/internal/train/scope"
 )
 
 func TestCollectPRReplaysCompleteCacheOnRateLimit(t *testing.T) {

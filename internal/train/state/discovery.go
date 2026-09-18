@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/doomer/internal/train/securefs"
 )
 
 // PROutcome records what happened when we last looked at a PR.

@@ -319,7 +319,7 @@ func TestUpgradeRaisesOlderSDKWithoutReplacingPackageMetadata(t *testing.T) {
 func TestUpgradeCanPinSDKCommitForPremergeValidation(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "adversaries", "operability")
-	dependency := "https://github.com/doomerlabs/adversary-sdk-typescript/archive/abc123.tar.gz"
+	dependency := "https://github.com/doomerlabs/doomer-sdk-typescript/archive/abc123.tar.gz"
 	lockTemplate := filepath.Join(t.TempDir(), "package-lock.json")
 	if err := os.WriteFile(lockTemplate, []byte(`{"packages":{"":{"dependencies":{"@adversarylabs/sdk":"`+dependency+`"}},"node_modules/@adversarylabs/sdk":{"version":"0.1.32","resolved":"`+dependency+`","integrity":"sha512-test"}}}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -390,7 +390,7 @@ func TestCreateRefusesExistingDestination(t *testing.T) {
 func TestRenderSuccessIncludesNextSteps(t *testing.T) {
 	var output bytes.Buffer
 	RenderSuccess(&output, Result{Location: "/tmp/private catalog"}, "linux")
-	for _, want := range []string{"Generated catalog with 7 starter adversaries", "git init", "git commit", "'/tmp/private catalog'", "adversary catalog train", "adversary catalog train review"} {
+	for _, want := range []string{"Generated catalog with 7 starter adversaries", "git init", "git commit", "'/tmp/private catalog'", "doomer catalog train", "doomer catalog train review"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("output %q missing %q", output.String(), want)
 		}

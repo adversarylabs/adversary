@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/doomerlabs/adversary/pkg/review"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 //go:embed default.md

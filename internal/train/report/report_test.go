@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/cases"
-	"github.com/doomerlabs/adversary/internal/train/experiment"
-	"github.com/doomerlabs/adversary/internal/train/judge"
-	"github.com/doomerlabs/adversary/internal/train/normalize"
-	"github.com/doomerlabs/adversary/internal/train/score"
+	"github.com/doomerlabs/doomer/internal/train/cases"
+	"github.com/doomerlabs/doomer/internal/train/experiment"
+	"github.com/doomerlabs/doomer/internal/train/judge"
+	"github.com/doomerlabs/doomer/internal/train/normalize"
+	"github.com/doomerlabs/doomer/internal/train/score"
 )
 
 func TestWriteStoryIsPlainEnglish(t *testing.T) {
@@ -147,7 +147,7 @@ func TestWriteStoryReportsInboxRowsWhenNoIssueDraftIsProduced(t *testing.T) {
 	for _, want := range []string{
 		"No generalized issue drafts were produced this run.",
 		"recorded **2 result row(s)** in the local inbox",
-		"adversary train results ls",
+		"doomer train results ls",
 	} {
 		if !strings.Contains(story, want) {
 			t.Fatalf("story missing %q:\n%s", want, story)

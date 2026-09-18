@@ -1,4 +1,4 @@
-// Package officialsig implements Adversary Labs official catalog signatures.
+// Package officialsig implements Doomer official catalog signatures.
 //
 // Official free-catalog packages are signed with an Ed25519 key. The CLI embeds
 // the corresponding public key(s) and verifies signatures without external tools.

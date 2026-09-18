@@ -15,13 +15,13 @@ import (
 	"time"
 	"unicode"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/internal/findingverify"
-	"github.com/doomerlabs/adversary/internal/githubreview"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/review"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/internal/findingverify"
+	"github.com/doomerlabs/doomer/internal/githubreview"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 type composedRunJob struct {

@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/doomerlabs/adversary/pkg/manifest"
-	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/oci"
 )
 
 // ArtifactConfig is the strict, immutable metadata contract carried by an

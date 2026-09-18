@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
 )
 
 func TestParseTagsAndBenchmarkTrace(t *testing.T) {

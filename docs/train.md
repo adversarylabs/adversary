@@ -1,11 +1,11 @@
 # Private catalog training
 
-`adversary catalog train` mines human pull-request review comments into a
+`doomer catalog train` mines human pull-request review comments into a
 local, reviewable inbox for a private adversary catalog. It does not fine-tune
-model weights, upload review evidence to Adversary Labs, modify catalog files,
+model weights, upload review evidence to Doomer, modify catalog files,
 or create pull requests.
 
-The former top-level `adversary train` package-training interface has been
+The former top-level `doomer train` package-training interface has been
 removed from the public CLI. Its implementation remains an internal engine
 used by catalog training.
 
@@ -15,15 +15,15 @@ Create a starter catalog and configure repositories in
 `adversary.train.yaml`:
 
 ```sh
-adversary catalog init my-private-adversaries
+doomer catalog init my-private-adversaries
 cd my-private-adversaries
-adversary catalog train --model codex/gpt-5.6-luna
+doomer catalog train --model codex/gpt-5.6-luna
 ```
 
 You can also select repositories and reviewers for one run:
 
 ```sh
-adversary catalog train \
+doomer catalog train \
   --source-repo acme/api \
   --source-repo acme/web \
   --author alice \
@@ -39,7 +39,7 @@ the configured result target or turn limit, or exhausts unseen candidates.
 Live catalog training requires model-backed triage. Use `--model-provider` and
 `--model`, or set `ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. It supports
 the same OpenAI, Cloudflare, Anthropic, Fireworks, Camel, and Codex providers as
-`adversary run`. The model separates noise and broadly applicable public
+`doomer run`. The model separates noise and broadly applicable public
 concerns from codebase-specific private candidates, chooses an existing private
 adversary or suggests a new one, and drafts a generalized rule for review.
 
@@ -49,10 +49,10 @@ For example, Camel can be configured once in the shell:
 export CAMEL_API_KEY='qaml_live_...'
 export ADVERSARY_MODEL_PROVIDER=camel
 export ADVERSARY_MODEL=auto
-adversary catalog train
+doomer catalog train
 ```
 
-Training evidence is not uploaded to Adversary Labs. Bounded comment, thread,
+Training evidence is not uploaded to Doomer. Bounded comment, thread,
 review-summary, and diff evidence is sent to the model provider selected by the
 user, so teams should choose a provider and retention policy appropriate for
 their private source code.
@@ -79,19 +79,19 @@ backoff. Ctrl-C remains immediate, and rerunning resumes from the seen-PR state.
 ## Review candidates
 
 ```sh
-adversary catalog train review
-adversary catalog train inspect
-adversary catalog train inspect --all
-adversary catalog train inspect <id>
-adversary catalog train accept <id>
-adversary catalog train dismiss <id>
+doomer catalog train review
+doomer catalog train inspect
+doomer catalog train inspect --all
+doomer catalog train inspect <id>
+doomer catalog train accept <id>
+doomer catalog train dismiss <id>
 ```
 
 Catalogs created by older CLI versions may contain README-only routing policies.
 Upgrade them in place without replacing those policies:
 
 ```sh
-adversary catalog upgrade
+doomer catalog upgrade
 ```
 
 The command adds a locked, model-backed runtime, manifest, built entrypoint,
@@ -118,7 +118,7 @@ fetches the remote default branch, creates an isolated temporary worktree and a
 candidate-specific branch, asks the configured model to integrate the rule and
 create positive and negative regression cases, validates the shape of that
 change, installs locked dependencies, runs the package build and tests, runs
-`adversary validate` and `adversary pack --check`, then commits it, pushes the
+`doomer validate` and `doomer pack --check`, then commits it, pushes the
 branch, and opens a GitHub pull request with `gh`;
 it never switches or writes catalog files in the current checkout. Selecting a
 finding updates the browser URL, so refresh and browser back/forward preserve
@@ -145,8 +145,8 @@ To rebuild the local inbox with newly collected presentation metadata while
 retaining the downloaded GitHub cache, run:
 
 ```sh
-adversary catalog train reset --all
-adversary catalog train
+doomer catalog train reset --all
+doomer catalog train
 ```
 
 Results approved for later record a decision in the local inbox only. Applying

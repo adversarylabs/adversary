@@ -5,7 +5,7 @@ runtime input and review output envelopes. Changes to an existing schema must
 remain backward compatible; incompatible changes require a new versioned file.
 `adversary.manifest.v1.schema.json` is the canonical v1 project manifest schema.
 It includes optional `uses` composition members (other adversaries to run when
-this package is selected). Semantic expansion at `adversary run` time is owned
+this package is selected). Semantic expansion at `doomer run` time is owned
 by the CLI; see [composition](../docs/composition.md).
 `adversary.detection-context.v1.schema.json` and
 `adversary.detection.v1.schema.json` define the separate detector input and
@@ -25,7 +25,7 @@ independent of map insertion order.
 
 The manifest JSON Schema is the portable structural and syntactic layer. The
 canonical Go `manifest.Parse` operation is the normative semantic validator and
-always runs at CLI trust boundaries, including `adversary validate`. Semantic
+always runs at CLI trust boundaries, including `doomer validate`. Semantic
 rules that JSON Schema cannot robustly express—full Masterminds version
 constraints, cross-array read/write conflicts, and project/runtime consistency—
 are listed in `x-adversary-semanticRules` and covered by parser-only corpora.

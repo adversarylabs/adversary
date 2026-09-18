@@ -33,8 +33,8 @@ func digest(path string) string {
 func main() {
 	dir, version, commit, formula := flag.String("dir", "dist", "directory"), flag.String("version", "", "version"), flag.String("commit", "", "commit"), flag.String("formula", "", "formula")
 	flag.Parse()
-	archives := []string{"adversary_" + *version + "_darwin_amd64.tar.gz", "adversary_" + *version + "_darwin_arm64.tar.gz", "adversary_" + *version + "_linux_amd64.tar.gz", "adversary_" + *version + "_linux_arm64.tar.gz"}
-	checksummed := append(append([]string{}, archives...), "adversary_"+*version+".spdx.json", *formula, "release-manifest.json")
+	archives := []string{"doomer_" + *version + "_darwin_amd64.tar.gz", "doomer_" + *version + "_darwin_arm64.tar.gz", "doomer_" + *version + "_linux_amd64.tar.gz", "doomer_" + *version + "_linux_arm64.tar.gz"}
+	checksummed := append(append([]string{}, archives...), "doomer_"+*version+".spdx.json", *formula, "release-manifest.json")
 	expected := append(append([]string{}, checksummed...), "checksums.txt")
 	sort.Strings(expected)
 	entries, err := os.ReadDir(*dir)
@@ -114,7 +114,7 @@ func main() {
 			die("formula archive mapping missing: %s", name)
 		}
 	}
-	verifySPDX(filepath.Join(*dir, "adversary_"+*version+".spdx.json"), *version)
+	verifySPDX(filepath.Join(*dir, "doomer_"+*version+".spdx.json"), *version)
 }
 
 func verifyArchive(path, version string, epoch int64) {
@@ -131,7 +131,7 @@ func verifyArchive(path, version string, epoch int64) {
 		die("gzip timestamp is not normalized")
 	}
 	tr := tar.NewReader(gz)
-	want := map[string]bool{"adversary": false, "LICENSE": false, "README.md": false, "docs/release.md": false, "docs/trust-model.md": false}
+	want := map[string]bool{"doomer": false, "LICENSE": false, "README.md": false, "docs/release.md": false, "docs/trust-model.md": false}
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -155,13 +155,13 @@ func verifyArchive(path, version string, epoch int64) {
 			die("archive mtime is not normalized")
 		}
 		wantMode := int64(0644)
-		if n == "adversary" || strings.HasSuffix(n, "/") {
+		if n == "doomer" || strings.HasSuffix(n, "/") {
 			wantMode = 0755
 		}
 		if h.Mode != wantMode {
 			die("archive mode for %s is %o", n, h.Mode)
 		}
-		if n == "adversary" {
+		if n == "doomer" {
 			data, err := io.ReadAll(io.LimitReader(tr, 128<<20))
 			if err != nil || !bytes.Contains(data, []byte(version)) {
 				die("archive binary version stamp missing")
@@ -185,7 +185,7 @@ func verifySPDX(path, version string) {
 		Relationships []struct{ SPDXElementID, RelationshipType, RelatedSPDXElement string }
 	}
 	b, _ := os.ReadFile(path)
-	if json.Unmarshal(b, &d) != nil || d.SPDXVersion != "SPDX-2.3" || d.DataLicense != "CC0-1.0" || d.SPDXID != "SPDXRef-DOCUMENT" || d.Name != "adversary-"+version || len(d.Packages) == 0 {
+	if json.Unmarshal(b, &d) != nil || d.SPDXVersion != "SPDX-2.3" || d.DataLicense != "CC0-1.0" || d.SPDXID != "SPDXRef-DOCUMENT" || d.Name != "doomer-"+version || len(d.Packages) == 0 {
 		die("invalid SPDX document")
 	}
 	ids := map[string]bool{d.SPDXID: true}
@@ -205,7 +205,7 @@ func verifySPDX(path, version string) {
 		}
 		if r.SPDXElementID == d.SPDXID && r.RelationshipType == "DESCRIBES" {
 			for _, p := range d.Packages {
-				if p.SPDXID == r.RelatedSPDXElement && p.Name == "github.com/doomerlabs/adversary" && p.VersionInfo == version {
+				if p.SPDXID == r.RelatedSPDXElement && p.Name == "github.com/doomerlabs/doomer" && p.VersionInfo == version {
 					describes = true
 				}
 			}

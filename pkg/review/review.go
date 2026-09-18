@@ -113,13 +113,13 @@ func DecodeRunEnvelope(data []byte) (RunEnvelope, error) {
 		return RunEnvelope{}, err
 	}
 	if envelope.ProtocolVersion != ProtocolVersion {
-		return RunEnvelope{}, fmt.Errorf("unsupported adversary run protocolVersion %d", envelope.ProtocolVersion)
+		return RunEnvelope{}, fmt.Errorf("unsupported doomer run protocolVersion %d", envelope.ProtocolVersion)
 	}
 	if err := validateRequiredReviewFields(data); err != nil {
 		return RunEnvelope{}, err
 	}
 	if err := envelope.Result.validate(); err != nil {
-		return RunEnvelope{}, fmt.Errorf("invalid adversary run result: %w", err)
+		return RunEnvelope{}, fmt.Errorf("invalid doomer run result: %w", err)
 	}
 	return envelope, nil
 }
@@ -133,16 +133,16 @@ func validateRequiredReviewFields(data []byte) error {
 	}
 	for _, field := range []string{"adversary", "target", "positives", "observations", "findings", "suppressed"} {
 		if _, ok := raw.Result[field]; !ok {
-			return fmt.Errorf("invalid adversary run result: %s is required", field)
+			return fmt.Errorf("invalid doomer run result: %s is required", field)
 		}
 	}
 	var suppressed map[string]json.RawMessage
 	if err := json.Unmarshal(raw.Result["suppressed"], &suppressed); err != nil {
-		return fmt.Errorf("invalid adversary run result: suppressed must be an object")
+		return fmt.Errorf("invalid doomer run result: suppressed must be an object")
 	}
 	for _, field := range []string{"observations", "findings"} {
 		if _, ok := suppressed[field]; !ok {
-			return fmt.Errorf("invalid adversary run result: suppressed.%s is required", field)
+			return fmt.Errorf("invalid doomer run result: suppressed.%s is required", field)
 		}
 	}
 	return nil
@@ -152,7 +152,7 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	var extra json.RawMessage
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("unexpected data after adversary run envelope")
+			return fmt.Errorf("unexpected data after doomer run envelope")
 		}
 		return err
 	}

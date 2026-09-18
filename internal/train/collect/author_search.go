@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/githubapi"
 )
 
 // AuthorSearchOpts finds PRs across GitHub by reviewer/commenter activity.

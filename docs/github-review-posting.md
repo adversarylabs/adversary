@@ -1,6 +1,6 @@
 # GitHub PR review posting
 
-`adversary run` can project findings into GitHub pull request review comments
+`doomer run` can project findings into GitHub pull request review comments
 using **direct HTTP** (REST + GraphQL). It does **not** shell out to `gh`.
 
 ## Quick start
@@ -9,17 +9,17 @@ using **direct HTTP** (REST + GraphQL). It does **not** shell out to `gh`.
 export GH_TOKEN=…   # or GITHUB_TOKEN / ADVERSARY_GITHUB_TOKEN
 
 # Analyze a PR (sets base/head + workspace; does not post)
-adversary run https://github.com/owner/repo/pull/123
+doomer run https://github.com/owner/repo/pull/123
 
 # Plan only (no mutation)
-adversary run https://github.com/owner/repo/pull/123 \
+doomer run https://github.com/owner/repo/pull/123 \
   --github-review --github-dry-run --github-plan-file plan.json
 
 # Create a pending review (default)
-adversary run https://github.com/owner/repo/pull/123 --github-review
+doomer run https://github.com/owner/repo/pull/123 --github-review
 
 # Submit as informational COMMENT (visible to authors)
-adversary run https://github.com/owner/repo/pull/123 --github-review --github-submit
+doomer run https://github.com/owner/repo/pull/123 --github-review --github-submit
 ```
 
 ## Flags
@@ -42,7 +42,7 @@ Posting is **never** enabled solely because a PR URL was passed.
 
 ## Review-posting auth
 
-`adversary run --github-review` resolves an explicit environment token in this
+`doomer run --github-review` resolves an explicit environment token in this
 order:
 
 1. `ADVERSARY_GITHUB_TOKEN`
@@ -71,7 +71,7 @@ Full guide: **[Comment voice](./voice.md)** (layout, train banking, composition)
 2. **Review target** (`--path`), same relative names
 3. Else the **CLI-embedded** default prompt
 
-Example: `adversary run ./torvalds-adversary --path ../app --github-review` loads
+Example: `doomer run ./torvalds-adversary --path ../app --github-review` loads
 `./torvalds-adversary/agent/voice.md` when present.
 
 With **composition** (`uses`), the **CLI entry** package owns rewrite voice—not
@@ -115,6 +115,6 @@ failure into success; all-failed compositions retain the underlying error class.
 
 ## Catalog training authentication
 
-`adversary catalog train` uses the direct GitHub HTTP client. Explicit token
+`doomer catalog train` uses the direct GitHub HTTP client. Explicit token
 environment variables take precedence; otherwise it uses the active `gh auth`
 token. The `gh` CLI is not required when an environment token is configured.

@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/githubapi"
-	"github.com/doomerlabs/adversary/internal/train/collect"
-	"github.com/doomerlabs/adversary/internal/train/repos"
-	"github.com/doomerlabs/adversary/internal/train/state"
+	"github.com/doomerlabs/doomer/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/train/collect"
+	"github.com/doomerlabs/doomer/internal/train/repos"
+	"github.com/doomerlabs/doomer/internal/train/state"
 )
 
 func TestCollectOnePRPreservesRateLimitMetadataAfterGateExpires(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/train/judge"
+	"github.com/doomerlabs/doomer/internal/train/judge"
 )
 
 func TestAggregateAndSave(t *testing.T) {

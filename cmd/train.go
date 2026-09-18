@@ -5,17 +5,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	internalpaths "github.com/doomerlabs/adversary/internal/paths"
-	"github.com/doomerlabs/adversary/internal/train/adversaries"
-	"github.com/doomerlabs/adversary/internal/train/collect"
-	"github.com/doomerlabs/adversary/internal/train/dataroot"
-	traininbox "github.com/doomerlabs/adversary/internal/train/inbox"
-	"github.com/doomerlabs/adversary/internal/train/pipeline"
-	"github.com/doomerlabs/adversary/internal/train/repos"
-	"github.com/doomerlabs/adversary/internal/train/results"
-	trainstate "github.com/doomerlabs/adversary/internal/train/state"
-	"github.com/doomerlabs/adversary/internal/train/workspace"
+	"github.com/doomerlabs/doomer/internal/application"
+	internalpaths "github.com/doomerlabs/doomer/internal/paths"
+	"github.com/doomerlabs/doomer/internal/train/adversaries"
+	"github.com/doomerlabs/doomer/internal/train/collect"
+	"github.com/doomerlabs/doomer/internal/train/dataroot"
+	traininbox "github.com/doomerlabs/doomer/internal/train/inbox"
+	"github.com/doomerlabs/doomer/internal/train/pipeline"
+	"github.com/doomerlabs/doomer/internal/train/repos"
+	"github.com/doomerlabs/doomer/internal/train/results"
+	trainstate "github.com/doomerlabs/doomer/internal/train/state"
+	"github.com/doomerlabs/doomer/internal/train/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -53,7 +53,7 @@ authors, local packages, and official jury include/exclude before train run.`,
 			fmt.Fprintf(out, "\nNext steps:\n")
 			fmt.Fprintf(out, "  1. Edit %s — set sources.org and/or sources.repos\n", workspace.DefaultConfigName)
 			fmt.Fprintf(out, "  2. Ensure local packages have docs/scope.md\n")
-			fmt.Fprintf(out, "  3. adversary train run\n")
+			fmt.Fprintf(out, "  3. doomer train run\n")
 			return nil
 		},
 	}
@@ -117,7 +117,7 @@ Use --no-issues for a local-only run.`,
 			cfgPath, err := workspace.FindConfig(ws)
 			if err != nil {
 				if catalogMode {
-					return fmt.Errorf("%w (run: adversary catalog init)", err)
+					return fmt.Errorf("%w (run: doomer catalog init)", err)
 				}
 				return err
 			}
@@ -369,9 +369,9 @@ Use --no-issues for a local-only run.`,
 
 			stderr := cmd.ErrOrStderr()
 			if catalogMode {
-				fmt.Fprintln(stderr, "adversary catalog train")
+				fmt.Fprintln(stderr, "doomer catalog train")
 			} else {
-				fmt.Fprintln(stderr, "adversary train run")
+				fmt.Fprintln(stderr, "doomer train run")
 			}
 			fmt.Fprintf(stderr, "  config: %s\n", cfgPath)
 			fmt.Fprintf(stderr, "  state:  %s\n", stateRoot)
@@ -435,9 +435,9 @@ Use --no-issues for a local-only run.`,
 				}
 				fmt.Fprintf(out, "  results: %d row(s) written this run\n", res.ResultsAdded)
 				if catalogMode {
-					fmt.Fprintf(out, "  review:  adversary catalog train review\n")
+					fmt.Fprintf(out, "  review:  doomer catalog train review\n")
 				} else {
-					fmt.Fprintf(out, "  evidence: adversary train results ls\n")
+					fmt.Fprintf(out, "  evidence: doomer train results ls\n")
 				}
 				if res.HumanReport != nil && res.HumanReport.READMEPath != "" {
 					fmt.Fprintf(out, "  story:   %s\n", res.HumanReport.READMEPath)
@@ -508,9 +508,9 @@ func newTrainResultsCommand(app *application.App) *cobra.Command {
 		Short:   "List, inspect, and apply train result drafts",
 		Long: `The results inbox is the primary train output.
 
-  adversary train results ls
-  adversary train results inspect <id>
-  adversary train results apply <id> [<id>...]`,
+  doomer train results ls
+  doomer train results inspect <id>
+  doomer train results apply <id> [<id>...]`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -586,12 +586,12 @@ individual miss and human-gold rows remain local evidence. This prevents one
 implementation issue per reviewer comment. Use --include-individual-issues or
 --include-human-issues to opt back into those issue kinds during bulk apply.
 
-  adversary train results apply <id>
-  adversary train results apply --all
-  adversary train results apply --all --no-issue   # draft file only
-  adversary train results apply --all --no-git     # skip branch/commit
-  adversary train results apply --all --include-individual-issues
-  adversary train results apply --all --include-human-issues
+  doomer train results apply <id>
+  doomer train results apply --all
+  doomer train results apply --all --no-issue   # draft file only
+  doomer train results apply --all --no-git     # skip branch/commit
+  doomer train results apply --all --include-individual-issues
+  doomer train results apply --all --include-human-issues
 
 Uses an active gh auth login, or ADVERSARY_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN with issues:write
 on the package repo (unless --no-issue). Does not open a PR.`,
@@ -601,7 +601,7 @@ on the package repo (unless --no-issue). Does not open a PR.`,
 				return fmt.Errorf("use either --all or explicit ids, not both")
 			}
 			if !applyAll && len(args) == 0 {
-				return fmt.Errorf("provide result id(s) or --all (see: adversary train results ls)")
+				return fmt.Errorf("provide result id(s) or --all (see: doomer train results ls)")
 			}
 			state, err := resolveStateDir(path)
 			if err != nil {
@@ -716,9 +716,9 @@ func newTrainResetCommand(app *application.App) *cobra.Command {
 		Long: `By default clears discovery state (seen PRs and catalog position),
 so the next train run will re-examine the catalog repos.
 
-  adversary catalog train reset           # discovery only
-  adversary catalog train reset --results # clear results inbox only
-  adversary catalog train reset --all     # discovery + results`,
+  doomer catalog train reset           # discovery only
+  doomer catalog train reset --results # clear results inbox only
+  doomer catalog train reset --all     # discovery + results`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			state, err := resolveStateDir(path)
 			if err != nil {
@@ -768,7 +768,7 @@ func newTrainStoryCommand(app *application.App) *cobra.Command {
 			story := filepath.Join(state, "LATEST_STORY.md")
 			raw, err := workspace.ReadFile(story)
 			if err != nil {
-				return fmt.Errorf("no story at %s (run: adversary train run): %w", story, err)
+				return fmt.Errorf("no story at %s (run: doomer train run): %w", story, err)
 			}
 			fmt.Fprint(cmd.OutOrStdout(), string(raw))
 			return nil
@@ -790,7 +790,7 @@ func newTrainIssuesCommand(app *application.App) *cobra.Command {
 			}
 			_, raw, err := workspace.FindSuggestedIssues(state)
 			if err != nil {
-				return fmt.Errorf("%w (run: adversary train run)", err)
+				return fmt.Errorf("%w (run: doomer train run)", err)
 			}
 			fmt.Fprint(cmd.OutOrStdout(), string(raw))
 			return nil

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/pkg/oci"
-	"github.com/doomerlabs/adversary/pkg/officialsig"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/officialsig"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 type policyExecutor struct {

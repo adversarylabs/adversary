@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/cases"
-	"github.com/doomerlabs/adversary/internal/train/judge"
-	"github.com/doomerlabs/adversary/internal/train/report"
+	"github.com/doomerlabs/doomer/internal/train/cases"
+	"github.com/doomerlabs/doomer/internal/train/judge"
+	"github.com/doomerlabs/doomer/internal/train/report"
 )
 
 const (
@@ -666,12 +666,12 @@ func WriteFromRun(stateRoot string, in WriteInput) (int, error) {
 // FormatListTable returns a fixed-width table for CLI.
 func FormatListTable(rows []Result) string {
 	if len(rows) == 0 {
-		return "No results. Run: adversary train run\n"
+		return "No results. Run: doomer train run\n"
 	}
 	var b strings.Builder
 	b.WriteString(formatListRows(rows))
-	fmt.Fprintf(&b, "\n%d result(s). Inspect: adversary train results inspect <id>\n", len(rows))
-	fmt.Fprintf(&b, "Apply:   adversary train results apply <id>\n")
+	fmt.Fprintf(&b, "\n%d result(s). Inspect: doomer train results inspect <id>\n", len(rows))
+	fmt.Fprintf(&b, "Apply:   doomer train results apply <id>\n")
 	fmt.Fprintf(&b, "Kinds:   human = human said it · miss = should have caught · false+ = we over-fired · draft = package fix idea\n")
 	fmt.Fprintf(&b, "Store:   SQLite results.db\n")
 	return b.String()
@@ -681,7 +681,7 @@ func FormatListTable(rows []Result) string {
 // the legacy package issue/apply workflow.
 func FormatCatalogListTable(rows []Result) string {
 	if len(rows) == 0 {
-		return "No results. Run: adversary catalog train\n"
+		return "No results. Run: doomer catalog train\n"
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%-10s %-10s %-28s %s\n", "ID", "STATUS", "ADVERSARY", "HUMAN REVIEW EVIDENCE")

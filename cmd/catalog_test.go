@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/internal/train/results"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/internal/train/results"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 type catalogReviewRuntimeStub struct {
@@ -61,7 +61,7 @@ func TestCatalogTrainHelpDescribesNonInteractiveLocalInbox(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"exit without prompting", "never uploads training evidence to Adversary Labs", "bounded review evidence", "--author", "--exclude-author", "--model-provider", "cloudflare", "catalog train review", "reset"} {
+	for _, want := range []string{"exit without prompting", "never uploads training evidence to Doomer", "bounded review evidence", "--author", "--exclude-author", "--model-provider", "cloudflare", "catalog train review", "reset"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("help=%q missing %q", output.String(), want)
 		}

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/detection"
 )
 
 func gitTest(t *testing.T, root string, args ...string) string {

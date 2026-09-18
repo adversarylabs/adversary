@@ -8,9 +8,9 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/manifest"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 // Official registry host for retired-path filtering (matches oci.DefaultRegistry).

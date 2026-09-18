@@ -18,8 +18,8 @@ Public keys are committed and compiled in. Private seeds are never committed.
 
 ## Private team namespace signatures
 
-`adversary push` automatically requests a server-side signature when the target
-is the authenticated team's private namespace on the configured Adversary Labs
+`doomer push` automatically requests a server-side signature when the target
+is the authenticated team's private namespace on the configured Doomer
 registry. The platform returns a digest signature and a root-endorsed public
 team key; the publisher attaches both as OCI referrers. No private key leaves
 the platform.
@@ -31,7 +31,7 @@ for offline execution of that digest. A copy on GHCR does not match the signed
 registry and remains untrusted.
 
 This establishes authorized team provenance and artifact integrity. It does not
-mean Adversary Labs reviewed the package's code.
+mean Doomer reviewed the package's code.
 
 ## Dev vs prod keys (separate binaries)
 
@@ -98,10 +98,10 @@ adversarylabs-official-sig-v1
 
 ## CLI verify path
 
-1. `adversary pull` resolves digest, installs content, fetches the signature
+1. `doomer pull` resolves digest, installs content, fetches the signature
    referrer, verifies with this binary’s keyring, stores under
    `official-signatures/` in the local repository.
-2. `adversary run` sets `OfficialSigned` when verification succeeds, then allows
+2. `doomer run` sets `OfficialSigned` when verification succeeds, then allows
    `HostExecutor`.
 
 ## Secrets
@@ -116,15 +116,15 @@ Same secret **name** in every environment; **values** differ by env:
 
 ```bash
 # Local (from a package repo with make sign-dev — Doppler wraps the seed):
-adversary push … localhost:8787/adversarylabs/adversary:0.0.22
+doomer push … localhost:8787/adversarylabs/adversary:0.0.22
 make sign-dev REF=localhost:8787/adversarylabs/adversary:0.0.22
 
 # Or invoke CLI directly (flag or env for the seed):
-adversary sign localhost:8787/adversarylabs/adversary:0.0.22 \
+doomer sign localhost:8787/adversarylabs/adversary:0.0.22 \
   --seed "$ADVERSARY_OFFICIAL_SIGNING_SEED" --key-id official-dev
 
 # Prod CI: inject ADVERSARY_OFFICIAL_SIGNING_SEED, then after push:
-adversary sign registry.adversarylabs.ai/adversarylabs/adversary:0.0.22 \
+doomer sign registry.adversarylabs.ai/adversarylabs/adversary:0.0.22 \
   --key-id official-prod
 ```
 

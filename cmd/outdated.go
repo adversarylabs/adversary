@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/doomer/internal/application"
 	"github.com/spf13/cobra"
 )
 
@@ -12,12 +12,12 @@ func newOutdatedCommand(app *application.App, apiURL, profile *string) *cobra.Co
 		Short: "List installed adversaries with a newer catalog version",
 		Long: `List adversaries that are installed locally but have a newer version in the remote catalog.
 
-This is equivalent to adversary list --outdated. Requires network access to the
+This is equivalent to doomer list --outdated. Requires network access to the
 catalog API; if the remote catalog is unavailable, the list is empty (with a warning).
 
-Upgrade with: adversary pull <name>`,
-		Example: `  adversary outdated
-  adversary outdated --format json`,
+Upgrade with: doomer pull <name>`,
+		Example: `  doomer outdated
+  doomer outdated --format json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved, err := commandFormat(cmd, format, false)

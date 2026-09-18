@@ -11,21 +11,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/modelreview"
-	"github.com/doomerlabs/adversary/internal/train/bundle"
-	"github.com/doomerlabs/adversary/internal/train/dataroot"
-	"github.com/doomerlabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/doomer/internal/modelreview"
+	"github.com/doomerlabs/doomer/internal/train/bundle"
+	"github.com/doomerlabs/doomer/internal/train/dataroot"
+	"github.com/doomerlabs/doomer/internal/train/securefs"
 )
 
 // localPackageLocks serializes runs against the same local package directory.
 // Hunt/collect may run in parallel, but reading or patching a package while
-// another goroutine is `adversary run`-ing it races (draft apply, remeasure,
+// another goroutine is `doomer run`-ing it races (draft apply, remeasure,
 // concurrent grade). OCI refs and non-dirs skip the lock.
 var localPackageLocks sync.Map // abs path -> *sync.Mutex
 
 // LockLocalPackage holds an exclusive lock for a local package directory.
 // Use around copy/patch of a package source while another goroutine might
-// `adversary run` the same path. Returns an unlock func (always non-nil; no-op
+// `doomer run` the same path. Returns an unlock func (always non-nil; no-op
 // when the ref is not a local directory).
 func LockLocalPackage(adversaryRef string) (unlock func()) {
 	return lockLocalPackage(adversaryRef)
@@ -172,7 +172,7 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("adversary run interrupted: %w", err)
+		return nil, fmt.Errorf("doomer run interrupted: %w", err)
 	}
 	// Prefer absolute local path early so the lock keys match across callers.
 	if adversaryRef != "" {
@@ -236,7 +236,7 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 				Dependency:     "git-checkout",
 				Operation:      "run-engineering-review",
 				Classification: "missing-source",
-				SanitizedError: "repo path and base/head SHAs required for real adversary run",
+				SanitizedError: "repo path and base/head SHAs required for real doomer run",
 				StagesNotRun:   []string{"review"},
 				RetrySafe:      true,
 				NextAction:     "prepare a git checkout with exact base and reviewed head SHAs",
@@ -275,7 +275,7 @@ func RunEngineeringReviewContext(ctx context.Context, proj *bundle.Projection, o
 	combined, err := cmd.CombinedOutput()
 	latency := time.Since(start).Milliseconds()
 	if ctx.Err() != nil {
-		return nil, fmt.Errorf("adversary run interrupted: %w", ctx.Err())
+		return nil, fmt.Errorf("doomer run interrupted: %w", ctx.Err())
 	}
 	exitCode := 0
 	if err != nil {
@@ -354,7 +354,7 @@ func resolveAdversaryCLI() (string, error) {
 	if current, err := os.Executable(); err == nil && strings.HasPrefix(filepath.Base(current), "adversary") {
 		return current, nil
 	}
-	return exec.LookPath("adversary")
+	return exec.LookPath("doomer")
 }
 
 func looksLikeJSON(raw []byte) bool {
@@ -402,7 +402,7 @@ func nextActionForAdversaryError(msg string) string {
 	case strings.Contains(l, "api key"):
 		return "set the model provider API key (e.g. OPENAI_API_KEY) for engineering-review"
 	case strings.Contains(l, "not installed") || strings.Contains(l, "oci"):
-		return "pass --source /path/to/engineering-review-adversary (local checkout) or adversary pull engineering-review"
+		return "pass --source /path/to/engineering-review-adversary (local checkout) or doomer pull engineering-review"
 	default:
 		return "run the same adversary command manually with --verbose and fix the reported error"
 	}

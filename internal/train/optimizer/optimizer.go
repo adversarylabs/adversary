@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/critic"
+	"github.com/doomerlabs/doomer/internal/train/critic"
 )
 
 // Proposal is an optimizer output: patch + experiment record (no merge).

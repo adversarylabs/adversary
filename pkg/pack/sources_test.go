@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/doomerlabs/adversary/pkg/blobsource"
-	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/oci"
 )
 
 func TestArtifactSourcesExposeOwnedPackedContent(t *testing.T) {

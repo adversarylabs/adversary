@@ -1,4 +1,4 @@
-// Package workspace implements adversary train config, init, and draft attribution.
+// Package workspace implements doomer train config, init, and draft attribution.
 package workspace
 
 import (

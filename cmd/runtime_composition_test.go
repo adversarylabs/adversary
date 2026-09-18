@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/internal/modelreview"
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/pack"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/internal/modelreview"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/pack"
 )
 
 type compositionProcess struct{}

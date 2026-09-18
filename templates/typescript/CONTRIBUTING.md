@@ -3,15 +3,15 @@
 ## Prerequisites
 
 - Node.js 22
-- The Adversary CLI
+- The Doomer CLI
 
 ## Build and test
 
 ```sh
 npm ci
 npm test
-adversary validate .
-adversary pack . --check
+doomer validate .
+doomer pack . --check
 ```
 
 ## Changing review behavior

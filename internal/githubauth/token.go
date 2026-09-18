@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/githubapi"
 )
 
 // RequireToken returns an explicit environment token or the active gh login token.

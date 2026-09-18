@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
 )
 
 type browserAPI struct {

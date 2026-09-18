@@ -11,15 +11,15 @@ import (
 	"strings"
 	"time"
 
-	internalpaths "github.com/doomerlabs/adversary/internal/paths"
-	"github.com/doomerlabs/adversary/pkg/oci"
+	internalpaths "github.com/doomerlabs/doomer/internal/paths"
+	"github.com/doomerlabs/doomer/pkg/oci"
 )
 
 var ErrAuthCAS = errors.New("credential compare-and-swap conflict")
 
 const (
 	DefaultRegistry = oci.DefaultRegistry
-	DefaultAPIURL   = "https://adversarylabs.ai/api"
+	DefaultAPIURL   = "https://doomer.ai/api"
 	expirySkew      = 30 * time.Second
 )
 

@@ -1,8 +1,8 @@
 package adversary
 
 import (
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/manifest"
 )
 
 // SelectBeforeDownload is deliberately conservative. Executable detectors and

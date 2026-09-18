@@ -8,7 +8,7 @@ result
 .direnv/
 docs/cli-audit.md
 
-# adversary train runtime state
+# doomer train runtime state
 .adversary-train/
 
 # Never embed or commit install trees under templates / smoke packages.

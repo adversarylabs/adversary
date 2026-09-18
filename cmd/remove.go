@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/repository"
 	"github.com/spf13/cobra"
 )
 
@@ -44,11 +44,11 @@ space is reclaimed. The remote catalog is never modified.
 
 Concurrent pack/pull is handled by re-scanning the store until matching
 references are gone (or a bounded number of passes is exhausted).`,
-		Example: `  adversary remove go/cli
-  adversary remove go/cli:0.0.15 security/secrets
-  adversary remove --all --yes
-  adversary remove --dry-run --all
-  adversary rm go/cli`,
+		Example: `  doomer remove go/cli
+  doomer remove go/cli:0.0.15 security/secrets
+  doomer remove --all --yes
+  doomer remove --dry-run --all
+  doomer rm go/cli`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, opts.format, false)

@@ -20,11 +20,11 @@ import (
 	"strings"
 	"time"
 
-	internalpaths "github.com/doomerlabs/adversary/internal/paths"
-	"github.com/doomerlabs/adversary/internal/publock"
-	"github.com/doomerlabs/adversary/pkg/blobsource"
-	"github.com/doomerlabs/adversary/pkg/manifest"
-	"github.com/doomerlabs/adversary/pkg/oci"
+	internalpaths "github.com/doomerlabs/doomer/internal/paths"
+	"github.com/doomerlabs/doomer/internal/publock"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/oci"
 )
 
 type Options struct {

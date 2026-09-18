@@ -6,7 +6,7 @@ migration; `application-cleanup-status.md` records the completed command-family
 composition. Compatibility constructors remain test-only seams, not production
 dependency authorities.
 
-`adversary store check [--json]` reports repository integrity and fails closed
+`doomer store check [--json]` reports repository integrity and fails closed
 when corrupt. `store gc` is a dry run by default; destructive application
 requires both `--apply` and `--yes`. `store ref-delete` requires the expected
 digest and `--yes`, preserving CAS semantics. `store migration-status [--json]`

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://adversarylabs.dev/schemas/cli-output-v1.schema.json",
-  "title": "Adversary CLI output envelope v1",
+  "title": "Doomer CLI output envelope v1",
   "oneOf": [
     { "$ref": "#/$defs/list" }, { "$ref": "#/$defs/inspect" },
     { "$ref": "#/$defs/search" }, { "$ref": "#/$defs/whoami" },

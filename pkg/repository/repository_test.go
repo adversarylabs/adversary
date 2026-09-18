@@ -14,10 +14,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/rootreplace"
-	"github.com/doomerlabs/adversary/pkg/blobsource"
-	"github.com/doomerlabs/adversary/pkg/oci"
-	"github.com/doomerlabs/adversary/pkg/pack"
+	"github.com/doomerlabs/doomer/internal/rootreplace"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/pack"
 )
 
 func digestSource(t *testing.T, data []byte, algorithm string) blobsource.Source {
@@ -772,7 +772,7 @@ func TestReferenceJournalRejectsNoncanonicalReferenceWithoutCreatingIndex(t *tes
 }
 
 func TestPullRetargetsMutableLatestAfterContentImport(t *testing.T) {
-	// Mirrors adversary pull: install content without binding the mutable tag
+	// Mirrors doomer pull: install content without binding the mutable tag
 	// (ImportSources CAS-rejects retarget), then UpdateRef moves :latest.
 	r := Repository{Root: t.TempDir()}
 	oldArt := artifactVersioned(t, "local/test", "0.0.11", "old")

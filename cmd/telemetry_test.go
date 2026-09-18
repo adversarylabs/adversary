@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/internal/telemetry"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/repository"
-	"github.com/doomerlabs/adversary/pkg/review"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/internal/telemetry"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 type sourceIdentityRuntime struct{ application.Runtime }

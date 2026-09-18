@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/manifest"
 )
 
 func TestEvaluateDeclarativeDetectionSeparatesRepositoryAndChangeMatch(t *testing.T) {

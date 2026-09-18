@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/oci"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 type selectionTestRegistry struct {

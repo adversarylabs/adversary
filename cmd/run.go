@@ -15,15 +15,15 @@ import (
 	"time"
 	"unicode"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/internal/githubapi"
-	"github.com/doomerlabs/adversary/internal/githubreview"
-	"github.com/doomerlabs/adversary/internal/modelreview"
-	"github.com/doomerlabs/adversary/internal/telemetry"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/outcomecontext"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/githubreview"
+	"github.com/doomerlabs/doomer/internal/modelreview"
+	"github.com/doomerlabs/doomer/internal/telemetry"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/outcomecontext"
 	"github.com/spf13/cobra"
 )
 
@@ -130,22 +130,22 @@ Use --all-files for a whole-repository scan instead of change inference.
 A GitHub pull request URL may be passed as a positional argument to set the
 review base/head and optional posting context. Posting still requires
 --github-review.`,
-		Example: `  adversary run
-  adversary run --all
-  adversary run --all-files
-  adversary run --dry-run --explain
-  adversary run --base main
-  adversary run adversarylabs/dockerfile
-  adversary run ./local-adversary --path ../project
-  adversary run person/torvalds --path ../app
-  adversary run adversarylabs/dockerfile --base main --head feature
-  adversary run adversarylabs/go-cli adversarylabs/secrets --all-files
-  adversary run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id
-  adversary run review/code --model-provider camel --model auto
-  adversary run --all --all-files --output-file review.txt
-  adversary run go-cli secrets --format json --output-file results.json
-  adversary run https://github.com/owner/repo/pull/123
-  adversary run https://github.com/owner/repo/pull/123 --github-review --github-dry-run`,
+		Example: `  doomer run
+  doomer run --all
+  doomer run --all-files
+  doomer run --dry-run --explain
+  doomer run --base main
+  doomer run adversarylabs/dockerfile
+  doomer run ./local-adversary --path ../project
+  doomer run person/torvalds --path ../app
+  doomer run adversarylabs/dockerfile --base main --head feature
+  doomer run adversarylabs/go-cli adversarylabs/secrets --all-files
+  doomer run adversarylabs/go-cli --model-provider fireworks --model accounts/fireworks/models/your-model-id
+  doomer run review/code --model-provider camel --model auto
+  doomer run --all --all-files --output-file review.txt
+  doomer run go-cli secrets --format json --output-file results.json
+  doomer run https://github.com/owner/repo/pull/123
+  doomer run https://github.com/owner/repo/pull/123 --github-review --github-dry-run`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, opts.format, opts.json)

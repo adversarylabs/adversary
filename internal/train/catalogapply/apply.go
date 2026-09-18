@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/results"
-	"github.com/doomerlabs/adversary/internal/train/workspace"
+	"github.com/doomerlabs/doomer/internal/train/results"
+	"github.com/doomerlabs/doomer/internal/train/workspace"
 	"gopkg.in/yaml.v3"
 )
 
@@ -456,7 +456,7 @@ func pullRequestBody(row results.Result, generatedTarget, generatedSummary strin
 			fmt.Fprintln(&body, "\n## Validation\n\n- Deterministic finding and close non-finding cases passed through the production runtime.\n- The isolated adversary package built, tested, validated, and packed successfully.")
 		}
 	}
-	fmt.Fprintln(&body, "\nGenerated locally by `adversary catalog train inspect`; review and edit before merging.")
+	fmt.Fprintln(&body, "\nGenerated locally by `doomer catalog train inspect`; review and edit before merging.")
 	return body.String()
 }
 

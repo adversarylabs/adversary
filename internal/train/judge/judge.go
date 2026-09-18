@@ -4,8 +4,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/doomerlabs/adversary/internal/train/cases"
-	"github.com/doomerlabs/adversary/internal/train/normalize"
+	"github.com/doomerlabs/doomer/internal/train/cases"
+	"github.com/doomerlabs/doomer/internal/train/normalize"
 )
 
 // FindingJudgment is a structured judgment for one finding.

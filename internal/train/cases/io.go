@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/doomerlabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/doomer/internal/train/securefs"
 	"gopkg.in/yaml.v3"
 )
 

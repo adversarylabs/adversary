@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/blobsource"
-	"github.com/doomerlabs/adversary/pkg/namespacesig"
-	"github.com/doomerlabs/adversary/pkg/oci"
-	"github.com/doomerlabs/adversary/pkg/pack"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/namespacesig"
+	"github.com/doomerlabs/doomer/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/pack"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 func TestNewReportsTypedMissingDependencies(t *testing.T) {

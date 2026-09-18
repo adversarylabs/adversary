@@ -175,7 +175,7 @@ func TestParseRejectsUnsafeAndInvalidInput(t *testing.T) {
 		"unknown field":      valid + "unknown: true\n",
 		"duplicate":          strings.Replace(valid, "name: adversarylabs/example", "name: adversarylabs/example\nname: other/example", 1),
 		"alias":              strings.Replace(valid, "command: [dist/index.js]", "command: &cmd [dist/index.js]", 1),
-		"name":               strings.Replace(valid, "adversarylabs/example", "Adversary Labs/example", 1),
+		"name":               strings.Replace(valid, "adversarylabs/example", "Doomer/example", 1),
 		"version":            strings.Replace(valid, "1.2.3", "latest", 1),
 		"runtime":            strings.Replace(valid, "name: node", "name: shell", 1),
 		"command":            strings.Replace(valid, "command: [dist/index.js]", "command: []", 1),

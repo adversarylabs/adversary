@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/modelreview"
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/review"
+	"github.com/doomerlabs/doomer/internal/modelreview"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 const Version = "adversary.finding-verification.v1"

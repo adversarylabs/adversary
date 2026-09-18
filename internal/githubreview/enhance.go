@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/modelreview"
-	"github.com/doomerlabs/adversary/pkg/review"
+	"github.com/doomerlabs/doomer/internal/modelreview"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 // bodyOutputSchema is the JSON schema providers must satisfy for voice rewrite.

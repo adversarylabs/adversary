@@ -1,8 +1,8 @@
-BINARY := bin/adversary
+BINARY := bin/doomer
 VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || printf unknown)
 BUILD_DATE ?= unknown
-VERSION_PKG := github.com/doomerlabs/adversary/internal/version
+VERSION_PKG := github.com/doomerlabs/doomer/internal/version
 LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)
 
 .PHONY: build test verify ci clean
@@ -28,5 +28,5 @@ ci:
 	scripts/ci-verify.sh all
 
 clean:
-	test "$(BINARY)" = "bin/adversary"
+	test "$(BINARY)" = "bin/doomer"
 	rm -f -- $(BINARY)

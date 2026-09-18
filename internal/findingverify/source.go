@@ -14,7 +14,7 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/detection"
 )
 
 const maxFileBytes = 512 << 10

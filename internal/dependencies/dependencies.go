@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
 )
 
 type Clock struct {
@@ -192,7 +192,7 @@ func (b BrowserAuth) Login(parent context.Context, request application.BrowserAu
 	if err != nil {
 		return adversarylabs.TokenResponse{}, err
 	}
-	fmt.Fprintln(request.Output, "Opening browser for Adversary Labs login...")
+	fmt.Fprintln(request.Output, "Opening browser for Doomer login...")
 	fmt.Fprintln(request.Output)
 	fmt.Fprintln(request.Output, loginURL)
 	fmt.Fprintln(request.Output)

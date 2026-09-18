@@ -10,7 +10,7 @@ func newVersionCommand() *cobra.Command {
 	var legacyJSON bool
 	cmd := &cobra.Command{
 		Use:   "version",
-		Short: "Print the adversary version",
+		Short: "Print the doomer version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved, err := commandFormat(cmd, format, legacyJSON)

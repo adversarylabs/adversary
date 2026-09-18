@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/githubapi"
 )
 
 // HunkSets maps path -> line sets for RIGHT (head) and LEFT (base).

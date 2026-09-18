@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/doomer/internal/train/securefs"
 )
 
 // EnsureStateDir creates the state directory tree (user-only 0700).
@@ -99,8 +99,8 @@ func RewriteTrainDrafts(stateRoot string) error {
 			return nil
 		}
 		text := string(raw)
-		text = strings.ReplaceAll(text, "adversary-factory discovery", "adversary train")
-		text = strings.ReplaceAll(text, "Drafted by adversary-factory", "Drafted by adversary train")
+		text = strings.ReplaceAll(text, "adversary-factory discovery", "doomer train")
+		text = strings.ReplaceAll(text, "Drafted by adversary-factory", "Drafted by doomer train")
 		return os.WriteFile(path, []byte(text), 0o644)
 	})
 }

@@ -12,26 +12,26 @@ import (
 	"sync"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/adversaries"
-	"github.com/doomerlabs/adversary/internal/train/bundle"
-	"github.com/doomerlabs/adversary/internal/train/cases"
-	"github.com/doomerlabs/adversary/internal/train/checkout"
-	"github.com/doomerlabs/adversary/internal/train/collect"
-	"github.com/doomerlabs/adversary/internal/train/critic"
-	"github.com/doomerlabs/adversary/internal/train/dataroot"
-	"github.com/doomerlabs/adversary/internal/train/experiment"
-	"github.com/doomerlabs/adversary/internal/train/judge"
-	"github.com/doomerlabs/adversary/internal/train/normalize"
-	"github.com/doomerlabs/adversary/internal/train/optimizer"
-	"github.com/doomerlabs/adversary/internal/train/receipt"
-	"github.com/doomerlabs/adversary/internal/train/report"
-	"github.com/doomerlabs/adversary/internal/train/repos"
-	"github.com/doomerlabs/adversary/internal/train/results"
-	"github.com/doomerlabs/adversary/internal/train/runner"
-	"github.com/doomerlabs/adversary/internal/train/scope"
-	"github.com/doomerlabs/adversary/internal/train/score"
-	"github.com/doomerlabs/adversary/internal/train/securefs"
-	"github.com/doomerlabs/adversary/internal/train/state"
+	"github.com/doomerlabs/doomer/internal/train/adversaries"
+	"github.com/doomerlabs/doomer/internal/train/bundle"
+	"github.com/doomerlabs/doomer/internal/train/cases"
+	"github.com/doomerlabs/doomer/internal/train/checkout"
+	"github.com/doomerlabs/doomer/internal/train/collect"
+	"github.com/doomerlabs/doomer/internal/train/critic"
+	"github.com/doomerlabs/doomer/internal/train/dataroot"
+	"github.com/doomerlabs/doomer/internal/train/experiment"
+	"github.com/doomerlabs/doomer/internal/train/judge"
+	"github.com/doomerlabs/doomer/internal/train/normalize"
+	"github.com/doomerlabs/doomer/internal/train/optimizer"
+	"github.com/doomerlabs/doomer/internal/train/receipt"
+	"github.com/doomerlabs/doomer/internal/train/report"
+	"github.com/doomerlabs/doomer/internal/train/repos"
+	"github.com/doomerlabs/doomer/internal/train/results"
+	"github.com/doomerlabs/doomer/internal/train/runner"
+	"github.com/doomerlabs/doomer/internal/train/scope"
+	"github.com/doomerlabs/doomer/internal/train/score"
+	"github.com/doomerlabs/doomer/internal/train/securefs"
+	"github.com/doomerlabs/doomer/internal/train/state"
 	"gopkg.in/yaml.v3"
 )
 
@@ -69,7 +69,7 @@ type Options struct {
 	// normal target and turn limits. It is supported by repository discovery.
 	AllHistory bool
 	// Concurrency is how many PR collects may run in parallel (gh API). Default 4.
-	// Local package `adversary run` stays serialized via a per-path lock.
+	// Local package `doomer run` stays serialized via a per-path lock.
 	Concurrency int
 	// ResetDiscovery clears all seen-PR and catalog-cursor state once before hunting.
 	ResetDiscovery  bool
@@ -944,7 +944,7 @@ func Run(opts Options) (*Result, error) {
 	}
 	out.HumanReport = human
 
-	// Inbox rows for: adversary train results ls / inspect / apply
+	// Inbox rows for: doomer train results ls / inspect / apply
 	var issues []report.SuggestedIssue
 	if human != nil {
 		issues = human.Issues
@@ -982,7 +982,7 @@ func Run(opts Options) (*Result, error) {
 
 func reviewResultsCommand(opts Options) string {
 	if opts.CollectOnly {
-		return "adversary catalog train review"
+		return "doomer catalog train review"
 	}
 	return "the package-training results viewer"
 }

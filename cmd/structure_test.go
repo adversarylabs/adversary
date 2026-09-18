@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 func TestRootCommandRemainsThinComposition(t *testing.T) {
@@ -127,8 +127,8 @@ var forbiddenHandlerSelectors = map[string]struct{}{
 	"crypto/rand.Reader": {}, "crypto/rand.Read": {}, "net.Listen": {}, "net.ListenConfig": {},
 	"net/http.Server": {}, "net/http.Client": {}, "net/http.Transport": {}, "net/http.DefaultClient": {}, "net/http.Get": {}, "net/http.Post": {}, "net/http.PostForm": {}, "net/http.NewRequest": {}, "net/http.NewRequestWithContext": {}, "net/http.NewServeMux": {}, "net/http.Serve": {}, "net/http.ServeTLS": {}, "net/http.ListenAndServe": {}, "net/http.ListenAndServeTLS": {},
 	"context.Background": {}, "context.TODO": {}, "context.WithoutCancel": {},
-	"github.com/doomerlabs/adversary/internal/initproject.Create": {}, "github.com/doomerlabs/adversary/internal/initproject.RenderSuccess": {},
-	"github.com/doomerlabs/adversary/pkg/manifest.Load": {}, "github.com/doomerlabs/adversary/pkg/pack.Create": {}, "github.com/doomerlabs/adversary/pkg/pack.Check": {}, "github.com/doomerlabs/adversary/pkg/oci.ParseReference": {},
+	"github.com/doomerlabs/doomer/internal/initproject.Create": {}, "github.com/doomerlabs/doomer/internal/initproject.RenderSuccess": {},
+	"github.com/doomerlabs/doomer/pkg/manifest.Load": {}, "github.com/doomerlabs/doomer/pkg/pack.Create": {}, "github.com/doomerlabs/doomer/pkg/pack.Check": {}, "github.com/doomerlabs/doomer/pkg/oci.ParseReference": {},
 }
 
 var forbiddenHandlerImports = map[string]struct{}{"crypto/rand": {}, "net": {}}
@@ -216,7 +216,7 @@ func TestSubcommandStreamOverridesAreHonored(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "__start_adversary") {
+	if !strings.Contains(out.String(), "__start_doomer") {
 		t.Fatalf("completion subcommand output=%q", out.String())
 	}
 }

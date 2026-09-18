@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/train/judge"
+	"github.com/doomerlabs/doomer/internal/train/judge"
 )
 
 // Hypothesis is a generalized improvement hypothesis (not a repo-specific fix).

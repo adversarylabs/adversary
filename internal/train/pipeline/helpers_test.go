@@ -3,9 +3,9 @@ package pipeline
 import (
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/train/cases"
-	"github.com/doomerlabs/adversary/internal/train/collect"
-	"github.com/doomerlabs/adversary/internal/train/dataroot"
+	"github.com/doomerlabs/doomer/internal/train/cases"
+	"github.com/doomerlabs/doomer/internal/train/collect"
+	"github.com/doomerlabs/doomer/internal/train/dataroot"
 )
 
 func TestLooksJSONAndWrap(t *testing.T) {

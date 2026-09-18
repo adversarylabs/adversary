@@ -2,7 +2,7 @@
 
 Rewrite automated code-review findings into concise GitHub pull request comments
 for this package. The CLI loads this entire file as the rewrite prompt on
-`adversary run` GitHub comment enhance.
+`doomer run` GitHub comment enhance.
 
 Edit the **Core voice** section for persona. As train applies human gold, append
 real review quotes under **Example maintainer comments** (style few-shots only).

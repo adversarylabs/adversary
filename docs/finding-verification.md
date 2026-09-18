@@ -17,11 +17,11 @@ This stage does not rewrite claims or transfer validity between findings. The ex
 ## Capture a run and replay only the verifier
 
 ```sh
-adversary run review/code --base main --head feature \
+doomer run review/code --base main --head feature \
   --model-provider camel --model auto \
   --verification-output verification.json
 
-adversary verify-findings verification.json \
+doomer verify-findings verification.json \
   --model-provider camel --model auto \
   --output verification-replay.json
 ```

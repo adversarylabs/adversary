@@ -23,7 +23,7 @@ two publishers for one release.
 Archives have stable ordering, uid/gid 0, normalized modes and mtimes, and gzip
 headers without timestamps. Each contains the binary, README, LICENSE status,
 release guide, and trust model. Every cross-built binary is inspected for its
-stamped version metadata; the native Linux binary executes `adversary version`.
+stamped version metadata; the native Linux binary executes `doomer version`.
 `release-manifest.json` binds the version and peeled tag commit to each artifact
 digest; the checksum set covers that manifest.
 
@@ -71,8 +71,8 @@ execute; see the trust model.
 4. Verify checksums, archive contents, binary `version`, and the rendered
    Homebrew formula. Confirm the tap commit references the same URLs and hashes.
 
-Prereleases use `2026.7.11-beta.1`, update `adversary-beta.rb`, and install
-`adversary-beta` so stable and beta can coexist.
+Prereleases use `2026.7.11-beta.1`, update `doomer-beta.rb`, and install
+`doomer-beta` so stable and beta can coexist.
 
 ## Credentials and least privilege
 

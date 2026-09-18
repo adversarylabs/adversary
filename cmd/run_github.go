@@ -9,15 +9,15 @@ import (
 	"strings"
 	"time"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/internal/githubapi"
-	"github.com/doomerlabs/adversary/internal/githubreview"
-	"github.com/doomerlabs/adversary/internal/modelreview"
-	"github.com/doomerlabs/adversary/internal/outcomeinfer"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/outcomecontext"
-	"github.com/doomerlabs/adversary/pkg/review"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/githubreview"
+	"github.com/doomerlabs/doomer/internal/modelreview"
+	"github.com/doomerlabs/doomer/internal/outcomeinfer"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/outcomecontext"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 // peelPRURL extracts at most one GitHub PR URL from args; remaining are adversary refs.
@@ -374,7 +374,7 @@ func registerGitHubReviewWatch(
 	deps := app.Dependencies()
 	auth, ok, err := scopedAuth(deps.Auth, apiURL, profile, deps.RegistryHost)
 	if err != nil || !ok || auth.Token == "" {
-		fmt.Fprintln(progress, "Warning: review posted but feedback watching requires an authenticated Adversary Labs CI session.")
+		fmt.Fprintln(progress, "Warning: review posted but feedback watching requires an authenticated Doomer CI session.")
 		return
 	}
 	watch := adversarylabs.ReviewWatch{

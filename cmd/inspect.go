@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/pack"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/pack"
 	"github.com/spf13/cobra"
 )
 
@@ -23,11 +23,11 @@ func newInspectCommand(app *application.App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inspect <name|digest|adversary-ref>",
 		Short: "Inspect a locally stored adversary or local runtime configuration",
-		Example: `  adversary inspect ./smoke-tests/comment-sentence-adversary --path .
-  adversary inspect security-reviewer --path .
-  adversary inspect security-reviewer
-  adversary inspect security-reviewer:0.1.0
-  adversary inspect sha256:abc123`,
+		Example: `  doomer inspect ./smoke-tests/comment-sentence-adversary --path .
+  doomer inspect security-reviewer --path .
+  doomer inspect security-reviewer
+  doomer inspect security-reviewer:0.1.0
+  doomer inspect sha256:abc123`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, inspectOpts.format, inspectOpts.json)

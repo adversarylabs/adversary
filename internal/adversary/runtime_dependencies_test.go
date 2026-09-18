@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	canonical "github.com/doomerlabs/adversary/pkg/manifest"
+	canonical "github.com/doomerlabs/doomer/pkg/manifest"
 )
 
 type capturingExecutor struct {

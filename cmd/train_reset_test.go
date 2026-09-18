@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	trainstate "github.com/doomerlabs/adversary/internal/train/state"
-	"github.com/doomerlabs/adversary/internal/train/workspace"
+	trainstate "github.com/doomerlabs/doomer/internal/train/state"
+	"github.com/doomerlabs/doomer/internal/train/workspace"
 )
 
 func TestTrainResetClearsDiscoveryAndCatalogCursor(t *testing.T) {

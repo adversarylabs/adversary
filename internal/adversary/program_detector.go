@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/detection"
 )
 
 const maxDetectionOutputBytes int64 = 1 << 20

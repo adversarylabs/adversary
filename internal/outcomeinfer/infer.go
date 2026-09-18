@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/outcomecontext"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/outcomecontext"
 )
 
 const prompt = `Infer the intended outcome of a software change from the supplied source-attributed metadata.

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/doomerlabs/adversary/pkg/compose"
-	"github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/compose"
+	"github.com/doomerlabs/doomer/pkg/manifest"
 )
 
 // ExpandUsesRefs returns the ordered product run set for a local package:

@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/pkg/review"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 func TestResolveVoiceDefaultAndOverride(t *testing.T) {
 	prompt, info := ResolveVoice("")
-	if info.Source != "cli_default" || !strings.Contains(prompt, "Adversary Labs") {
+	if info.Source != "cli_default" || !strings.Contains(prompt, "Doomer") {
 		t.Fatalf("%s %q", info.Source, prompt[:min(40, len(prompt))])
 	}
 	// Prefer agent/voice.md over legacy VOICE.md

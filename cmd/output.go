@@ -8,10 +8,10 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/doomerlabs/adversary/internal/version"
-	"github.com/doomerlabs/adversary/pkg/pack"
-	"github.com/doomerlabs/adversary/pkg/repository"
-	"github.com/doomerlabs/adversary/pkg/review"
+	"github.com/doomerlabs/doomer/internal/version"
+	"github.com/doomerlabs/doomer/pkg/pack"
+	"github.com/doomerlabs/doomer/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/review"
 	"github.com/spf13/cobra"
 )
 

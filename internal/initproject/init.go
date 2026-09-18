@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/doomerlabs/adversary/pkg/manifest"
-	projecttemplates "github.com/doomerlabs/adversary/templates"
+	"github.com/doomerlabs/doomer/pkg/manifest"
+	projecttemplates "github.com/doomerlabs/doomer/templates"
 )
 
 const (
@@ -180,7 +180,7 @@ func RenderSuccess(w io.Writer, result Result, _ string, platform string) {
 	}
 	fmt.Fprintln(w, "  npm ci")
 	fmt.Fprintln(w, "  npm run build")
-	fmt.Fprintln(w, "  adversary run . --path /path/to/repository")
+	fmt.Fprintln(w, "  doomer run . --path /path/to/repository")
 }
 
 func shellQuote(value string) string {
@@ -208,7 +208,7 @@ func writableFileMode(mode fs.FileMode) fs.FileMode {
 }
 
 // shouldSkipInitTemplatePath excludes install/vendor trees that must not ship
-// inside `adversary init` scaffolds (use the published npm SDK instead).
+// inside `doomer init` scaffolds (use the published npm SDK instead).
 func shouldSkipInitTemplatePath(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	if rel == "node_modules" || strings.HasPrefix(rel, "node_modules/") {

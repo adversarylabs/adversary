@@ -28,7 +28,7 @@ required future resolution before claiming descendant-tree termination there.
 
 ## Local build policy (CLI-007)
 
-`adversary run` no longer mutates a local source tree implicitly. Existing
+`doomer run` no longer mutates a local source tree implicitly. Existing
 `dist` output is used by default and missing output fails before a temporary run
 directory or child is created. `--build` explicitly requests the transactional
 builder and `--build-timeout` bounds it. The retired `--no-build` spelling is a

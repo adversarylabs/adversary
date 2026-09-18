@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/modelreview"
-	"github.com/doomerlabs/adversary/pkg/review"
+	"github.com/doomerlabs/doomer/internal/modelreview"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 type fakeProvider struct {
@@ -36,7 +36,7 @@ func (f *fakeProvider) Review(_ context.Context, req modelreview.Request) (model
 	if !strings.Contains(req.Prompt, "CLI comment rewrite task") {
 		return modelreview.Result{}, &modelreview.ProviderError{Code: "bad_prompt", Message: "missing rewrite preamble"}
 	}
-	if !strings.Contains(req.Prompt, "Adversary Labs") && !strings.Contains(req.Prompt, "Custom") &&
+	if !strings.Contains(req.Prompt, "Doomer") && !strings.Contains(req.Prompt, "Custom") &&
 		!strings.Contains(req.Prompt, "Example maintainer comments") {
 		return modelreview.Result{}, &modelreview.ProviderError{Code: "bad_prompt", Message: "missing voice document"}
 	}

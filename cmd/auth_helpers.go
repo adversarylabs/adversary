@@ -3,8 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
 	"io"
 	"strings"
 	"time"

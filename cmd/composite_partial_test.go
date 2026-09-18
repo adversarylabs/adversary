@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/repository"
-	"github.com/doomerlabs/adversary/pkg/review"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 func TestCompositeIsolatesFailedReviewers(t *testing.T) {

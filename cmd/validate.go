@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/doomer/internal/application"
 	"github.com/spf13/cobra"
 )
 

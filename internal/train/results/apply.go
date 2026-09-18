@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/githubapi"
-	"github.com/doomerlabs/adversary/internal/githubauth"
+	"github.com/doomerlabs/doomer/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/githubauth"
 )
 
 // ErrResultDismissed prevents a stale apply decision from overriding a human
@@ -263,7 +263,7 @@ func formatIssueBody(r Result, draftPath, packagePath string) string {
 	spirit := ClassifyCommentSpirit(r.Summary)
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Task for coding agent\n\n")
-	fmt.Fprintf(&b, "Implement this **adversary train** result in the **`%s`** package.\n\n", r.Package)
+	fmt.Fprintf(&b, "Implement this **doomer train** result in the **`%s`** package.\n\n", r.Package)
 	switch kind {
 	case KindMiss:
 		fmt.Fprintf(&b, "The human review signal was a **`%s`**. Teach the general detection class described in the brief.\n", spirit)
@@ -391,7 +391,7 @@ func formatIssueBody(r Result, draftPath, packagePath string) string {
 	if draftPath != "" {
 		fmt.Fprintf(&b, "### Local draft copy\n\n`%s`\n\n", RelDraftPath(packagePath, draftPath))
 	}
-	fmt.Fprintf(&b, "---\n_Opened by `adversary train`._\n")
+	fmt.Fprintf(&b, "---\n_Opened by `doomer train`._\n")
 	return b.String()
 }
 
@@ -472,11 +472,11 @@ func formatApplyMarkdown(r Result) string {
 	}
 	fmt.Fprintf(&b, "- **Run:** `%s`\n", r.RunID)
 	if bankVoice {
-		fmt.Fprintf(&b, "\n_Applied by `adversary train results apply`. Implement detection + bank persona voice gold in `%s`._\n\n", VoiceBankFile)
+		fmt.Fprintf(&b, "\n_Applied by `doomer train results apply`. Implement detection + bank persona voice gold in `%s`._\n\n", VoiceBankFile)
 	} else if humanGold {
-		fmt.Fprintf(&b, "\n_Applied by `adversary train results apply`. Implement the generalized detection class; keep wording as evidence only._\n\n")
+		fmt.Fprintf(&b, "\n_Applied by `doomer train results apply`. Implement the generalized detection class; keep wording as evidence only._\n\n")
 	} else {
-		fmt.Fprintf(&b, "\n_Applied by `adversary train results apply`. Synthetic draft — do not bank summary into `%s`._\n\n", VoiceBankFile)
+		fmt.Fprintf(&b, "\n_Applied by `doomer train results apply`. Synthetic draft — do not bank summary into `%s`._\n\n", VoiceBankFile)
 	}
 	draft := strings.TrimSpace(r.DraftBody)
 	if humanGold {

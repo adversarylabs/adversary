@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
 )
 
 func TestProcessTTYRejectsRedirectedInputWithoutReadPassword(t *testing.T) {

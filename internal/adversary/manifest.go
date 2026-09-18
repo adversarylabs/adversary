@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	canonical "github.com/doomerlabs/adversary/pkg/manifest"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	canonical "github.com/doomerlabs/doomer/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 type Manifest = canonical.Manifest

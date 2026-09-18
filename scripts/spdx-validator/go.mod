@@ -1,4 +1,4 @@
-module github.com/doomerlabs/adversary/scripts/spdx-validator
+module github.com/doomerlabs/doomer/scripts/spdx-validator
 
 go 1.26.6
 

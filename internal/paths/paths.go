@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const appName = "adversary"
+const appName = "doomer"
 
 // DataDir returns persistent artifact data. ADVERSARY_DATA_DIR overrides only
 // this root; credentials and disposable caches remain separate.
@@ -29,12 +29,12 @@ func dataDir(goos string, getenv func(string) string, home func() (string, error
 	}
 	switch goos {
 	case "darwin":
-		return filepath.Join(h, "Library", "Application Support", "Adversary"), nil
+		return filepath.Join(h, "Library", "Application Support", "Doomer"), nil
 	case "windows":
 		if base := strings.TrimSpace(getenv("LOCALAPPDATA")); base != "" {
-			return filepath.Join(base, "Adversary"), nil
+			return filepath.Join(base, "Doomer"), nil
 		}
-		return filepath.Join(h, "AppData", "Local", "Adversary"), nil
+		return filepath.Join(h, "AppData", "Local", "Doomer"), nil
 	default:
 		if base := strings.TrimSpace(getenv("XDG_DATA_HOME")); base != "" {
 			return filepath.Join(base, appName), nil

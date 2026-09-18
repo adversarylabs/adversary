@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/doomer/internal/application"
 	"github.com/spf13/cobra"
 )
 
@@ -25,13 +25,13 @@ func newInitCommand(app *application.App) *cobra.Command {
 <name> is the project directory name (and default package id). Use --path to
 place it under a parent directory instead of the current working directory.
 
-  adversary init my-adversary
-  adversary init my-adversary --path ../packages
-  adversary init person-mitchellh --path /Users/me/src/github.com/adversarylabs`,
-		Example: `  adversary init my-adversary
-  adversary init my-adversary --sdk typescript
-  adversary init my-adversary --path ../packages
-  adversary init person-mitchellh --path ~/go/src/github.com/adversarylabs`,
+  doomer init my-adversary
+  doomer init my-adversary --path ../packages
+  doomer init person-mitchellh --path /Users/me/src/github.com/adversarylabs`,
+		Example: `  doomer init my-adversary
+  doomer init my-adversary --sdk typescript
+  doomer init my-adversary --path ../packages
+  doomer init person-mitchellh --path ~/go/src/github.com/adversarylabs`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dest, err := resolveInitDestination(args[0], opts.path)

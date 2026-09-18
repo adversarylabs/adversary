@@ -4,7 +4,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
 )
 
 func TestBlobSourceAdapterIsRepeatable(t *testing.T) {

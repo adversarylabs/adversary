@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/githubapi"
 )
 
 // OrgRepo is one repository listed under a GitHub organization (or user).

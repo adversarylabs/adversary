@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This repository contains an Adversary Labs adversary.
+This repository contains an Doomer adversary.
 
 An adversary analyzes a repository and emits structured findings.
 

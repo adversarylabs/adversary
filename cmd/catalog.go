@@ -10,12 +10,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	internalpaths "github.com/doomerlabs/adversary/internal/paths"
-	trainadversaries "github.com/doomerlabs/adversary/internal/train/adversaries"
-	"github.com/doomerlabs/adversary/internal/train/catalogapply"
-	traininbox "github.com/doomerlabs/adversary/internal/train/inbox"
-	"github.com/doomerlabs/adversary/internal/train/results"
+	"github.com/doomerlabs/doomer/internal/application"
+	internalpaths "github.com/doomerlabs/doomer/internal/paths"
+	trainadversaries "github.com/doomerlabs/doomer/internal/train/adversaries"
+	"github.com/doomerlabs/doomer/internal/train/catalogapply"
+	traininbox "github.com/doomerlabs/doomer/internal/train/inbox"
+	"github.com/doomerlabs/doomer/internal/train/results"
 	"github.com/spf13/cobra"
 )
 
@@ -39,16 +39,16 @@ noise, route reusable concerns to a private adversary when there is enough evide
 plausible unmatched concerns as unassigned candidates in the catalog's private local SQLite inbox,
 then exit without prompting. Discovery state is durable, so interrupted and repeated scans resume safely.
 
-This command never uploads training evidence to Adversary Labs or creates issues.
+This command never uploads training evidence to Doomer or creates issues.
 It sends bounded review evidence to the model provider you configure for triage.
-Review results later with "adversary catalog train review".`
-	command.Example = `  adversary catalog train --model codex/gpt-5.6-luna
-  adversary catalog train --source-repo acme/api --source-repo acme/web
-  adversary catalog train --since 2025-09-12 --all-history
-  adversary catalog train --model-provider cloudflare --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
-  adversary catalog train --author alice --exclude-author dependabot[bot]
-  adversary catalog train --max-prs 25
-  adversary catalog train review`
+Review results later with "doomer catalog train review".`
+	command.Example = `  doomer catalog train --model codex/gpt-5.6-luna
+  doomer catalog train --source-repo acme/api --source-repo acme/web
+  doomer catalog train --since 2025-09-12 --all-history
+  doomer catalog train --model-provider cloudflare --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
+  doomer catalog train --author alice --exclude-author dependabot[bot]
+  doomer catalog train --max-prs 25
+  doomer catalog train review`
 	if flag := command.Flags().Lookup("no-issues"); flag != nil {
 		_ = flag.Value.Set("true")
 		flag.DefValue = "true"
@@ -317,7 +317,7 @@ func newCatalogTrainReviewCommand() *cobra.Command {
 					for _, catalog := range catalogs {
 						fmt.Fprintf(cmd.OutOrStdout(), "  %d  %s\n", catalog.Pending, filepath.Dir(catalog.ConfigPath))
 					}
-					fmt.Fprintln(cmd.OutOrStdout(), "\nReview one with: adversary catalog train review --path <catalog>")
+					fmt.Fprintln(cmd.OutOrStdout(), "\nReview one with: doomer catalog train review --path <catalog>")
 					return nil
 				}
 				state = catalogs[0].StateRoot
@@ -339,12 +339,12 @@ func newCatalogTrainReviewCommand() *cobra.Command {
 					pathFlag = fmt.Sprintf(" --path %q", reviewPath)
 				}
 				fmt.Fprintln(out, "Open the local browser review queue:")
-				fmt.Fprintf(out, "  adversary catalog train inspect%s\n", pathFlag)
+				fmt.Fprintf(out, "  doomer catalog train inspect%s\n", pathFlag)
 				fmt.Fprintln(out, "Terminal alternatives:")
-				fmt.Fprintf(out, "  adversary catalog train inspect --all%s\n", pathFlag)
-				fmt.Fprintf(out, "  adversary catalog train inspect <id>%s\n", pathFlag)
-				fmt.Fprintf(out, "  adversary catalog train accept <id>%s\n", pathFlag)
-				fmt.Fprintf(out, "  adversary catalog train dismiss <id>%s\n", pathFlag)
+				fmt.Fprintf(out, "  doomer catalog train inspect --all%s\n", pathFlag)
+				fmt.Fprintf(out, "  doomer catalog train inspect <id>%s\n", pathFlag)
+				fmt.Fprintf(out, "  doomer catalog train accept <id>%s\n", pathFlag)
+				fmt.Fprintf(out, "  doomer catalog train dismiss <id>%s\n", pathFlag)
 			}
 			return nil
 		},
@@ -387,9 +387,9 @@ func newCatalogInitCommand(app *application.App) *cobra.Command {
 uploading source code. The catalog includes a focused set of editable starter
 adversaries for common production concerns. The destination must not already
 exist.`,
-		Example: `  adversary catalog init
-  adversary catalog init adversary-catalog
-  adversary catalog init ../security/private-adversaries`,
+		Example: `  doomer catalog init
+  doomer catalog init adversary-catalog
+  doomer catalog init ../security/private-adversaries`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			destination := "adversary-catalog"
@@ -415,8 +415,8 @@ func newCatalogUpgradeCommand(app *application.App) *cobra.Command {
 		Long: `Preserve existing private policies while adding the model-backed runtime,
 manifest, build output, and tests required to run every catalog entry as an adversary.
 Existing runnable adversaries are left unchanged.`,
-		Example: `  adversary catalog upgrade
-  adversary catalog upgrade ../security/private-adversaries`,
+		Example: `  doomer catalog upgrade
+  doomer catalog upgrade ../security/private-adversaries`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := "."

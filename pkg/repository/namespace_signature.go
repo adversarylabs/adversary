@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/doomerlabs/adversary/pkg/namespacesig"
+	"github.com/doomerlabs/doomer/pkg/namespacesig"
 )
 
 type namespaceSignatureEvidence struct {
@@ -15,7 +15,7 @@ type namespaceSignatureEvidence struct {
 }
 
 // SaveNamespaceSignature stores only already-verified evidence. The root is a
-// public key fetched over the authenticated Adversary Labs API connection.
+// public key fetched over the authenticated Doomer API connection.
 func (r Repository) SaveNamespaceSignature(digest string, envelopeData, trustData []byte, root namespacesig.Root) error {
 	if err := r.init(); err != nil {
 		return err

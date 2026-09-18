@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/catalogapply"
-	"github.com/doomerlabs/adversary/internal/train/results"
+	"github.com/doomerlabs/doomer/internal/train/catalogapply"
+	"github.com/doomerlabs/doomer/internal/train/results"
 )
 
 func TestHandlerRequiresTokenAndRendersLocalReviewPage(t *testing.T) {

@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"runtime"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/internal/version"
-	"github.com/doomerlabs/adversary/pkg/review"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/internal/version"
+	"github.com/doomerlabs/doomer/pkg/review"
 	"github.com/spf13/cobra"
 )
 
@@ -48,7 +48,7 @@ func newRootCommand(app *application.App) *cobra.Command {
 	var apiURL string
 	var profile string
 	cmd := &cobra.Command{
-		Use:           "adversary",
+		Use:           "doomer",
 		Short:         "Run source-code adversaries against a local repository",
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -60,11 +60,11 @@ func newRootCommand(app *application.App) *cobra.Command {
 		},
 	}
 	cmd.Version = fmt.Sprintf("%s (commit %s, built %s, %s, review protocol %d)", version.Version, version.Commit, version.BuildDate, runtime.Version(), review.ProtocolVersion)
-	cmd.SetVersionTemplate("adversary {{.Version}}\n")
+	cmd.SetVersionTemplate("doomer {{.Version}}\n")
 	cmd.SetIn(deps.Stdin)
 	cmd.SetOut(deps.Stdout)
 	cmd.SetErr(deps.Stderr)
-	cmd.PersistentFlags().StringVar(&apiURL, "api-url", deps.DefaultAPIURL, "Adversary Labs API endpoint (or ADVERSARY_API_URL)")
+	cmd.PersistentFlags().StringVar(&apiURL, "api-url", deps.DefaultAPIURL, "Doomer API endpoint (or ADVERSARY_API_URL)")
 	cmd.PersistentFlags().StringVar(&profile, "profile", "default", "credential profile")
 
 	cmd.AddCommand(newRunCommand(app, &apiURL, &profile))

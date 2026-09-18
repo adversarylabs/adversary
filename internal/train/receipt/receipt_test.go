@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/train/dataroot"
+	"github.com/doomerlabs/doomer/internal/train/dataroot"
 )
 
 func TestReceiptSaveVerify(t *testing.T) {

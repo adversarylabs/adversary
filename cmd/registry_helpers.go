@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/oci"
 	"net/http"
 	"strings"
 )
@@ -101,7 +101,7 @@ func defaultAdversaryLabsPushRef(ctx context.Context, deps application.Dependenc
 			}
 			return defaultRegistryPushRef(registryHost, namespace, record), nil
 		}
-		return "", fmt.Errorf("remote reference is required for unqualified local ref %q; run adversary login or provide a remote reference", localRef)
+		return "", fmt.Errorf("remote reference is required for unqualified local ref %q; run doomer login or provide a remote reference", localRef)
 	}
 	namespace := registryNamespaceFromAuth(auth, deps.RegistryNS)
 	if namespace == "" {
@@ -124,7 +124,7 @@ func defaultAdversaryLabsPushRef(ctx context.Context, deps application.Dependenc
 		}
 	}
 	if namespace == "" {
-		return "", fmt.Errorf("logged in, but Adversary Labs did not provide a registry namespace; provide a remote reference explicitly")
+		return "", fmt.Errorf("logged in, but Doomer did not provide a registry namespace; provide a remote reference explicitly")
 	}
 	return defaultRegistryPushRef(registryHost, namespace, record), nil
 }
@@ -159,7 +159,7 @@ func pushErrorWithNamespaceHint(err error, localRef string, ref oci.Reference) e
 	} else {
 		suggested += ":" + ref.Tag
 	}
-	return fmt.Errorf("push is not authorized for %s\n\nThe remote namespace %q may not match your Adversary Labs team slug. Push to your slug namespace, for example:\n  adversary push %s %s\n\nFor unqualified pushes, set ADVERSARY_REGISTRY_NAMESPACE=<slug>.\n\nOriginal error: %w", ref.Locator(), namespace, localRef, suggested, err)
+	return fmt.Errorf("push is not authorized for %s\n\nThe remote namespace %q may not match your Doomer team slug. Push to your slug namespace, for example:\n  doomer push %s %s\n\nFor unqualified pushes, set ADVERSARY_REGISTRY_NAMESPACE=<slug>.\n\nOriginal error: %w", ref.Locator(), namespace, localRef, suggested, err)
 }
 
 func isRegistryAccessDenied(err error) bool {

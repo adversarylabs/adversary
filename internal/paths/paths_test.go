@@ -12,10 +12,10 @@ func TestDataDirPlatformDefaults(t *testing.T) {
 		env  map[string]string
 		want string
 	}{
-		{"linux", nil, filepath.FromSlash("/home/test/.local/share/adversary")},
-		{"linux", map[string]string{"XDG_DATA_HOME": filepath.FromSlash("/xdg")}, filepath.FromSlash("/xdg/adversary")},
-		{"darwin", nil, filepath.FromSlash("/home/test/Library/Application Support/Adversary")},
-		{"windows", map[string]string{"LOCALAPPDATA": filepath.FromSlash("/local")}, filepath.FromSlash("/local/Adversary")},
+		{"linux", nil, filepath.FromSlash("/home/test/.local/share/doomer")},
+		{"linux", map[string]string{"XDG_DATA_HOME": filepath.FromSlash("/xdg")}, filepath.FromSlash("/xdg/doomer")},
+		{"darwin", nil, filepath.FromSlash("/home/test/Library/Application Support/Doomer")},
+		{"windows", map[string]string{"LOCALAPPDATA": filepath.FromSlash("/local")}, filepath.FromSlash("/local/Doomer")},
 	}
 	for _, tc := range tests {
 		t.Run(tc.os, func(t *testing.T) {

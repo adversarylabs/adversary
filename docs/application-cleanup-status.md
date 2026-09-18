@@ -6,7 +6,7 @@ receive no App argument: they have no filesystem, process, network, credential,
 clock, or persistence authority to inject. They inherit stdin/stdout/stderr from
 the App-bound root command, so passing an otherwise unused App would obscure
 rather than strengthen the dependency boundary. Authentication persistence,
-Adversary Labs API operations, and OCI registry creation are strongly typed
+Doomer API operations, and OCI registry creation are strongly typed
 ports/factories; login, logout, search, whoami, push, pull, and default namespace
 selection do not construct or discover dependencies inside handlers.
 

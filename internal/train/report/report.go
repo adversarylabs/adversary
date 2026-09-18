@@ -11,15 +11,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/cases"
-	"github.com/doomerlabs/adversary/internal/train/critic"
-	"github.com/doomerlabs/adversary/internal/train/experiment"
-	"github.com/doomerlabs/adversary/internal/train/judge"
-	"github.com/doomerlabs/adversary/internal/train/normalize"
-	"github.com/doomerlabs/adversary/internal/train/scope"
-	"github.com/doomerlabs/adversary/internal/train/score"
-	"github.com/doomerlabs/adversary/internal/train/securefs"
-	"github.com/doomerlabs/adversary/internal/train/workspace"
+	"github.com/doomerlabs/doomer/internal/train/cases"
+	"github.com/doomerlabs/doomer/internal/train/critic"
+	"github.com/doomerlabs/doomer/internal/train/experiment"
+	"github.com/doomerlabs/doomer/internal/train/judge"
+	"github.com/doomerlabs/doomer/internal/train/normalize"
+	"github.com/doomerlabs/doomer/internal/train/scope"
+	"github.com/doomerlabs/doomer/internal/train/score"
+	"github.com/doomerlabs/doomer/internal/train/securefs"
+	"github.com/doomerlabs/doomer/internal/train/workspace"
 )
 
 // Input is everything needed to write a human-readable run report.
@@ -234,9 +234,9 @@ func formatCLI(verdict, headline, openPath string, in Input) string {
 	b.WriteString("========================================================\n\n")
 	fmt.Fprintf(&b, "%s\n\n", headline)
 	b.WriteString("Next steps:\n\n")
-	b.WriteString("  adversary train results ls\n")
-	b.WriteString("  adversary train results inspect <id>\n")
-	b.WriteString("  adversary train results apply <id>\n\n")
+	b.WriteString("  doomer train results ls\n")
+	b.WriteString("  doomer train results inspect <id>\n")
+	b.WriteString("  doomer train results apply <id>\n\n")
 	fmt.Fprintf(&b, "Full story (optional):\n  %s\n", openPath)
 	if in.DataRoot != "" {
 		fmt.Fprintf(&b, "  %s/LATEST_STORY.md\n", in.DataRoot)
@@ -328,11 +328,11 @@ func renderStoryWithIssues(in Input, verdict, headline string, issues []Suggeste
 
 	// Suggested GitHub issues (draft only — not created)
 	fmt.Fprintf(&b, "## Suggested GitHub issue(s) for our agents\n\n")
-	b.WriteString("_These are **drafts for you to review**. Nothing was filed on GitHub. Use `adversary train results ls` / `apply`._\n\n")
+	b.WriteString("_These are **drafts for you to review**. Nothing was filed on GitHub. Use `doomer train results ls` / `apply`._\n\n")
 	if len(issues) == 0 {
 		b.WriteString("No generalized issue drafts were produced this run.\n\n")
 		if in.InboxRows > 0 {
-			fmt.Fprintf(&b, "The run still recorded **%d result row(s)** in the local inbox, including individual review evidence and grading state. Inspect or dismiss them with `adversary train results ls`.\n\n", in.InboxRows)
+			fmt.Fprintf(&b, "The run still recorded **%d result row(s)** in the local inbox, including individual review evidence and grading state. Inspect or dismiss them with `doomer train results ls`.\n\n", in.InboxRows)
 		}
 	} else {
 		for i, iss := range issues {

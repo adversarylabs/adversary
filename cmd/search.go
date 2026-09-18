@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/doomer/internal/application"
 	"github.com/spf13/cobra"
 )
 
@@ -16,10 +16,10 @@ func newSearchCommand(app *application.App, apiURL, profile *string) *cobra.Comm
 		Short: "Search adversaries available to you (local store and registry)",
 		Long: `Search the local store and remote catalog you can access.
 
-With no query, search lists the same combined inventory as adversary list.
+With no query, search lists the same combined inventory as doomer list.
 With a query, results are filtered by name, version, reference, description, status, or digest.
 
-Each name appears once. STATUS is installed, catalog, or outdated (see adversary list).
+Each name appears once. STATUS is installed, catalog, or outdated (see doomer list).
 
 Flags filter after status is computed, so --installed still shows outdated rows.
 
@@ -29,12 +29,12 @@ security/secrets, …).
 
 Remote entries require network access and, for private catalog results, login.
 If the remote catalog is unavailable, local adversaries are still searched.`,
-		Example: `  adversary search
-  adversary search dockerfile
-  adversary search go/cli
-  adversary search --installed
-  adversary search --catalog secrets
-  adversary search --outdated`,
+		Example: `  doomer search
+  doomer search dockerfile
+  doomer search go/cli
+  doomer search --installed
+  doomer search --catalog secrets
+  doomer search --outdated`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved, err := commandFormat(cmd, format, legacyJSON)

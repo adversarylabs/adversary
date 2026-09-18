@@ -1,11 +1,11 @@
 # Repository index for adversary runs
 
-Status: implemented (v1 CLI + SDK + go/security consumer)  
+Status: implemented (v1 CLI + SDK + go/security consumer)
 Audience: CLI + TypeScript SDK
 
 ## Summary
 
-**Yes — this makes sense.** Best-in-class generic review agents need **repo navigation**, not only the PR diff. The CLI should ensure a **local filesystem index** of the target repository at `adversary run` time; the SDK should expose **read-only query APIs** so every adversary (specialist) can use the same graph without re-walking the tree ad hoc.
+**Yes — this makes sense.** Best-in-class generic review agents need **repo navigation**, not only the PR diff. The CLI should ensure a **local filesystem index** of the target repository at `doomer run` time; the SDK should expose **read-only query APIs** so every adversary (specialist) can use the same graph without re-walking the tree ad hoc.
 
 Caching between runs is optional for correctness but **worth doing**: same worktree, same content → skip rebuild. Defer CI action caches until local behavior is solid.
 
@@ -31,10 +31,10 @@ The product shape stays specialist-first. The platform provides the map; adversa
 
 Adversaries must not invent their own long-lived caches of the target repo. They may keep in-memory structures for a single run derived from SDK queries.
 
-## Lifecycle at `adversary run`
+## Lifecycle at `doomer run`
 
 ```text
-adversary run [refs…] --path <repo>
+doomer run [refs…] --path <repo>
   1. Resolve review scope (base/head/all-files/worktree)  [existing]
   2. EnsureRepoIndex(repoPath) → IndexHandle
        - compute fingerprint of target tree state
@@ -86,16 +86,16 @@ Branch name alone is **not** enough (two branches can share a tree; dirty trees 
 2. Absolute `repoPath`
 3. If git repo:
    - `HEAD` commit OID (or empty if unborn)
-   - **Dirty worktree fingerprint**: sorted list of `(path, blob_oid or mtime+size)` for tracked+untracked relevant files, or a single `git write-tree` / `git status --porcelain=v2` digest  
+   - **Dirty worktree fingerprint**: sorted list of `(path, blob_oid or mtime+size)` for tracked+untracked relevant files, or a single `git write-tree` / `git status --porcelain=v2` digest
 4. If not git: recursive content hash of included paths (or mtime+size fallback with documented caveats)
 
-**Hit:** fingerprint matches `meta.json` and files exist.  
-**Miss:** full rebuild (v1).  
+**Hit:** fingerprint matches `meta.json` and files exist.
+**Miss:** full rebuild (v1).
 **Later:** incremental update when only a small set of paths changed.
 
 CLI may log one stderr line on rebuild vs hit (debug/verbose). No interactive prompt.
 
-### Dirty worktrees (local `adversary run .`)
+### Dirty worktrees (local `doomer run .`)
 
 Local development **must** see uncommitted changes. The index always reflects the **current worktree content** used for review, not only last commit. That is the main reason fingerprint ≠ `HEAD` alone.
 
@@ -133,15 +133,15 @@ await index.file("pkg/hub/server.go"); // metadata + optional hash
 
 **Properties:**
 
-- Read-only  
-- Fail closed with clear errors if index missing (CLI should always ensure before launch when feature is on)  
-- Bounded results (limits) so models cannot dump the monorepo  
-- No network  
+- Read-only
+- Fail closed with clear errors if index missing (CLI should always ensure before launch when feature is on)
+- Bounded results (limits) so models cannot dump the monorepo
+- No network
 - Citations: prefer returning **paths + line ranges** that plug into existing evidence / `read_file` flows
 
 **Injection into the child process:**
 
-- Prefer extending the existing run protocol (e.g. path to index dir or socket in `ADVERSARY_INPUT` / env) rather than re-parsing git inside every adversary.  
+- Prefer extending the existing run protocol (e.g. path to index dir or socket in `ADVERSARY_INPUT` / env) rather than re-parsing git inside every adversary.
 - Details belong in a follow-on CLI/SDK protocol change; this doc only requires that the CLI **builds** and the SDK **reads** the same on-disk format.
 
 ## CLI flags / config (suggested)
@@ -167,34 +167,34 @@ If cold builds are painful on large trees, **v1.1 incremental** is the fix—not
 
 ## Relationship to review scope
 
-- **Diff / change context** remains the primary *focus* of the review (what changed).  
-- **Index** answers *where else to look* (callers, importers, twins).  
+- **Diff / change context** remains the primary *focus* of the review (what changed).
+- **Index** answers *where else to look* (callers, importers, twins).
 - Automatic detection and specialist selection stay as today; index does not replace detection globs.
 
 ## Security and trust
 
-- Index is a **derived view of local/trusted checkout content**. It does not grant host execution trust to packages.  
-- Treat indexed source as **untrusted data** for model prompts (same as today’s excerpts).  
-- Cache files: user-only permissions (0700/0600) like other CLI state.  
+- Index is a **derived view of local/trusted checkout content**. It does not grant host execution trust to packages.
+- Treat indexed source as **untrusted data** for model prompts (same as today’s excerpts).
+- Cache files: user-only permissions (0700/0600) like other CLI state.
 - Do not upload the index anywhere.
 
 ## Rollout plan
 
-1. **On-disk format + CLI ensure/load** with fingerprint (no SDK yet) — unit tests on hit/miss/dirty.  
-2. **SDK read API** + fixture index in tests.  
-3. **Wire specialists** that exercise both languages on day one — `go/security` **and** `lang/typescript` — to use `importersOf` / `importsOf` in deterministic navigation (and later model tools). Both languages get import edges from the CLI builder; specialists only *query*.  
-4. Measure against a private held-out set of multi-hop review findings (offline).  
-5. Turn on by default; document in CLI/runtime docs.  
+1. **On-disk format + CLI ensure/load** with fingerprint (no SDK yet) — unit tests on hit/miss/dirty.
+2. **SDK read API** + fixture index in tests.
+3. **Wire specialists** that exercise both languages on day one — `go/security` **and** `lang/typescript` — to use `importersOf` / `importsOf` in deterministic navigation (and later model tools). Both languages get import edges from the CLI builder; specialists only *query*.
+4. Measure against a private held-out set of multi-hop review findings (offline).
+5. Turn on by default; document in CLI/runtime docs.
 6. CI action cache — later, separate change.
 
 ## Non-goals (v1)
 
-- Persistent SaaS / remote index service  
-- Full monorepo semantic search  
-- Replacing specialist tree-sitter passes entirely on day one  
-- Guaranteeing index completeness for every language  
-- Caching in GitHub Actions  
-- Product knowledge bases (Cursor rules, internal docs) — orthogonal layer  
+- Persistent SaaS / remote index service
+- Full monorepo semantic search
+- Replacing specialist tree-sitter passes entirely on day one
+- Guaranteeing index completeness for every language
+- Caching in GitHub Actions
+- Product knowledge bases (Cursor rules, internal docs) — orthogonal layer
 
 ## Pushbacks / refinements (accepted into design)
 
@@ -208,19 +208,19 @@ If cold builds are painful on large trees, **v1.1 incremental** is the fix—not
 
 ## Open questions (resolve at implement)
 
-1. Exact protocol field: env path vs embedded in `ADVERSARY_INPUT`.  
-2. SQLite vs JSONL for v1 (SQLite better for queries; JSONL simpler to debug).  
-3. Whether `go list` / module graph is used for Go edges vs pure tree-sitter; for TypeScript, whether `tsconfig` path aliases / project references are resolved in v1 or deferred.  
+1. Exact protocol field: env path vs embedded in `ADVERSARY_INPUT`.
+2. SQLite vs JSONL for v1 (SQLite better for queries; JSONL simpler to debug).
+3. Whether `go list` / module graph is used for Go edges vs pure tree-sitter; for TypeScript, whether `tsconfig` path aliases / project references are resolved in v1 or deferred.
 4. Feature flag default during beta (`off` vs `auto`).
 
 ## Success criteria
 
-- Second `adversary run` on an unchanged worktree does **not** rebuild (observable via verbose log or test).  
-- Dirty edit to a tracked file **does** invalidate.  
-- An SDK test adversary can resolve importers of a fixture file via the index API.  
+- Second `doomer run` on an unchanged worktree does **not** rebuild (observable via verbose log or test).
+- Dirty edit to a tracked file **does** invalidate.
+- An SDK test adversary can resolve importers of a fixture file via the index API.
 - No public dependency on CI caches for correctness.
 
 ## Related
 
-- Trust model: host execution still signature/path based; index is not trust  
+- Trust model: host execution still signature/path based; index is not trust
 - Automatic detection: `docs/automatic-detection.md` (scope remains separate)

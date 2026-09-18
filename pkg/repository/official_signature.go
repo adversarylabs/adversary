@@ -3,7 +3,7 @@ package repository
 import (
 	"fmt"
 
-	"github.com/doomerlabs/adversary/pkg/officialsig"
+	"github.com/doomerlabs/doomer/pkg/officialsig"
 )
 
 // SaveOfficialSignature stores a signature envelope for digest under the local store.

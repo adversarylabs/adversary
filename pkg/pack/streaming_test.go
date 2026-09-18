@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
 )
 
 func BenchmarkCreateStreamingLargeLayer(b *testing.B) {

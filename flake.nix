@@ -1,5 +1,5 @@
 {
-  description = "Adversary CLI development environment";
+  description = "Doomer CLI development environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -50,7 +50,7 @@
         };
 
         packages.default = buildGoModule {
-          pname = "adversary";
+          pname = "doomer";
           version = "dev";
           src = self;
           # The TypeScript template has a directory named vendor; use the Go
@@ -63,7 +63,7 @@
             mkdir -p "$HOME"
           '';
           ldflags = [
-            "-X github.com/doomerlabs/adversary/internal/version.Version=dev"
+            "-X github.com/doomerlabs/doomer/internal/version.Version=dev"
           ];
         };
       });

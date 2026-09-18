@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 type pathExecutor struct{ path string }

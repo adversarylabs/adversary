@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/namespacesig"
-	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/namespacesig"
+	"github.com/doomerlabs/doomer/pkg/oci"
 )
 
 // attachHostedNamespaceSignature makes signing part of the hosted-registry

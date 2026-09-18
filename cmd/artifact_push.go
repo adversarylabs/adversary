@@ -7,9 +7,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/blobsource"
-	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/oci"
 	"github.com/spf13/cobra"
 )
 
@@ -36,10 +36,10 @@ func newPushCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 		Short:         "Push a locally packed adversary to an OCI registry",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Example: `  adversary push dockerfile-reviewer:0.1.0
-  adversary push security-reviewer:0.1.0 ghcr.io/acme/security-reviewer:0.1.0
-  adversary push sha256:abc123 ghcr.io/acme/security-reviewer:0.1.0
-  adversary push ghcr.io/acme/security-reviewer:0.1.0`,
+		Example: `  doomer push dockerfile-reviewer:0.1.0
+  doomer push security-reviewer:0.1.0 ghcr.io/acme/security-reviewer:0.1.0
+  doomer push sha256:abc123 ghcr.io/acme/security-reviewer:0.1.0
+  doomer push ghcr.io/acme/security-reviewer:0.1.0`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved, err := commandFormat(cmd, format, legacyJSON)

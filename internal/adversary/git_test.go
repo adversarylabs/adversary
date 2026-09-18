@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/detection"
 )
 
 func TestParseChangedFiles(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/repository"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -130,7 +130,7 @@ func TestCompletion(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "__start_adversary") {
+	if !strings.Contains(out.String(), "__start_doomer") {
 		t.Fatalf("unexpected completion output")
 	}
 }

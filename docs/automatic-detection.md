@@ -1,16 +1,16 @@
 # Automatic adversary selection
 
-`adversary run` with **no adversary references** pulls every adversary in the
+`doomer run` with **no adversary references** pulls every adversary in the
 remote catalog you can access (unless `--no-pull`), resolves one review scope,
 asks each installed adversary whether that scope applies, explains the
 selection, and runs the selected set.
 
 ```sh
-adversary run                      # detect + run for inferred scope
-adversary run --all                # every installed adversary
-adversary run --all-files          # whole-repository scan
-adversary run --dry-run --explain
-adversary run --no-pull            # local store only
+doomer run                      # detect + run for inferred scope
+doomer run --all                # every installed adversary
+doomer run --all-files          # whole-repository scan
+doomer run --dry-run --explain
+doomer run --no-pull            # local store only
 ```
 
 With **one or more** adversary references, those adversaries run explicitly
@@ -18,8 +18,8 @@ With **one or more** adversary references, those adversaries run explicitly
 apply.
 
 ```sh
-adversary run adversarylabs/go-cli
-adversary run adversarylabs/go-cli adversarylabs/secrets --all-files
+doomer run adversarylabs/go-cli
+doomer run adversarylabs/go-cli adversarylabs/secrets --all-files
 ```
 
 Pull failures during automatic selection are reported as warnings; the command
@@ -31,11 +31,11 @@ pass `--no-pull`.
 Scope for both automatic and explicit `run` uses the same resolution:
 
 ```sh
-adversary run                         # dirty worktree, then PR CI, then branch, then whole target
-adversary run --base main             # merge-base(main, HEAD) through HEAD
-adversary run --base main --head feature
-adversary run --all-files             # entire repository
-adversary run --path ../project
+doomer run                         # dirty worktree, then PR CI, then branch, then whole target
+doomer run --base main             # merge-base(main, HEAD) through HEAD
+doomer run --base main --head feature
+doomer run --all-files             # entire repository
+doomer run --path ../project
 ```
 
 With no explicit scope flags in CI, the CLI uses captured base/head pairs when
@@ -110,16 +110,16 @@ run; low-confidence results are visible with `--explain` but do not run unless
 the threshold is lowered or they are included explicitly.
 
 ```sh
-adversary run --dry-run
-adversary run --explain
-adversary run --min-confidence high
-adversary run --min-confidence medium
-adversary run --min-confidence low
-adversary run --include security --include complexity
-adversary run --exclude repository
-adversary run --all
-adversary run --no-pull
-adversary run --all-files --all
+doomer run --dry-run
+doomer run --explain
+doomer run --min-confidence high
+doomer run --min-confidence medium
+doomer run --min-confidence low
+doomer run --include security --include complexity
+doomer run --exclude repository
+doomer run --all
+doomer run --no-pull
+doomer run --all-files --all
 ```
 
 By default, automatic `run` pulls the accessible remote catalog before detection
@@ -148,7 +148,7 @@ for text output. With `--format json` it goes to stderr so stdout stays a pure
 JSON stream for adversary result documents.
 
 Repository applicability, change applicability, automatic selection, and an
-explicit `adversary run <reference>` are distinct. Repository applicability
+explicit `doomer run <reference>` are distinct. Repository applicability
 says the technology exists somewhere in the repository. Change applicability
 says the resolved change intersects the adversary's scope. Automatic selection
 applies the confidence threshold and include/exclude policy. Explicit `run`

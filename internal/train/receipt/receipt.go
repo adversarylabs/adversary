@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/dataroot"
-	"github.com/doomerlabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/doomer/internal/train/dataroot"
+	"github.com/doomerlabs/doomer/internal/train/securefs"
 )
 
 // Receipt is the durable proof of a factory run.

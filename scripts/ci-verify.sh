@@ -190,7 +190,7 @@ cli_smoke() {
   project="$tmp/smoke-adversary"
   json="$tmp/pack-check.json"
   log "build and execute CLI version/init/pack preflight smoke"
-  go build -trimpath -ldflags='-X github.com/doomerlabs/adversary/internal/version.Version=ci-smoke' -o "$binary" .
+  go build -trimpath -ldflags='-X github.com/doomerlabs/doomer/internal/version.Version=ci-smoke' -o "$binary" .
   "$binary" version | grep -Fq 'ci-smoke' || fail "version smoke failed"
   HOME="$tmp/home" "$binary" init "$project" >/dev/null
   HOME="$tmp/home" "$binary" pack --check --format json "$project" >"$json"
