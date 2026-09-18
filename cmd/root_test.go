@@ -652,7 +652,7 @@ func TestRegistryAuthRealmUsesAppAuthRoute(t *testing.T) {
 	tests := map[string]string{
 		"http://localhost:3000/api":       "http://localhost:3000/auth/registry",
 		"http://localhost:3000/api/":      "http://localhost:3000/auth/registry",
-		"https://doomer.ai/api":    "https://doomer.ai/auth/registry",
+		"https://doomer.ai/api":           "https://doomer.ai/auth/registry",
 		"https://example.com/custom/api":  "https://example.com/custom/auth/registry",
 		"https://example.com/custom/api/": "https://example.com/custom/auth/registry",
 	}
