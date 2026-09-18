@@ -24,7 +24,7 @@ func newVersionCommand() *cobra.Command {
 			if resolved == "json" {
 				return writeJSON(cmd.OutOrStdout(), "version", v)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "adversary %s\n", v.Version)
+			fmt.Fprintf(cmd.OutOrStdout(), "doomer %s\n", v.Version)
 			return nil
 		},
 	}

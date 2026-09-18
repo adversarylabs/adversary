@@ -161,7 +161,7 @@ func TestVersionCommand(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := stdout.String(), "adversary dev\n"; got != want {
+	if got, want := stdout.String(), "doomer dev\n"; got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
 	}
 }
