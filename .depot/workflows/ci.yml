@@ -139,10 +139,10 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Check out adversarylabs/actions v1 fixture
+      - name: Check out doomerlabs/actions v1 fixture
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: adversarylabs/actions
+          repository: doomerlabs/actions
           ref: v1
           path: .test-actions-version-v1
           persist-credentials: false

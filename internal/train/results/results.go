@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/train/cases"
-	"github.com/adversarylabs/adversary/internal/train/judge"
-	"github.com/adversarylabs/adversary/internal/train/report"
+	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/adversary/internal/train/judge"
+	"github.com/doomerlabs/adversary/internal/train/report"
 )
 
 const (

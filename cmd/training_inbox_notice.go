@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/adversarylabs/adversary/internal/application"
-	internalpaths "github.com/adversarylabs/adversary/internal/paths"
-	traininbox "github.com/adversarylabs/adversary/internal/train/inbox"
+	"github.com/doomerlabs/adversary/internal/application"
+	internalpaths "github.com/doomerlabs/adversary/internal/paths"
+	traininbox "github.com/doomerlabs/adversary/internal/train/inbox"
 	"github.com/spf13/cobra"
 )
 

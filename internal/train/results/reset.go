@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/adversarylabs/adversary/internal/train/state"
+	"github.com/doomerlabs/adversary/internal/train/state"
 )
 
 // ResetDiscovery clears seen-PR memory and the catalog cursor so train run will

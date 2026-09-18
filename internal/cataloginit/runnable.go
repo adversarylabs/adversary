@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	projecttemplates "github.com/adversarylabs/adversary/templates"
+	projecttemplates "github.com/doomerlabs/adversary/templates"
 )
 
 const runtimeVersion = "0.0.1"

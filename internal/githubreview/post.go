@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/internal/githubapi"
 )
 
 const maxInlineComments = 50

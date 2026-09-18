@@ -7,7 +7,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/adversarylabs/adversary/pkg/review"
+	"github.com/doomerlabs/adversary/pkg/review"
 )
 
 // ProjectOptions controls CommentPlan construction.

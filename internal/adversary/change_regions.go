@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/detection"
 )
 
 // ChangeRegionResolver resolves every changed hunk in an immutable review

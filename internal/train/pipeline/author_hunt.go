@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/train/collect"
-	"github.com/adversarylabs/adversary/internal/train/scope"
-	"github.com/adversarylabs/adversary/internal/train/state"
+	"github.com/doomerlabs/adversary/internal/train/collect"
+	"github.com/doomerlabs/adversary/internal/train/scope"
+	"github.com/doomerlabs/adversary/internal/train/state"
 )
 
 // runAuthorHunt discovers PRs via GitHub search (reviewed-by / commenter)

@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/adversary/pkg/adversarylabs"
 	"io"
 	"strings"
 )

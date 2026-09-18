@@ -7,9 +7,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/adversarylabs/adversary/internal/publock"
-	"github.com/adversarylabs/adversary/pkg/blobsource"
-	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/internal/publock"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/adversary/pkg/oci"
 )
 
 // CommitEquivalentManifest records the exact manifest bytes under another

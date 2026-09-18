@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/modelreview"
-	"github.com/adversarylabs/adversary/internal/train/bundle"
-	"github.com/adversarylabs/adversary/internal/train/dataroot"
-	"github.com/adversarylabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/adversary/internal/modelreview"
+	"github.com/doomerlabs/adversary/internal/train/bundle"
+	"github.com/doomerlabs/adversary/internal/train/dataroot"
+	"github.com/doomerlabs/adversary/internal/train/securefs"
 )
 
 // localPackageLocks serializes runs against the same local package directory.

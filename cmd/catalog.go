@@ -10,12 +10,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/adversarylabs/adversary/internal/application"
-	internalpaths "github.com/adversarylabs/adversary/internal/paths"
-	trainadversaries "github.com/adversarylabs/adversary/internal/train/adversaries"
-	"github.com/adversarylabs/adversary/internal/train/catalogapply"
-	traininbox "github.com/adversarylabs/adversary/internal/train/inbox"
-	"github.com/adversarylabs/adversary/internal/train/results"
+	"github.com/doomerlabs/adversary/internal/application"
+	internalpaths "github.com/doomerlabs/adversary/internal/paths"
+	trainadversaries "github.com/doomerlabs/adversary/internal/train/adversaries"
+	"github.com/doomerlabs/adversary/internal/train/catalogapply"
+	traininbox "github.com/doomerlabs/adversary/internal/train/inbox"
+	"github.com/doomerlabs/adversary/internal/train/results"
 	"github.com/spf13/cobra"
 )
 

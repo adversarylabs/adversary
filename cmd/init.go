@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/internal/application"
 	"github.com/spf13/cobra"
 )
 

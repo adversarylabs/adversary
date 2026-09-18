@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/train/results"
-	"github.com/adversarylabs/adversary/internal/train/workspace"
+	"github.com/doomerlabs/adversary/internal/train/results"
+	"github.com/doomerlabs/adversary/internal/train/workspace"
 )
 
 func writeTrainApplyPackage(t *testing.T, root, dirName, manifestName string) string {

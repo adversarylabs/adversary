@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/publock"
-	"github.com/adversarylabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/adversary/internal/publock"
+	"github.com/doomerlabs/adversary/internal/train/securefs"
 )
 
 // AdversaryCycleTarget records durable round-robin coverage for one package.

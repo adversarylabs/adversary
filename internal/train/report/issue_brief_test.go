@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/modelreview"
-	"github.com/adversarylabs/adversary/internal/train/cases"
-	"github.com/adversarylabs/adversary/internal/train/judge"
-	"github.com/adversarylabs/adversary/internal/train/score"
+	"github.com/doomerlabs/adversary/internal/modelreview"
+	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/adversary/internal/train/judge"
+	"github.com/doomerlabs/adversary/internal/train/score"
 )
 
 type fixtureBriefProvider struct {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/pkg/review"
+	"github.com/doomerlabs/adversary/pkg/review"
 )
 
 func TestResolveVoiceDefaultAndOverride(t *testing.T) {

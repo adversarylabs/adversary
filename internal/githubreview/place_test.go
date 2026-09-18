@@ -3,7 +3,7 @@ package githubreview
 import (
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/githubapi"
 )
 
 func TestParseUnifiedDiffIncludesContext(t *testing.T) {

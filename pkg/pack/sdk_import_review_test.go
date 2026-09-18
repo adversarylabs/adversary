@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/adversary/pkg/manifest"
 )
 
 func TestSDKImportScannerAdversarialSyntax(t *testing.T) {

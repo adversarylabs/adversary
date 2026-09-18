@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/pkg/blobsource"
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/pack"
 )
 
 func sharedContentArtifact(t *testing.T, a pack.Artifact, marker string) pack.Artifact {

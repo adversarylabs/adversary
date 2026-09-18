@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
+	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
 )
 
 func helperFixture(t *testing.T, body string) string {

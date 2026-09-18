@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/train/optimizer"
-	"github.com/adversarylabs/adversary/internal/train/runner"
-	"github.com/adversarylabs/adversary/internal/train/score"
+	"github.com/doomerlabs/adversary/internal/train/optimizer"
+	"github.com/doomerlabs/adversary/internal/train/runner"
+	"github.com/doomerlabs/adversary/internal/train/score"
 )
 
 // Report is the base-vs-candidate report for human decision.

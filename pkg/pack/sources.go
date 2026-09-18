@@ -3,8 +3,8 @@ package pack
 import (
 	"fmt"
 
-	"github.com/adversarylabs/adversary/pkg/blobsource"
-	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/adversary/pkg/oci"
 )
 
 // Sources exposes the current packed bytes through the repeatable source

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/adversary/internal/train/securefs"
 	_ "modernc.org/sqlite"
 )
 

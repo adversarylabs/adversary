@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/application"
-	traininbox "github.com/adversarylabs/adversary/internal/train/inbox"
-	"github.com/adversarylabs/adversary/internal/train/results"
-	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/doomerlabs/adversary/internal/application"
+	traininbox "github.com/doomerlabs/adversary/internal/train/inbox"
+	"github.com/doomerlabs/adversary/internal/train/results"
+	"github.com/doomerlabs/adversary/pkg/repository"
 )
 
 type trainingNoticeTTY struct{}

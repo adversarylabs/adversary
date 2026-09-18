@@ -9,15 +9,15 @@ import (
 	"strings"
 	"time"
 
-	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/internal/githubapi"
-	"github.com/adversarylabs/adversary/internal/githubreview"
-	"github.com/adversarylabs/adversary/internal/modelreview"
-	"github.com/adversarylabs/adversary/internal/outcomeinfer"
-	"github.com/adversarylabs/adversary/pkg/adversarylabs"
-	"github.com/adversarylabs/adversary/pkg/outcomecontext"
-	"github.com/adversarylabs/adversary/pkg/review"
+	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/githubreview"
+	"github.com/doomerlabs/adversary/internal/modelreview"
+	"github.com/doomerlabs/adversary/internal/outcomeinfer"
+	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/adversary/pkg/outcomecontext"
+	"github.com/doomerlabs/adversary/pkg/review"
 )
 
 // peelPRURL extracts at most one GitHub PR URL from args; remaining are adversary refs.

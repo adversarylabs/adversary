@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/githubapi"
-	"github.com/adversarylabs/adversary/internal/githubauth"
+	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/githubauth"
 )
 
 // ErrResultDismissed prevents a stale apply decision from overriding a human

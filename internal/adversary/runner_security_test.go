@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/pkg/review"
+	"github.com/doomerlabs/adversary/pkg/review"
 )
 
 type outputExecutor struct {

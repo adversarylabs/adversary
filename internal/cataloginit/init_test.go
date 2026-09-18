@@ -110,9 +110,9 @@ func TestCreateGeneratesLocalCatalog(t *testing.T) {
 		t.Fatalf("managed runtime source does not discover learned rules: %q err=%v", source, err)
 	}
 	for name, wants := range map[string][]string{
-		"adversary-review.yml":    {"paths:", "adversarylabs/actions/run@v1", "adversaries: adversarylabs/adversary", "matrix.adversary"},
-		"version-adversaries.yml": {"workflow_dispatch:", "Continue serial versioning", "adversarylabs/actions/version@v1", "[skip-ci]", "gh workflow run publish-adversary.yml", "actions: write"},
-		"publish-adversary.yml":   {"workflow_dispatch:", "id-token: write", "adversarylabs/actions/push@v1", "auth-mode: oidc", "ADVERSARY_REGISTRY_NAMESPACE", "inputs.commit"},
+		"adversary-review.yml":    {"paths:", "doomerlabs/actions/run@v1", "adversaries: adversarylabs/adversary", "matrix.adversary"},
+		"version-adversaries.yml": {"workflow_dispatch:", "Continue serial versioning", "doomerlabs/actions/version@v1", "[skip-ci]", "gh workflow run publish-adversary.yml", "actions: write"},
+		"publish-adversary.yml":   {"workflow_dispatch:", "id-token: write", "doomerlabs/actions/push@v1", "auth-mode: oidc", "ADVERSARY_REGISTRY_NAMESPACE", "inputs.commit"},
 	} {
 		raw, err := os.ReadFile(filepath.Join(destination, ".github", "workflows", name))
 		if err != nil {
@@ -319,7 +319,7 @@ func TestUpgradeRaisesOlderSDKWithoutReplacingPackageMetadata(t *testing.T) {
 func TestUpgradeCanPinSDKCommitForPremergeValidation(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "adversaries", "operability")
-	dependency := "https://github.com/adversarylabs/adversary-sdk-typescript/archive/abc123.tar.gz"
+	dependency := "https://github.com/doomerlabs/adversary-sdk-typescript/archive/abc123.tar.gz"
 	lockTemplate := filepath.Join(t.TempDir(), "package-lock.json")
 	if err := os.WriteFile(lockTemplate, []byte(`{"packages":{"":{"dependencies":{"@adversarylabs/sdk":"`+dependency+`"}},"node_modules/@adversarylabs/sdk":{"version":"0.1.32","resolved":"`+dependency+`","integrity":"sha512-test"}}}`), 0o644); err != nil {
 		t.Fatal(err)

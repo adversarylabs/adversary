@@ -8,12 +8,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/train/cases"
-	"github.com/adversarylabs/adversary/internal/train/collect"
-	"github.com/adversarylabs/adversary/internal/train/dataroot"
-	"github.com/adversarylabs/adversary/internal/train/repos"
-	"github.com/adversarylabs/adversary/internal/train/scope"
-	"github.com/adversarylabs/adversary/internal/train/state"
+	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/adversary/internal/train/collect"
+	"github.com/doomerlabs/adversary/internal/train/dataroot"
+	"github.com/doomerlabs/adversary/internal/train/repos"
+	"github.com/doomerlabs/adversary/internal/train/scope"
+	"github.com/doomerlabs/adversary/internal/train/state"
 )
 
 // Default / caps for parallel PR collect (gh API). Authenticated gh is typically

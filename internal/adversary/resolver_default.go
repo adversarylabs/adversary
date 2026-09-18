@@ -4,8 +4,8 @@ import (
 	"os"
 	"path/filepath"
 
-	internalpaths "github.com/adversarylabs/adversary/internal/paths"
-	"github.com/adversarylabs/adversary/pkg/repository"
+	internalpaths "github.com/doomerlabs/adversary/internal/paths"
+	"github.com/doomerlabs/adversary/pkg/repository"
 )
 
 // DefaultResolver is the concrete process-filesystem factory used only at the

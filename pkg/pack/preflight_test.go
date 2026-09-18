@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/adversary/pkg/manifest"
 )
 
 func TestCheckReturnsSortedInventoryAndPathOnlyWarnings(t *testing.T) {

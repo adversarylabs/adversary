@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/pkg/detection"
-	"github.com/adversarylabs/adversary/pkg/pack"
-	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/pkg/repository"
 )
 
 type fakeChangeResolver struct {

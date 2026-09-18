@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/githubapi"
-	"github.com/adversarylabs/adversary/internal/train/cases"
-	"github.com/adversarylabs/adversary/internal/train/judge"
-	"github.com/adversarylabs/adversary/internal/train/report"
-	trainstate "github.com/adversarylabs/adversary/internal/train/state"
+	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/adversary/internal/train/judge"
+	"github.com/doomerlabs/adversary/internal/train/report"
+	trainstate "github.com/doomerlabs/adversary/internal/train/state"
 )
 
 func TestSQLiteWriteListInspectApply(t *testing.T) {
@@ -152,7 +152,7 @@ func TestApplyKeepsResultRetryableWhenIssueFails(t *testing.T) {
 	}
 	pkg := t.TempDir()
 	_ = exec.Command("git", "init", pkg).Run()
-	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/torvalds-adversary.git").Run()
+	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/doomerlabs/torvalds-adversary.git").Run()
 	_, err := Apply(state, "cafe0001", ApplyOptions{
 		PackagePath:             pkg,
 		CreateBranch:            false,
@@ -240,7 +240,7 @@ func TestApplyCreatesGitHubIssue(t *testing.T) {
 	// Minimal git remote so ResolvePackageGitHubRepo works when IssueClient is set we bypass...
 	// Wait: createApplyIssue always ResolvePackageGitHubRepo. Need git remote.
 	_ = exec.Command("git", "init", pkg).Run()
-	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/torvalds-adversary.git").Run()
+	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/doomerlabs/torvalds-adversary.git").Run()
 
 	fake := &fakeIssueClient{}
 	ar, err := Apply(state, "deadbeef", ApplyOptions{
@@ -253,10 +253,10 @@ func TestApplyCreatesGitHubIssue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ar.IssueURL != "https://github.com/adversarylabs/torvalds-adversary/issues/7" {
+	if ar.IssueURL != "https://github.com/doomerlabs/torvalds-adversary/issues/7" {
 		t.Fatalf("issue url %q", ar.IssueURL)
 	}
-	if fake.lastOwner != "adversarylabs" || fake.lastRepo != "torvalds-adversary" {
+	if fake.lastOwner != "doomerlabs" || fake.lastRepo != "torvalds-adversary" {
 		t.Fatalf("repo %s/%s", fake.lastOwner, fake.lastRepo)
 	}
 	if !strings.Contains(fake.lastBody, "coding agent") || !strings.Contains(fake.lastBody, "subsurface") {
@@ -294,7 +294,7 @@ func TestApplyIssueEligibilityDefaults(t *testing.T) {
 			}
 			pkg := t.TempDir()
 			_ = exec.Command("git", "init", pkg).Run()
-			_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/engineering-review-adversary.git").Run()
+			_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/doomerlabs/engineering-review-adversary.git").Run()
 			fake := &fakeIssueClient{}
 			ar, err := Apply(state, "eligibility", ApplyOptions{
 				PackagePath: pkg, CreateIssue: true, IssueClient: fake,
@@ -314,7 +314,7 @@ func TestAutoIssueRunDeduplicatesAndDoesNotWriteDrafts(t *testing.T) {
 	state := t.TempDir()
 	pkg := t.TempDir()
 	_ = exec.Command("git", "init", pkg).Run()
-	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/engineering-review-adversary.git").Run()
+	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/doomerlabs/engineering-review-adversary.git").Run()
 	for _, row := range []Result{
 		{ID: "run1draft", RunID: "run-1", Package: "engineering-review", Kind: KindDraft, Status: StatusNew, Title: "Detect cross-layer contract drift", ConcernID: "engineering-review|contract-integrity", CreatedAt: time.Now().UTC()},
 		{ID: "run2draft", RunID: "run-2", Package: "engineering-review", Kind: KindDraft, Status: StatusNew, Title: "Catch incomplete contract propagation", ConcernID: "engineering-review|contract-integrity", CreatedAt: time.Now().UTC()},
@@ -353,7 +353,7 @@ func TestAutoIssueRunDoesNotResurrectDismissedResult(t *testing.T) {
 	state := t.TempDir()
 	pkg := t.TempDir()
 	_ = exec.Command("git", "init", pkg).Run()
-	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/adversarylabs/go-cli-adversary.git").Run()
+	_ = exec.Command("git", "-C", pkg, "remote", "add", "origin", "https://github.com/doomerlabs/go-cli-adversary.git").Run()
 	if err := SaveResult(state, Result{
 		ID: "stale-draft", RunID: "run-1", Package: "go-cli", Kind: KindDraft,
 		Status: StatusNew, Title: "Broad stale suggestion", CreatedAt: time.Now().UTC(),

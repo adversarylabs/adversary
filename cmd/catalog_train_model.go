@@ -13,9 +13,9 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/internal/train/catalogapply"
-	trainreviewui "github.com/adversarylabs/adversary/internal/train/reviewui"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/internal/train/catalogapply"
+	trainreviewui "github.com/doomerlabs/adversary/internal/train/reviewui"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )

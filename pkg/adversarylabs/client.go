@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/pkg/namespacesig"
+	"github.com/doomerlabs/adversary/pkg/namespacesig"
 )
 
 type Client struct {

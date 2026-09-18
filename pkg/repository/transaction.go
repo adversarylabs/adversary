@@ -10,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/adversarylabs/adversary/internal/publock"
-	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/internal/publock"
+	"github.com/doomerlabs/adversary/pkg/oci"
 )
 
 type importJournal struct {

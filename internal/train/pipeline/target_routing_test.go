@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/train/adversaries"
-	"github.com/adversarylabs/adversary/internal/train/cases"
-	"github.com/adversarylabs/adversary/internal/train/scope"
+	"github.com/doomerlabs/adversary/internal/train/adversaries"
+	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/adversary/internal/train/scope"
 )
 
 func TestLearnedRuleSummariesExposeOnlyBoundedRoutingEvidence(t *testing.T) {

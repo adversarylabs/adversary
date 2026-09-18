@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/publock"
-	"github.com/adversarylabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/adversary/internal/publock"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
 )
 
 func TestRepairRejectsInvalidSourceBeforePublicationAndCleansTemporaryFiles(t *testing.T) {

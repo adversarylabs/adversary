@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/pkg/blobsource"
-	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/adversary/pkg/oci"
 )
 
 func equivalentManifestFixture(t *testing.T) (Repository, Record, []byte) {

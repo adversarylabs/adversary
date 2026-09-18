@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adversarylabs/adversary/pkg/adversarylabs"
-	"github.com/adversarylabs/adversary/pkg/blobsource"
-	"github.com/adversarylabs/adversary/pkg/detection"
-	"github.com/adversarylabs/adversary/pkg/namespacesig"
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/outcomecontext"
-	"github.com/adversarylabs/adversary/pkg/pack"
-	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/namespacesig"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/outcomecontext"
+	"github.com/doomerlabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/pkg/repository"
 )
 
 type Clock interface {

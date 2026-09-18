@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/train/bundle"
-	"github.com/adversarylabs/adversary/internal/train/dataroot"
+	"github.com/doomerlabs/adversary/internal/train/bundle"
+	"github.com/doomerlabs/adversary/internal/train/dataroot"
 )
 
 func TestLockLocalPackageSerializes(t *testing.T) {

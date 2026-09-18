@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/githubapi"
 )
 
 func TestIsRateLimit(t *testing.T) {

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/githubapi"
-	"github.com/adversarylabs/adversary/internal/train/cases"
-	"github.com/adversarylabs/adversary/internal/train/dataroot"
-	"github.com/adversarylabs/adversary/internal/train/scope"
-	"github.com/adversarylabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/adversary/internal/train/dataroot"
+	"github.com/doomerlabs/adversary/internal/train/scope"
+	"github.com/doomerlabs/adversary/internal/train/securefs"
 )
 
 // Result of a collect operation.

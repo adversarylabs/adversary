@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/adversarylabs/adversary/pkg/namespacesig"
+	"github.com/doomerlabs/adversary/pkg/namespacesig"
 )
 
 type namespaceSignatureEvidence struct {

@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/adversarylabs/adversary/cmd"
+	"github.com/doomerlabs/adversary/cmd"
 )
 
 func main() {

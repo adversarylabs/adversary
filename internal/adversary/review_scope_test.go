@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/adversarylabs/adversary/pkg/detection"
-	"github.com/adversarylabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/manifest"
 )
 
 func TestScopeReviewContextKeepsOnlyRelevantChangedFiles(t *testing.T) {

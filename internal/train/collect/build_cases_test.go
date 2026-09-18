@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/train/cases"
-	"github.com/adversarylabs/adversary/internal/train/scope"
+	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/adversary/internal/train/scope"
 )
 
 func TestBuildCasesFromCacheFiltered(t *testing.T) {

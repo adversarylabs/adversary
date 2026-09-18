@@ -24,7 +24,7 @@ Outcomes that are **not** done:
 
 ## Context (already built)
 
-- **Repo:** `adversarylabs/adversary-factory` (private), sibling to `*-adversary` packages under `github.com/adversarylabs/`.
+- **Repo:** `adversarylabs/adversary-factory` (private), sibling to `*-adversary` packages under `github.com/doomerlabs/`.
 - **CLI:** `make build && ./bin/factory slice --data-root <dir>` (no `--source` required if siblings exist).
 - **Outputs to read first:**  
   - stderr hunt progress  

@@ -10,8 +10,8 @@ import (
 	"unicode/utf8"
 
 	semver "github.com/Masterminds/semver/v3"
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/internal/progress"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/internal/progress"
 	"golang.org/x/term"
 )
 

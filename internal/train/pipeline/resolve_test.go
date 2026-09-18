@@ -3,7 +3,7 @@ package pipeline
 import (
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/train/adversaries"
+	"github.com/doomerlabs/adversary/internal/train/adversaries"
 )
 
 func TestResolvePrimaryAndPackageID(t *testing.T) {

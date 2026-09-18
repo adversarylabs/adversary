@@ -151,8 +151,8 @@ generated_template_tests() {
     HOME="$tmp/home" "$binary" pack . --name adversarylabs/generated-template
   )
   actions_root="${ADVERSARY_ACTIONS_PATH:-}"
-  [[ -n "$actions_root" ]] || fail "ADVERSARY_ACTIONS_PATH must point to an adversarylabs/actions@v1 checkout"
-  log "generated catalog patch bump with adversarylabs/actions/version@v1"
+  [[ -n "$actions_root" ]] || fail "ADVERSARY_ACTIONS_PATH must point to an doomerlabs/actions@v1 checkout"
+  log "generated catalog patch bump with doomerlabs/actions/version@v1"
   scripts/test-generated-version-action.sh "$binary" "$actions_root"
   rm -rf -- "$tmp"
   trap - RETURN
@@ -190,7 +190,7 @@ cli_smoke() {
   project="$tmp/smoke-adversary"
   json="$tmp/pack-check.json"
   log "build and execute CLI version/init/pack preflight smoke"
-  go build -trimpath -ldflags='-X github.com/adversarylabs/adversary/internal/version.Version=ci-smoke' -o "$binary" .
+  go build -trimpath -ldflags='-X github.com/doomerlabs/adversary/internal/version.Version=ci-smoke' -o "$binary" .
   "$binary" version | grep -Fq 'ci-smoke' || fail "version smoke failed"
   HOME="$tmp/home" "$binary" init "$project" >/dev/null
   HOME="$tmp/home" "$binary" pack --check --format json "$project" >"$json"

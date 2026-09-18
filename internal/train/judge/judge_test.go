@@ -3,8 +3,8 @@ package judge
 import (
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/train/cases"
-	"github.com/adversarylabs/adversary/internal/train/normalize"
+	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/adversary/internal/train/normalize"
 )
 
 func TestUnsupportedClaimRateNotDoubleCounted(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/train/judge"
+	"github.com/doomerlabs/adversary/internal/train/judge"
 )
 
 func TestAnalyzeFailuresGeneralized(t *testing.T) {
