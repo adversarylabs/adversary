@@ -21,7 +21,7 @@ limitation in [the release guide](docs/release.md).
 Because the project has not selected a license, source publication grants no
 reuse rights; see [the license decision](docs/license-decision.md).
 
-`go install github.com/adversarylabs/adversary@<commit-or-tag>` is supported for
+`go install github.com/doomerlabs/adversary@<commit-or-tag>` is supported for
 source installation, but the Go tool does not apply release `-ldflags`, so the
 binary reports version `dev`; its Go VCS build information remains inspectable
 with `go version -m`. Prefer release archives when a stamped version is needed.

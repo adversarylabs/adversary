@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/modelreview"
-	"github.com/adversarylabs/adversary/internal/repopolicy"
-	"github.com/adversarylabs/adversary/pkg/detection"
-	"github.com/adversarylabs/adversary/pkg/outcomecontext"
-	"github.com/adversarylabs/adversary/pkg/pack"
-	"github.com/adversarylabs/adversary/pkg/repoindex"
-	"github.com/adversarylabs/adversary/pkg/repository"
-	"github.com/adversarylabs/adversary/pkg/review"
+	"github.com/doomerlabs/adversary/internal/modelreview"
+	"github.com/doomerlabs/adversary/internal/repopolicy"
+	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/outcomecontext"
+	"github.com/doomerlabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/pkg/repoindex"
+	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/adversary/pkg/review"
 )
 
 type RunOptions struct {

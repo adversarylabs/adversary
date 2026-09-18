@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/internal/application"
 )
 
 // expandComposeRefs expands adversary.yaml uses via the application port.

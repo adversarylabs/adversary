@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly REPO="adversarylabs/adversary" TAP_REPO="adversarylabs/homebrew-tap" BINARY="adversary"
+readonly REPO="doomerlabs/adversary" TAP_REPO="doomerlabs/homebrew-tap" BINARY="adversary"
 readonly DIST_DIR="${DIST_DIR:-dist}" FORMULA_TEMPLATE="${FORMULA_TEMPLATE:-Formula/adversary.rb.tmpl}"
 readonly STABLE_FORMULA_NAME="adversary.rb" PRERELEASE_FORMULA_NAME="adversary-beta.rb"
 export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/adversary-go-build}"
@@ -101,7 +101,7 @@ build_release() {
     # make release bytes depend on checkout/cache state.
     # -tags release embeds only the production official public key (not dev).
     CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -tags release -buildvcs=false -trimpath \
-      -ldflags="-s -w -X github.com/adversarylabs/adversary/internal/version.Version=${VERSION} -X github.com/adversarylabs/adversary/internal/version.Commit=${COMMIT} -X github.com/adversarylabs/adversary/internal/version.BuildDate=${BUILD_DATE}" \
+      -ldflags="-s -w -X github.com/doomerlabs/adversary/internal/version.Version=${VERSION} -X github.com/doomerlabs/adversary/internal/version.Commit=${COMMIT} -X github.com/doomerlabs/adversary/internal/version.BuildDate=${BUILD_DATE}" \
       -o "${build_dir}/${BINARY}" .
     verify_binary "${build_dir}/${BINARY}"
     install -m 0644 LICENSE README.md "${build_dir}/"

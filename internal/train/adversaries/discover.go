@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/adversarylabs/adversary/internal/train/scope"
+	"github.com/doomerlabs/adversary/internal/train/scope"
 	"gopkg.in/yaml.v3"
 )
 

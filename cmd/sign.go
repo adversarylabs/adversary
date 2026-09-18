@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/officialsig"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/officialsig"
 	"github.com/spf13/cobra"
 )
 
@@ -33,7 +33,7 @@ Key id defaults to this binary's build flavor:
 Requires registry credentials (adversary login or service account profile).
 End users never need this command; publishers use it after push.`,
 		Example: `  # Local/dev (seed from Doppler)
-  doppler run -p adversarylabs -c dev -- \
+  doppler run -p doomer -c dev -- \
     adversary sign localhost:8787/adversarylabs/adversary:0.0.22 --key-id official-dev
 
   # Or explicit seed flag

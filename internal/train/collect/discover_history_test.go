@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/githubapi"
 )
 
 func TestDiscoverHistoricalPRsPaginatesToUpdatedBoundary(t *testing.T) {

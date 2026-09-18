@@ -9,13 +9,13 @@ import (
 	"sync"
 	"time"
 
-	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/internal/githubreview"
-	"github.com/adversarylabs/adversary/internal/telemetry"
-	"github.com/adversarylabs/adversary/internal/version"
-	"github.com/adversarylabs/adversary/pkg/adversarylabs"
-	"github.com/adversarylabs/adversary/pkg/review"
+	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/internal/githubreview"
+	"github.com/doomerlabs/adversary/internal/telemetry"
+	"github.com/doomerlabs/adversary/internal/version"
+	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/adversary/pkg/review"
 )
 
 // Constrained forms only — never send free text, emails, or flags as version.

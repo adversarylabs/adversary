@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/adversarylabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
 )
 
 func TestPushSourcesReopensBodyForBearerRetry(t *testing.T) {

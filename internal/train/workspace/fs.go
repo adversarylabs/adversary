@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/adversarylabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/adversary/internal/train/securefs"
 )
 
 // EnsureStateDir creates the state directory tree (user-only 0700).

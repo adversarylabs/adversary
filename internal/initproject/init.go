@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/adversarylabs/adversary/pkg/manifest"
-	projecttemplates "github.com/adversarylabs/adversary/templates"
+	"github.com/doomerlabs/adversary/pkg/manifest"
+	projecttemplates "github.com/doomerlabs/adversary/templates"
 )
 
 const (

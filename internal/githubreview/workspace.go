@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/adversarylabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/githubapi"
 )
 
 // WorkspaceResult is the local path prepared for a PR review.

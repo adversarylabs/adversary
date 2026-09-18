@@ -89,7 +89,7 @@ credential broker rather than a GitHub workflow permission.
 
 The following `publish-homebrew` job has only `contents: read` for this
 repository. `HOMEBREW_TAP_TOKEN` is exposed only to its final step and must be a
-fine-grained token scoped solely to `adversarylabs/homebrew-tap` contents
+fine-grained token scoped solely to `doomerlabs/homebrew-tap` contents
 read/write. The script copies the exact checksummed formula from the release
 bundle into the tap and verifies its digest; it never rerenders after
 verification. It uses `GIT_ASKPASS`, so secrets never appear in clone URLs, and

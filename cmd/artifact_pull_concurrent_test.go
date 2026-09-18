@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/pkg/repository"
 )
 
 type concurrentPullResolver struct {

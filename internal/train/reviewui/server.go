@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/train/catalogapply"
-	"github.com/adversarylabs/adversary/internal/train/results"
+	"github.com/doomerlabs/adversary/internal/train/catalogapply"
+	"github.com/doomerlabs/adversary/internal/train/results"
 )
 
 const tokenHeader = "X-Adversary-Review-Token"

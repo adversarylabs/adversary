@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/pkg/detection"
-	"github.com/adversarylabs/adversary/pkg/outcomecontext"
-	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/outcomecontext"
+	"github.com/doomerlabs/adversary/pkg/pack"
 )
 
 func TestLoadManifest(t *testing.T) {

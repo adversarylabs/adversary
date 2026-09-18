@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/internal/application"
 )
 
 func TestNilFunctionAdaptersAreSafeAndInvalid(t *testing.T) {

@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/oci"
 )
 
 func TestCreateRejectsSymlink(t *testing.T) {

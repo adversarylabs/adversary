@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	internalpaths "github.com/adversarylabs/adversary/internal/paths"
-	"github.com/adversarylabs/adversary/pkg/oci"
+	internalpaths "github.com/doomerlabs/adversary/internal/paths"
+	"github.com/doomerlabs/adversary/pkg/oci"
 )
 
 var ErrAuthCAS = errors.New("credential compare-and-swap conflict")

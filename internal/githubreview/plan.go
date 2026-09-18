@@ -1,6 +1,6 @@
 package githubreview
 
-import "github.com/adversarylabs/adversary/pkg/review"
+import "github.com/doomerlabs/adversary/pkg/review"
 
 // CommentPlan is a derived, comment-ready projection of review findings.
 type CommentPlan struct {

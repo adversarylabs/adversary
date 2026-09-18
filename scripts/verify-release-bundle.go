@@ -205,7 +205,7 @@ func verifySPDX(path, version string) {
 		}
 		if r.SPDXElementID == d.SPDXID && r.RelationshipType == "DESCRIBES" {
 			for _, p := range d.Packages {
-				if p.SPDXID == r.RelatedSPDXElement && p.Name == "github.com/adversarylabs/adversary" && p.VersionInfo == version {
+				if p.SPDXID == r.RelatedSPDXElement && p.Name == "github.com/doomerlabs/adversary" && p.VersionInfo == version {
 					describes = true
 				}
 			}

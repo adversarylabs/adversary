@@ -3,8 +3,8 @@ package repository
 import (
 	"fmt"
 
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/pack"
 )
 
 // Inventory returns the immutable file inventory embedded in the verified OCI

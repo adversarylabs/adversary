@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	cliprogress "github.com/adversarylabs/adversary/internal/progress"
-	"github.com/adversarylabs/adversary/pkg/compose"
-	"github.com/adversarylabs/adversary/pkg/manifest"
+	cliprogress "github.com/doomerlabs/adversary/internal/progress"
+	"github.com/doomerlabs/adversary/pkg/compose"
+	"github.com/doomerlabs/adversary/pkg/manifest"
 )
 
 // ComposePullFunc pulls an adversary ref into the local store (same as run auto-pull).

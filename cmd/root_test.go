@@ -19,12 +19,12 @@ import (
 	"sync"
 	"testing"
 
-	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/pkg/adversarylabs"
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/pack"
-	"github.com/adversarylabs/adversary/pkg/repository"
+	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/pkg/repository"
 )
 
 func TestInitCommandGeneratesTypeScriptProject(t *testing.T) {

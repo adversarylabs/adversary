@@ -17,13 +17,13 @@ import (
 	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
-	"github.com/adversarylabs/adversary/internal/archiveutil"
-	"github.com/adversarylabs/adversary/internal/publock"
-	"github.com/adversarylabs/adversary/internal/rootreplace"
-	"github.com/adversarylabs/adversary/pkg/blobsource"
-	canonical "github.com/adversarylabs/adversary/pkg/manifest"
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/internal/archiveutil"
+	"github.com/doomerlabs/adversary/internal/publock"
+	"github.com/doomerlabs/adversary/internal/rootreplace"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
+	canonical "github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/pack"
 )
 
 var ErrAmbiguous = errors.New("ambiguous artifact alias")

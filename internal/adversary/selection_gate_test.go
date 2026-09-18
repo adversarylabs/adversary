@@ -1,8 +1,8 @@
 package adversary
 
 import (
-	"github.com/adversarylabs/adversary/pkg/detection"
-	"github.com/adversarylabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/manifest"
 	"testing"
 )
 

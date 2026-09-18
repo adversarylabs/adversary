@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/pkg/repository"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 

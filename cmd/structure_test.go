@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/doomerlabs/adversary/pkg/repository"
 )
 
 func TestRootCommandRemainsThinComposition(t *testing.T) {
@@ -127,8 +127,8 @@ var forbiddenHandlerSelectors = map[string]struct{}{
 	"crypto/rand.Reader": {}, "crypto/rand.Read": {}, "net.Listen": {}, "net.ListenConfig": {},
 	"net/http.Server": {}, "net/http.Client": {}, "net/http.Transport": {}, "net/http.DefaultClient": {}, "net/http.Get": {}, "net/http.Post": {}, "net/http.PostForm": {}, "net/http.NewRequest": {}, "net/http.NewRequestWithContext": {}, "net/http.NewServeMux": {}, "net/http.Serve": {}, "net/http.ServeTLS": {}, "net/http.ListenAndServe": {}, "net/http.ListenAndServeTLS": {},
 	"context.Background": {}, "context.TODO": {}, "context.WithoutCancel": {},
-	"github.com/adversarylabs/adversary/internal/initproject.Create": {}, "github.com/adversarylabs/adversary/internal/initproject.RenderSuccess": {},
-	"github.com/adversarylabs/adversary/pkg/manifest.Load": {}, "github.com/adversarylabs/adversary/pkg/pack.Create": {}, "github.com/adversarylabs/adversary/pkg/pack.Check": {}, "github.com/adversarylabs/adversary/pkg/oci.ParseReference": {},
+	"github.com/doomerlabs/adversary/internal/initproject.Create": {}, "github.com/doomerlabs/adversary/internal/initproject.RenderSuccess": {},
+	"github.com/doomerlabs/adversary/pkg/manifest.Load": {}, "github.com/doomerlabs/adversary/pkg/pack.Create": {}, "github.com/doomerlabs/adversary/pkg/pack.Check": {}, "github.com/doomerlabs/adversary/pkg/oci.ParseReference": {},
 }
 
 var forbiddenHandlerImports = map[string]struct{}{"crypto/rand": {}, "net": {}}

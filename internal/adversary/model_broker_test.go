@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/modelreview"
+	"github.com/doomerlabs/adversary/internal/modelreview"
 )
 
 type brokerCallingExecutor struct {

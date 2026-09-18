@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/adversary/pkg/adversarylabs"
 )
 
 const (
@@ -220,7 +220,7 @@ func OTLPJSON(report adversarylabs.RunUsageReport, cliVersion string) ([]byte, e
 			makeOTLPAttribute("service.version", cliVersion),
 			makeOTLPAttribute("telemetry.sdk.language", "go"),
 		}},
-		"scopeSpans": []any{map[string]any{"scope": map[string]any{"name": "github.com/adversarylabs/adversary"}, "spans": spans}},
+		"scopeSpans": []any{map[string]any{"scope": map[string]any{"name": "github.com/doomerlabs/adversary"}, "spans": spans}},
 	}}}
 	return json.Marshal(payload)
 }

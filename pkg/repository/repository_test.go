@@ -14,10 +14,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/rootreplace"
-	"github.com/adversarylabs/adversary/pkg/blobsource"
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/internal/rootreplace"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/pack"
 )
 
 func digestSource(t *testing.T, data []byte, algorithm string) blobsource.Source {

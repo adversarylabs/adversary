@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/adversarylabs/adversary/internal/githubapi"
-	"github.com/adversarylabs/adversary/internal/githubauth"
+	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/githubauth"
 )
 
 var discussionIDPattern = regexp.MustCompile(`(?:discussion_r|pullrequestreview-)([0-9]+)`)

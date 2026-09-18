@@ -269,7 +269,7 @@ jobs:
           persist-credentials: false
 
       - name: Review adversary package
-        uses: adversarylabs/actions/run@v1
+        uses: doomerlabs/actions/run@v1
         with:
           adversaries: adversarylabs/adversary
           path: adversaries/${{ matrix.adversary }}
@@ -374,7 +374,7 @@ jobs:
         if: steps.select.outputs.empty == 'false'
         id: version
         # The v1 action commits synchronized metadata with [skip-ci].
-        uses: adversarylabs/actions/version@v1
+        uses: doomerlabs/actions/version@v1
         with:
           tag: ${{ steps.next.outputs.tag }}
           path: ${{ steps.select.outputs.path }}
@@ -458,7 +458,7 @@ jobs:
 
       - name: Publish adversary
         id: publish
-        uses: adversarylabs/actions/push@v1
+        uses: doomerlabs/actions/push@v1
         with:
           path: ${{ inputs.path }}
           auth-mode: oidc

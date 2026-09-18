@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/githubapi"
-	"github.com/adversarylabs/adversary/internal/train/cases"
-	"github.com/adversarylabs/adversary/internal/train/collect"
-	"github.com/adversarylabs/adversary/internal/train/repos"
-	"github.com/adversarylabs/adversary/internal/train/runner"
-	"github.com/adversarylabs/adversary/internal/train/state"
+	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/adversary/internal/train/collect"
+	"github.com/doomerlabs/adversary/internal/train/repos"
+	"github.com/doomerlabs/adversary/internal/train/runner"
+	"github.com/doomerlabs/adversary/internal/train/state"
 )
 
 func TestNormalizeConcurrency(t *testing.T) {

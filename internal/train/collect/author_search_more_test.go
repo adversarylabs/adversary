@@ -3,7 +3,7 @@ package collect
 import (
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/adversary/internal/githubapi"
 )
 
 func TestDiscoverPRsByAuthorValidation(t *testing.T) {

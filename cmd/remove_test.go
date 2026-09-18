@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/repository"
 )
 
 func TestRemoveIsCanonicalAndRmIsAlias(t *testing.T) {

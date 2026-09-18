@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/repository"
 )
 
 type PublisherTrust string

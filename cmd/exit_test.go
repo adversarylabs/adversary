@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
-	"github.com/adversarylabs/adversary/internal/application"
+	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
+	"github.com/doomerlabs/adversary/internal/application"
 )
 
 func TestExitCodeContract(t *testing.T) {

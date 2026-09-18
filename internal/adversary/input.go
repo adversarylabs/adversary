@@ -3,7 +3,7 @@ package adversary
 import (
 	"encoding/json"
 
-	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/detection"
 )
 
 const InputSchemaVersion = "adversary.input.v1"

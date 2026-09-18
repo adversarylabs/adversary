@@ -1,6 +1,6 @@
 package adversary
 
-import canonical "github.com/adversarylabs/adversary/pkg/manifest"
+import canonical "github.com/doomerlabs/adversary/pkg/manifest"
 
 // LoadManifest and the legacy ResolveReference helpers are concrete
 // filesystem conveniences. Production runtime composition uses

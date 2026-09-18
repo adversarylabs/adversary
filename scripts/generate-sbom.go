@@ -132,7 +132,7 @@ func main() {
 	if err != nil {
 		panic("SOURCE_DATE_EPOCH is required")
 	}
-	d := document{"SPDX-2.3", "CC0-1.0", "SPDXRef-DOCUMENT", "adversary-" + *version, "https://github.com/adversarylabs/adversary/sbom/" + *version, map[string]any{"created": time.Unix(epoch, 0).UTC().Format(time.RFC3339), "creators": []string{"Tool: adversary-release"}}, packages, rels}
+	d := document{"SPDX-2.3", "CC0-1.0", "SPDXRef-DOCUMENT", "adversary-" + *version, "https://github.com/doomerlabs/adversary/sbom/" + *version, map[string]any{"created": time.Unix(epoch, 0).UTC().Format(time.RFC3339), "creators": []string{"Tool: adversary-release"}}, packages, rels}
 	f, err := os.Create(*output)
 	if err != nil {
 		panic(err)

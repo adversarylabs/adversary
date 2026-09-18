@@ -14,11 +14,11 @@ import (
 	"reflect"
 	"sort"
 
-	"github.com/adversarylabs/adversary/internal/archiveutil"
-	"github.com/adversarylabs/adversary/pkg/blobsource"
-	canonical "github.com/adversarylabs/adversary/pkg/manifest"
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/internal/archiveutil"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
+	canonical "github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/pack"
 )
 
 func validateArtifactLayer(configData, adversary []byte, annotations map[string]string, layer blobsource.Source) ([]byte, error) {

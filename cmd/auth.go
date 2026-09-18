@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/pkg/adversarylabs"
 	"github.com/spf13/cobra"
 )
 

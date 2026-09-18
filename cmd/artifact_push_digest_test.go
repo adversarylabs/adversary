@@ -12,11 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/application"
-	"github.com/adversarylabs/adversary/pkg/blobsource"
-	"github.com/adversarylabs/adversary/pkg/oci"
-	"github.com/adversarylabs/adversary/pkg/pack"
-	"github.com/adversarylabs/adversary/pkg/repository"
+	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/adversary/pkg/pack"
+	"github.com/doomerlabs/adversary/pkg/repository"
 )
 
 func TestPushCommandSilencesRuntimeUsageAndErrors(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adversarylabs/adversary/pkg/review"
+	"github.com/doomerlabs/adversary/pkg/review"
 )
 
 func TestProjectFindingsOnlyAndMinSeverity(t *testing.T) {

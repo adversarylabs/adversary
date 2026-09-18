@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/adversarylabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/adversary/pkg/blobsource"
 )
 
 // PulledSources owns downloaded temporary files. Close releases every source.

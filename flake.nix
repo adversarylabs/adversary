@@ -63,7 +63,7 @@
             mkdir -p "$HOME"
           '';
           ldflags = [
-            "-X github.com/adversarylabs/adversary/internal/version.Version=dev"
+            "-X github.com/doomerlabs/adversary/internal/version.Version=dev"
           ];
         };
       });

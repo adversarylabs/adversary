@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/train/cases"
-	"github.com/adversarylabs/adversary/internal/train/experiment"
-	"github.com/adversarylabs/adversary/internal/train/judge"
-	"github.com/adversarylabs/adversary/internal/train/normalize"
-	"github.com/adversarylabs/adversary/internal/train/score"
+	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/adversary/internal/train/experiment"
+	"github.com/doomerlabs/adversary/internal/train/judge"
+	"github.com/doomerlabs/adversary/internal/train/normalize"
+	"github.com/doomerlabs/adversary/internal/train/score"
 )
 
 func TestWriteStoryIsPlainEnglish(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/adversarylabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/detection"
 )
 
 func TestReviewAssignmentForFilesPreservesOnlySpecialistScope(t *testing.T) {

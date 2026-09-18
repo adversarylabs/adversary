@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io"
 
-	internaladversary "github.com/adversarylabs/adversary/internal/adversary"
-	"github.com/adversarylabs/adversary/internal/application"
-	cliprogress "github.com/adversarylabs/adversary/internal/progress"
-	"github.com/adversarylabs/adversary/pkg/detection"
-	"github.com/adversarylabs/adversary/pkg/manifest"
-	"github.com/adversarylabs/adversary/pkg/oci"
+	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
+	"github.com/doomerlabs/adversary/internal/application"
+	cliprogress "github.com/doomerlabs/adversary/internal/progress"
+	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/adversary/pkg/oci"
 )
 
 type composeContextProvider interface {

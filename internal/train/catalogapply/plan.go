@@ -18,9 +18,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/adversarylabs/adversary/internal/cataloginit"
-	"github.com/adversarylabs/adversary/internal/train/results"
-	"github.com/adversarylabs/adversary/internal/train/workspace"
+	"github.com/doomerlabs/adversary/internal/cataloginit"
+	"github.com/doomerlabs/adversary/internal/train/results"
+	"github.com/doomerlabs/adversary/internal/train/workspace"
 	"gopkg.in/yaml.v3"
 )
 

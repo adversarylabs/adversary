@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/adversarylabs/adversary/internal/modelreview"
-	"github.com/adversarylabs/adversary/pkg/detection"
-	"github.com/adversarylabs/adversary/pkg/review"
+	"github.com/doomerlabs/adversary/internal/modelreview"
+	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/adversary/pkg/review"
 )
 
 type fakeProvider struct {

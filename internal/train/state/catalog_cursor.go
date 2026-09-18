@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/adversarylabs/adversary/internal/publock"
-	"github.com/adversarylabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/adversary/internal/publock"
+	"github.com/doomerlabs/adversary/internal/train/securefs"
 )
 
 // CatalogCursorState persists the next repository window used by live train

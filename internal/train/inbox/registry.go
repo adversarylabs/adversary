@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adversarylabs/adversary/internal/train/results"
-	"github.com/adversarylabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/adversary/internal/train/results"
+	"github.com/doomerlabs/adversary/internal/train/securefs"
 	_ "modernc.org/sqlite"
 )
 
