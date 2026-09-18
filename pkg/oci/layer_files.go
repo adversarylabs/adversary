@@ -8,7 +8,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
 )
 
 // ExtractLayerFiles returns the named files from an adversary package layer

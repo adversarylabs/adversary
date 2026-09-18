@@ -3,9 +3,9 @@
 GitHub review feedback is a SaaS-owned loop. There is no feedback-ingest command
 and an Actions runner does not keep the durable record.
 
-When `adversary run --github-review` posts inline findings from an authenticated
+When `doomer run --github-review` posts inline findings from an authenticated
 GitHub Actions session, it registers the review and posted comments with
-Adversary Labs. The service polls those threads through its GitHub App, stores new
+Doomer. The service polls those threads through its GitHub App, stores new
 human replies, and classifies technically explained false positives. Accepted
 feedback receives a follow-up in the original thread confirming it was learned.
 

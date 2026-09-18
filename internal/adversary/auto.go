@@ -9,10 +9,10 @@ import (
 	"time"
 
 	semver "github.com/Masterminds/semver/v3"
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/oci"
-	"github.com/doomerlabs/adversary/pkg/outcomecontext"
-	"github.com/doomerlabs/adversary/pkg/review"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/outcomecontext"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 type AutoOptions struct {

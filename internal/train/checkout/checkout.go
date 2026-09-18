@@ -362,7 +362,7 @@ func syntheticTwoCommitRepo(dest string) error {
 	return nil
 }
 
-// ResolveBaseHeadRefs returns ref names usable with adversary --base/--head after Prepare.
+// ResolveBaseHeadRefs returns ref names usable with doomer --base/--head after Prepare.
 func ResolveBaseHeadRefs(checkout Result) (base, head string) {
 	if checkout.Method == "fetch" {
 		return checkout.BaseSHA, checkout.HeadSHA

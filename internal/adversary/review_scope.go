@@ -3,8 +3,8 @@ package adversary
 import (
 	"strings"
 
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/manifest"
 )
 
 // ScopeReviewContext limits a reviewer to the changed files selected by its

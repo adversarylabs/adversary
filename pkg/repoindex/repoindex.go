@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	internalpaths "github.com/doomerlabs/adversary/internal/paths"
+	internalpaths "github.com/doomerlabs/doomer/internal/paths"
 )
 
 const (

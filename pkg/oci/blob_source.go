@@ -3,7 +3,7 @@ package oci
 import (
 	"fmt"
 
-	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
 )
 
 // SourceBlob is the blob transport contract. Source must report the

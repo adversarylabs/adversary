@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/internal/githubreview"
-	"github.com/doomerlabs/adversary/pkg/outcomecontext"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/internal/githubreview"
+	"github.com/doomerlabs/doomer/pkg/outcomecontext"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 type outcomeIntentRuntimeStub struct {

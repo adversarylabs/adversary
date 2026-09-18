@@ -9,10 +9,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/doomerlabs/adversary/internal/publock"
-	"github.com/doomerlabs/adversary/internal/rootreplace"
-	"github.com/doomerlabs/adversary/pkg/blobsource"
-	"github.com/doomerlabs/adversary/pkg/oci"
+	"github.com/doomerlabs/doomer/internal/publock"
+	"github.com/doomerlabs/doomer/internal/rootreplace"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/oci"
 	digestapi "github.com/opencontainers/go-digest"
 )
 

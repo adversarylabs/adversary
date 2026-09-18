@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/modelreview"
-	"github.com/doomerlabs/adversary/internal/repopolicy"
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/outcomecontext"
-	"github.com/doomerlabs/adversary/pkg/pack"
-	"github.com/doomerlabs/adversary/pkg/repoindex"
-	"github.com/doomerlabs/adversary/pkg/repository"
-	"github.com/doomerlabs/adversary/pkg/review"
+	"github.com/doomerlabs/doomer/internal/modelreview"
+	"github.com/doomerlabs/doomer/internal/repopolicy"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/outcomecontext"
+	"github.com/doomerlabs/doomer/pkg/pack"
+	"github.com/doomerlabs/doomer/pkg/repoindex"
+	"github.com/doomerlabs/doomer/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 type RunOptions struct {
@@ -93,7 +93,7 @@ type notInstalledError struct {
 }
 
 func (e *notInstalledError) Error() string {
-	return fmt.Sprintf("adversary %q is not installed locally; run `adversary pull %s` first", e.ref, e.ref)
+	return fmt.Sprintf("adversary %q is not installed locally; run `doomer pull %s` first", e.ref, e.ref)
 }
 func (e *notInstalledError) Unwrap() error { return e.cause }
 

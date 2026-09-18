@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doomerlabs/adversary/pkg/namespacesig"
+	"github.com/doomerlabs/doomer/pkg/namespacesig"
 )
 
 type Client struct {
@@ -229,7 +229,7 @@ func (c Client) Search(ctx context.Context, query string, token string) ([]Searc
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("search requires login; run adversary login")
+		return nil, fmt.Errorf("search requires login; run doomer login")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("search failed: %s", resp.Status)
@@ -260,7 +260,7 @@ func (c Client) Whoami(ctx context.Context, token string) (WhoamiResponse, error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
-		return WhoamiResponse{}, fmt.Errorf("not logged in; run adversary login")
+		return WhoamiResponse{}, fmt.Errorf("not logged in; run doomer login")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return WhoamiResponse{}, fmt.Errorf("whoami failed: %s", resp.Status)

@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/manifest"
 )
 
 func EvaluateDeclarativeDetection(m manifest.Manifest, context detection.Context) detection.Result {

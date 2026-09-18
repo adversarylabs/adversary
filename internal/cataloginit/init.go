@@ -98,7 +98,7 @@ var starterAdversaries = []starterAdversary{
 	},
 }
 
-const readmeHeader = `# Private adversary catalog
+const readmeHeader = `# Private doomer catalog
 
 This repository is the source of truth for your organization's private
 AdversaryLabs adversaries. AdversaryLabs proposes learned changes through pull
@@ -547,8 +547,8 @@ func RenderSuccess(w io.Writer, result Result, platform string) {
 	fmt.Fprintln(w, "Train from human review history")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  Edit adversary.train.yaml and add the source repositories to scan.")
-	fmt.Fprintln(w, "  adversary catalog train --model codex/gpt-5.6-luna")
-	fmt.Fprintln(w, "  adversary catalog train review")
+	fmt.Fprintln(w, "  doomer catalog train --model codex/gpt-5.6-luna")
+	fmt.Fprintln(w, "  doomer catalog train review")
 }
 
 func shellQuote(value string) string {

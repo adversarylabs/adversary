@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
 	"io"
 	"strings"
 )
@@ -43,7 +43,7 @@ func printWhoami(stdout io.Writer, account adversarylabs.WhoamiResponse) {
 	if status == "" {
 		status = "(unknown)"
 	}
-	fmt.Fprintln(stdout, "Logged in to Adversary Labs.")
+	fmt.Fprintln(stdout, "Logged in to Doomer.")
 	fmt.Fprintln(stdout)
 	fmt.Fprintf(stdout, "Name: %s\n", name)
 	fmt.Fprintf(stdout, "Email: %s\n", email)

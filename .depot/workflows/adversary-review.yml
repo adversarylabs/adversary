@@ -1,4 +1,4 @@
-name: Adversary review
+name: Doomer review
 
 on:
   pull_request:

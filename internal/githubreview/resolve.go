@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/doomer/internal/application"
 )
 
 type reviewFindingKey struct {

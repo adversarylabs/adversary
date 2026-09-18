@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/doomerlabs/adversary/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/detection"
 )
 
 type ChangeRequest struct {

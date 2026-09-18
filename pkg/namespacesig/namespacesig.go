@@ -1,5 +1,5 @@
 // Package namespacesig verifies private adversary signatures delegated by the
-// Adversary Labs platform to a team namespace.
+// Doomer platform to a team namespace.
 package namespacesig
 
 import (

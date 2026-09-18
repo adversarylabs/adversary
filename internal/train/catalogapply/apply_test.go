@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/results"
-	"github.com/doomerlabs/adversary/internal/train/workspace"
+	"github.com/doomerlabs/doomer/internal/train/results"
+	"github.com/doomerlabs/doomer/internal/train/workspace"
 	"gopkg.in/yaml.v3"
 )
 

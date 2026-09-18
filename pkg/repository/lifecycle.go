@@ -12,9 +12,9 @@ import (
 	"reflect"
 	"sort"
 
-	"github.com/doomerlabs/adversary/internal/archiveutil"
-	"github.com/doomerlabs/adversary/internal/publock"
-	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/doomer/internal/archiveutil"
+	"github.com/doomerlabs/doomer/internal/publock"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
 )
 
 const maxLifecycleEntries = 100000

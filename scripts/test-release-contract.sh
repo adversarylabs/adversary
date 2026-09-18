@@ -17,9 +17,9 @@ for workflow in .depot/workflows/*.yml; do
   done < <(grep -E '^[[:space:]]*uses:' "$workflow" || true)
 done
 
-grep -Fq 'No license stanza' Formula/adversary.rb.tmpl || fail 'formula license decision missing'
-grep -Fq 'source-code adversaries' Formula/adversary.rb.tmpl || fail 'formula description drift'
-grep -Fq '__INSTALLED_BINARY__ version' Formula/adversary.rb.tmpl || fail 'formula smoke test drift'
+grep -Fq 'No license stanza' Formula/doomer.rb.tmpl || fail 'formula license decision missing'
+grep -Fq 'source-code adversaries' Formula/doomer.rb.tmpl || fail 'formula description drift'
+grep -Fq '__INSTALLED_BINARY__ version' Formula/doomer.rb.tmpl || fail 'formula smoke test drift'
 # shellcheck disable=SC2016 # The function variables are intentional literals.
 grep -Fq 'install -m 0644 "${DIST_DIR}/${FORMULA_NAME}"' scripts/publish-homebrew.sh || fail 'tap publication does not use verified formula bytes'
 grep -Fq 'staged formula differs from verified bundle' scripts/publish-homebrew.sh || fail 'staged formula digest invariant missing'
@@ -29,7 +29,7 @@ grep -Fq 'uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
 grep -Fq 'node-version: 22' .depot/workflows/release.yml || fail 'release Node.js version drift'
 grep -Fq 'publish-github mode rejects HOMEBREW_TAP_TOKEN' scripts/publish-homebrew.sh || fail 'GitHub publication channel guard missing'
 grep -Fq 'publish-homebrew mode rejects GITHUB_TOKEN' scripts/publish-homebrew.sh || fail 'Homebrew publication channel guard missing'
-grep -Fq 'adversary completion bash' README.md || fail 'README command surface drift'
+grep -Fq 'doomer completion bash' README.md || fail 'README command surface drift'
 # shellcheck disable=SC2016 # Markdown backticks are literal.
 grep -Fq 'version `dev`' README.md || fail 'go install version semantics missing'
 
@@ -50,8 +50,8 @@ grep -Eq '"versionInfo": "v1.2.3\+replace\.[0-9a-f]{12}"' "$fixture_sbom" || fai
 rm -f -- "$fixture_sbom"
 
 tmp=".release-dist/contract-$$"; tmp2=".release-dist/contract-two-$$"
-sum1="${TMPDIR:-/tmp}/adversary-release-one.$$.sum"; sum2="${TMPDIR:-/tmp}/adversary-release-two.$$.sum"
-fakebin="${TMPDIR:-/tmp}/adversary-release-fake-$$"; publish_log="${TMPDIR:-/tmp}/adversary-release-publish-$$.log"
+sum1="${TMPDIR:-/tmp}/doomer-release-one.$$.sum"; sum2="${TMPDIR:-/tmp}/doomer-release-two.$$.sum"
+fakebin="${TMPDIR:-/tmp}/doomer-release-fake-$$"; publish_log="${TMPDIR:-/tmp}/doomer-release-publish-$$.log"
 mkdir -p -m 0700 .release-dist; trap 'rm -rf -- "$tmp" "$tmp2" "$fakebin"; rm -f -- "$sum1" "$sum2" "$publish_log"; rmdir .release-dist 2>/dev/null || true' EXIT
 DIST_DIR="$tmp" RELEASE_MODE=build scripts/publish-homebrew.sh 2099.1.2 >/dev/null
 DIST_DIR="$tmp2" RELEASE_MODE=build scripts/publish-homebrew.sh 2099.1.2 >/dev/null
@@ -78,7 +78,7 @@ if ! cmp "$sum1" "$sum2"; then
 fi
 
 RELEASE_MODE=verify DIST_DIR="$tmp" scripts/publish-homebrew.sh 2099.1.2 >/dev/null
-(cd scripts/spdx-validator && go run . "../../$tmp/adversary_2099.1.2.spdx.json")
+(cd scripts/spdx-validator && go run . "../../$tmp/doomer_2099.1.2.spdx.json")
 touch "$tmp/unexpected"; if RELEASE_MODE=verify DIST_DIR="$tmp" scripts/publish-homebrew.sh 2099.1.2 >/dev/null 2>&1; then fail 'extra bundle entry accepted'; fi
 rm -f "$tmp/unexpected"
 cp "$tmp/checksums.txt" "$sum1"
@@ -92,13 +92,13 @@ mv "$tmp/release-manifest.json" "$sum2"
 if RELEASE_MODE=verify DIST_DIR="$tmp" scripts/publish-homebrew.sh 2099.1.2 >/dev/null 2>&1; then fail 'missing bundle entry accepted'; fi
 mv "$sum2" "$tmp/release-manifest.json"
 
-for unsafe in cmd Formula ../adversary-release-escape .; do
+for unsafe in cmd Formula ../doomer-release-escape .; do
   if DIST_DIR="$unsafe" RELEASE_MODE=build scripts/publish-homebrew.sh 2099.1.2 >/dev/null 2>&1; then fail "unsafe DIST_DIR accepted: $unsafe"; fi
 done
 ln -s "${TMPDIR:-/tmp}" .release-dist/link
 if DIST_DIR=.release-dist/link RELEASE_MODE=build scripts/publish-homebrew.sh 2099.1.2 >/dev/null 2>&1; then fail 'symlink DIST_DIR accepted'; fi
 rm -f .release-dist/link
-if [[ ! -f cmd/root.go || ! -f Formula/adversary.rb.tmpl ]]; then fail 'unsafe deletion damaged source'; fi
+if [[ ! -f cmd/root.go || ! -f Formula/doomer.rb.tmpl ]]; then fail 'unsafe deletion damaged source'; fi
 
 mkdir -p "$fakebin"
 chmod 0700 "$fakebin"
@@ -295,7 +295,7 @@ if grep -Fq 'release ' "$publish_log"; then fail 'Homebrew-only publication invo
 
 for archive in "$tmp"/*.tar.gz; do
   listing="$(tar -tzf "$archive")"
-  grep -Eq '(^|/)adversary$' <<<"$listing" || fail "binary absent from $archive"
+  grep -Eq '(^|/)doomer$' <<<"$listing" || fail "binary absent from $archive"
   grep -Eq '(^|/)LICENSE$' <<<"$listing" || fail "LICENSE absent from $archive"
   grep -Eq '(^|/)README.md$' <<<"$listing" || fail "README absent from $archive"
 done

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/manifest"
 )
 
 func writeComposePkg(t *testing.T, dir, name, usesYAML string) {

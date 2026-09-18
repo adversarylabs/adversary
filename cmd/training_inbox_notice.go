@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	internalpaths "github.com/doomerlabs/adversary/internal/paths"
-	traininbox "github.com/doomerlabs/adversary/internal/train/inbox"
+	"github.com/doomerlabs/doomer/internal/application"
+	internalpaths "github.com/doomerlabs/doomer/internal/paths"
+	traininbox "github.com/doomerlabs/doomer/internal/train/inbox"
 	"github.com/spf13/cobra"
 )
 
@@ -48,5 +48,5 @@ func trainingInboxNotice(dataRoot string) string {
 	for _, catalog := range catalogs {
 		total += catalog.Pending
 	}
-	return fmt.Sprintf("Training inbox: %d result(s) ready across %d catalog(s). Run: adversary catalog train review", total, len(catalogs))
+	return fmt.Sprintf("Training inbox: %d result(s) ready across %d catalog(s). Run: doomer catalog train review", total, len(catalogs))
 }

@@ -1,5 +1,8 @@
 # Adversary
 
+
+The CLI and repository are now named **Doomer**. Install `doomerlabs/tap/doomer` and invoke `doomer`; no `adversary` executable alias is shipped. Existing artifact manifests, SDK packages, and signing formats retain their identities.
+
 Adversary is a CLI for packaging, distributing, and running source-code review
 adversaries. Host execution runs code with your user account's authority; read
 the [trust model](docs/trust-model.md) before running code you did not write.
@@ -10,7 +13,7 @@ Supported release binaries target macOS and Linux on amd64 and arm64. Windows
 is source-build and CI supported but does not yet have a packaged release.
 
 ```sh
-brew install adversarylabs/tap/adversary
+brew install doomerlabs/tap/doomer
 # Or build the current checkout with stamped metadata:
 make build VERSION=dev
 ```
@@ -21,7 +24,7 @@ limitation in [the release guide](docs/release.md).
 Because the project has not selected a license, source publication grants no
 reuse rights; see [the license decision](docs/license-decision.md).
 
-`go install github.com/doomerlabs/adversary@<commit-or-tag>` is supported for
+`go install github.com/doomerlabs/doomer@<commit-or-tag>` is supported for
 source installation, but the Go tool does not apply release `-ldflags`, so the
 binary reports version `dev`; its Go VCS build information remains inspectable
 with `go version -m`. Prefer release archives when a stamped version is needed.
@@ -32,26 +35,26 @@ Node.js 22 is required for the generated TypeScript adversary. Node is managed
 by the user, not downloaded by this CLI.
 
 ```sh
-adversary init my-adversary --sdk typescript
+doomer init my-adversary --sdk typescript
 cd my-adversary && npm ci && npm test && npm run build
-adversary run . --path /path/to/repository
+doomer run . --path /path/to/repository
 ```
 
 Only TypeScript project generation is currently supported. Useful commands:
 
 ```sh
-adversary run . --path . --format json
-adversary run --dry-run --explain
-adversary run --all-files
-adversary inspect . --path .
-adversary pack . --name ghcr.io/acme/reviewer
-adversary push ghcr.io/acme/reviewer:0.1.0
-adversary pull ghcr.io/acme/reviewer:0.1.0
-adversary list --format json
-adversary completion bash
+doomer run . --path . --format json
+doomer run --dry-run --explain
+doomer run --all-files
+doomer inspect . --path .
+doomer pack . --name ghcr.io/acme/reviewer
+doomer push ghcr.io/acme/reviewer:0.1.0
+doomer pull ghcr.io/acme/reviewer:0.1.0
+doomer list --format json
+doomer completion bash
 ```
 
-Run `adversary help <command>` for the canonical command and flag reference.
+Run `doomer help <command>` for the canonical command and flag reference.
 See [automatic selection](docs/automatic-detection.md) for change resolution,
 manifest detection declarations, selection policy, and CI behavior.
 See [composition](docs/composition.md) for `adversary.yaml` `uses` (language packs
@@ -69,22 +72,22 @@ for input: it stores resumable results in a local, gitignored SQLite inbox and
 exits. Review is a separate command.
 
 ```sh
-adversary catalog init my-private-adversaries
+doomer catalog init my-private-adversaries
 cd my-private-adversaries
 # Edit adversary.train.yaml, or select sources and a model on the command line:
-adversary catalog train --source-repo acme/api --source-repo acme/web \
+doomer catalog train --source-repo acme/api --source-repo acme/web \
   --model-provider cloudflare --model @cf/meta/llama-3.3-70b-instruct-fp8-fast
-adversary catalog train review
-adversary catalog train inspect
-adversary catalog train inspect <id>
-adversary catalog train accept <id>
+doomer catalog train review
+doomer catalog train inspect
+doomer catalog train inspect <id>
+doomer catalog train accept <id>
 ```
 
 Catalogs initialized before runnable private starters were introduced can be
 updated in place while preserving their policies:
 
 ```sh
-adversary catalog upgrade
+doomer catalog upgrade
 ```
 
 For an exhaustive, resumable repository scan, set a date boundary and remove
@@ -115,7 +118,7 @@ selection; the equivalent committed policy is `sources.authors_only` and
 `sources.authors_ignore`. Model configuration can also come from
 `ADVERSARY_MODEL_PROVIDER` and `ADVERSARY_MODEL`. Results approved for later
 record a decision only. Applying a result updates tracked local catalog files,
-but does not commit, push, upload private evidence to Adversary Labs, or open a
+but does not commit, push, upload private evidence to Doomer, or open a
 pull request. The scan does send bounded comment, thread, review-summary, and
 diff evidence to the model provider you select.
 Interactive CLI commands display a one-line stderr reminder while registered
@@ -136,7 +139,7 @@ that watches replies and steers later reviews.
 
 ## Automatic review scope
 
-`adversary run` chooses an obvious review scope when no scope flags are given.
+`doomer run` chooses an obvious review scope when no scope flags are given.
 The precedence is:
 
 1. explicit `--base`, `--head`, or `--all-files`;
@@ -170,7 +173,7 @@ loop. Installed adversaries may use the host backend when an **official
 signature** verifies, or when a hosted private package has a valid
 platform-delegated team signature for its registry, exact repository, and
 content digest. See [artifact signatures](docs/official-signatures.md). Private
-publishes to the Adversary Labs registry are signed automatically; external
+publishes to the Doomer registry are signed automatically; external
 copies such as GHCR remain untrusted. Path names and registry hostnames alone do
 not grant trust.
 Unknown publishers require a sandbox backend or `--allow-unsafe-host-execution`; that explicit
@@ -196,9 +199,9 @@ and are not general CLI configuration.
 
 | Concern | Flag | Environment | Default/config |
 | --- | --- | --- | --- |
-| SaaS endpoint | `--api-url` | `ADVERSARY_API_URL` | `https://adversarylabs.ai/api` |
+| SaaS endpoint | `--api-url` | `ADVERSARY_API_URL` | `https://doomer.ai/api` |
 | profile | `--profile` | — | `default` profile in OS config dir |
-| registry | explicit OCI reference | `ADVERSARY_REGISTRY_HOST`, `ADVERSARY_REGISTRY_NAMESPACE` | Adversary Labs registry |
+| registry | explicit OCI reference | `ADVERSARY_REGISTRY_HOST`, `ADVERSARY_REGISTRY_NAMESPACE` | Doomer registry |
 | artifact data | — | `ADVERSARY_DATA_DIR` | OS data directory |
 | Node runtime | manifest requirement | `ADVERSARY_NODE_PATH`, then `PATH` | user runtime locations |
 | model provider | `--model-provider`, `--model` | `ADVERSARY_MODEL_PROVIDER`, `ADVERSARY_MODEL`, provider API key | inferred only when exactly one supported provider credential set is present |
@@ -223,7 +226,7 @@ environment:
 
 ```sh
 export OPENAI_API_KEY="..."
-adversary run adversarylabs/example \
+doomer run adversarylabs/example \
   --model-provider openai \
   --model "your-model-id"
 ```
@@ -250,9 +253,9 @@ subscription login, without an API key:
 
 ```sh
 codex login
-adversary run review/code --model codex/gpt-5.6-luna
+doomer run review/code --model codex/gpt-5.6-luna
 # Equivalent explicit provider:
-adversary run review/code --model-provider codex --model gpt-5.6-luna
+doomer run review/code --model-provider codex --model gpt-5.6-luna
 ```
 
 GitHub review runs infer one structured intent from the pull request title and body,
@@ -294,7 +297,7 @@ Fireworks uses its full model identifier:
 
 ```sh
 export FIREWORKS_API_KEY="..."
-adversary run adversarylabs/example \
+doomer run adversarylabs/example \
   --model-provider fireworks \
   --model "accounts/fireworks/models/your-model-id"
 ```
@@ -308,7 +311,7 @@ configured gateway's logging, caching, rate limits, and policies:
 export CLOUDFLARE_API_TOKEN="..."
 export CLOUDFLARE_ACCOUNT_ID="..."
 export ADVERSARY_CLOUDFLARE_GATEWAY_ID="your-gateway"
-adversary run adversarylabs/example \
+doomer run adversarylabs/example \
   --model-provider cloudflare \
   --model "openai/gpt-5.5"
 ```
@@ -318,7 +321,7 @@ credential namespace:
 
 ```sh
 export CAMEL_API_KEY="qaml_live_..."
-adversary run review/code \
+doomer run review/code \
   --model-provider camel \
   --model auto
 ```
@@ -372,14 +375,14 @@ does not accept them as command-line values.
 ## Run telemetry
 
 Authenticated runs report privacy-safe OpenTelemetry timing spans to
-Adversary Labs. The trace contains adversary identifiers, group identifiers,
+Doomer. The trace contains adversary identifiers, group identifiers,
 durations, statuses, and aggregate finding counts. It never contains source
 code, repository identity, file paths, prompts, or finding text.
 
 Attach short labels with repeatable `--tag key=value`. Benchmark harnesses
 should pass `--tag benchmark=true`; these traces are stored for comparison but
 hidden from normal project analytics by default. `--telemetry-file trace.jsonl`
-appends each completed run as OTLP/HTTP JSON, and `adversary telemetry pull
+appends each completed run as OTLP/HTTP JSON, and `doomer telemetry pull
 <trace-id>` retrieves an authorized stored trace in the same format. Standard
 `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, headers,
 and timeout variables send a copy to another OTLP/HTTP collector.

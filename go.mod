@@ -1,4 +1,4 @@
-module github.com/doomerlabs/adversary
+module github.com/doomerlabs/doomer
 
 go 1.26.6
 

@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/githubapi"
-	"github.com/doomerlabs/adversary/internal/train/cases"
-	"github.com/doomerlabs/adversary/internal/train/judge"
-	"github.com/doomerlabs/adversary/internal/train/report"
-	trainstate "github.com/doomerlabs/adversary/internal/train/state"
+	"github.com/doomerlabs/doomer/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/train/cases"
+	"github.com/doomerlabs/doomer/internal/train/judge"
+	"github.com/doomerlabs/doomer/internal/train/report"
+	trainstate "github.com/doomerlabs/doomer/internal/train/state"
 )
 
 func TestSQLiteWriteListInspectApply(t *testing.T) {

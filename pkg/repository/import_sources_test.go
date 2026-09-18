@@ -18,10 +18,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/rootreplace"
-	"github.com/doomerlabs/adversary/pkg/blobsource"
-	"github.com/doomerlabs/adversary/pkg/oci"
-	"github.com/doomerlabs/adversary/pkg/pack"
+	"github.com/doomerlabs/doomer/internal/rootreplace"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/pack"
 )
 
 func mutateSourceMetadata(t *testing.T, in SourceImport, mutateConfig func(map[string]any), mutateAnnotations func(map[string]string)) SourceImport {

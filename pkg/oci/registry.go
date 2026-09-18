@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/doomerlabs/adversary/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
 )
 
 type Registry interface {

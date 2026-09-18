@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/safepath"
+	"github.com/doomerlabs/doomer/internal/safepath"
 )
 
 type Limits struct {

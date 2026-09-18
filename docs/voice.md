@@ -17,7 +17,7 @@ reasoning in the finding; put cadence and bans in voice.
 ## When voice runs
 
 ```sh
-adversary run ./my-adversary --path ./app \
+doomer run ./my-adversary --path ./app \
   --github-review \
   --model-provider openai --model …
 ```
@@ -47,10 +47,10 @@ Examples:
 
 ```sh
 # Voice from torvalds package (entry), not from each specialist
-adversary run ./torvalds-adversary --path ../app --github-review
+doomer run ./torvalds-adversary --path ../app --github-review
 
 # Composition: entry package still owns voice
-adversary run lang/go --path ./service --github-review
+doomer run lang/go --path ./service --github-review
 # → findings from go/* members; rewrite voice from lang/go if it has agent/voice.md
 ```
 
@@ -62,20 +62,20 @@ Core voice files are size-capped (~**32 KiB**) when loaded from disk.
 
 ## Package layout (`agent/voice.md`)
 
-`adversary init` scaffolds `agent/voice.md` with:
+`doomer init` scaffolds `agent/voice.md` with:
 
-1. **Core voice** — persona rules, length, bans, output shape  
+1. **Core voice** — persona rules, length, bans, output shape
 2. **Example maintainer comments (style only)** — few-shot bank with spirit
-   subsections  
+   subsections
 3. **Output** — “return only the PR comment body”
 
 ### Core voice
 
 Edit this for product tone:
 
-- Lead with the issue; mechanism over attitude  
-- Confidence honesty; no invented files/APIs  
-- Length targets (often ~2–6 short sentences)  
+- Lead with the issue; mechanism over attitude
+- Confidence honesty; no invented files/APIs
+- Length targets (often ~2–6 short sentences)
 - Hard bans (corporate padding, praise sandwiches, etc. for a Torvalds-style pack)
 
 ### Example bank (style few-shots)
@@ -98,10 +98,10 @@ use subsections:
 Bank **real human** review excerpts as blockquotes (train apply issues spell this
 out). Rules for the model (also enforced in the CLI rewrite preamble):
 
-- Match **cadence and bluntness**, not copy the quote  
-- Re-ground every claim in the **current** finding’s evidence  
-- **Never** emit an example quote unchanged as the PR comment  
-- **Never** invent facts from examples that are not in the finding  
+- Match **cadence and bluntness**, not copy the quote
+- Re-ground every claim in the **current** finding’s evidence
+- **Never** emit an example quote unchanged as the PR comment
+- **Never** invent facts from examples that are not in the finding
 
 Optional one-line source note after a quote:
 
@@ -141,7 +141,7 @@ style only. JSON input includes severity, title, template body, path/line, and
 **Model flags** (shared with analysis when configured):
 
 - `--model-provider` (`openai` | `cloudflare` | `anthropic` | `fireworks` | `camel` | `codex`)
-- `--model`  
+- `--model`
 
 Env overrides: `ADVERSARY_MODEL_PROVIDER`, `ADVERSARY_MODEL`.
 
@@ -154,16 +154,16 @@ or package-generated text.
 
 ## Authoring checklist
 
-- [ ] `agent/voice.md` exists for persona / product packages  
-- [ ] Core rules match the product (bans, length, structure)  
-- [ ] Example bank heading + spirit subsections present  
-- [ ] Gold is short, human, deduped  
-- [ ] Findings carry enough mechanism for rewrite to stay honest  
-- [ ] With composition, voice lives on the **entry** package you run  
+- [ ] `agent/voice.md` exists for persona / product packages
+- [ ] Core rules match the product (bans, length, structure)
+- [ ] Example bank heading + spirit subsections present
+- [ ] Gold is short, human, deduped
+- [ ] Findings carry enough mechanism for rewrite to stay honest
+- [ ] With composition, voice lives on the **entry** package you run
 
 ## Related
 
 - [Private catalog training](../README.md#private-catalog-training) — collect and review human evidence locally
-- [GitHub PR review posting](./github-review-posting.md) — flags, auth, placement  
-- [Composition (`uses`)](./composition.md) — entry package owns voice under multi-run  
-- [Automatic detection](./automatic-detection.md) — who runs; separate from voice  
+- [GitHub PR review posting](./github-review-posting.md) — flags, auth, placement
+- [Composition (`uses`)](./composition.md) — entry package owns voice under multi-run
+- [Automatic detection](./automatic-detection.md) — who runs; separate from voice

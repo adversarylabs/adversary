@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/train/critic"
+	"github.com/doomerlabs/doomer/internal/train/critic"
 )
 
 func TestProposeWritesPatchAndExperiment(t *testing.T) {

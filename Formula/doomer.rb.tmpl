@@ -1,6 +1,6 @@
 class __FORMULA_CLASS__ < Formula
   desc "Run source-code adversaries against a local repository"
-  homepage "https://github.com/doomerlabs/adversary"
+  homepage "https://github.com/doomerlabs/doomer"
   version "__VERSION__"
   # No license stanza: upstream has not selected a license. See LICENSE.
 
@@ -29,7 +29,7 @@ class __FORMULA_CLASS__ < Formula
   end
 
   def install
-    bin.install "adversary" => "__INSTALLED_BINARY__"
+    bin.install "doomer" => "__INSTALLED_BINARY__"
   end
 
   test do

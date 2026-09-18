@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/train/judge"
-	"github.com/doomerlabs/adversary/internal/train/optimizer"
-	"github.com/doomerlabs/adversary/internal/train/score"
+	"github.com/doomerlabs/doomer/internal/train/judge"
+	"github.com/doomerlabs/doomer/internal/train/optimizer"
+	"github.com/doomerlabs/doomer/internal/train/score"
 )
 
 func TestAssembleReportIdenticalToBaseNoFakeDeltas(t *testing.T) {

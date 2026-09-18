@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/doomer/internal/application"
 	"github.com/spf13/cobra"
 )
 
@@ -12,9 +12,9 @@ func newWhoamiCommand(app *application.App, apiURL, profile *string) *cobra.Comm
 	var legacyJSON bool
 	cmd := &cobra.Command{
 		Use:   "whoami",
-		Short: "Show the current Adversary Labs login",
-		Example: `  adversary whoami
-  adversary whoami --api-url http://localhost:3000/api`,
+		Short: "Show the current Doomer login",
+		Example: `  doomer whoami
+  doomer whoami --api-url http://localhost:3000/api`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved, err := commandFormat(cmd, format, legacyJSON)
@@ -36,7 +36,7 @@ func newWhoamiCommand(app *application.App, apiURL, profile *string) *cobra.Comm
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "Not logged in.")
 				fmt.Fprintln(cmd.OutOrStdout())
-				fmt.Fprintln(cmd.OutOrStdout(), "Run `adversary login` to authenticate with Adversary Labs.")
+				fmt.Fprintln(cmd.OutOrStdout(), "Run `doomer login` to authenticate with Doomer.")
 				return nil
 			}
 			client := deps.API.New(valueOf(apiURL))

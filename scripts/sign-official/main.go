@@ -18,7 +18,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/doomerlabs/adversary/pkg/officialsig"
+	"github.com/doomerlabs/doomer/pkg/officialsig"
 )
 
 func main() {

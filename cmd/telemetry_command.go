@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/doomer/internal/application"
 	"github.com/spf13/cobra"
 )
 
@@ -29,7 +29,7 @@ func newTelemetryCommand(app *application.App, apiURL, profile *string) *cobra.C
 				return err
 			}
 			if !ok || auth.Token == "" {
-				return fmt.Errorf("telemetry pull requires adversary login")
+				return fmt.Errorf("telemetry pull requires doomer login")
 			}
 			raw, err := deps.API.New(valueOf(apiURL)).PullTelemetry(cmd.Context(), auth.Token, traceID)
 			if err != nil {

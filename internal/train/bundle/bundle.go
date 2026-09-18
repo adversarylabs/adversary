@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/train/cases"
-	"github.com/doomerlabs/adversary/internal/train/securefs"
+	"github.com/doomerlabs/doomer/internal/train/cases"
+	"github.com/doomerlabs/doomer/internal/train/securefs"
 )
 
 // Section names present on a full bundle.

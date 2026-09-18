@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/githubreview"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/repository"
-	"github.com/doomerlabs/adversary/pkg/review"
+	"github.com/doomerlabs/doomer/internal/githubreview"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 func TestGitHubReviewWatchSameHeadRerun(t *testing.T) {

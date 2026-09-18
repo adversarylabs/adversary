@@ -34,18 +34,18 @@ Rules:
 
 ```sh
 # Expand uses, run root + members
-adversary run person/torvalds --path ./app --github-review
+doomer run person/torvalds --path ./app --github-review
 
 # Language pack
-adversary run go --path ./myservice
+doomer run go --path ./myservice
 
 # Default product: review/code plus its specialists
-adversary run --path ./app
+doomer run --path ./app
 ```
 
 Expansion is **transitive** (depth cap 8), **deduped**, and **cycle-safe**.
 Missing members fail the run (fail closed). Selected registry members are auto-pulled
-when not installed, same as a direct `adversary run <ref>`.
+when not installed, same as a direct `doomer run <ref>`.
 
 One-root compositions execute with bounded parallelism (five reviewers by
 default; configurable with `--compose-concurrency`). The root generalist sees
@@ -90,10 +90,10 @@ separate manifests use the legacy download path to discover their dependencies.
 
 ```sh
 # Preview the default review/code composition without downloading packages
-adversary run --path ./app --compose-plan
+doomer run --path ./app --compose-plan
 
 # Machine-readable selected/skipped references, digests, and reasons
-adversary run review/code --path ./app --compose-plan --format json
+doomer run review/code --path ./app --compose-plan --format json
 ```
 
 Preview does not download legacy packages; if their metadata cannot be obtained,
@@ -145,7 +145,7 @@ wording; meta packages only change the default member set.
 |------|---------|
 | `--compose-concurrency` | Maximum composed reviewers running concurrently (default 5) |
 
-`adversary run` with no refs selects `review/code` and expands its composition.
+`doomer run` with no refs selects `review/code` and expands its composition.
 `--all` retains catalog-wide automatic selection. The internal `--no-compose`
 compatibility flag remains available to controlled training and evaluation
 workflows, but is intentionally hidden from normal CLI help.
@@ -153,5 +153,5 @@ workflows, but is intentionally hidden from normal CLI help.
 ## Related
 
 - [Private catalog training](../README.md#private-catalog-training) — collect and review human evidence locally
-- [Comment voice](./voice.md) — `agent/voice.md`, example banks, rewrite  
+- [Comment voice](./voice.md) — `agent/voice.md`, example banks, rewrite
 - [GitHub PR review posting](./github-review-posting.md) — posting flags

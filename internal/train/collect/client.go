@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/doomerlabs/adversary/internal/githubapi"
-	"github.com/doomerlabs/adversary/internal/githubauth"
+	"github.com/doomerlabs/doomer/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/githubauth"
 )
 
 var (

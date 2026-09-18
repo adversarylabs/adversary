@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
 )
 
 // ExitCode maps stable error classes at the single process edge. Commands and

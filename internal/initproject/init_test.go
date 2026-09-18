@@ -285,7 +285,7 @@ func TestCreateScaffoldsCatalogAndContributorDocs(t *testing.T) {
 			t.Fatalf("README.md missing %q\n\n%s", want, readme)
 		}
 	}
-	for _, command := range []string{"npm ci", "npm test", "adversary validate", "adversary pack"} {
+	for _, command := range []string{"npm ci", "npm test", "doomer validate", "doomer pack"} {
 		if strings.Contains(readme, command) {
 			t.Fatalf("README.md contains contributor command %q\n\n%s", command, readme)
 		}
@@ -307,7 +307,7 @@ func TestCreateScaffoldsCatalogAndContributorDocs(t *testing.T) {
 		t.Fatalf("CONTRIBUTING.md missing: %v", err)
 	}
 	contributing := string(contributingRaw)
-	for _, want := range []string{"npm ci", "npm test", "adversary validate .", "adversary pack . --check", "CHECKS.md"} {
+	for _, want := range []string{"npm ci", "npm test", "doomer validate .", "doomer pack . --check", "CHECKS.md"} {
 		if !strings.Contains(contributing, want) {
 			t.Fatalf("CONTRIBUTING.md missing %q\n\n%s", want, contributing)
 		}

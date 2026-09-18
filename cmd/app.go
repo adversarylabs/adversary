@@ -20,22 +20,22 @@ import (
 	"strings"
 	"time"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/internal/cataloginit"
-	"github.com/doomerlabs/adversary/internal/dependencies"
-	"github.com/doomerlabs/adversary/internal/findingverify"
-	"github.com/doomerlabs/adversary/internal/initproject"
-	"github.com/doomerlabs/adversary/internal/modelreview"
-	internalpaths "github.com/doomerlabs/adversary/internal/paths"
-	trainreviewui "github.com/doomerlabs/adversary/internal/train/reviewui"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/manifest"
-	"github.com/doomerlabs/adversary/pkg/oci"
-	"github.com/doomerlabs/adversary/pkg/pack"
-	"github.com/doomerlabs/adversary/pkg/repository"
-	"github.com/doomerlabs/adversary/pkg/review"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/internal/cataloginit"
+	"github.com/doomerlabs/doomer/internal/dependencies"
+	"github.com/doomerlabs/doomer/internal/findingverify"
+	"github.com/doomerlabs/doomer/internal/initproject"
+	"github.com/doomerlabs/doomer/internal/modelreview"
+	internalpaths "github.com/doomerlabs/doomer/internal/paths"
+	trainreviewui "github.com/doomerlabs/doomer/internal/train/reviewui"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/pack"
+	"github.com/doomerlabs/doomer/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/review"
 	"golang.org/x/term"
 )
 
@@ -586,10 +586,10 @@ func (f processRegistryFactory) New(apiURL, profile string) (application.OCIRegi
 	// credentials are sent on token requests (otherwise pulls look anonymous).
 	if isOfficialCatalogRegistry(f.host) {
 		r.TokenAuthorities[oci.DefaultRegistry] = oci.TokenAuthority{
-			Origin:  "https://adversarylabs.ai",
+			Origin:  "https://doomer.ai",
 			Service: oci.DefaultRegistry,
 		}
-		r.BearerRealm = "https://adversarylabs.ai/auth/registry"
+		r.BearerRealm = "https://doomer.ai/auth/registry"
 		r.BearerService = oci.DefaultRegistry
 	}
 	auth, ok, err := scopedAuth(f.store, apiURL, profile, f.host)

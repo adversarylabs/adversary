@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/train/adversaries"
-	"github.com/doomerlabs/adversary/internal/train/cases"
-	"github.com/doomerlabs/adversary/internal/train/receipt"
-	"github.com/doomerlabs/adversary/internal/train/results"
+	"github.com/doomerlabs/doomer/internal/train/adversaries"
+	"github.com/doomerlabs/doomer/internal/train/cases"
+	"github.com/doomerlabs/doomer/internal/train/receipt"
+	"github.com/doomerlabs/doomer/internal/train/results"
 )
 
 func TestResolvePrimaryAdversaryName(t *testing.T) {

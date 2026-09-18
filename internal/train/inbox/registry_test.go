@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/train/results"
+	"github.com/doomerlabs/doomer/internal/train/results"
 )
 
 func TestRegisterAndListPendingCatalogs(t *testing.T) {

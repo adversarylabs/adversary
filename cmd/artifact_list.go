@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/doomerlabs/adversary/internal/application"
+	"github.com/doomerlabs/doomer/internal/application"
 	"github.com/spf13/cobra"
 )
 
@@ -38,11 +38,11 @@ security/secrets, …).
 Remote entries require network access and, for private catalog results, login.
 If the remote catalog is unavailable, local adversaries are still listed
 (without outdated detection).`,
-		Example: `  adversary list
-  adversary list --installed
-  adversary list --catalog
-  adversary list --outdated
-  adversary list --format json`,
+		Example: `  doomer list
+  doomer list --installed
+  doomer list --catalog
+  doomer list --outdated
+  doomer list --format json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := commandFormat(cmd, opts.format, opts.json)

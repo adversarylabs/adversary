@@ -153,7 +153,7 @@ func SanitizeAdversaryRef(value string) string {
 		}
 	}
 	parts = filtered
-	// Only peel Adversary Labs registry hosts. External OCI hosts must not
+	// Only peel Doomer registry hosts. External OCI hosts must not
 	// become catalog-shaped ids (registry.example.com/go/secret → go/secret).
 	if len(parts) > 2 && isRegistryHostPart(parts[0]) && !isWindowsDriveLetter(parts[0]) {
 		if !isOfficialRegistryHost(parts[0]) {
@@ -261,7 +261,7 @@ func isWindowsDriveLetter(value string) bool {
 }
 
 func isOfficialRegistryHost(value string) bool {
-	// Only Adversary Labs production registry hosts. localhost (any port) is
+	// Only Doomer production registry hosts. localhost (any port) is
 	// not official — localhost:5000/go/private must not become go/private.
 	host := value
 	if i := strings.IndexByte(value, ':'); i >= 0 {

@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
 	"github.com/spf13/cobra"
 )
 
@@ -18,13 +18,13 @@ func newLoginCommand(app *application.App, apiURL, profile *string) *cobra.Comma
 	opts := &loginOptions{}
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Authenticate with Adversary Labs",
-		Example: `  adversary login
-  adversary login --name "Marc's MacBook Pro"
-  adversary login --ci
-  printf '%s\n' "$ADVERSARY_SERVICE_TOKEN" | adversary login --token-stdin --registry-namespace my-team
-  adversary login --email-address marc@example.com
-  printf '%s\n' "$ADVERSARY_PASSWORD" | adversary login --email-address marc@example.com --password-stdin`,
+		Short: "Authenticate with Doomer",
+		Example: `  doomer login
+  doomer login --name "Marc's MacBook Pro"
+  doomer login --ci
+  printf '%s\n' "$ADVERSARY_SERVICE_TOKEN" | doomer login --token-stdin --registry-namespace my-team
+  doomer login --email-address marc@example.com
+  printf '%s\n' "$ADVERSARY_PASSWORD" | doomer login --email-address marc@example.com --password-stdin`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			deps := app.Dependencies()
@@ -105,7 +105,7 @@ func newLoginCommand(app *application.App, apiURL, profile *string) *cobra.Comma
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout())
-			fmt.Fprintln(cmd.OutOrStdout(), "Logged in to Adversary Labs.")
+			fmt.Fprintln(cmd.OutOrStdout(), "Logged in to Doomer.")
 			return nil
 		},
 	}
@@ -124,9 +124,9 @@ func newLogoutCommand(app *application.App, apiURL, profile *string) *cobra.Comm
 	opts := &logoutOptions{}
 	cmd := &cobra.Command{
 		Use:   "logout",
-		Short: "Log out of Adversary Labs",
-		Example: `  adversary logout
-  adversary logout --local-only`,
+		Short: "Log out of Doomer",
+		Example: `  doomer logout
+  doomer logout --local-only`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			deps := app.Dependencies()
@@ -144,7 +144,7 @@ func newLogoutCommand(app *application.App, apiURL, profile *string) *cobra.Comm
 				}
 			}
 			if !ok {
-				fmt.Fprintln(cmd.OutOrStdout(), "No Adversary Labs login was configured.")
+				fmt.Fprintln(cmd.OutOrStdout(), "No Doomer login was configured.")
 				return nil
 			}
 			if !opts.localOnly && auth.Token != "" {
@@ -156,10 +156,10 @@ func newLogoutCommand(app *application.App, apiURL, profile *string) *cobra.Comm
 			if err := store.RemoveAuthCAS(key, auth); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Logged out of Adversary Labs.")
+			fmt.Fprintln(cmd.OutOrStdout(), "Logged out of Doomer.")
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&opts.localOnly, "local-only", false, "remove local credentials without contacting Adversary Labs")
+	cmd.Flags().BoolVar(&opts.localOnly, "local-only", false, "remove local credentials without contacting Doomer")
 	return cmd
 }

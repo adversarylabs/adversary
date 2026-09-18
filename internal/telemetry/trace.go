@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
 )
 
 const (
@@ -68,7 +68,7 @@ func BuildTrace(report adversarylabs.RunUsageReport, started, ended time.Time) a
 	}
 	rootID := randomHex(8)
 	report.Spans = append(report.Spans, adversarylabs.RunUsageSpan{
-		TraceID: report.TraceID, SpanID: rootID, Name: "adversary run", Kind: 1,
+		TraceID: report.TraceID, SpanID: rootID, Name: "doomer run", Kind: 1,
 		StartTimeUnixNano: unixNanoString(started), EndTimeUnixNano: unixNanoString(ended), Status: runStatus(report.Results),
 		Attributes: map[string]any{
 			"adversary.run.adversary_count": len(report.Adversaries),
@@ -220,7 +220,7 @@ func OTLPJSON(report adversarylabs.RunUsageReport, cliVersion string) ([]byte, e
 			makeOTLPAttribute("service.version", cliVersion),
 			makeOTLPAttribute("telemetry.sdk.language", "go"),
 		}},
-		"scopeSpans": []any{map[string]any{"scope": map[string]any{"name": "github.com/doomerlabs/adversary"}, "spans": spans}},
+		"scopeSpans": []any{map[string]any{"scope": map[string]any{"name": "github.com/doomerlabs/doomer"}, "spans": spans}},
 	}}}
 	return json.Marshal(payload)
 }

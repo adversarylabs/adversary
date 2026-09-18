@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/manifest"
 )
 
 const maxJSEntrypointScanBytes = 16 << 20

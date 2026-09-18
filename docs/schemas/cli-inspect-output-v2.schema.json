@@ -1,7 +1,7 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
   "$id":"https://adversarylabs.dev/schemas/cli-inspect-output-v2.schema.json",
-  "title":"Adversary CLI stored-artifact inspect output v2",
+  "title":"Doomer CLI stored-artifact inspect output v2",
   "type":"object","additionalProperties":false,
   "required":["schemaVersion","command","data"],
   "properties":{

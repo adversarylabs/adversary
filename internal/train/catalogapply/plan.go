@@ -18,9 +18,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/doomerlabs/adversary/internal/cataloginit"
-	"github.com/doomerlabs/adversary/internal/train/results"
-	"github.com/doomerlabs/adversary/internal/train/workspace"
+	"github.com/doomerlabs/doomer/internal/cataloginit"
+	"github.com/doomerlabs/doomer/internal/train/results"
+	"github.com/doomerlabs/doomer/internal/train/workspace"
 	"gopkg.in/yaml.v3"
 )
 
@@ -908,11 +908,11 @@ func validateRunnablePackageAndSync(ctx context.Context, dir string, run command
 	}
 	distSnapshot, err := captureCatalogTree(filepath.Join(isolated, "dist"))
 	if err != nil {
-		return fmt.Errorf("capture validated adversary build output: %w", err)
+		return fmt.Errorf("capture validated doomer build output: %w", err)
 	}
 	if distSnapshot.existed {
 		if err := restoreCatalogTree(filepath.Join(dir, "dist"), distSnapshot); err != nil {
-			return fmt.Errorf("synchronize validated adversary build output: %w", err)
+			return fmt.Errorf("synchronize validated doomer build output: %w", err)
 		}
 		if err := validateCompiledRelativeImports(dir); err != nil {
 			return err

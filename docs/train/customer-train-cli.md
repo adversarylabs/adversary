@@ -1,10 +1,10 @@
 # Historical customer training CLI sketch
 
-> The public workflow is now `adversary catalog train`. The top-level
-> `adversary train` command described below has been removed; this document is
+> The public workflow is now `doomer catalog train`. The top-level
+> `doomer train` command described below has been removed; this document is
 > retained only as historical design context.
 
-**CLI name:** **`train`** (not `factory`).  
+**CLI name:** **`train`** (not `factory`).
 **Goal:** Customers improve **their own** adversaries using **their own** PR review history.
 
 Related: [quality-bar.md](./quality-bar.md) (internal factory quality bar).
@@ -28,15 +28,15 @@ Not “train on the open web.” Not “scan one PR once.” **History + state +
 | Prefer | Avoid |
 |--------|--------|
 | `adversary.train.yaml` in the workspace, **checked into git** | Imperative “source” subcommands that mutate hidden state |
-| `adversary train init` that **stubs** the config for the user to edit | Magic discovery of “where history lives” with no file to review |
-| `adversary train run` / `run --adversary X` reading that config | A second CLI dialect just to manage the repo list |
+| `doomer train init` that **stubs** the config for the user to edit | Magic discovery of “where history lives” with no file to review |
+| `doomer train run` / `run --adversary X` reading that config | A second CLI dialect just to manage the repo list |
 
 Why:
 
-- **Reviewable** — PR the sources list like any other policy  
-- **Shareable** — team clones the adversary workspace and gets the same history targets  
-- **Less magic** — open the file; see org, repos, filters, authors  
-- **Scriptable** — edit YAML in CI or codegen if needed  
+- **Reviewable** — PR the sources list like any other policy
+- **Shareable** — team clones the adversary workspace and gets the same history targets
+- **Less magic** — open the file; see org, repos, filters, authors
+- **Scriptable** — edit YAML in CI or codegen if needed
 
 CLI stays small: **init (stub config) → edit config → run (one adversary or all) → story / issues**.
 
@@ -52,9 +52,9 @@ CLI stays small: **init (stub config) → edit config → run (one adversary or 
 
 All of them need:
 
-1. A **local adversary workspace** (one or many packages with clear `docs/scope.md`).  
-2. A **committed train config** listing history sources (org, repos, filters, authors).  
-3. **Durable runtime state** (gitignored) so re-runs don’t re-grade the same PR rounds.  
+1. A **local adversary workspace** (one or many packages with clear `docs/scope.md`).
+2. A **committed train config** listing history sources (org, repos, filters, authors).
+3. **Durable runtime state** (gitignored) so re-runs don’t re-grade the same PR rounds.
 4. **Stories + draft issues** they can accept, edit, or ignore.
 
 ---
@@ -81,8 +81,8 @@ All of them need:
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Config = policy (commit it).**  
-**State = progress (gitignore it).**  
+**Config = policy (commit it).**
+**State = progress (gitignore it).**
 **Scope.md = mission (commit it).**
 
 ---
@@ -95,15 +95,15 @@ Train must **not** turn every customer into a second `go-security` / `engineerin
 
 | Role | Who | Participates in grade? | Gets train drafts? |
 |------|-----|------------------------|--------------------|
-| **Official** | Adversary Labs packages from the registry (`go/security`, `go/testing`, `engineering-review`, …) | **Yes** — run them; they may **catch** gold | **No** — never suggested issues / patches for official |
+| **Official** | Doomer packages from the registry (`go/security`, `go/testing`, `engineering-review`, …) | **Yes** — run them; they may **catch** gold | **No** — never suggested issues / patches for official |
 | **Local (home-grown)** | Packages under the workspace (`adversaries/*` or `path: .`) | **Yes** | **Yes** — only these are trainable |
 
 So:
 
-1. User **creates** local adversaries (SDK / `adversary init`) and edits `docs/scope.md` for **their** niche.  
-2. User **trains** those locals (one package or all locals in a pass; regularly).  
-3. Train **downloads / uses the official catalog** as a **read-only jury** on the same history.  
-4. If **official** `go-testing` already catches the human concern, that is **not** a miss for the home-grown package — **do not** draft a local improvement from that gold.  
+1. User **creates** local adversaries (SDK / `doomer init`) and edits `docs/scope.md` for **their** niche.
+2. User **trains** those locals (one package or all locals in a pass; regularly).
+3. Train **downloads / uses the official catalog** as a **read-only jury** on the same history.
+4. If **official** `go-testing` already catches the human concern, that is **not** a miss for the home-grown package — **do not** draft a local improvement from that gold.
 5. Product default: **local overrides official** when both claim a comment (same mission shape or same id alias) — the customer’s package owns grading *and* training for that gold.
 
 ### Why official is present during train
@@ -112,9 +112,9 @@ Without official in the room, every security-shaped human comment becomes “mis
 
 With official catching:
 
-- Local packages stay **narrow** (company rules, domain, policy).  
-- Train only proposes changes when **no included official** (and no better local) covered the gold.  
-- Day-to-day `adversary run` can still use official + local together the same way.
+- Local packages stay **narrow** (company rules, domain, policy).
+- Train only proposes changes when **no included official** (and no better local) covered the gold.
+- Day-to-day `doomer run` can still use official + local together the same way.
 
 ### Local overrides official
 
@@ -136,22 +136,22 @@ With official catching:
 | Use official during train so gold isn’t mis-attributed | Yes — default on, configurable |
 | Train / improve official packages from customer history | **No** — official is never a train draft target |
 | Disable some official packages they don’t want in the jury | Yes — config include/exclude |
-| **Catalog author (Adversary Labs):** train local checkouts of packages that *publish as* official, with registry jury off | Yes — see below |
+| **Catalog author (Doomer):** train local checkouts of packages that *publish as* official, with registry jury off | Yes — see below |
 
 ### Catalog author mode (first-party)
 
 You author the official packages. For your own train loop you do **not** need the registry copies in the jury (they would duplicate the same missions). Instead:
 
-1. **`official.enabled: false`** (or `exclude` everything) — no registry jury.  
-2. Point **`adversaries.root`** at your monorepo siblings (or a workspace that lists every package you ship): local `go-concurrency-adversary`, `engineering-review-adversary`, etc.  
-3. Each has **`docs/scope.md`**; routing picks best owner among those locals.  
-4. **`train run`** / regular re-runs draft improvements **for those locals** — the same trees you later pack/push as official.  
+1. **`official.enabled: false`** (or `exclude` everything) — no registry jury.
+2. Point **`adversaries.root`** at your monorepo siblings (or a workspace that lists every package you ship): local `go-concurrency-adversary`, `engineering-review-adversary`, etc.
+3. Each has **`docs/scope.md`**; routing picks best owner among those locals.
+4. **`train run`** / regular re-runs draft improvements **for those locals** — the same trees you later pack/push as official.
 5. Optional: `sources` = public OSS catalog and/or internal repos; `authors_*` as needed.
 
 Example:
 
 ```yaml
-# Adversary Labs monorepo — train the packages we publish
+# Doomer monorepo — train the packages we publish
 version: 1
 
 adversaries:
@@ -167,10 +167,10 @@ sources:
   # repos: [open-telemetry/opentelemetry-go, ...]  # or org / allowlist
 ```
 
-**Customers** keep `official.enabled: true` so home-grown packages stay narrow.  
+**Customers** keep `official.enabled: true` so home-grown packages stay narrow.
 **You** flip official off and train the local set that becomes official on release.
 
-No special CLI flag required for v1 — config is enough. Optional later: `adversary train init --catalog-author` stubs this shape.
+No special CLI flag required for v1 — config is enough. Optional later: `doomer train init --catalog-author` stubs this shape.
 
 ---
 
@@ -217,7 +217,7 @@ This is the **source of truth** for history and workspace layout. No separate �
 
 ```yaml
 # adversary.train.yaml — edit and commit
-# Generated by: adversary train init
+# Generated by: doomer train init
 # Docs: https://… (link when shipped)
 
 version: 1
@@ -253,7 +253,7 @@ official:
   #   - engineering-review    # e.g. customer doesn't want official generalist in the jury
   #   - complexity
 
-# History to train against (customer org/repos — not Adversary Labs public catalog).
+# History to train against (customer org/repos — not Doomer public catalog).
 sources:
   host: github.com
   # Pick one primary mode (or combine carefully):
@@ -322,12 +322,12 @@ Train grades **human review comments**. Customers need control over *whose* comm
 
 **Rules:**
 
-1. **Built-in bot reject still applies** (Copilot, dependabot, `*[bot]`, assessment bots, etc.) — config does not re-enable bots.  
-2. Filters apply when labeling gold / routing, **before** miss grading.  
-3. Logins are **case-insensitive**; match GitHub (or host) username, not display name.  
-4. Empty `authors_only` = no allowlist (all non-ignored, non-bot humans eligible).  
-5. Empty `authors_ignore` = no extra blocklist beyond bots / global non-defects.  
-6. A PR with only ignored authors may still be **marked seen** (so history walks forward) but produces **no in-scope gold**.  
+1. **Built-in bot reject still applies** (Copilot, dependabot, `*[bot]`, assessment bots, etc.) — config does not re-enable bots.
+2. Filters apply when labeling gold / routing, **before** miss grading.
+3. Logins are **case-insensitive**; match GitHub (or host) username, not display name.
+4. Empty `authors_only` = no allowlist (all non-ignored, non-bot humans eligible).
+5. Empty `authors_ignore` = no extra blocklist beyond bots / global non-defects.
+6. A PR with only ignored authors may still be **marked seen** (so history walks forward) but produces **no in-scope gold**.
 7. Optional later: per-source author lists under each repo entry if org-wide defaults are too coarse.
 
 Examples:
@@ -408,12 +408,12 @@ official:
 
 Order of decisions for each human comment (after bots / authors / non-defects):
 
-1. **Local override** — if an override maps this surface to a local package, owner = local.  
-2. **Best specialist** among **included official + all loaded locals** (scope.md / heuristics).  
-3. Prefer **local over official** when scores tie or missions overlap (customer ownership).  
-4. Prefer **specific official** over vague local generalist when local scope is empty/template.  
-5. **Catch check:** run all owners that are in-scope for grading; if **any official** findings match the gold, do **not** emit a train draft for locals on that gold.  
-6. **Train draft** only if: gold in-scope for a **local** train-eligible package, that local missed, and no official catch covered it.  
+1. **Local override** — if an override maps this surface to a local package, owner = local.
+2. **Best specialist** among **included official + all loaded locals** (scope.md / heuristics).
+3. Prefer **local over official** when scores tie or missions overlap (customer ownership).
+4. Prefer **specific official** over vague local generalist when local scope is empty/template.
+5. **Catch check:** run all owners that are in-scope for grading; if **any official** findings match the gold, do **not** emit a train draft for locals on that gold.
+6. **Train draft** only if: gold in-scope for a **local** train-eligible package, that local missed, and no official catch covered it.
 7. **Never** emit suggested issues with `adversary:go/security` (official) as the improvement target.
 
 Story should still *show* “official go-testing caught this” so the user understands why local wasn’t trained.
@@ -431,73 +431,73 @@ train      Train adversary packages from PR review history (draft gaps; stateful
 run        Review a repository with an installed or local adversary
 ```
 
-### `adversary train init`
+### `doomer train init`
 
 ```bash
 # Multi-adversary workspace: stub config + gitignore + state dir
-adversary train init
-adversary train init --path ~/work/my-adversaries
+doomer train init
+doomer train init --path ~/work/my-adversaries
 
 # Single existing package
-adversary train init --path ~/work/my-db-adversary
+doomer train init --path ~/work/my-db-adversary
 ```
 
 **Does:**
 
-- Write **`adversary.train.yaml`** stub (if missing) with commented examples for org/repos/authors  
-- Ensure `.adversary-train/` exists  
-- Add `.adversary-train/` to `.gitignore`  
-- Optionally detect `adversaries/` vs single-package and set `adversaries.root` / `path`  
+- Write **`adversary.train.yaml`** stub (if missing) with commented examples for org/repos/authors
+- Ensure `.adversary-train/` exists
+- Add `.adversary-train/` to `.gitignore`
+- Optionally detect `adversaries/` vs single-package and set `adversaries.root` / `path`
 
 **Does not:**
 
-- Call the code host  
-- Register “sources” in hidden state  
-- Require a chain of `source add` commands  
+- Call the code host
+- Register “sources” in hidden state
+- Require a chain of `source add` commands
 
 User **edits the YAML** (or opens a PR) to set `org` / `repos` / authors.
 
-### `adversary train run`
+### `doomer train run`
 
 ```bash
 cd ~/work/my-adversaries
 
 # All adversaries from config; history from config sources
-adversary train run
+doomer train run
 
 # Explicit all-local routing with an exclusion
-adversary train run --all-adversaries --exclude-adversary torvalds
+doomer train run --all-adversaries --exclude-adversary torvalds
 
 # One adversary only (domain owner)
-adversary train run --adversary go-database
+doomer train run --adversary go-database
 
 # Budget overrides (optional; defaults from config)
-adversary train run --max-prs 100 --max-turns 300
+doomer train run --max-prs 100 --max-turns 300
 
 # Resume is default (state dir). Explicit reset:
-adversary train run --reset-discovery
+doomer train run --reset-discovery
 
 # Debug only — not the product default
-adversary train run --pr 4242 --repo acme/payments-api
+doomer train run --pr 4242 --repo acme/payments-api
 ```
 
 **Semantics:**
 
-- Read **`adversary.train.yaml`** (fail clearly if missing or empty sources).  
-- Ensure **official catalog** is available per `official.*` (pull/cache); run them as grade-only jury.  
-- Walk **unseen** history for configured sources until budget.  
+- Read **`adversary.train.yaml`** (fail clearly if missing or empty sources).
+- Ensure **official catalog** is available per `official.*` (pull/cache); run them as grade-only jury.
+- Walk **unseen** history for configured sources until budget.
 - **Train-eligible** set: one local (`--adversary`) or all locals (default / `--all-adversaries`), minus config and CLI exclusions.
 - Route each human comment to the best matching eligible local, or none.
-- Draft suggested issues **only** for train-eligible locals that missed gold **not** already caught by an included official.  
+- Draft suggested issues **only** for train-eligible locals that missed gold **not** already caught by an included official.
 - Create deduplicated GitHub issues for consolidated drafts and false-positive fixes; individual misses remain local evidence.
 - Append story + update **gitignored** state. `--no-issues` skips GitHub writes.
 
 ### Inspect
 
 ```bash
-adversary train story       # LATEST_STORY.md
-adversary train issues      # draft suggested issues
-adversary train status      # config summary + state counts + loaded packages
+doomer train story       # LATEST_STORY.md
+doomer train issues      # draft suggested issues
+doomer train status      # config summary + state counts + loaded packages
 ```
 
 No `train source` command group.
@@ -533,13 +533,13 @@ Re-runs skip seen PR/rounds. `--reset-discovery` is explicit and loud.
 
 ## What a full-history run does
 
-1. Load config → sources + **local** train set + **official** jury set (include/exclude).  
-2. Auto-pull / resolve official packages into the local store as needed (not train targets).  
-3. For each repo in sources (expand `org` if set), list PRs with human review activity.  
-4. Skip anything in discovery state.  
-5. Until budget: collect → filter authors → route (local override / best owner) → run locals **and** included official → judge:  
-   - official catch ⇒ no local train draft for that gold  
-   - local miss only ⇒ draft for that local  
+1. Load config → sources + **local** train set + **official** jury set (include/exclude).
+2. Auto-pull / resolve official packages into the local store as needed (not train targets).
+3. For each repo in sources (expand `org` if set), list PRs with human review activity.
+4. Skip anything in discovery state.
+5. Until budget: collect → filter authors → route (local override / best owner) → run locals **and** included official → judge:
+   - official catch ⇒ no local train draft for that gold
+   - local miss only ⇒ draft for that local
 6. **Save state**; print BOTTOM LINE + paths.
 
 ---
@@ -550,39 +550,39 @@ Re-runs skip seen PR/rounds. `--reset-discovery` is explicit and loud.
 
 ```bash
 mkdir acme-adversaries && cd acme-adversaries
-adversary train init
+doomer train init
 # edit adversary.train.yaml:
 #   adversaries.root: ./adversaries
 #   sources.org: acme
 #   # or sources.repos: [acme/payments-api, acme/ledger]
 # add packages under adversaries/*/ with docs/scope.md
 
-adversary train run
-adversary train story
+doomer train run
+doomer train story
 # next week
-adversary train run
+doomer train run
 ```
 
 ### Database team (one package)
 
 ```bash
 cd go-database-adversary   # already has docs/scope.md
-adversary train init
+doomer train init
 # edit adversary.train.yaml:
 #   adversaries.path: .
 #   sources.repos:
 #     - acme/payments-api
 #     - acme/ledger
 
-adversary train run
+doomer train run
 # or from a multi workspace:
-# adversary train run --adversary go-database
+# doomer train run --adversary go-database
 ```
 
 ### Debug one PR
 
 ```bash
-adversary train run --repo acme/payments-api --pr 4242 --force
+doomer train run --repo acme/payments-api --pr 4242 --force
 ```
 
 ---
@@ -601,8 +601,8 @@ Never auto-merge adversary code or auto-file GitHub issues without an explicit l
 
 ## Privacy & trust
 
-- History uses **their** credentials against **their** org/repos from **their** config.  
-- Config is local/committed by them; default no upload of review bodies to Adversary Labs.  
+- History uses **their** credentials against **their** org/repos from **their** config.
+- Config is local/committed by them; default no upload of review bodies to Doomer.
 - Public OSS catalog stays **our** internal tool.
 
 ---
@@ -611,7 +611,7 @@ Never auto-merge adversary code or auto-file GitHub issues without an explicit l
 
 | Today (internal) | Customer CLI (target) |
 |------------------|------------------------|
-| Separate **`adversary-factory`** repo + `./bin/factory slice` | **`adversary train …` inside the main `adversary` CLI** — this project goes away |
+| Separate **`adversary-factory`** repo + `./bin/factory slice` | **`doomer train …` inside the main `adversary` CLI** — this project goes away |
 | `config/repositories.json` | **`adversary.train.yaml` `sources`** (committed in the customer workspace) |
 | Sibling `*-adversary` checkouts under monorepo | `adversaries.root` or `adversaries.path` |
 | `$DATA_ROOT/state/discovery` | `.adversary-train/state/discovery` (gitignored) |
@@ -621,9 +621,9 @@ Never auto-merge adversary code or auto-file GitHub issues without an explicit l
 
 **`adversary-factory` is temporary R&D / scaffolding.** When productized, the project is **deleted** (or archived)—not kept as a long-lived library that `adversary` wraps. No need to preserve a `factory` CLI name.
 
-1. **Now** — prove quality with the private `adversary-factory` binary and these docs.  
-2. **Productize** — move the engine (collect → case → scope/route → run → grade → story/issues + discovery state) **into the `adversary` repo** as first-class **`adversary train`** commands and packages.  
-3. **Delete** standalone `adversary-factory` once the CLI owns behavior and tests.  
+1. **Now** — prove quality with the private `adversary-factory` binary and these docs.
+2. **Productize** — move the engine (collect → case → scope/route → run → grade → story/issues + discovery state) **into the `adversary` repo** as first-class **`doomer train`** commands and packages.
+3. **Delete** standalone `adversary-factory` once the CLI owns behavior and tests.
 4. Customer install is only **`adversary`** — config + `train init|run|story|…`. No second binary.
 
 End state: **one CLI, one product repo to ship.**
@@ -632,36 +632,36 @@ End state: **one CLI, one product repo to ship.**
 
 ## Non-goals (v1)
 
-- `adversary train source add|list|rm` command family  
-- `adversary factory …` or other compat aliases  
-- **Training / drafting improvements for official catalog packages**  
-- Encouraging locals that re-implement official missions when an included official already caught the gold  
-- Auto fine-tuning of model weights (unless explicitly added later under the same name)  
-- Auto-filing on application repos  
-- Replacing `adversary run` for day-to-day review  
+- `doomer train source add|list|rm` command family
+- `adversary factory …` or other compat aliases
+- **Training / drafting improvements for official catalog packages**
+- Encouraging locals that re-implement official missions when an included official already caught the gold
+- Auto fine-tuning of model weights (unless explicitly added later under the same name)
+- Auto-filing on application repos
+- Replacing `doomer run` for day-to-day review
 
 ---
 
 ## Open questions
 
-1. History order default: newest-first vs oldest-first?  
-2. Org expansion: all repos vs require `repos_allowlist` for safety?  
-3. Config filename locked as `adversary.train.yaml` vs `.adversary/train.yaml`?  
-4. Should `run` refuse to start if `sources.repos` and `sources.org` are both empty? (yes)  
-5. Exact `--help` wording so “train” is not mistaken for offline GPU fine-tunes?  
-6. Default official jury: full catalog vs curated default exclude list?  
+1. History order default: newest-first vs oldest-first?
+2. Org expansion: all repos vs require `repos_allowlist` for safety?
+3. Config filename locked as `adversary.train.yaml` vs `.adversary/train.yaml`?
+4. Should `run` refuse to start if `sources.repos` and `sources.org` are both empty? (yes)
+5. Exact `--help` wording so “train” is not mistaken for offline GPU fine-tunes?
+6. Default official jury: full catalog vs curated default exclude list?
 7. When local override maps `go/security` → `acme-security`, still shadow-run official for metrics?
 
 ---
 
 ## Success for this design
 
-1. Customer commits **`adversary.train.yaml`** (sources, authors, local roots, official include/exclude).  
-2. `train init` only **stubs** that file + gitignore — no magic source registry.  
-3. `train run` walks **unseen** history; **official jury** runs but is **never** a train draft target.  
-4. Official catch **suppresses** local drafts for that gold (no pressure to clone go-security / eng-review).  
-5. **Local overrides official** when the customer replaces a surface.  
-6. `train run` / `train run --adversary <id>` cover **all locals vs one**.  
+1. Customer commits **`adversary.train.yaml`** (sources, authors, local roots, official include/exclude).
+2. `train init` only **stubs** that file + gitignore — no magic source registry.
+3. `train run` walks **unseen** history; **official jury** runs but is **never** a train draft target.
+4. Official catch **suppresses** local drafts for that gold (no pressure to clone go-security / eng-review).
+5. **Local overrides official** when the customer replaces a surface.
+6. `train run` / `train run --adversary <id>` cover **all locals vs one**.
 7. Next week’s run does **not** reprocess the same PR rounds (state, not config).
 
-When the internal loop is honest enough, fold it into **`adversary train`** (config-first surface) and **retire this repo**.
+When the internal loop is honest enough, fold it into **`doomer train`** (config-first surface) and **retire this repo**.

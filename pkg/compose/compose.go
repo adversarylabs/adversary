@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/doomerlabs/adversary/pkg/manifest"
+	"github.com/doomerlabs/doomer/pkg/manifest"
 )
 
 // DefaultMaxDepth caps nested uses expansion (meta packs like go → go/*).

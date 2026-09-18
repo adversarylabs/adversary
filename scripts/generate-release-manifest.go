@@ -25,9 +25,9 @@ func main() {
 	formula, output := flag.String("formula", "", "formula name"), flag.String("output", "", "manifest output")
 	flag.Parse()
 	names := []string{
-		"adversary_" + *version + "_darwin_amd64.tar.gz", "adversary_" + *version + "_darwin_arm64.tar.gz",
-		"adversary_" + *version + "_linux_amd64.tar.gz", "adversary_" + *version + "_linux_arm64.tar.gz",
-		"adversary_" + *version + ".spdx.json", *formula,
+		"doomer_" + *version + "_darwin_amd64.tar.gz", "doomer_" + *version + "_darwin_arm64.tar.gz",
+		"doomer_" + *version + "_linux_amd64.tar.gz", "doomer_" + *version + "_linux_arm64.tar.gz",
+		"doomer_" + *version + ".spdx.json", *formula,
 	}
 	sort.Strings(names)
 	artifacts := make(map[string]string, len(names))

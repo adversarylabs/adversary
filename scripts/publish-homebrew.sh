@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly REPO="doomerlabs/adversary" TAP_REPO="doomerlabs/homebrew-tap" BINARY="adversary"
-readonly DIST_DIR="${DIST_DIR:-dist}" FORMULA_TEMPLATE="${FORMULA_TEMPLATE:-Formula/adversary.rb.tmpl}"
-readonly STABLE_FORMULA_NAME="adversary.rb" PRERELEASE_FORMULA_NAME="adversary-beta.rb"
+readonly REPO="doomerlabs/doomer" TAP_REPO="doomerlabs/homebrew-tap" BINARY="doomer"
+readonly DIST_DIR="${DIST_DIR:-dist}" FORMULA_TEMPLATE="${FORMULA_TEMPLATE:-Formula/doomer.rb.tmpl}"
+readonly STABLE_FORMULA_NAME="doomer.rb" PRERELEASE_FORMULA_NAME="doomer-beta.rb"
 export GOCACHE="${GOCACHE:-${TMPDIR:-/tmp}/adversary-go-build}"
 
 TEMP_PATHS=()
@@ -101,7 +101,7 @@ build_release() {
     # make release bytes depend on checkout/cache state.
     # -tags release embeds only the production official public key (not dev).
     CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -tags release -buildvcs=false -trimpath \
-      -ldflags="-s -w -X github.com/doomerlabs/adversary/internal/version.Version=${VERSION} -X github.com/doomerlabs/adversary/internal/version.Commit=${COMMIT} -X github.com/doomerlabs/adversary/internal/version.BuildDate=${BUILD_DATE}" \
+      -ldflags="-s -w -X github.com/doomerlabs/doomer/internal/version.Version=${VERSION} -X github.com/doomerlabs/doomer/internal/version.Commit=${COMMIT} -X github.com/doomerlabs/doomer/internal/version.BuildDate=${BUILD_DATE}" \
       -o "${build_dir}/${BINARY}" .
     verify_binary "${build_dir}/${BINARY}"
     install -m 0644 LICENSE README.md "${build_dir}/"
@@ -110,20 +110,20 @@ build_release() {
     rm -rf -- "$build_dir"
   done
   if [[ "$(go env GOOS)/$(go env GOARCH)" == linux/amd64 ]]; then
-    tar -xOzf "${DIST_DIR}/${LINUX_AMD64_ARCHIVE}" ./adversary >"${DIST_DIR}/.smoke-adversary"
-    chmod 0755 "${DIST_DIR}/.smoke-adversary"
-    "${DIST_DIR}/.smoke-adversary" version | grep -Fq "$VERSION" || fail "native version smoke test failed"
-    rm -f -- "${DIST_DIR}/.smoke-adversary"
+    tar -xOzf "${DIST_DIR}/${LINUX_AMD64_ARCHIVE}" ./doomer >"${DIST_DIR}/.smoke-doomer"
+    chmod 0755 "${DIST_DIR}/.smoke-doomer"
+    "${DIST_DIR}/.smoke-doomer" version | grep -Fq "$VERSION" || fail "native version smoke test failed"
+    rm -f -- "${DIST_DIR}/.smoke-doomer"
   fi
-  go run ./scripts/generate-sbom.go -version "$VERSION" -output "${DIST_DIR}/adversary_${VERSION}.spdx.json"
-  (cd scripts/spdx-validator && go run . "../../${DIST_DIR}/adversary_${VERSION}.spdx.json")
-  (cd "$DIST_DIR" && LC_ALL=C shasum -a 256 "${ARCHIVES[@]}" "adversary_${VERSION}.spdx.json" >checksums.txt)
+  go run ./scripts/generate-sbom.go -version "$VERSION" -output "${DIST_DIR}/doomer_${VERSION}.spdx.json"
+  (cd scripts/spdx-validator && go run . "../../${DIST_DIR}/doomer_${VERSION}.spdx.json")
+  (cd "$DIST_DIR" && LC_ALL=C shasum -a 256 "${ARCHIVES[@]}" "doomer_${VERSION}.spdx.json" >checksums.txt)
 }
 
 finalize_bundle() {
   render_formula "${DIST_DIR}/${FORMULA_NAME}"
   go run ./scripts/generate-release-manifest.go -dir "$DIST_DIR" -version "$VERSION" -commit "$COMMIT" -formula "$FORMULA_NAME" -output "${DIST_DIR}/release-manifest.json"
-  (cd "$DIST_DIR" && LC_ALL=C shasum -a 256 "${ARCHIVES[@]}" "adversary_${VERSION}.spdx.json" "$FORMULA_NAME" release-manifest.json >checksums.txt)
+  (cd "$DIST_DIR" && LC_ALL=C shasum -a 256 "${ARCHIVES[@]}" "doomer_${VERSION}.spdx.json" "$FORMULA_NAME" release-manifest.json >checksums.txt)
 }
 
 verify_bundle() {
@@ -132,7 +132,7 @@ verify_bundle() {
 }
 
 upload_release_assets() {
-  local assets=("${DIST_DIR}/${ARCHIVES[0]}" "${DIST_DIR}/${ARCHIVES[1]}" "${DIST_DIR}/${ARCHIVES[2]}" "${DIST_DIR}/${ARCHIVES[3]}" "${DIST_DIR}/adversary_${VERSION}.spdx.json" "${DIST_DIR}/${FORMULA_NAME}" "${DIST_DIR}/release-manifest.json" "${DIST_DIR}/checksums.txt")
+  local assets=("${DIST_DIR}/${ARCHIVES[0]}" "${DIST_DIR}/${ARCHIVES[1]}" "${DIST_DIR}/${ARCHIVES[2]}" "${DIST_DIR}/${ARCHIVES[3]}" "${DIST_DIR}/doomer_${VERSION}.spdx.json" "${DIST_DIR}/${FORMULA_NAME}" "${DIST_DIR}/release-manifest.json" "${DIST_DIR}/checksums.txt")
   local missing=() remote_snapshot confirmed_snapshot remote_names remote_dir asset name downloaded remote_name expected
   local remote_id remote_size remote_digest
   local is_draft is_prerelease confirmed_draft confirmed_prerelease expected_prerelease=false
@@ -171,7 +171,7 @@ upload_release_assets() {
     if ! grep -Fxq -- "$name" <<<"$remote_names"; then missing+=("$asset"); fi
   done
   if [[ -n "$remote_names" ]]; then
-    remote_dir="$(mktemp -d "${TMPDIR:-/tmp}/adversary-release-existing.XXXXXX")"
+    remote_dir="$(mktemp -d "${TMPDIR:-/tmp}/doomer-release-existing.XXXXXX")"
     TEMP_PATHS+=("$remote_dir")
     for asset in "${assets[@]}"; do
       name="${asset##*/}"
@@ -205,7 +205,7 @@ upload_release_assets() {
     [[ "$(grep -Fxc -- "$name" <<<"$remote_names")" -eq 1 ]] || fail "GitHub release does not contain exactly one expected asset: ${name}"
   done
   [[ "$(grep -c . <<<"$remote_names")" -eq ${#assets[@]} ]] || fail "GitHub release contains unexpected assets after upload"
-  remote_dir="$(mktemp -d "${TMPDIR:-/tmp}/adversary-release-assets.XXXXXX")"
+  remote_dir="$(mktemp -d "${TMPDIR:-/tmp}/doomer-release-assets.XXXXXX")"
   TEMP_PATHS+=("$remote_dir")
   for asset in "${assets[@]}"; do
     name="${asset##*/}"
@@ -238,7 +238,7 @@ publish_formula() {
   mkdir -p "${tap_dir}/Formula"
   install -m 0644 "${DIST_DIR}/${FORMULA_NAME}" "${tap_dir}/Formula/${FORMULA_NAME}"
   [[ "$(shasum -a 256 "${DIST_DIR}/${FORMULA_NAME}" | awk '{print $1}')" == "$(shasum -a 256 "${tap_dir}/Formula/${FORMULA_NAME}" | awk '{print $1}')" ]] || fail "staged formula differs from verified bundle"
-  git -C "$tap_dir" config user.name "${GIT_COMMITTER_NAME:-adversary-release-bot}"
+  git -C "$tap_dir" config user.name "${GIT_COMMITTER_NAME:-doomer-release-bot}"
   git -C "$tap_dir" config user.email "${GIT_COMMITTER_EMAIL:-release-bot@adversarylabs.com}"
   git -C "$tap_dir" add "Formula/${FORMULA_NAME}"
   git -C "$tap_dir" diff --cached --quiet || { git -C "$tap_dir" commit -m "Update adversary to ${TAG}"; git -C "$tap_dir" push origin HEAD; }
@@ -261,8 +261,8 @@ TAG="$(detect_tag "${1:-}")"; [[ -n "$TAG" ]] || fail "could not determine relea
 VERSION="$TAG"; COMMIT="$(git rev-parse HEAD)"; SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git show -s --format=%ct HEAD)}"
 export SOURCE_DATE_EPOCH
 BUILD_DATE="$(date -u -r "$SOURCE_DATE_EPOCH" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%dT%H:%M:%SZ')"
-if [[ "$TAG" == *-* ]]; then IS_PRERELEASE=1; FORMULA_NAME="$PRERELEASE_FORMULA_NAME"; FORMULA_CLASS=AdversaryBeta; INSTALLED_BINARY=adversary-beta
-else IS_PRERELEASE=0; FORMULA_NAME="$STABLE_FORMULA_NAME"; FORMULA_CLASS=Adversary; INSTALLED_BINARY="$BINARY"; fi
+if [[ "$TAG" == *-* ]]; then IS_PRERELEASE=1; FORMULA_NAME="$PRERELEASE_FORMULA_NAME"; FORMULA_CLASS=DoomerBeta; INSTALLED_BINARY=doomer-beta
+else IS_PRERELEASE=0; FORMULA_NAME="$STABLE_FORMULA_NAME"; FORMULA_CLASS=Doomer; INSTALLED_BINARY="$BINARY"; fi
 DARWIN_AMD64_ARCHIVE="${BINARY}_${VERSION}_darwin_amd64.tar.gz"; DARWIN_ARM64_ARCHIVE="${BINARY}_${VERSION}_darwin_arm64.tar.gz"
 LINUX_AMD64_ARCHIVE="${BINARY}_${VERSION}_linux_amd64.tar.gz"; LINUX_ARM64_ARCHIVE="${BINARY}_${VERSION}_linux_arm64.tar.gz"
 ARCHIVES=("$DARWIN_AMD64_ARCHIVE" "$DARWIN_ARM64_ARCHIVE" "$LINUX_AMD64_ARCHIVE" "$LINUX_ARM64_ARCHIVE")

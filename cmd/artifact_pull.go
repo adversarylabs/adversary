@@ -9,14 +9,14 @@ import (
 	"os"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/internal/progress"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/blobsource"
-	"github.com/doomerlabs/adversary/pkg/namespacesig"
-	"github.com/doomerlabs/adversary/pkg/oci"
-	"github.com/doomerlabs/adversary/pkg/officialsig"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/internal/progress"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/namespacesig"
+	"github.com/doomerlabs/doomer/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/officialsig"
+	"github.com/doomerlabs/doomer/pkg/repository"
 	"github.com/spf13/cobra"
 )
 
@@ -26,10 +26,10 @@ func newPullCommand(app *application.App, apiURL, profile *string) *cobra.Comman
 	cmd := &cobra.Command{
 		Use:   "pull <reference>",
 		Short: "Pull and install an adversary from an OCI registry",
-		Example: `  adversary pull security-reviewer
-  adversary pull adversarylabs/security-reviewer
-  adversary pull ghcr.io/acme/security-reviewer
-  adversary pull localhost:5000/security-reviewer`,
+		Example: `  doomer pull security-reviewer
+  doomer pull adversarylabs/security-reviewer
+  doomer pull ghcr.io/acme/security-reviewer
+  doomer pull localhost:5000/security-reviewer`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved, err := commandFormat(cmd, format, legacyJSON)
@@ -204,7 +204,7 @@ func pullAdversary(ctx context.Context, refStr, apiURL, profile string, app *app
 		if err := registerExactRef(resolver, ref.Locator(), existing.Digest); err != nil {
 			return pullResult{}, err
 		}
-		// Also pin name:version so `adversary run go/concurrency:0.0.10` has a
+		// Also pin name:version so `doomer run go/concurrency:0.0.10` has a
 		// durable FQ ref, not only an alias index entry.
 		if err := registerVersionRef(resolver, ref, existing); err != nil {
 			return pullResult{}, err

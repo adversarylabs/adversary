@@ -90,7 +90,7 @@ so readers cannot presently guarantee uninterrupted visibility; the repository
 chooses this portable transaction and explicit limitation rather than
 platform-specific exchange APIs.
 
-Compatibility decision: local `adversary run` no longer builds implicitly. It
+Compatibility decision: local `doomer run` no longer builds implicitly. It
 uses existing `dist` output by default; `--build` explicitly invokes the
 transactional builder and `--build-timeout` bounds it. The deprecated
 `--no-build` spelling remains a no-op for script compatibility. The complete

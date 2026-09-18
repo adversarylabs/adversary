@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/blobsource"
-	"github.com/doomerlabs/adversary/pkg/detection"
-	"github.com/doomerlabs/adversary/pkg/namespacesig"
-	"github.com/doomerlabs/adversary/pkg/oci"
-	"github.com/doomerlabs/adversary/pkg/outcomecontext"
-	"github.com/doomerlabs/adversary/pkg/pack"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/blobsource"
+	"github.com/doomerlabs/doomer/pkg/detection"
+	"github.com/doomerlabs/doomer/pkg/namespacesig"
+	"github.com/doomerlabs/doomer/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/outcomecontext"
+	"github.com/doomerlabs/doomer/pkg/pack"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 type Clock interface {
@@ -86,7 +86,7 @@ type AuthStore interface {
 	RemoveAuthCAS(string, adversarylabs.Auth) error
 }
 
-// APIClient contains exactly the Adversary Labs operations used by the CLI.
+// APIClient contains exactly the Doomer operations used by the CLI.
 type APIClient interface {
 	BeginLogin(context.Context, adversarylabs.LoginOptions) (adversarylabs.DeviceLogin, error)
 	LoginWithPassword(context.Context, adversarylabs.PasswordLoginOptions) (adversarylabs.TokenResponse, error)

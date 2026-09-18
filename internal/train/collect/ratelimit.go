@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/githubapi"
+	"github.com/doomerlabs/doomer/internal/githubapi"
 )
 
 // RateLimitError is an alias for githubapi.RateLimitError for package consumers.

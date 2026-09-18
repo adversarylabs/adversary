@@ -19,12 +19,12 @@ import (
 	"sync"
 	"testing"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/adversarylabs"
-	"github.com/doomerlabs/adversary/pkg/oci"
-	"github.com/doomerlabs/adversary/pkg/pack"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/adversarylabs"
+	"github.com/doomerlabs/doomer/pkg/oci"
+	"github.com/doomerlabs/doomer/pkg/pack"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 func TestInitCommandGeneratesTypeScriptProject(t *testing.T) {
@@ -94,7 +94,7 @@ func TestInitCommandGeneratesTypeScriptProject(t *testing.T) {
 
 	agents := readFile(t, filepath.Join(destination, "AGENTS.md"))
 	for _, want := range []string{
-		"This repository contains an Adversary Labs adversary.",
+		"This repository contains an Doomer adversary.",
 		"Parse files once whenever practical.",
 		"Include evidence with every finding.",
 		"Never modify the scanned repository.",
@@ -161,7 +161,7 @@ func TestVersionCommand(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := stdout.String(), "adversary dev\n"; got != want {
+	if got, want := stdout.String(), "doomer dev\n"; got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
 	}
 }
@@ -238,7 +238,7 @@ func TestLoginHelpShowsAPIURLFlag(t *testing.T) {
 	if !strings.Contains(output, "--api-url") {
 		t.Fatalf("login help missing --api-url:\n%s", output)
 	}
-	if !strings.Contains(output, "https://adversarylabs.ai/api") {
+	if !strings.Contains(output, "https://doomer.ai/api") {
 		t.Fatalf("login help missing default API URL:\n%s", output)
 	}
 }
@@ -275,7 +275,7 @@ func TestWhoamiCommandWhenLoggedOut(t *testing.T) {
 	if !strings.Contains(output, "Not logged in.") {
 		t.Fatalf("whoami output missing logged-out message:\n%s", output)
 	}
-	if !strings.Contains(output, "adversary login") {
+	if !strings.Contains(output, "doomer login") {
 		t.Fatalf("whoami output missing login hint:\n%s", output)
 	}
 }
@@ -652,7 +652,7 @@ func TestRegistryAuthRealmUsesAppAuthRoute(t *testing.T) {
 	tests := map[string]string{
 		"http://localhost:3000/api":       "http://localhost:3000/auth/registry",
 		"http://localhost:3000/api/":      "http://localhost:3000/auth/registry",
-		"https://adversarylabs.ai/api":    "https://adversarylabs.ai/auth/registry",
+		"https://doomer.ai/api":           "https://doomer.ai/auth/registry",
 		"https://example.com/custom/api":  "https://example.com/custom/auth/registry",
 		"https://example.com/custom/api/": "https://example.com/custom/auth/registry",
 	}
@@ -686,8 +686,8 @@ func TestPushErrorWithNamespaceHintForRegistryDenied(t *testing.T) {
 	text := err.Error()
 	for _, want := range []string{
 		"push is not authorized for localhost:8787/library/dockerfile-adversary:0.1.0",
-		`remote namespace "library" may not match your Adversary Labs team slug`,
-		"adversary push dockerfile-adversary:0.1.0 localhost:8787/<slug>/dockerfile-adversary:0.1.0",
+		`remote namespace "library" may not match your Doomer team slug`,
+		"doomer push dockerfile-adversary:0.1.0 localhost:8787/<slug>/dockerfile-adversary:0.1.0",
 		"ADVERSARY_REGISTRY_NAMESPACE=<slug>",
 		"Original error: OCI token localhost:8787/library/dockerfile-adversary failed: 403 Forbidden",
 	} {
@@ -1612,11 +1612,11 @@ func TestOfficialCatalogRegistryTrustsProductionAuthRealm(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := created.(processOCIRegistry).HTTPRegistry
-	if registry.BearerRealm != "https://adversarylabs.ai/auth/registry" {
+	if registry.BearerRealm != "https://doomer.ai/auth/registry" {
 		t.Fatalf("BearerRealm = %q, want production auth realm", registry.BearerRealm)
 	}
 	authority, ok := registry.TokenAuthorities[oci.DefaultRegistry]
-	if !ok || authority.Origin != "https://adversarylabs.ai" || authority.Service != oci.DefaultRegistry {
+	if !ok || authority.Origin != "https://doomer.ai" || authority.Service != oci.DefaultRegistry {
 		t.Fatalf("TokenAuthorities = %#v", registry.TokenAuthorities)
 	}
 }

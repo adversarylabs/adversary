@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	projecttemplates "github.com/doomerlabs/adversary/templates"
+	projecttemplates "github.com/doomerlabs/doomer/templates"
 )
 
 const runtimeVersion = "0.0.1"
@@ -52,7 +52,7 @@ func Upgrade(catalogRoot string) (UpgradeResult, error) {
 		return UpgradeResult{}, err
 	}
 	if _, err := os.Stat(filepath.Join(abs, "adversarylabs.yaml")); err != nil {
-		return UpgradeResult{}, fmt.Errorf("%s is not an adversary catalog: %w", abs, err)
+		return UpgradeResult{}, fmt.Errorf("%s is not an doomer catalog: %w", abs, err)
 	}
 	adversaryRoot := filepath.Join(abs, "adversaries")
 	entries, err := os.ReadDir(adversaryRoot)

@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/optimizer"
-	"github.com/doomerlabs/adversary/internal/train/runner"
-	"github.com/doomerlabs/adversary/internal/train/score"
+	"github.com/doomerlabs/doomer/internal/train/optimizer"
+	"github.com/doomerlabs/doomer/internal/train/runner"
+	"github.com/doomerlabs/doomer/internal/train/score"
 )
 
 // Report is the base-vs-candidate report for human decision.
@@ -169,7 +169,7 @@ func ApplyProposalToWorktree(dataRoot, adversarySource, improvementMarkdown, exp
 		WorktreePath: wt,
 		ArtifactPath: impPath,
 	}
-	if path, err := exec.LookPath("adversary"); err == nil {
+	if path, err := exec.LookPath("doomer"); err == nil {
 		cmd := exec.Command(path, "pack", ".")
 		cmd.Dir = wt
 		if out, err := cmd.CombinedOutput(); err != nil {

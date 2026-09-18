@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doomerlabs/adversary/internal/train/cases"
+	"github.com/doomerlabs/doomer/internal/train/cases"
 )
 
 func sampleCase() *cases.Case {

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	"github.com/doomerlabs/adversary/pkg/outcomecontext"
+	"github.com/doomerlabs/doomer/internal/application"
+	"github.com/doomerlabs/doomer/pkg/outcomecontext"
 )
 
 type fakeProvider struct {

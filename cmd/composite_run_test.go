@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	internaladversary "github.com/doomerlabs/adversary/internal/adversary"
-	"github.com/doomerlabs/adversary/pkg/review"
+	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
+	"github.com/doomerlabs/doomer/pkg/review"
 )
 
 func TestRetryableComposedRunFailure(t *testing.T) {

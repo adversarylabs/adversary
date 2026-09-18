@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doomerlabs/adversary/internal/application"
-	traininbox "github.com/doomerlabs/adversary/internal/train/inbox"
-	"github.com/doomerlabs/adversary/internal/train/results"
-	"github.com/doomerlabs/adversary/pkg/repository"
+	"github.com/doomerlabs/doomer/internal/application"
+	traininbox "github.com/doomerlabs/doomer/internal/train/inbox"
+	"github.com/doomerlabs/doomer/internal/train/results"
+	"github.com/doomerlabs/doomer/pkg/repository"
 )
 
 type trainingNoticeTTY struct{}
@@ -37,7 +37,7 @@ func TestTrainingInboxNoticeSummarizesRegisteredCatalogs(t *testing.T) {
 	}
 
 	notice := trainingInboxNotice(dataRoot)
-	for _, want := range []string{"1 result(s)", "1 catalog(s)", "adversary catalog train review"} {
+	for _, want := range []string{"1 result(s)", "1 catalog(s)", "doomer catalog train review"} {
 		if !strings.Contains(notice, want) {
 			t.Fatalf("notice=%q missing %q", notice, want)
 		}

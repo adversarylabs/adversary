@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/doomerlabs/adversary/internal/modelreview"
+	"github.com/doomerlabs/doomer/internal/modelreview"
 )
 
 // IssueBriefEvidence is one human review signal supplied to the issue writer.

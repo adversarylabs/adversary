@@ -16,7 +16,7 @@ import (
 
 func TestResolveAPIURLDefaultEnvAndOverride(t *testing.T) {
 	t.Setenv("ADVERSARY_API_URL", "")
-	if got := ResolveAPIURL(""); got != "https://adversarylabs.ai/api" {
+	if got := ResolveAPIURL(""); got != "https://doomer.ai/api" {
 		t.Fatalf("default API URL = %q", got)
 	}
 	t.Setenv("ADVERSARY_API_URL", "http://localhost:3000/api/")
@@ -87,7 +87,7 @@ func TestDefaultConfigStoreReadsLegacyCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantConfig, _ := os.UserConfigDir()
-	if store.Path != filepath.Join(wantConfig, "adversary", "config.json") {
+	if store.Path != filepath.Join(wantConfig, "doomer", "config.json") {
 		t.Fatalf("path = %q", store.Path)
 	}
 	got, err := store.Load()
