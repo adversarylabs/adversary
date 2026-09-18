@@ -13,7 +13,7 @@ Supported release binaries target macOS and Linux on amd64 and arm64. Windows
 is source-build and CI supported but does not yet have a packaged release.
 
 ```sh
-brew install adversarylabs/tap/adversary
+brew install doomerlabs/tap/doomer
 # Or build the current checkout with stamped metadata:
 make build VERSION=dev
 ```
