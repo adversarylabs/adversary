@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	DefaultRegistry  = "registry.adversarylabs.ai"
+	DefaultRegistry  = "registry.doomer.ai"
 	DefaultNamespace = "library"
 	DefaultTag       = "latest"
 )

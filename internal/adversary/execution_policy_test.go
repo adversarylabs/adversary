@@ -169,7 +169,7 @@ func TestPinnedDigestWithoutOfficialSignatureIsUnknown(t *testing.T) {
 	repo, resolver, record := importPolicyArtifactSigned(t, "adversarylabs/security:1.2.0", false)
 	host := &policyExecutor{backend: HostExecutorBackend}
 	err := Runner{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Executor: host, Repository: &repo, Resolver: &resolver}.Run(context.Background(), RunOptions{
-		AdversaryRef: record.Digest, ReferenceIdentity: "registry.adversarylabs.ai/adversarylabs/security:1.2.0", RepoPath: t.TempDir(),
+		AdversaryRef: record.Digest, ReferenceIdentity: "registry.doomer.ai/adversarylabs/security:1.2.0", RepoPath: t.TempDir(),
 	})
 	if err == nil || !strings.Contains(err.Error(), "untrusted adversary") || host.called != 0 {
 		t.Fatalf("error=%v calls=%d", err, host.called)

@@ -15,14 +15,14 @@ func TestParseReferenceDefaults(t *testing.T) {
 			registry:   DefaultRegistry,
 			repository: "library/security-reviewer",
 			tag:        "latest",
-			locator:    "registry.adversarylabs.ai/library/security-reviewer:latest",
+			locator:    "registry.doomer.ai/library/security-reviewer:latest",
 		},
 		{
 			input:      "adversarylabs/security-reviewer",
 			registry:   DefaultRegistry,
 			repository: "adversarylabs/security-reviewer",
 			tag:        "latest",
-			locator:    "registry.adversarylabs.ai/adversarylabs/security-reviewer:latest",
+			locator:    "registry.doomer.ai/adversarylabs/security-reviewer:latest",
 		},
 		{
 			input:      "ghcr.io/acme/security-reviewer",
@@ -114,7 +114,7 @@ func TestParseReferenceWithDefaultsIgnoresRegistryEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := ref.Locator(), "registry.adversarylabs.ai/library/security-reviewer:1.2.3"; got != want {
+	if got, want := ref.Locator(), "registry.doomer.ai/library/security-reviewer:1.2.3"; got != want {
 		t.Fatalf("locator=%q want %q", got, want)
 	}
 }

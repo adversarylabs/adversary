@@ -237,8 +237,8 @@ func TestAvailableCandidatesCollapseSharedDigestAcrossNamespaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ref := range []string{
-		"registry.adversarylabs.ai/go/cli:0.0.15",
-		"registry.adversarylabs.ai/go/cli:latest",
+		"registry.doomer.ai/go/cli:0.0.15",
+		"registry.doomer.ai/go/cli:latest",
 		"localhost:8787/go/cli:0.0.15",
 	} {
 		if _, err := repo.ImportPacked(artifact, ref); err != nil {
@@ -272,8 +272,8 @@ func TestAvailableCandidatesCollapseSamePublisherPackageRename(t *testing.T) {
 		name    string
 		version string
 	}{
-		{"registry.adversarylabs.ai/ci/depot:0.0.4", "ci/depot", "0.0.4"},
-		{"registry.adversarylabs.ai/ci/depot:0.0.8", "ci/depot", "0.0.8"},
+		{"registry.doomer.ai/ci/depot:0.0.4", "ci/depot", "0.0.4"},
+		{"registry.doomer.ai/ci/depot:0.0.8", "ci/depot", "0.0.8"},
 	} {
 		project := t.TempDir()
 		writeFile(t, filepath.Join(project, "adversary.yaml"), "name: "+item.name+"\nversion: "+item.version+"\nruntime:\n  name: node\n  version: \"22\"\n  command: [dist/index.js]\n")
@@ -309,13 +309,13 @@ func TestAvailableCandidatesCollapseFlatAndDomainCatalogNames(t *testing.T) {
 		name    string
 		version string
 	}{
-		{"registry.adversarylabs.ai/go/cli:0.0.21", "go/cli", "0.0.21"},
+		{"registry.doomer.ai/go/cli:0.0.21", "go/cli", "0.0.21"},
 		{"localhost:8787/go-cli:0.0.18", "go-cli", "0.0.18"},
-		{"registry.adversarylabs.ai/container/dockerfile:0.0.13", "container/dockerfile", "0.0.13"},
+		{"registry.doomer.ai/container/dockerfile:0.0.13", "container/dockerfile", "0.0.13"},
 		{"localhost:8787/dockerfile:0.0.11", "dockerfile", "0.0.11"},
-		{"registry.adversarylabs.ai/security/secrets:0.0.12", "security/secrets", "0.0.12"},
+		{"registry.doomer.ai/security/secrets:0.0.12", "security/secrets", "0.0.12"},
 		{"localhost:8787/secrets:0.0.9", "secrets", "0.0.9"},
-		{"registry.adversarylabs.ai/review/engineering:0.0.11", "review/engineering", "0.0.11"},
+		{"registry.doomer.ai/review/engineering:0.0.11", "review/engineering", "0.0.11"},
 		{"localhost:8787/engineering-review:0.0.7", "engineering-review", "0.0.7"},
 	} {
 		project := t.TempDir()
@@ -337,7 +337,7 @@ func TestAvailableCandidatesCollapseFlatAndDomainCatalogNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ImportPacked(artifact, "registry.adversarylabs.ai/library/go-cli:0.0.1"); err != nil {
+	if _, err := repo.ImportPacked(artifact, "registry.doomer.ai/library/go-cli:0.0.1"); err != nil {
 		t.Fatal(err)
 	}
 	// Meta package stays eligible (not retired).
@@ -348,7 +348,7 @@ func TestAvailableCandidatesCollapseFlatAndDomainCatalogNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ImportPacked(metaArtifact, "registry.adversarylabs.ai/adversarylabs/adversary:0.0.24"); err != nil {
+	if _, err := repo.ImportPacked(metaArtifact, "registry.doomer.ai/adversarylabs/adversary:0.0.24"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -396,7 +396,7 @@ func TestAvailableCandidatesPreferNewestVersionPerRepository(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ref := "registry.adversarylabs.ai/review/engineering:" + version
+		ref := "registry.doomer.ai/review/engineering:" + version
 		if _, err := repo.ImportPacked(artifact, ref); err != nil {
 			t.Fatal(err)
 		}
