@@ -86,6 +86,5 @@ func attachHostedNamespaceSignature(ctx context.Context, app *application.App, r
 func isHostedNamespaceRegistry(host string) bool {
 	host = strings.ToLower(strings.TrimSpace(host))
 	return host == adversarylabs.DefaultRegistry ||
-		strings.HasSuffix(host, ".adversarylabs.ai") ||
 		host == "localhost" || hasLocalhostPort(host)
 }
