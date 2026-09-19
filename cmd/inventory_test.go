@@ -134,35 +134,35 @@ func TestIsRetiredPublisherInventory(t *testing.T) {
 		{
 			item: inventoryItem{
 				Name:      "go-cli",
-				Reference: "registry.adversarylabs.ai/adversarylabs/go-cli:0.0.16",
+				Reference: "registry.doomer.ai/adversarylabs/go-cli:0.0.16",
 			},
 			want: true,
 		},
 		{
 			item: inventoryItem{
 				Name:      "go-cli",
-				Reference: "registry.adversarylabs.ai/library/go-cli:0.0.16",
+				Reference: "registry.doomer.ai/library/go-cli:0.0.16",
 			},
 			want: false,
 		},
 		{
 			item: inventoryItem{
 				Name:      "adversarylabs/dockerfile",
-				Reference: "registry.adversarylabs.ai/adversarylabs/dockerfile:0.0.9",
+				Reference: "registry.doomer.ai/adversarylabs/dockerfile:0.0.9",
 			},
 			want: true,
 		},
 		{
 			item: inventoryItem{
 				Name:      "adversarylabs/go/cli",
-				Reference: "registry.adversarylabs.ai/library/go/cli",
+				Reference: "registry.doomer.ai/library/go/cli",
 			},
 			want: false,
 		},
 		{
 			item: inventoryItem{
 				Name:      "security/secrets",
-				Reference: "registry.adversarylabs.ai/security/secrets:0.0.9",
+				Reference: "registry.doomer.ai/security/secrets:0.0.9",
 			},
 			want: false,
 		},

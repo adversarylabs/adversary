@@ -535,7 +535,7 @@ func TestPackUsesEditedManifestNameForDistinctLocalReference(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Reference: local/security-reviewer:1.4.2") {
 		t.Fatalf("first pack did not use manifest name:\n%s", stdout.String())
 	}
-	if strings.Contains(stdout.String(), "registry.adversarylabs.ai") {
+	if strings.Contains(stdout.String(), "registry.doomer.ai") {
 		t.Fatalf("first pack exposed the default registry:\n%s", stdout.String())
 	}
 
@@ -556,7 +556,7 @@ func TestPackUsesEditedManifestNameForDistinctLocalReference(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Reference: replicated/security-reviewer:1.4.2") {
 		t.Fatalf("second pack did not use edited manifest name:\n%s", stdout.String())
 	}
-	if strings.Contains(stdout.String(), "registry.adversarylabs.ai") {
+	if strings.Contains(stdout.String(), "registry.doomer.ai") {
 		t.Fatalf("second pack exposed the default registry:\n%s", stdout.String())
 	}
 
@@ -565,8 +565,8 @@ func TestPackUsesEditedManifestNameForDistinctLocalReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ref := range []string{
-		"registry.adversarylabs.ai/local/security-reviewer:1.4.2",
-		"registry.adversarylabs.ai/replicated/security-reviewer:1.4.2",
+		"registry.doomer.ai/local/security-reviewer:1.4.2",
+		"registry.doomer.ai/replicated/security-reviewer:1.4.2",
 	} {
 		if _, err := resolver.Repository.Resolve(ref); err != nil {
 			t.Fatalf("resolve %q: %v", ref, err)

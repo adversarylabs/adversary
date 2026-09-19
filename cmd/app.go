@@ -599,7 +599,7 @@ func (f processRegistryFactory) New(apiURL, profile string) (application.OCIRegi
 	stores := oci.ChainCredentialStore{f.docker}
 	if ok {
 		// Official catalog tokens must key off the production registry host so
-		// the OCI client attaches them when resolving registry.adversarylabs.ai.
+		// the OCI client attaches them when resolving registry.doomer.ai.
 		credHost := f.host
 		if isOfficialCatalogRegistry(f.host) {
 			credHost = oci.DefaultRegistry

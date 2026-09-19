@@ -41,7 +41,7 @@ func TestWithRunSourceContextReportsPRBranchAndCommit(t *testing.T) {
 
 func TestSanitizeAdversarySelectionDelegates(t *testing.T) {
 	got := telemetry.SanitizeAdversarySelection([]string{
-		"registry.adversarylabs.ai/ci/gitlab-ci:0.0.4",
+		"registry.doomer.ai/ci/gitlab-ci:0.0.4",
 		"./x",
 	})
 	if len(got) != 2 || got[0] != "ci/gitlab-ci" || got[1] != "local" {

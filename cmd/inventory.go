@@ -14,7 +14,7 @@ import (
 )
 
 // Official registry host for retired-path filtering (matches oci.DefaultRegistry).
-const officialRegistryHost = "registry.adversarylabs.ai"
+const officialRegistryHost = "registry.doomer.ai"
 
 // Origin of a raw inventory row before status merge.
 const (
@@ -304,7 +304,7 @@ func inventoryNameKey(item inventoryItem) string {
 
 // isRetiredPublisherInventory reports whether an entry is a retired official-
 // registry path that the free catalog no longer publishes:
-//   - registry.adversarylabs.ai/adversarylabs/<name> (old publisher namespace)
+//   - registry.doomer.ai/adversarylabs/<name> (old publisher namespace)
 //
 // Team-owned adversarylabs/* source packages stay hidden from the catalog
 // inventory. Promoted library/* packages are canonical catalog entries.

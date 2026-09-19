@@ -41,7 +41,7 @@ End users never need this command; publishers use it after push.`,
     --seed "$ADVERSARY_OFFICIAL_SIGNING_SEED" --key-id official-prod
 
   # Production CI
-  doomer sign registry.adversarylabs.ai/adversarylabs/adversary:0.0.22 \
+  doomer sign registry.doomer.ai/adversarylabs/adversary:0.0.22 \
     --key-id official-prod`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
