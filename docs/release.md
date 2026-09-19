@@ -1,6 +1,8 @@
 # Release policy and operations
 
-Adversary uses immutable CalVer tags (`YYYY.M.D`, optionally `-beta.N`). GitHub
+Doomer uses immutable CalVer tags (`YYYY.M.D`, optionally `-beta.N`). A failed
+stable release keeps its tag; the corrected same-day build uses a numeric
+rebuild suffix such as `YYYY.M.D.1`. GitHub
 Releases are the authoritative changelog and artifact location. Never move a
 published tag; publish a correcting release. Stable CLI/schema deprecations
 remain supported for at least two minor releases or 60 days, whichever is
@@ -73,6 +75,9 @@ execute; see the trust model.
 
 Prereleases use `2026.7.11-beta.1`, update `doomer-beta.rb`, and install
 `doomer-beta` so stable and beta can coexist.
+
+Stable rebuilds use tags such as `2026.7.11.1`. They publish the normal
+`doomer.rb` formula and never move or reuse the failed tag.
 
 ## Credentials and least privilege
 
