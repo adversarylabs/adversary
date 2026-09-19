@@ -7,14 +7,11 @@ import (
 	"github.com/doomerlabs/doomer/pkg/manifest"
 )
 
-// SelectBeforeDownload is deliberately conservative. Executable detectors and
-// absent declarations cannot prove that a package is irrelevant without code.
-// This gate selects packages; runtime detection still scopes individual jobs.
+// SelectBeforeDownload uses declarative scope whenever a package provides it.
+// A programmatic detector is retained conservatively only when the manifest
+// does not also provide a declarative gate.
 func SelectBeforeDownload(m manifest.Manifest, c detection.Context) (bool, string) {
 	d := m.Detection
-	if d.Entrypoint != "" {
-		return true, "programmatic detector requires package"
-	}
 	if d.Scope != "" && d.Scope != "repository" && d.Scope != "change" {
 		return true, "unsupported selection scope"
 	}
@@ -23,6 +20,9 @@ func SelectBeforeDownload(m manifest.Manifest, c detection.Context) (bool, strin
 		patterns = m.Triggers.FilesChanged
 	}
 	if len(patterns) == 0 && len(d.RepositoryFiles) == 0 {
+		if d.Entrypoint != "" {
+			return true, "programmatic detector has no declarative gate; retained"
+		}
 		return true, "no declarative gate; retained"
 	}
 	scope := strings.TrimSpace(d.Scope)

@@ -54,10 +54,12 @@ CREATE TABLE semantic_units (
   adapter TEXT NOT NULL, data TEXT NOT NULL
 );
 CREATE INDEX files_language_path ON files(language,path);
+CREATE INDEX files_module ON files(module);
 CREATE INDEX symbols_file_name_kind ON symbols(file_id,name,kind);
 CREATE INDEX symbols_name_kind ON symbols(name,kind);
 CREATE INDEX edges_kind_source ON edges(kind,from_symbol_id,from_file_id);
 CREATE INDEX edges_kind_target ON edges(kind,to_symbol_id,to_file_id);
+CREATE INDEX edges_kind_target_file ON edges(kind,to_file_id,id);
 CREATE INDEX test_links_source ON test_links(source_file_id,source_symbol_id);
 CREATE INDEX semantic_units_language_file ON semantic_units(language,file_id);
 `

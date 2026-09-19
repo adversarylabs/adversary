@@ -17,7 +17,7 @@ import (
 
 const (
 	V2SchemaVersion   = "v2"
-	V2AdapterRevision = "go-semantic-operations-v3+ts-syntax-v1"
+	V2AdapterRevision = "go-semantic-operations-v3+ts-syntax-v2"
 	EnvRepoGraph      = "ADVERSARY_REPO_GRAPH"
 	v2DatabaseFile    = "graph.sqlite"
 	v2MetaFile        = "meta.json"
@@ -306,7 +306,7 @@ func (g *V2Graph) fileRelations(path, cursor string, limit int, outgoing bool) (
 	}
 	condition := "ff.path=?"
 	if !outgoing {
-		condition = "tf.module=(SELECT module FROM files WHERE path=?)"
+		condition = "e.to_file_id IN (SELECT target.id FROM files target WHERE target.module=(SELECT source.module FROM files source WHERE source.path=?))"
 	}
 	statement := fmt.Sprintf(`SELECT e.id,ff.path,e.from_symbol_id,COALESCE(tf.path,''),e.to_symbol_id,COALESCE(e.unresolved_target,''),e.kind,e.line,e.column,e.confidence,e.adapter
 FROM edges e JOIN files ff ON ff.id=e.from_file_id LEFT JOIN files tf ON tf.id=e.to_file_id
