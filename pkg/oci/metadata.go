@@ -8,6 +8,11 @@ import (
 	"net/url"
 )
 
+const (
+	metadataBatchSize           = 64
+	metadataFallbackConcurrency = 8
+)
+
 type Metadata struct {
 	Ref      string `json:"ref"`
 	Digest   string `json:"digest,omitempty"`
@@ -27,8 +32,8 @@ func (r *HTTPRegistry) MetadataBatch(ctx context.Context, refs []Reference) map[
 		groups[ref.Registry] = append(groups[ref.Registry], ref)
 	}
 	for _, group := range groups {
-		for start := 0; start < len(group); start += 16 {
-			chunk := group[start:min(start+16, len(group))]
+		for start := 0; start < len(group); start += metadataBatchSize {
+			chunk := group[start:min(start+metadataBatchSize, len(group))]
 			q := url.Values{}
 			for _, ref := range chunk {
 				q.Add("ref", ref.Repository+ref.Locator()[len(ref.Name()):])
@@ -65,27 +70,60 @@ func (r *HTTPRegistry) MetadataBatch(ctx context.Context, refs []Reference) map[
 					resp.Body.Close()
 				}
 			}
+			missing := make([]Reference, 0, len(chunk))
 			for _, ref := range chunk {
-				if _, ok := out[ref.Locator()]; ok {
-					continue
+				if _, ok := out[ref.Locator()]; !ok {
+					missing = append(missing, ref)
 				}
-				item := Metadata{Ref: ref.Locator()}
-				digest, e := r.Resolve(ctx, ref)
-				if e == nil {
-					item.Digest = digest
-					var data []byte
-					data, _, e = r.getAdversaryManifestReferrer(ctx, ref, digest)
-					item.Manifest = string(data)
-					if e == nil && len(data) == 0 {
-						e = fmt.Errorf("manifest metadata unavailable")
-					}
-				}
-				if e != nil {
-					item.Error = e.Error()
-				}
-				out[ref.Locator()] = item
+			}
+			for key, item := range r.metadataFallbackBatch(ctx, missing) {
+				out[key] = item
 			}
 		}
+	}
+	return out
+}
+
+func (r *HTTPRegistry) metadataFallbackBatch(ctx context.Context, refs []Reference) map[string]Metadata {
+	out := make(map[string]Metadata, len(refs))
+	if len(refs) == 0 {
+		return out
+	}
+	type result struct {
+		key  string
+		item Metadata
+	}
+	jobs := make(chan Reference, len(refs))
+	results := make(chan result, len(refs))
+	for _, ref := range refs {
+		jobs <- ref
+	}
+	close(jobs)
+	workers := min(metadataFallbackConcurrency, len(refs))
+	for range workers {
+		go func() {
+			for ref := range jobs {
+				item := Metadata{Ref: ref.Locator()}
+				digest, err := r.Resolve(ctx, ref)
+				if err == nil {
+					item.Digest = digest
+					var data []byte
+					data, _, err = r.getAdversaryManifestReferrer(ctx, ref, digest)
+					item.Manifest = string(data)
+					if err == nil && len(data) == 0 {
+						err = fmt.Errorf("manifest metadata unavailable")
+					}
+				}
+				if err != nil {
+					item.Error = err.Error()
+				}
+				results <- result{key: ref.Locator(), item: item}
+			}
+		}()
+	}
+	for range refs {
+		completed := <-results
+		out[completed.key] = completed.item
 	}
 	return out
 }

@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
-func TestMetadataBatchAvoidsPayloadsAndChunks(t *testing.T) {
+func TestMetadataBatchAvoidsPayloadsAndUsesOneCatalogSnapshot(t *testing.T) {
 	calls := 0
 	digest := "sha256:" + strings.Repeat("a", 64)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -22,7 +24,7 @@ func TestMetadataBatchAvoidsPayloadsAndChunks(t *testing.T) {
 			return
 		}
 		refs := r.URL.Query()["ref"]
-		if len(refs) > 16 {
+		if len(refs) > metadataBatchSize {
 			t.Error("unbounded batch")
 		}
 		items := []Metadata{}
@@ -39,7 +41,7 @@ func TestMetadataBatchAvoidsPayloadsAndChunks(t *testing.T) {
 		refs = append(refs, Reference{Registry: strings.TrimPrefix(server.URL, "http://"), Repository: fmt.Sprintf("library/reviewer%d", i), Tag: "1.0.0"})
 	}
 	results := registry.MetadataBatch(context.Background(), refs)
-	if len(results) != 33 || calls != 3 {
+	if len(results) != 33 || calls != 1 {
 		t.Fatalf("results=%d requests=%d", len(results), calls)
 	}
 	for _, item := range results {
@@ -53,6 +55,37 @@ func TestMetadataBatchFallsBackForOlderRegistry(t *testing.T) {
 	got := registry.MetadataBatch(context.Background(), []Reference{ref})[ref.Locator()]
 	if got.Error != "" || got.Manifest != string(want) {
 		t.Fatalf("got %+v want %q", got, want)
+	}
+}
+
+func TestMetadataBatchBoundsConcurrentFallbacks(t *testing.T) {
+	var active, peak int32
+	registry := NewHTTPRegistry()
+	registry.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/v2/metadata" {
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"items":[]}`)), Request: req}, nil
+		}
+		current := atomic.AddInt32(&active, 1)
+		for {
+			observed := atomic.LoadInt32(&peak)
+			if current <= observed || atomic.CompareAndSwapInt32(&peak, observed, current) {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+		atomic.AddInt32(&active, -1)
+		return &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"errors":[]}`)), Request: req}, nil
+	})}
+	refs := make([]Reference, 12)
+	for i := range refs {
+		refs[i] = Reference{Registry: "registry.test", Repository: fmt.Sprintf("library/reviewer%d", i), Tag: "1.0.0"}
+	}
+	results := registry.MetadataBatch(context.Background(), refs)
+	if len(results) != len(refs) {
+		t.Fatalf("results=%d want=%d", len(results), len(refs))
+	}
+	if got := atomic.LoadInt32(&peak); got <= 1 || got > metadataFallbackConcurrency {
+		t.Fatalf("peak fallback concurrency=%d want 2..%d", got, metadataFallbackConcurrency)
 	}
 }
 

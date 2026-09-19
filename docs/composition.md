@@ -64,7 +64,7 @@ No repository paths or source code are sent to the metadata endpoint.
 
 ```yaml
 detection:
-  scope: repository       # default for pre-download selection
+  scope: repository       # opt in to repository-wide pre-download selection
   repository_files:
     - "**/*.go"
     - "**/go.mod"
@@ -72,10 +72,16 @@ detection:
     - "**/*.go"          # still scopes runtime review jobs
 ```
 
-`scope: repository` matches `repository_files`, falling back to `files` and then
-legacy `triggers.files_changed`. Repository paths include tracked and unignored
-untracked files, plus changed paths and previous rename paths. A Go repository
-therefore selects Go specialists even when the particular change edits docs.
+When `scope` is omitted and a change is available, `files` and legacy
+`triggers.files_changed` match changed paths before packages are downloaded.
+This keeps an unrelated specialist out of a narrow review. With no change
+context, selection falls back to repository paths.
+
+`scope: repository` explicitly matches `repository_files`, falling back to
+`files` and then legacy `triggers.files_changed`. Repository paths include
+tracked and unignored untracked files, plus changed paths and previous rename
+paths. Use it when a specialist must run for every change in an applicable
+repository.
 
 Use `scope: change` to require changed files matching `files` (or legacy triggers),
 with the existing `change_types` restriction. A repository marker alone does not

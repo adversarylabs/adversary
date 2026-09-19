@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	internaladversary "github.com/doomerlabs/doomer/internal/adversary"
 	"github.com/doomerlabs/doomer/internal/application"
@@ -59,6 +60,7 @@ type metadataRegistry interface {
 }
 
 func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptions, refs []string, apiURL, profile string, resultOut, progress io.Writer) (application.ComposePlan, error) {
+	selectionStarted := time.Now()
 	if !opts.composePlan && cliprogress.InCI() {
 		fmt.Fprintln(progress, "Compose: selecting and preparing adversaries…")
 	}
@@ -106,6 +108,10 @@ func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptio
 			groups[ref.Registry] = append(groups[ref.Registry], ref)
 		}
 		for host, group := range groups {
+			metadataStarted := time.Now()
+			if cliprogress.InCI() {
+				fmt.Fprintf(progress, "Compose: resolving metadata for %d adversaries…\n", len(group))
+			}
 			registry, err := app.Dependencies().Registries.New(apiURL, profile)
 			if err != nil {
 				return nil, fmt.Errorf("create registry client for %s: %w", host, err)
@@ -117,6 +123,9 @@ func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptio
 				for key, value := range metadata.MetadataBatch(ctx, group) {
 					fetched[key] = value
 				}
+			}
+			if cliprogress.InCI() {
+				fmt.Fprintf(progress, "Compose: resolved metadata for %d adversaries in %s\n", len(group), time.Since(metadataStarted).Round(time.Millisecond))
 			}
 		}
 		for _, ref := range remote {
@@ -174,7 +183,7 @@ func selectComposeRefs(ctx context.Context, app *application.App, opts *runOptio
 		return plan, err
 	}
 	if cliprogress.InCI() {
-		fmt.Fprintf(progress, "Compose: selected %d of %d adversaries; preparing packages…\n", len(plan.Refs), len(plan.Selections))
+		fmt.Fprintf(progress, "Compose: selected %d of %d adversaries in %s; preparing packages…\n", len(plan.Refs), len(plan.Selections), time.Since(selectionStarted).Round(time.Millisecond))
 	}
 	// All selection decisions are visible before the first selected payload pull.
 	for _, selection := range plan.Selections {

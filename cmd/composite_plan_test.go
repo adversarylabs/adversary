@@ -39,6 +39,18 @@ func TestGroupReviewRegionsHasNoGroupCap(t *testing.T) {
 	}
 }
 
+func TestNeedsGraphGroupingOnlyForMultipleChangedPaths(t *testing.T) {
+	if needsGraphGrouping([]detection.ChangedFile{{Path: ".depot/workflows/pr.yml", Status: detection.StatusModified}}) {
+		t.Fatal("one changed path cannot gain grouping information from the repository graph")
+	}
+	if !needsGraphGrouping([]detection.ChangedFile{{Path: "a.go", PreviousPath: "old.go", Status: detection.StatusRenamed}}) {
+		t.Fatal("a rename spanning two paths can use repository graph grouping")
+	}
+	if !needsGraphGrouping([]detection.ChangedFile{{Path: "a.go"}, {Path: "b.go"}}) {
+		t.Fatal("multiple changed paths can use repository graph grouping")
+	}
+}
+
 func TestGroupReviewRegionsCombinesNearbyAndGraphRelatedHunks(t *testing.T) {
 	regions := []detection.ReviewRegion{
 		{Path: "a.go", StartLine: 1, EndLine: 5},
