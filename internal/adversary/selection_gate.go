@@ -1,6 +1,8 @@
 package adversary
 
 import (
+	"strings"
+
 	"github.com/doomerlabs/doomer/pkg/detection"
 	"github.com/doomerlabs/doomer/pkg/manifest"
 )
@@ -23,7 +25,10 @@ func SelectBeforeDownload(m manifest.Manifest, c detection.Context) (bool, strin
 	if len(patterns) == 0 && len(d.RepositoryFiles) == 0 {
 		return true, "no declarative gate; retained"
 	}
-	if d.Scope == "change" {
+	scope := strings.TrimSpace(d.Scope)
+	// Unspecified composition scopes follow the active change when one exists.
+	// Authors that need repository-wide applicability can request it explicitly.
+	if scope == "change" || scope == "" && len(c.ChangedFiles) > 0 && len(patterns) > 0 {
 		if len(patterns) == 0 {
 			return true, "no change-file gate; retained"
 		}

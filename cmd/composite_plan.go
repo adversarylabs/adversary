@@ -65,7 +65,7 @@ func (p processRuntime) planCompositeReview(ctx context.Context, opts *runOption
 	phaseStarted = time.Now()
 	groups := groupReviewRegions(regions, nil)
 	mode, modeErr := repoindex.ParseMode(opts.repoIndex)
-	if modeErr == nil && (mode == repoindex.ModeGraph || mode == repoindex.ModeGraphForce) {
+	if needsGraphGrouping(full.ChangedFiles) && modeErr == nil && (mode == repoindex.ModeGraph || mode == repoindex.ModeGraphForce) {
 		repoRoot := full.RepositoryRoot
 		if repoRoot == "" {
 			repoRoot = opts.path
@@ -115,6 +115,23 @@ func (p processRuntime) planCompositeReview(ctx context.Context, opts *runOption
 	}
 	plan.Phases = append(plan.Phases, runUsagePhase("resolve-reviewers", phaseStarted, time.Now()))
 	return plan, nil
+}
+
+func needsGraphGrouping(files []detection.ChangedFile) bool {
+	paths := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		path := strings.TrimSpace(filepath.ToSlash(file.Path))
+		if path != "" {
+			paths[path] = struct{}{}
+		}
+		if previous := strings.TrimSpace(filepath.ToSlash(file.PreviousPath)); previous != "" {
+			paths[previous] = struct{}{}
+		}
+		if len(paths) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func runUsagePhase(name string, started, ended time.Time) adversarylabs.RunUsagePhase {

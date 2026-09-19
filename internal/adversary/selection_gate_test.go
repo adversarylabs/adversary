@@ -13,7 +13,9 @@ func TestSelectBeforeDownload(t *testing.T) {
 		d    manifest.Detection
 		want bool
 	}{
-		{"go repo despite docs change", manifest.Detection{Files: []string{"**/*.go"}}, true},
+		{"default scope follows changed files", manifest.Detection{Files: []string{"**/*.go"}}, false},
+		{"explicit repository scope retains go reviewer", manifest.Detection{Scope: "repository", Files: []string{"**/*.go"}}, true},
+		{"default scope matches changed language", manifest.Detection{Files: []string{"**/*.md"}}, true},
 		{"unrelated python", manifest.Detection{Files: []string{"**/*.py"}}, false},
 		{"explicit change gate", manifest.Detection{Scope: "change", Files: []string{"**/*.go"}}, false},
 		{"repository marker", manifest.Detection{RepositoryFiles: []string{"**/go.mod"}}, true},
