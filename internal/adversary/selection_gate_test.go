@@ -20,7 +20,8 @@ func TestSelectBeforeDownload(t *testing.T) {
 		{"explicit change gate", manifest.Detection{Scope: "change", Files: []string{"**/*.go"}}, false},
 		{"repository marker", manifest.Detection{RepositoryFiles: []string{"**/go.mod"}}, true},
 		{"generalist", manifest.Detection{}, true},
-		{"executable", manifest.Detection{Entrypoint: "detect.js", Files: []string{"**/*.py"}}, true},
+		{"executable with unrelated declarative gate", manifest.Detection{Entrypoint: "detect.js", Files: []string{"**/*.py"}}, false},
+		{"executable without declarative gate", manifest.Detection{Entrypoint: "detect.js"}, true},
 		{"unknown scope", manifest.Detection{Scope: "future", Files: []string{"**/*.py"}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

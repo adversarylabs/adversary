@@ -177,6 +177,10 @@ boot();
 	if err != nil || len(imports.Items) != 1 || imports.Items[0].ToPath != "web/util.ts" {
 		t.Fatalf("imports=%#v err=%v", imports, err)
 	}
+	importers, err := graph.ImportersOf("web/util.ts", "", 10)
+	if err != nil || !slices.ContainsFunc(importers.Items, func(edge V2Edge) bool { return edge.FromPath == "web/main.ts" }) {
+		t.Fatalf("importers=%#v err=%v", importers, err)
+	}
 	tests, err := graph.RelatedTests("service/service.go", 0, "", 10)
 	if err != nil || len(tests.Items) != 1 || tests.Items[0].TestPath != "service/service_test.go" {
 		t.Fatalf("tests=%#v err=%v", tests, err)
