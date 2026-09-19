@@ -114,7 +114,7 @@ func TestResolverVersionAliasWithoutDurableVersionRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Only durable ref is :latest (no registry…/go/concurrency:0.0.10 file).
-	rec, err := r.Repository.ImportPacked(a, "registry.adversarylabs.ai/go/concurrency:latest")
+	rec, err := r.Repository.ImportPacked(a, "registry.doomer.ai/go/concurrency:latest")
 	if err != nil {
 		t.Fatal(err)
 	}

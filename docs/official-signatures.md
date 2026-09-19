@@ -41,7 +41,7 @@ mean Doomer reviewed the package's code.
 | Public key in binary | `official-dev` only | `official-prod` only |
 | Default key id | `official-dev` | `official-prod` |
 | Private seed | local/dev secret only | prod CI secret only |
-| Signs | local/staging catalog | `registry.adversarylabs.ai` |
+| Signs | local/staging catalog | `registry.doomer.ai` |
 
 A **released** CLI cannot verify packages signed with the **dev** key, because
 that public key is not present in the binary. An env var alone would still ship
@@ -124,7 +124,7 @@ doomer sign localhost:8787/adversarylabs/adversary:0.0.22 \
   --seed "$ADVERSARY_OFFICIAL_SIGNING_SEED" --key-id official-dev
 
 # Prod CI: inject ADVERSARY_OFFICIAL_SIGNING_SEED, then after push:
-doomer sign registry.adversarylabs.ai/adversarylabs/adversary:0.0.22 \
+doomer sign registry.doomer.ai/adversarylabs/adversary:0.0.22 \
   --key-id official-prod
 ```
 

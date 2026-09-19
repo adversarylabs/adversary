@@ -54,7 +54,7 @@ func TestSanitizeAdversarySelection(t *testing.T) {
 	t.Cleanup(func() { pathExists = defaultPathExists })
 
 	got := SanitizeAdversarySelection([]string{
-		"registry.adversarylabs.ai/infra/terraform:0.0.4",
+		"registry.doomer.ai/infra/terraform:0.0.4",
 		"go/security",
 		"go/security",
 		"./local-adv",
@@ -122,7 +122,7 @@ func TestSanitizeExternalOCIHosts(t *testing.T) {
 	if got := SanitizeAdversaryRef("localhost:8787/infra/terraform:0.0.4"); got != "external" {
 		t.Fatalf("localhost dev registry got %q want external", got)
 	}
-	if got := SanitizeAdversaryRef("registry.adversarylabs.ai/go/security:0.0.11"); got != "go/security" {
+	if got := SanitizeAdversaryRef("registry.doomer.ai/go/security:0.0.11"); got != "go/security" {
 		t.Fatalf("got %q want go/security", got)
 	}
 }

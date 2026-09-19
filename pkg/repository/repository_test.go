@@ -337,7 +337,7 @@ func TestShorthandResolutionAndIdentityIgnoreRegistryEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "registry.adversarylabs.ai/library/test:1.0.0"
+	want := "registry.doomer.ai/library/test:1.0.0"
 	if got, err := r.CanonicalReference(rec.Digest); err != nil || got != want {
 		t.Fatalf("canonical=%q err=%v", got, err)
 	}

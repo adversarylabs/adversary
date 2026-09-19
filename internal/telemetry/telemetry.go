@@ -267,8 +267,7 @@ func isOfficialRegistryHost(value string) bool {
 	if i := strings.IndexByte(value, ':'); i >= 0 {
 		host = value[:i]
 	}
-	return host == "registry.adversarylabs.ai" ||
-		strings.HasSuffix(host, ".adversarylabs.ai")
+	return host == "registry.doomer.ai"
 }
 
 func splitCatalogID(value string) (domain, name string, ok bool) {

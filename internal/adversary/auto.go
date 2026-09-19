@@ -299,7 +299,7 @@ func (a AutoRunner) availableCandidates(includes []string) ([]DetectionCandidate
 }
 
 // officialRegistryHost is the free-catalog registry used for retired-path filtering.
-const officialRegistryHost = "registry.adversarylabs.ai"
+const officialRegistryHost = "registry.doomer.ai"
 
 // sameAutoIdentity reports whether two candidates should only run once.
 // Official/local catalog packages collapse by package family (flat ↔ domain
