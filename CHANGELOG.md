@@ -1,7 +1,6 @@
 # Changelog
 
-This project uses CalVer (`YYYY.M.D`, with `.N` for immutable same-day stable
-rebuilds) releases. Until the first release notes
+This project uses CalVer (`YYYY.M.D`) releases. Until the first release notes
 are imported, GitHub Releases are the authoritative per-release changelog.
 
 Every release note groups user-visible additions, fixes, security changes,

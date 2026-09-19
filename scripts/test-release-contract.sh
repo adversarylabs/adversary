@@ -7,6 +7,8 @@ unset GITHUB_TOKEN HOMEBREW_TAP_TOKEN GH_TOKEN
 
 fail() { printf 'release contract: %s\n' "$*" >&2; exit 1; }
 
+bash scripts/test-release-tags.sh
+
 for workflow in .depot/workflows/*.yml; do
   while IFS= read -r use; do
     if [[ "$use" =~ ^[[:space:]]*uses:[[:space:]]+doomerlabs/actions/(run|version|push)@v1$ ]]; then

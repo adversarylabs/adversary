@@ -257,7 +257,7 @@ need git; need go; need shasum
 if [[ "$MODE" == build ]]; then need gzip; need tar; fi
 [[ -f "$FORMULA_TEMPLATE" && -f LICENSE ]] || fail "release metadata is missing"
 TAG="$(detect_tag "${1:-}")"; [[ -n "$TAG" ]] || fail "could not determine release tag"
-[[ "$TAG" =~ ^20[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]+)?(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] || fail "invalid CalVer tag: ${TAG}"
+[[ "$TAG" =~ ^20[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] || fail "invalid CalVer tag: ${TAG}"
 VERSION="$TAG"; COMMIT="$(git rev-parse HEAD)"; SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git show -s --format=%ct HEAD)}"
 export SOURCE_DATE_EPOCH
 BUILD_DATE="$(date -u -r "$SOURCE_DATE_EPOCH" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%dT%H:%M:%SZ')"
